@@ -21,15 +21,6 @@ const CREDENTIAL_ADMISSION: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-admission.json");
 const CREDENTIAL_SIGNING: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-signing.json");
-const CANVAS_LTI: &[u8] =
-    include_bytes!("../../../../contracts/issuance-canvas-lti-foundation.json");
-const CANVAS_OAUTH: &[u8] =
-    include_bytes!("../../../../contracts/issuance-canvas-oauth-lifecycle.json");
-const CANVAS_MANAGEMENT: &[u8] =
-    include_bytes!("../../../../contracts/issuance-canvas-management.json");
-const CANVAS_MIRROR: &[u8] = include_bytes!("../../../../contracts/issuance-canvas-mirror.json");
-const CANVAS_OPERATIONS: &[u8] =
-    include_bytes!("../../../../contracts/issuance-canvas-operations.json");
 const CREDENTIAL_LIFECYCLE: &[u8] =
     include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
 const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
@@ -67,10 +58,6 @@ struct Coverage {
     proof_nonce_behavior_contract: Upstream,
     credential_admission_behavior_contract: Upstream,
     credential_signing_behavior_contract: Upstream,
-    canvas_lti_behavior_contract: OwnedBehaviorContract,
-    canvas_oauth_behavior_contract: Upstream,
-    canvas_management_behavior_contract: Upstream,
-    canvas_mirror_behavior_contract: SourceBehaviorContract,
     credential_lifecycle_behavior_contract: Upstream,
     initiation_behavior_contract: Upstream,
     application_template_behavior_contract: Upstream,
@@ -85,6 +72,7 @@ struct Coverage {
     platform_additive_http: Vec<PlatformOperation>,
     platform_additive_environment_variables: Vec<String>,
     remaining: Remaining,
+    retired_legacy: RetiredLegacy,
     native_environment_variables: Vec<String>,
     deployment: String,
 }
@@ -95,14 +83,45 @@ struct Upstream {
     path: String,
     commit: String,
     sha256: String,
+    #[serde(default)]
+    platform_adaptation: Option<ContractAdaptation>,
 }
 
 #[derive(Deserialize)]
-struct OwnedBehaviorContract {
-    repository: String,
-    path: String,
+#[serde(deny_unknown_fields)]
+struct ContractAdaptation {
+    owner: String,
+    base_sha256: String,
     sha256: String,
-    upstream: Upstream,
+    reason: String,
+}
+
+impl Upstream {
+    fn effective_sha256(&self) -> Result<&str, MmfError> {
+        if let Some(adaptation) = &self.platform_adaptation {
+            require(
+                adaptation.owner == "ElevenID/marty-ui"
+                    && adaptation.base_sha256 == self.sha256
+                    && adaptation.sha256.len() == 64
+                    && adaptation
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    && !adaptation.reason.trim().is_empty(),
+                "invalid platform contract adaptation provenance",
+            )?;
+            Ok(&adaptation.sha256)
+        } else {
+            Ok(&self.sha256)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RetiredLegacy {
+    http_routes: Vec<HttpOperation>,
+    runtime_modes: Vec<String>,
+    environment_variables: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -154,19 +173,11 @@ struct HttpOperation {
     #[serde(default)]
     credential_lifecycle_behavior_contract: bool,
     #[serde(default)]
-    canvas_mirror_behavior_contract: bool,
-    #[serde(default)]
     didcomm_behavior_contract: bool,
     #[serde(default)]
     initiation_behavior_contract: bool,
     #[serde(default)]
     renewal_behavior_contract: bool,
-    #[serde(default)]
-    canvas_lti_behavior_case: Option<String>,
-    #[serde(default)]
-    canvas_oauth_behavior_case: Option<String>,
-    #[serde(default)]
-    canvas_management_behavior_case: Option<String>,
     #[serde(default)]
     application_template_behavior_case: Option<String>,
     #[serde(default)]
@@ -179,75 +190,6 @@ struct HttpOperation {
     issued_credential_adapter_behavior_contract: bool,
     #[serde(default)]
     oid4vci_authorization_behavior_contract: bool,
-    #[serde(default)]
-    canvas_operations_behavior_case: Option<CanvasOperationsCase>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(rename_all = "snake_case")]
-enum CanvasOperationsCase {
-    Enqueue,
-    Jobs,
-    Job,
-    Retry,
-    ResolveJob,
-    Candidates,
-    Reviews,
-    ResolveReview,
-}
-
-impl CanvasOperationsCase {
-    const ALL: [Self; 8] = [
-        Self::Enqueue,
-        Self::Jobs,
-        Self::Job,
-        Self::Retry,
-        Self::ResolveJob,
-        Self::Candidates,
-        Self::Reviews,
-        Self::ResolveReview,
-    ];
-
-    fn route(self) -> (&'static str, &'static str, &'static str) {
-        match self {
-            Self::Enqueue => (
-                "POST",
-                "/applications/{application_id}/canvas-sync",
-                "enqueue_canvas_application_sync_route",
-            ),
-            Self::Jobs => ("GET", "/canvas-sync-jobs", "list_canvas_sync_jobs_route"),
-            Self::Job => (
-                "GET",
-                "/canvas-sync-jobs/{job_id}",
-                "get_canvas_sync_job_route",
-            ),
-            Self::Retry => (
-                "POST",
-                "/canvas-sync-jobs/{job_id}/retry",
-                "retry_canvas_sync_job_route",
-            ),
-            Self::ResolveJob => (
-                "POST",
-                "/canvas-sync-jobs/{job_id}/resolve",
-                "resolve_canvas_sync_job_route",
-            ),
-            Self::Candidates => (
-                "GET",
-                "/canvas-award-candidates",
-                "list_canvas_award_candidates_route",
-            ),
-            Self::Reviews => (
-                "GET",
-                "/evidence-policy-reviews",
-                "list_evidence_policy_reviews_route",
-            ),
-            Self::ResolveReview => (
-                "POST",
-                "/evidence-policy-reviews/{review_id}/resolve",
-                "resolve_evidence_policy_review_route",
-            ),
-        }
-    }
 }
 
 impl HttpOperation {
@@ -260,20 +202,15 @@ impl HttpOperation {
             + usize::from(self.proof_nonce_behavior_case.is_some())
             + usize::from(self.credential_behavior_contract)
             + usize::from(self.credential_lifecycle_behavior_contract)
-            + usize::from(self.canvas_mirror_behavior_contract)
             + usize::from(self.didcomm_behavior_contract)
             + usize::from(self.initiation_behavior_contract)
             + usize::from(self.renewal_behavior_contract)
-            + usize::from(self.canvas_lti_behavior_case.is_some())
-            + usize::from(self.canvas_oauth_behavior_case.is_some())
-            + usize::from(self.canvas_management_behavior_case.is_some())
             + usize::from(self.application_template_behavior_case.is_some())
             + usize::from(self.internal_application_behavior_case.is_some())
             + usize::from(self.retention_behavior_contract)
             + usize::from(self.resource_owner_behavior_contract)
             + usize::from(self.issued_credential_adapter_behavior_contract)
             + usize::from(self.oid4vci_authorization_behavior_contract)
-            + usize::from(self.canvas_operations_behavior_case.is_some())
     }
 }
 
@@ -433,14 +370,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid credential admission contract", error))?;
     let credential_signing: Value = serde_json::from_slice(CREDENTIAL_SIGNING)
         .map_err(|error| contract_error("invalid credential signing contract", error))?;
-    let canvas_lti: Value = serde_json::from_slice(CANVAS_LTI)
-        .map_err(|error| contract_error("invalid Canvas LTI contract", error))?;
-    let canvas_oauth: Value = serde_json::from_slice(CANVAS_OAUTH)
-        .map_err(|error| contract_error("invalid Canvas OAuth contract", error))?;
-    let canvas_management: Value = serde_json::from_slice(CANVAS_MANAGEMENT)
-        .map_err(|error| contract_error("invalid Canvas management contract", error))?;
-    let canvas_mirror: Value = serde_json::from_slice(CANVAS_MIRROR)
-        .map_err(|error| contract_error("invalid Canvas mirror contract", error))?;
     let credential_lifecycle: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE)
         .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
     let application_templates: Value = serde_json::from_slice(APPLICATION_TEMPLATES)
@@ -637,92 +566,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected credential signing behavior contract",
     )?;
     require(
-        canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
-            && canvas_lti["scope"]["route_count"] == 12
-            && canvas_lti["scope"]["routes"]
-                .as_array()
-                .is_some_and(|routes| routes.len() == 12)
-            && canvas_lti["login"]["success"]["status_code"] == 303
-            && canvas_lti["login"]["success"]["state_source_bytes"] == 32
-            && canvas_lti["login"]["success"]["state_ttl_minutes"] == 10
-            && canvas_lti["login"]["failures"]
-                .as_array()
-                .is_some_and(|failures| failures.len() == 5)
-            && canvas_lti["launch"]["submission"]["accepted_content_types"]
-                .as_array()
-                .is_some_and(|content_types| content_types.len() == 2)
-            && canvas_lti["launch"]["submission"]["failures"]
-                .as_array()
-                .is_some_and(|failures| failures.len() == 6)
-            && canvas_lti["launch"]["private_response_fields"]
-                .as_array()
-                .is_some_and(|fields| fields.len() == 12)
-            && canvas_lti["launch"]["public_response_vector"]["expected"]["verified"].as_bool()
-                == Some(true)
-            && canvas_lti["experience"]["bootstrap"]["ordered_stages"]
-                .as_array()
-                .is_some_and(|stages| stages.len() == 12)
-            && canvas_lti["experience"]["bootstrap"]["template"]["failures"]
-                .as_array()
-                .is_some_and(|failures| failures.len() == 3)
-            && canvas_lti["experience"]["bootstrap"]["new_application"]["caller_protected_fields"]
-                .as_array()
-                .is_some_and(|fields| fields.len() == 3)
-            && canvas_lti["experience"]["bootstrap"]["response"]["private_fields_forbidden"]
-                .as_array()
-                .is_some_and(|fields| fields.len() == 9),
-        "unexpected Canvas LTI behavior contract",
-    )?;
-    require(
-        canvas_oauth["schema"] == "marty.issuance-canvas-oauth-lifecycle/v1"
-            && canvas_oauth["scope"]["routes"]
-                .as_array()
-                .is_some_and(|routes| routes.len() == 3)
-            && canvas_oauth["start"]["authorization"]["persisted_state"] == "sha256-only"
-            && canvas_oauth["start"]["authorization"]["ttl_seconds"] == 600
-            && canvas_oauth["callback"]["redirect_status_code"] == 303
-            && canvas_oauth["callback"]["publication"]["platform_snapshot_cas"] == true
-            && canvas_oauth["callback"]["publication"]["connection_insert_only_cas"] == true
-            && canvas_oauth["callback"]["publication"]["browser_token_disclosure"] == false
-            && canvas_oauth["disconnect"]["retry"]["maximum_seconds"] == 3600
-            && canvas_oauth["disconnect"]["retry"]["durable"] == true
-            && canvas_oauth["security_invariants"]
-                .as_array()
-                .is_some_and(|invariants| invariants.len() == 9),
-        "unexpected Canvas OAuth behavior contract",
-    )?;
-    require(
-        canvas_management["schema"] == "marty.issuance-canvas-management/v1"
-            && canvas_management["scope"]["route_count"] == 31
-            && canvas_management["scope"]["routes"]
-                .as_array()
-                .is_some_and(|routes| routes.len() == 31)
-            && canvas_management["legacy_ingest"]["default_enabled"] == false
-            && canvas_management["legacy_ingest"]["disabled_before_body_or_repository_processing"]
-                == true
-            && canvas_management["application_approval"]["uses_canonical_issuance_guard"] == true
-            && canvas_management["canvas_credentials_provider_validation"]
-                ["never_publishes_a_credential"]
-                == true
-            && canvas_management["security_invariants"]
-                .as_array()
-                .is_some_and(|invariants| invariants.len() == 11),
-        "unexpected Canvas management behavior contract",
-    )?;
-    require(
-        canvas_mirror["schema"] == "marty.issuance-canvas-mirror/v1"
-            && canvas_mirror["source_repository"] == "ElevenID/marty-credentials"
-            && canvas_mirror["source_commit"] == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
-            && canvas_mirror["routes"]
-                .as_array()
-                .is_some_and(|routes| routes.len() == 6)
-            && canvas_mirror["behavior"]["authentication"]["covered_operations"]
-                .as_array()
-                .is_some_and(|operations| operations.len() == 6)
-            && canvas_mirror["observations"]["http"] == 73,
-        "unexpected Canvas mirror behavior contract",
-    )?;
-    require(
         credential_lifecycle["schema"] == "marty.issuance-credential-lifecycle/v1"
             && credential_lifecycle["scope"]["http"]
                 .as_array()
@@ -791,10 +634,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "1dda8ac: map invalid status filters to a stable validation response",
                     "3bee6f7: fail closed on missing offer dependencies and issuer context",
                     "validate active tenant-owned revocation bindings before ordinary approval",
-                    "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
+                    "commit manual lifecycle transitions and ordinary issuance reservations atomically",
                     "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
-                    "preserve issuance-specific Canvas offer readiness errors separately from approval errors",
-                    "retain secret-safe structured diagnostics for provider, Canvas, issuer-context, and wallet-catalog failures"
+                    "reject unsupported integration context before ordinary approval or offer creation",
+                    "retain secret-safe structured diagnostics for external evidence, issuer-context, and wallet-catalog failures"
                 ]),
         "unexpected internal application behavior contract",
     )?;
@@ -878,59 +721,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .chars()
                 .all(|character| character.is_ascii_hexdigit()),
         "invalid credential signing provenance",
-    )?;
-    require(
-        coverage.canvas_lti_behavior_contract.repository == "ElevenID/marty-ui"
-            && coverage.canvas_lti_behavior_contract.path
-                == "contracts/issuance-canvas-lti-foundation.json"
-            && coverage.canvas_lti_behavior_contract.upstream.repository
-                == "ElevenID/marty-credentials"
-            && coverage.canvas_lti_behavior_contract.upstream.path
-                == "contracts/issuance-canvas-lti-foundation.json"
-            && coverage.canvas_lti_behavior_contract.upstream.sha256
-                == "abfa1773c5dcc44101e099c89b2ac11070607dc54fc3dd16e909e216c302add2"
-            && coverage.canvas_lti_behavior_contract.upstream.commit.len() == 40
-            && coverage
-                .canvas_lti_behavior_contract
-                .upstream
-                .commit
-                .chars()
-                .all(|character| character.is_ascii_hexdigit()),
-        "invalid Canvas LTI provenance",
-    )?;
-    require(
-        coverage.canvas_oauth_behavior_contract.repository == "ElevenID/marty-credentials"
-            && coverage.canvas_oauth_behavior_contract.path
-                == "contracts/issuance-canvas-oauth-lifecycle.json"
-            && coverage.canvas_oauth_behavior_contract.commit.len() == 40
-            && coverage
-                .canvas_oauth_behavior_contract
-                .commit
-                .chars()
-                .all(|character| character.is_ascii_hexdigit()),
-        "invalid Canvas OAuth provenance",
-    )?;
-    require(
-        coverage.canvas_management_behavior_contract.repository == "ElevenID/marty-credentials"
-            && coverage.canvas_management_behavior_contract.path
-                == "contracts/issuance-canvas-management.json"
-            && coverage.canvas_management_behavior_contract.commit.len() == 40
-            && coverage
-                .canvas_management_behavior_contract
-                .commit
-                .chars()
-                .all(|character| character.is_ascii_hexdigit()),
-        "invalid Canvas management provenance",
-    )?;
-    require(
-        coverage.canvas_mirror_behavior_contract.path == "contracts/issuance-canvas-mirror.json"
-            && coverage.canvas_mirror_behavior_contract.source_repository
-                == "ElevenID/marty-credentials"
-            && coverage.canvas_mirror_behavior_contract.source_path
-                == "services/issuance/infrastructure/api/routes.py"
-            && coverage.canvas_mirror_behavior_contract.source_commit
-                == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
-        "invalid Canvas mirror provenance",
     )?;
     require(
         coverage.credential_lifecycle_behavior_contract.repository == "ElevenID/marty-credentials"
@@ -1051,30 +841,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_credential_signing == coverage.credential_signing_behavior_contract.sha256,
         "credential signing hash does not match provenance",
     )?;
-    let canonical_canvas_lti = canonical_lf(CANVAS_LTI);
-    let actual_canvas_lti = format!("{:x}", Sha256::digest(&canonical_canvas_lti));
-    require(
-        actual_canvas_lti == coverage.canvas_lti_behavior_contract.sha256,
-        "Canvas LTI hash does not match provenance",
-    )?;
-    let canonical_canvas_oauth = canonical_lf(CANVAS_OAUTH);
-    let actual_canvas_oauth = format!("{:x}", Sha256::digest(&canonical_canvas_oauth));
-    require(
-        actual_canvas_oauth == coverage.canvas_oauth_behavior_contract.sha256,
-        "Canvas OAuth hash does not match provenance",
-    )?;
-    let canonical_canvas_management = canonical_lf(CANVAS_MANAGEMENT);
-    let actual_canvas_management = format!("{:x}", Sha256::digest(&canonical_canvas_management));
-    require(
-        actual_canvas_management == coverage.canvas_management_behavior_contract.sha256,
-        "Canvas management hash does not match provenance",
-    )?;
-    let canonical_canvas_mirror = canonical_lf(CANVAS_MIRROR);
-    let actual_canvas_mirror = format!("{:x}", Sha256::digest(&canonical_canvas_mirror));
-    require(
-        actual_canvas_mirror == coverage.canvas_mirror_behavior_contract.sha256,
-        "Canvas mirror hash does not match provenance",
-    )?;
     let canonical_credential_lifecycle = canonical_lf(CREDENTIAL_LIFECYCLE);
     let actual_credential_lifecycle =
         format!("{:x}", Sha256::digest(&canonical_credential_lifecycle));
@@ -1099,7 +865,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let actual_internal_applications =
         format!("{:x}", Sha256::digest(&canonical_internal_applications));
     require(
-        actual_internal_applications == coverage.internal_application_behavior_contract.sha256,
+        actual_internal_applications
+            == coverage
+                .internal_application_behavior_contract
+                .effective_sha256()?,
         "internal application hash does not match provenance",
     )?;
     let canonical_retention = canonical_lf(RETENTION);
@@ -1381,25 +1150,11 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     )?;
     let renewal_reference: Value = serde_json::from_slice(RENEWAL_REFERENCE)
         .map_err(|error| contract_error("invalid renewal reference", error))?;
-    let mut native_canvas_lti_cases = BTreeSet::new();
-    let mut native_canvas_oauth_cases = BTreeSet::new();
-    let mut native_canvas_management_cases = BTreeSet::new();
     let mut native_application_template_cases = BTreeSet::new();
     let mut native_internal_application_cases = BTreeSet::new();
     let mut native_resource_owner_operations = BTreeSet::new();
     let mut native_issued_credential_adapter_operations = BTreeSet::new();
     let mut native_oid4vci_operations = BTreeSet::new();
-    let mut native_canvas_mirror_operations = BTreeSet::new();
-    // Freeze the already-qualified source contract; changing its historical
-    // limits/status text is not necessary to select the eight exact operations.
-    require(
-        format!("{:x}", Sha256::digest(canonical_lf(CANVAS_OPERATIONS)))
-            == "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120",
-        "Canvas operations behavior provenance changed",
-    )?;
-    let canvas_operations: Value = serde_json::from_slice(CANVAS_OPERATIONS)
-        .map_err(|error| contract_error("invalid Canvas operations contract", error))?;
-    let mut native_canvas_operations_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -1640,113 +1395,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 native_credential_lifecycle_operations.insert(operation.operation.as_str()),
                 "duplicate native credential lifecycle operation",
             )?;
-        } else if operation.canvas_mirror_behavior_contract {
-            validate_canvas_mirror_operation(operation, &canvas_mirror)?;
-            require(
-                native_canvas_mirror_operations.insert(operation.operation.as_str()),
-                "duplicate native Canvas mirror operation",
-            )?;
-        } else if let Some(behavior_case) = operation.canvas_lti_behavior_case.as_deref() {
-            let expected_operation = match behavior_case {
-                "login" => "initiate_canvas_lti_login_route",
-                "experience" => "launch_canvas_lti_experience_route",
-                "experience-exchange" => "exchange_canvas_lti_experience_code_route",
-                "experience-session-current" => "get_canvas_lti_experience_session_route",
-                "experience-bootstrap" => "bootstrap_canvas_lti_experience_application_route",
-                "experience-deep-linking" => "create_canvas_lti_deep_linking_response_route",
-                "experience-evidence-status" => "get_canvas_lti_evidence_status",
-                "experience-evidence-sync" => "sync_canvas_lti_evidence",
-                "experience-login" => "initiate_canvas_lti_experience_login_route",
-                "tool-jwks" => "get_canvas_lti_tool_jwks",
-                "launch" => "verify_canvas_lti_launch_route",
-                _ => return Err(invalid("unknown native Canvas LTI behavior case")),
-            };
-            let expected_authentication = match behavior_case {
-                "launch" | "experience" => "public-lti-form-post",
-                "experience-exchange" => "public-one-time-code",
-                "experience-session-current"
-                | "experience-bootstrap"
-                | "experience-deep-linking"
-                | "experience-evidence-status"
-                | "experience-evidence-sync" => "lti-session-bearer",
-                "tool-jwks" => "public",
-                _ => "public-lti-login",
-            };
-            let expected_method = if matches!(
-                behavior_case,
-                "experience-session-current" | "experience-evidence-status" | "tool-jwks"
-            ) {
-                "GET"
-            } else {
-                "POST"
-            };
-            require(
-                operation.operation == expected_operation
-                    && operation.method == expected_method
-                    && native_canvas_lti_cases.insert(behavior_case)
-                    && canvas_lti["scope"]["routes"]
-                        .as_array()
-                        .is_some_and(|routes| {
-                            routes.iter().any(|route| {
-                                route["method"] == operation.method
-                                    && route["path"] == operation.path
-                                    && route["operation"] == operation.operation
-                                    && route["authentication"] == expected_authentication
-                            })
-                        }),
-                "native Canvas LTI operation diverges from its behavior contract",
-            )?;
-        } else if let Some(behavior_case) = operation.canvas_oauth_behavior_case.as_deref() {
-            let (expected_method, expected_operation, expected_authentication) = match behavior_case
-            {
-                "start" => (
-                    "POST",
-                    "start_canvas_oauth_connection",
-                    "management-api-key-and-trusted-organization",
-                ),
-                "callback" => (
-                    "GET",
-                    "complete_canvas_oauth_connection",
-                    "public-one-time-state",
-                ),
-                "disconnect" => (
-                    "DELETE",
-                    "disconnect_canvas_oauth_connection",
-                    "management-api-key-and-trusted-organization",
-                ),
-                _ => return Err(invalid("unknown native Canvas OAuth behavior case")),
-            };
-            require(
-                operation.operation == expected_operation
-                    && operation.method == expected_method
-                    && native_canvas_oauth_cases.insert(behavior_case)
-                    && canvas_oauth["scope"]["routes"]
-                        .as_array()
-                        .is_some_and(|routes| {
-                            routes.iter().any(|route| {
-                                route["method"] == operation.method
-                                    && route["path"] == operation.path
-                                    && route["operation"] == operation.operation
-                                    && route["authentication"] == expected_authentication
-                            })
-                        }),
-                "native Canvas OAuth operation diverges from its behavior contract",
-            )?;
-        } else if let Some(behavior_case) = operation.canvas_management_behavior_case.as_deref() {
-            require(
-                behavior_case == operation.operation
-                    && native_canvas_management_cases.insert(behavior_case)
-                    && canvas_management["scope"]["routes"]
-                        .as_array()
-                        .is_some_and(|routes| {
-                            routes.iter().any(|route| {
-                                route["method"] == operation.method
-                                    && route["path"] == operation.path
-                                    && route["operation"] == operation.operation
-                            })
-                        }),
-                "native Canvas management operation diverges from its behavior contract",
-            )?;
         } else if let Some(behavior_case) = operation.application_template_behavior_case.as_deref()
         {
             validate_application_template_operation(operation, &application_templates)?;
@@ -1760,12 +1408,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             require(
                 native_internal_application_cases.insert(behavior_case),
                 "duplicate native internal application behavior case",
-            )?;
-        } else if let Some(behavior_case) = operation.canvas_operations_behavior_case {
-            validate_canvas_operations_operation(operation, &canvas_operations)?;
-            require(
-                native_canvas_operations_cases.insert(behavior_case),
-                "duplicate native Canvas operations behavior case",
             )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
@@ -1788,42 +1430,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_tenant_behavior_cases == frozen_tenant_behavior_cases,
         "native tenant issuance behavior coverage is incomplete",
-    )?;
-    require(
-        native_canvas_lti_cases
-            == BTreeSet::from([
-                "experience",
-                "experience-exchange",
-                "experience-login",
-                "experience-session-current",
-                "experience-bootstrap",
-                "experience-deep-linking",
-                "experience-evidence-status",
-                "experience-evidence-sync",
-                "launch",
-                "login",
-                "tool-jwks",
-            ]),
-        "native Canvas LTI behavior coverage is incomplete",
-    )?;
-    require(
-        native_canvas_oauth_cases == BTreeSet::from(["callback", "disconnect", "start"]),
-        "native Canvas OAuth behavior coverage is incomplete",
-    )?;
-    let frozen_canvas_management_routes = canvas_management["scope"]["routes"]
-        .as_array()
-        .ok_or_else(|| invalid("Canvas management routes are missing"))?;
-    let frozen_canvas_management_cases = frozen_canvas_management_routes
-        .iter()
-        .filter_map(|route| route["operation"].as_str())
-        .collect::<BTreeSet<_>>();
-    require(
-        native_canvas_management_cases == frozen_canvas_management_cases,
-        "native Canvas management behavior coverage is incomplete",
-    )?;
-    require(
-        native_canvas_operations_cases == BTreeSet::from(CanvasOperationsCase::ALL),
-        "native Canvas operations behavior coverage is incomplete",
     )?;
     let frozen_application_template_cases = application_templates["surface"]["routes"]
         .as_array()
@@ -1908,16 +1514,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_credential_lifecycle_operations == frozen_credential_lifecycle_operations,
         "native credential lifecycle behavior coverage is incomplete",
     )?;
-    let frozen_canvas_mirror_operations = canvas_mirror["routes"]
-        .as_array()
-        .ok_or_else(|| invalid("Canvas mirror routes are missing"))?
-        .iter()
-        .filter_map(|route| route["operation"].as_str())
-        .collect::<BTreeSet<_>>();
-    require(
-        native_canvas_mirror_operations == frozen_canvas_mirror_operations,
-        "native Canvas mirror behavior coverage is incomplete",
-    )?;
     require(
         native_didcomm_contract,
         "native DIDComm endpoint behavior coverage is incomplete",
@@ -1943,7 +1539,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         )?;
     }
     require(
-        coverage.remaining.http + coverage.native_http.len() as u64 == route_count,
+        coverage.remaining.http
+            + coverage.native_http.len() as u64
+            + coverage.retired_legacy.http_routes.len() as u64
+            == route_count,
         "native and remaining issuance HTTP counts are inconsistent",
     )?;
     require(
@@ -1975,44 +1574,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             == [
                 "CORS_ALLOWED_ORIGINS",
                 "APP_ENV",
-                "CANVAS_ADMIN_API_TOKEN",
-                "CANVAS_ADMIN_API_TOKEN_FILE",
-                "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
-                "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
-                "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
-                "CANVAS_CREDENTIALS_API_BASE_URL",
-                "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
-                "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-                "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
-                "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
-                "CANVAS_CREDENTIALS_PUBLISH_URL",
-                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
-                "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
-                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-                "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
-                "CANVAS_LTI_DEEP_LINKING_ISSUER",
-                "CANVAS_LTI_EXPERIENCE_BASE_URL",
-                "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
-                "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
-                "CANVAS_LTI_JWKS_TTL_MINUTES",
-                "CANVAS_LTI_STATE_TTL_MINUTES",
-                "CANVAS_LTI_TOOL_ISSUER_DID",
-                "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-                "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
-                "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-                "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
-                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-                "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
-                "CANVAS_PILOT_ORGANIZATION_IDS",
-                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-                "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
-                "CANVAS_SYNC_SCHEDULE_LIMIT",
-                "CANVAS_SYNC_WORKER_BATCH_SIZE",
-                "CANVAS_SYNC_WORKER_ID",
-                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
-                "CANVAS_SYNC_WORKER_LEASE_SECONDS",
-                "CANVAS_SYNC_WORKER_POLL_SECONDS",
                 "CREDENTIAL_TEMPLATE_SERVICE_URL",
                 "CT_GRPC_TARGET",
                 "DATABASE_URL",
@@ -2052,19 +1613,6 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             ]
             && coverage.platform_additive_environment_variables
                 == [
-                    "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
-                    "CANVAS_ALLOW_PRIVATE_BASE_URLS",
-                    "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
-                    "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
-                    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-                    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-                    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
-                    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
-                    "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
-                    "CANVAS_MIRROR_WORKER_ENABLED",
-                    "CANVAS_MIRROR_WORKER_RETRY_FAILED",
-                    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
-                    "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                     "GRPC_INSECURE_ALLOWED",
                     "GRPC_TLS_CLIENT_CERT",
                     "GRPC_TLS_CLIENT_KMS_ADDR",
@@ -2083,6 +1631,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .all(|variable| !frozen_environment_variables.contains(variable.as_str()))
             && coverage.remaining.literal_environment_variables
                 + coverage.native_environment_variables.len() as u64
+                + coverage.retired_legacy.environment_variables.len() as u64
                 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
@@ -2102,10 +1651,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
+    let retired_modes = coverage
+        .retired_legacy
+        .runtime_modes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     require(
-        frozen_modes == remaining_modes,
-        "issuance runtime mode coverage is incomplete",
+        retired_modes == BTreeSet::from(["canvas-sync-worker"])
+            && remaining_modes.is_disjoint(&retired_modes)
+            && frozen_modes == remaining_modes.union(&retired_modes).copied().collect(),
+        "issuance runtime mode disposition is incomplete",
     )?;
+    validate_retired_scope(&coverage, routes, &frozen_environment_variables)?;
     require(
         coverage.deployment == "beta-rust-only-candidate",
         "issuance candidate deployment selector differs",
@@ -2116,6 +1674,48 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         remaining_http: coverage.remaining.http,
         remaining_grpc: coverage.remaining.grpc,
     })
+}
+
+fn validate_retired_scope(
+    coverage: &Coverage,
+    routes: &[Value],
+    frozen_environment: &BTreeSet<&str>,
+) -> Result<(), MmfError> {
+    let mut retired = BTreeSet::new();
+    for operation in &coverage.retired_legacy.http_routes {
+        require(
+            operation.behavior_selector_count() == 0
+                && (operation.path.starts_with("/v1/integrations/canvas/")
+                    || operation.path.contains("/canvas-"))
+                && retired.insert((operation.method.as_str(), operation.path.as_str()))
+                && routes.iter().any(|route| {
+                    route["method"] == operation.method
+                        && route["path"] == operation.path
+                        && route["operation"] == operation.operation
+                })
+                && !coverage.native_http.iter().any(|native| {
+                    native.method == operation.method && native.path == operation.path
+                }),
+            "retired provider route is invalid, duplicate or still native",
+        )?;
+    }
+    let retired_environment = coverage
+        .retired_legacy
+        .environment_variables
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    require(
+        retired_environment.len() == coverage.retired_legacy.environment_variables.len()
+            && retired_environment
+                .iter()
+                .all(|name| name.starts_with("CANVAS_") && frozen_environment.contains(name))
+            && coverage
+                .native_environment_variables
+                .iter()
+                .all(|name| !retired_environment.contains(name.as_str())),
+        "retired provider configuration is invalid or still native",
+    )
 }
 
 fn validate_application_template_operation(
@@ -2201,62 +1801,6 @@ fn validate_internal_application_operation(
                             == 1
                 }),
         "native internal application operation diverges from its exact behavior contract",
-    )
-}
-
-fn validate_canvas_mirror_operation(
-    operation: &HttpOperation,
-    contract: &Value,
-) -> Result<(), MmfError> {
-    require(
-        operation.behavior_selector_count() == 1
-            && operation.canvas_mirror_behavior_contract
-            && contract["schema"] == "marty.issuance-canvas-mirror/v1"
-            && contract["source_repository"] == "ElevenID/marty-credentials"
-            && contract["source_commit"] == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
-            && contract["routes"].as_array().is_some_and(|routes| {
-                routes.len() == 6
-                    && routes.iter().any(|route| {
-                        route["method"] == operation.method
-                            && route["path"] == operation.path
-                            && route["operation"] == operation.operation
-                    })
-            })
-            && contract["behavior"]["authentication"]["mechanism"]
-                == "X-API-Key management dependency"
-            && contract["behavior"]["authentication"]["failure_status"] == 401,
-        "native Canvas mirror operation diverges from its behavior contract",
-    )
-}
-
-fn validate_canvas_operations_operation(
-    operation: &HttpOperation,
-    contract: &Value,
-) -> Result<(), MmfError> {
-    let case = operation
-        .canvas_operations_behavior_case
-        .ok_or_else(|| invalid("native Canvas operations behavior case is missing"))?;
-    let (method, suffix, name) = case.route();
-    require(
-        operation.behavior_selector_count() == 1
-            && operation.method == method
-            && operation.path == format!("/v1/integrations/canvas{suffix}")
-            && operation.operation == name
-            && contract["schema"] == "marty.issuance-canvas-operations/v1"
-            && contract["route_prefix"] == "/v1/integrations/canvas"
-            && contract["routes"].as_array().is_some_and(|routes| {
-                routes.len() == 8
-                    && routes
-                        .iter()
-                        .filter(|route| route["method"] == method && route["path"] == suffix)
-                        .count()
-                        == 1
-            })
-            && contract["behavior"]["note_max_length"] == 2000
-            && contract["behavior"]["post_query_filter_window"] == 500
-            && contract["behavior"]["actor_priority"]
-                == serde_json::json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]),
-        "native Canvas operation diverges from its exact behavior contract",
     )
 }
 
@@ -2377,16 +1921,15 @@ fn contract_error(message: &'static str, error: serde_json::Error) -> MmfError {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
     use super::{
-        canonical_lf, validate_application_template_operation, validate_canvas_mirror_operation,
-        validate_canvas_operations_operation, validate_credential_lifecycle_operation,
-        validate_didcomm_operation, validate_embedded_contract, validate_initiation_operation,
-        validate_internal_application_operation, validate_renewal_operation, CanvasOperationsCase,
-        Coverage, HttpOperation, APPLICATION_TEMPLATES, CANVAS_LTI, CANVAS_MANAGEMENT,
-        CANVAS_MIRROR, CANVAS_OPERATIONS, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        canonical_lf, validate_application_template_operation,
+        validate_credential_lifecycle_operation, validate_didcomm_operation,
+        validate_embedded_contract, validate_initiation_operation,
+        validate_internal_application_operation, validate_renewal_operation, Coverage,
+        HttpOperation, APPLICATION_TEMPLATES, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
         CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, ISSUED_CREDENTIAL_ADAPTERS,
         OID4VCI_AUTHORIZATION, RENEWAL_REFERENCE, RESOURCE_OWNERS, RETENTION,
     };
@@ -2498,101 +2041,6 @@ mod tests {
     }
 
     #[test]
-    fn canvas_operations_selectors_are_closed_exact_and_exclusive() {
-        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
-        let contract: Value = serde_json::from_slice(CANVAS_OPERATIONS).unwrap();
-        let selected: Vec<_> = coverage["native_http"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|operation| operation.get("canvas_operations_behavior_case").is_some())
-            .collect();
-        assert_eq!(selected.len(), CanvasOperationsCase::ALL.len());
-        for original in selected {
-            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
-            validate_canvas_operations_operation(&parse(original.clone()).unwrap(), &contract)
-                .unwrap();
-            for value in [
-                serde_json::json!(true),
-                serde_json::json!(1),
-                serde_json::json!({}),
-                serde_json::json!("unknown"),
-            ] {
-                let mut changed = original.clone();
-                changed["canvas_operations_behavior_case"] = value;
-                assert!(parse(changed).is_err());
-            }
-            for (field, value) in [
-                ("canvas_operations_behavior_case", Value::Null),
-                ("method", serde_json::json!("DELETE")),
-                (
-                    "path",
-                    serde_json::json!("/v1/integrations/canvas/platforms"),
-                ),
-                ("operation", serde_json::json!("list_canvas_platforms")),
-                ("initiation_behavior_contract", Value::Bool(true)),
-                (
-                    "canvas_management_behavior_case",
-                    serde_json::json!("list_canvas_platforms"),
-                ),
-            ] {
-                let mut changed = original.clone();
-                changed[field] = value;
-                assert!(
-                    validate_canvas_operations_operation(&parse(changed).unwrap(), &contract)
-                        .is_err()
-                );
-            }
-            let mut removed = original.clone();
-            removed
-                .as_object_mut()
-                .unwrap()
-                .remove("canvas_operations_behavior_case");
-            assert!(
-                validate_canvas_operations_operation(&parse(removed).unwrap(), &contract).is_err()
-            );
-            let mut extra_segment = original.clone();
-            extra_segment["path"] =
-                serde_json::json!(format!("{}/extra", original["path"].as_str().unwrap()));
-            assert!(validate_canvas_operations_operation(
-                &parse(extra_segment).unwrap(),
-                &contract
-            )
-            .is_err());
-            for case in CanvasOperationsCase::ALL {
-                let mut changed = parse(original.clone()).unwrap();
-                if changed.canvas_operations_behavior_case != Some(case) {
-                    changed.canvas_operations_behavior_case = Some(case);
-                    assert!(validate_canvas_operations_operation(&changed, &contract).is_err());
-                }
-            }
-            for field in [
-                "note_max_length",
-                "post_query_filter_window",
-                "actor_priority",
-            ] {
-                let mut changed = contract.clone();
-                changed["behavior"][field] = Value::Null;
-                assert!(validate_canvas_operations_operation(
-                    &parse(original.clone()).unwrap(),
-                    &changed
-                )
-                .is_err());
-            }
-            let mut duplicate = contract.clone();
-            duplicate["routes"]
-                .as_array_mut()
-                .unwrap()
-                .push(contract["routes"][0].clone());
-            assert!(validate_canvas_operations_operation(
-                &parse(original.clone()).unwrap(),
-                &duplicate
-            )
-            .is_err());
-        }
-    }
-
-    #[test]
     fn credential_lifecycle_selectors_are_closed_exact_and_exclusive() {
         let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
         let contract: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE).unwrap();
@@ -2645,44 +2093,6 @@ mod tests {
         let mut unknown_selector = coverage["native_http"][0].clone();
         unknown_selector["future_behavior_contract"] = Value::Bool(true);
         assert!(serde_json::from_value::<HttpOperation>(unknown_selector).is_err());
-    }
-
-    #[test]
-    fn canvas_mirror_selectors_are_closed_exact_and_exclusive() {
-        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
-        let contract: Value = serde_json::from_slice(CANVAS_MIRROR).unwrap();
-        let selected = coverage["native_http"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|operation| {
-                operation.get("canvas_mirror_behavior_contract") == Some(&Value::Bool(true))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(selected.len(), 6);
-        for original in selected {
-            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
-            validate_canvas_mirror_operation(&parse(original.clone()).unwrap(), &contract).unwrap();
-            for (field, value) in [
-                ("method", serde_json::json!("DELETE")),
-                (
-                    "path",
-                    serde_json::json!("/v1/issuance/canvas-mirror/unknown"),
-                ),
-                ("operation", serde_json::json!("unknown_operation")),
-                ("canvas_mirror_behavior_contract", serde_json::json!(false)),
-                (
-                    "credential_lifecycle_behavior_contract",
-                    serde_json::json!(true),
-                ),
-            ] {
-                let mut changed = original.clone();
-                changed[field] = value;
-                assert!(
-                    validate_canvas_mirror_operation(&parse(changed).unwrap(), &contract).is_err()
-                );
-            }
-        }
     }
 
     #[test]
@@ -2983,18 +2393,6 @@ mod tests {
             "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
-            coverage.canvas_lti_behavior_contract.sha256
-        );
-        assert_eq!(
-            format!("{:x}", Sha256::digest(canonical_lf(CANVAS_MANAGEMENT))),
-            coverage.canvas_management_behavior_contract.sha256
-        );
-        assert_eq!(
-            format!("{:x}", Sha256::digest(canonical_lf(CANVAS_MIRROR))),
-            coverage.canvas_mirror_behavior_contract.sha256
-        );
-        assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
             coverage.credential_lifecycle_behavior_contract.sha256
         );
@@ -3008,7 +2406,10 @@ mod tests {
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
-            coverage.internal_application_behavior_contract.sha256
+            coverage
+                .internal_application_behavior_contract
+                .effective_sha256()
+                .unwrap()
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(RETENTION))),
@@ -3030,8 +2431,74 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 122);
+        assert_eq!(summary.native_http, 63);
         assert_eq!(summary.remaining_http, 9);
         assert_eq!(summary.remaining_grpc, 0);
+    }
+    #[test]
+    fn platform_adaptation_cannot_relabel_upstream_provenance() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let original = coverage["internal_application_behavior_contract"].clone();
+        let parsed: super::Upstream = serde_json::from_value(original.clone()).unwrap();
+        assert_ne!(parsed.effective_sha256().unwrap(), parsed.sha256);
+        for (key, value) in [
+            ("owner", json!("unowned-repository")),
+            ("base_sha256", json!("0".repeat(64))),
+            ("sha256", json!("not-a-digest")),
+            ("reason", json!("   ")),
+        ] {
+            let mut changed = original.clone();
+            changed["platform_adaptation"][key] = value;
+            let parsed: super::Upstream = serde_json::from_value(changed).unwrap();
+            assert!(parsed.effective_sha256().is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn retired_scope_cannot_hide_platform_routes_or_live_configuration() {
+        let surface: Value = serde_json::from_slice(super::SURFACE).unwrap();
+        let routes = surface["http"]["routes"].as_array().unwrap();
+        let environment = surface["configuration"]["environment_variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let original: Value = serde_json::from_str(COVERAGE).unwrap();
+        let mut variants = Vec::new();
+        let mut changed = original.clone();
+        changed["retired_legacy"]["http_routes"][0] =
+            json!({"method":"POST","path":"/v1/issuance/initiate","operation":"initiate_issuance"});
+        variants.push(changed);
+        let mut changed = original.clone();
+        let duplicate = changed["retired_legacy"]["http_routes"][0].clone();
+        changed["retired_legacy"]["http_routes"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["retired_legacy"]["http_routes"][0]["initiation_behavior_contract"] = json!(true);
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["native_http"]
+            .as_array_mut()
+            .unwrap()
+            .push(original["retired_legacy"]["http_routes"][0].clone());
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["retired_legacy"]["environment_variables"][0] = json!("ISSUANCE_API_KEY");
+        variants.push(changed);
+        let mut changed = original.clone();
+        let duplicate = changed["retired_legacy"]["environment_variables"][0].clone();
+        changed["retired_legacy"]["environment_variables"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        variants.push(changed);
+        for changed in variants {
+            let parsed: Coverage = serde_json::from_value(changed).unwrap();
+            assert!(super::validate_retired_scope(&parsed, routes, &environment).is_err());
+        }
     }
 }

@@ -2,9 +2,6 @@
 //! Child-process checks keep child-scoped configuration; database and executable
 //! smoke harnesses retain separate binaries.
 
-#[path = "canvas_management_contract.rs"]
-mod canvas_management_contract;
-
 #[path = "proof_nonce_behavior.rs"]
 mod proof_nonce_behavior;
 

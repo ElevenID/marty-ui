@@ -86,7 +86,13 @@
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-internal-applications.json",
     "commit": "e40c1ce6e807714278ef362d3ed24909dd8686fa",
-    "sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12"
+    "sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12",
+    "platform_adaptation": {
+      "owner": "ElevenID/marty-ui",
+      "base_sha256": "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12",
+      "sha256": "ebb5573fa06596c1e8482c8deb4ce459f303a3a1633b865e06b4d69ca49f4b13",
+      "reason": "Remove provider-only diagnostic stages while preserving generic secret-safe diagnostic fields/categories and lifecycle behavior."
+    }
   },
   "retention_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
@@ -562,10 +568,9 @@
     "http": 9,
     "grpc": 0,
     "runtime_modes": [
-      "api",
-      "canvas-sync-worker"
+      "api"
     ],
-    "literal_environment_variables": 13,
+    "literal_environment_variables": 12,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 46,
     "migration_heads": 1
@@ -611,5 +616,349 @@
     "VCDM_RELATED_RESOURCE_URLS"
   ],
   "deployment": "beta-rust-only-candidate",
-  "passport_http_implemented_separately": 9
+  "passport_http_implemented_separately": 9,
+  "retired_legacy": {
+    "reason": "Provider functionality belongs in the independent connector. Historical surface is retained as evidence, not a platform implementation obligation.",
+    "http_routes": [
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/ags/score-events",
+        "operation": "process_canvas_ags_score_event_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/applications/{application_id}/approve",
+        "operation": "approve_canvas_application"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/applications/{application_id}/canvas-sync",
+        "operation": "enqueue_canvas_application_sync_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/canvas-award-candidates",
+        "operation": "list_canvas_award_candidates_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/canvas-credentials/validate",
+        "operation": "validate_canvas_credentials_provider"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs",
+        "operation": "list_canvas_sync_jobs_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}",
+        "operation": "get_canvas_sync_job_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/resolve",
+        "operation": "resolve_canvas_sync_job_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/retry",
+        "operation": "retry_canvas_sync_job_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/evidence-events",
+        "operation": "process_canvas_evidence_event_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+        "operation": "get_canvas_evidence_event_status"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/evidence-policy-reviews",
+        "operation": "list_evidence_policy_reviews_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/evidence-policy-reviews/{review_id}/resolve",
+        "operation": "resolve_evidence_policy_review_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/integration-secrets",
+        "operation": "list_canvas_integration_secrets"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/integration-secrets",
+        "operation": "create_canvas_integration_secret"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+        "operation": "delete_canvas_integration_secret"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+        "operation": "update_canvas_integration_secret"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/lti/config/{token}",
+        "operation": "get_public_canvas_lti_config"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+        "operation": "get_canvas_lti_experience_session_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+        "operation": "bootstrap_canvas_lti_experience_application_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+        "operation": "create_canvas_lti_deep_linking_response_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
+        "operation": "get_canvas_lti_evidence_status"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
+        "operation": "sync_canvas_lti_evidence"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
+        "operation": "exchange_canvas_lti_experience_code_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/lti/jwks",
+        "operation": "get_canvas_lti_tool_jwks"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
+        "operation": "launch_canvas_lti_experience_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
+        "operation": "initiate_canvas_lti_experience_login_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
+        "operation": "verify_canvas_lti_launch_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
+        "operation": "initiate_canvas_lti_login_route"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/nrps/membership-events",
+        "operation": "process_canvas_nrps_membership_event_route"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/oauth/callback",
+        "operation": "complete_canvas_oauth_connection"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/platforms",
+        "operation": "list_canvas_platforms"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms",
+        "operation": "create_canvas_platform"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "operation": "delete_canvas_platform"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "operation": "get_canvas_platform"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "operation": "update_canvas_platform"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+        "operation": "get_canvas_catalog"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+        "operation": "refresh_canvas_platform_jwks"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+        "operation": "update_canvas_lti_installation"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+        "operation": "disconnect_canvas_oauth_connection"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+        "operation": "start_canvas_oauth_connection"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+        "operation": "create_canvas_program_binding"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+        "operation": "get_canvas_platform_readiness"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+        "operation": "get_canvas_lti_registration_config"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+        "operation": "probe_canvas_platform_sandbox"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+        "operation": "discover_canvas_scope"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/program-bindings",
+        "operation": "list_canvas_program_bindings"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "operation": "delete_canvas_program_binding"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "operation": "get_canvas_program_binding"
+      },
+      {
+        "method": "PUT",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "operation": "update_canvas_program_binding"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+        "operation": "activate_canvas_program_binding"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+        "operation": "deactivate_canvas_program_binding"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+        "operation": "validate_canvas_program_binding"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "operation": "process_pending_canvas_mirror_deliveries"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+        "operation": "process_failed_canvas_mirror_status_syncs"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
+        "operation": "get_canvas_mirror_provenance"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        "operation": "run_canvas_mirror_automation_cycle_endpoint"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
+        "operation": "get_canvas_mirror_health"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
+        "operation": "publish_issued_credential_canvas_mirror"
+      }
+    ],
+    "runtime_modes": [
+      "canvas-sync-worker"
+    ],
+    "environment_variables": [
+      "CANVAS_ADMIN_API_TOKEN",
+      "CANVAS_ADMIN_API_TOKEN_FILE",
+      "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
+      "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+      "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+      "CANVAS_CREDENTIALS_API_BASE_URL",
+      "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+      "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+      "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+      "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
+      "CANVAS_CREDENTIALS_PUBLISH_URL",
+      "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+      "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
+      "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+      "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+      "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
+      "CANVAS_LTI_DEEP_LINKING_ISSUER",
+      "CANVAS_LTI_EXPERIENCE_BASE_URL",
+      "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
+      "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
+      "CANVAS_LTI_JWKS_TTL_MINUTES",
+      "CANVAS_LTI_STATE_TTL_MINUTES",
+      "CANVAS_LTI_TOOL_ISSUER_DID",
+      "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+      "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+      "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+      "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
+      "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+      "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
+      "CANVAS_PILOT_ORGANIZATION_IDS",
+      "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
+      "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
+      "CANVAS_SYNC_PROCESSOR",
+      "CANVAS_SYNC_SCHEDULE_LIMIT",
+      "CANVAS_SYNC_WORKER_BATCH_SIZE",
+      "CANVAS_SYNC_WORKER_ID",
+      "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+      "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+      "CANVAS_SYNC_WORKER_POLL_SECONDS"
+    ]
+  }
 }

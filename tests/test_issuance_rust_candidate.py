@@ -13,7 +13,9 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_platform_postgres_contracts_remain_required_after_provider_retirement() -> None:
+def test_platform_postgres_contracts_remain_required_after_provider_retirement() -> (
+    None
+):
     contract_dir = ROOT / "rust" / "services" / "issuance" / "tests"
     assert not list(contract_dir.glob("canvas_*_postgres_contract.rs"))
     assert (contract_dir / "proof_nonce_postgres_contract.rs").is_file()
@@ -24,11 +26,14 @@ def test_platform_postgres_contracts_remain_required_after_provider_retirement()
     assert 'name = "canvas_' not in manifest
     runner = text("scripts/ci/run-rust-db-contracts.sh")
     assert "resolve_contract_executable proof_nonce_postgres_contract" in runner
-    assert "resolve_contract_executable internal_application_postgres_contract" in runner
+    assert (
+        "resolve_contract_executable internal_application_postgres_contract" in runner
+    )
     assert "Expected one proof nonce PostgreSQL contract executable" in runner
     assert "resolve_issuance_canvas_contracts" not in runner
-    assert "python3 ../scripts/ci/run-db-contract-groups.py" in text(".github/workflows/ci.yml")
-
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in text(
+        ".github/workflows/ci.yml"
+    )
 
 
 def test_internal_application_postgres_contract_is_required_in_ci() -> None:
@@ -69,12 +74,17 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     assert 'name = "oid4vci_migration_postgres_contract"' in manifest
     assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
     assert "resolve_contract_executable oid4vci_migration_postgres_contract" in runtime
-    assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
+    assert (
+        "Expected one Issuance OID4VCI migration PostgreSQL contract executable"
+        in runtime
+    )
     assert (
         "resolve_recorded_contract_executable marty-issuance-service "
         "oid4vci_migration_postgres_contract"
     ) in workflow
-    assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
+    assert (
+        "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
+    )
     assert runtime.index(
         "resolve_contract_executable oid4vci_migration_postgres_contract"
     ) < runtime.index(
@@ -98,8 +108,14 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert smoke.count("--host 127.0.0.1") == 4
     assert 'POSTGRES_PASSWORD="$postgres_password"' in smoke
     assert smoke.count('PGPASSWORD="$postgres_password"') == 3
-    assert 'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"' in smoke
-    assert "SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys" in smoke
+    assert (
+        'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"'
+        in smoke
+    )
+    assert (
+        "SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys"
+        in smoke
+    )
     assert "INTEGRATION_SECRET_MASTER_KEY" not in smoke
     assert "access_token_expires_at" in smoke
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
@@ -113,7 +129,9 @@ def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
     assert '"rust/target/debug/$owner" migrate' in workflow
     assert '"rust/target/debug/$owner" verify-owned-schema' in workflow
     assert "CREATE TABLE organization_service.organizations" not in workflow
-    assert "CREATE TABLE credential_template_service.credential_templates" not in workflow
+    assert (
+        "CREATE TABLE credential_template_service.credential_templates" not in workflow
+    )
     assert "rust/target/debug/marty-issuance-service migrate" in workflow
     assert (
         "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
@@ -160,22 +178,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     token_exchange = json.loads(token_exchange_bytes)
     proof_nonce_bytes = (ROOT / "contracts/issuance-proof-nonce.json").read_bytes()
     proof_nonce = json.loads(proof_nonce_bytes)
-    canvas_lti_bytes = (
-        ROOT / "contracts/issuance-canvas-lti-foundation.json"
-    ).read_bytes()
-    canvas_lti = json.loads(canvas_lti_bytes)
-    canvas_oauth_bytes = (
-        ROOT / "contracts/issuance-canvas-oauth-lifecycle.json"
-    ).read_bytes()
-    canvas_oauth = json.loads(canvas_oauth_bytes)
-    canvas_management_bytes = (
-        ROOT / "contracts/issuance-canvas-management.json"
-    ).read_bytes()
-    canvas_management = json.loads(canvas_management_bytes)
-    canvas_mirror_bytes = (
-        ROOT / "contracts/issuance-canvas-mirror.json"
-    ).read_bytes()
-    canvas_mirror = json.loads(canvas_mirror_bytes)
     credential_lifecycle_bytes = (
         ROOT / "contracts/issuance-credential-lifecycle.json"
     ).read_bytes()
@@ -211,12 +213,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert (
         hashlib.sha256(canonical_surface).hexdigest() == coverage["upstream"]["sha256"]
     )
-    assert coverage["upstream"]["commit"] == (
-        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
-    )
+    assert coverage["upstream"]["commit"] == "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
     assert (
         hashlib.sha256(discovery_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == (coverage["behavior_contract"]["sha256"])
+        == coverage["behavior_contract"]["sha256"]
     )
     assert (
         coverage["behavior_contract"]["commit"]
@@ -225,7 +225,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
     assert (
         hashlib.sha256(tenant_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == (coverage["tenant_behavior_contract"]["sha256"])
+        == coverage["tenant_behavior_contract"]["sha256"]
     )
     assert (
         coverage["tenant_behavior_contract"]["commit"]
@@ -305,52 +305,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "single_use": True,
     }
     assert (
-        hashlib.sha256(canvas_lti_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == coverage["canvas_lti_behavior_contract"]["sha256"]
-    )
-    assert (
-        coverage["canvas_lti_behavior_contract"]["upstream"]["commit"]
-        == "82945b2ad4a12aef03389d754f2eb4ed32cb1b18"
-    )
-    assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
-    assert len(canvas_lti["scope"]["routes"]) == 12
-    assert (
-        hashlib.sha256(canvas_oauth_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == coverage["canvas_oauth_behavior_contract"]["sha256"]
-    )
-    assert (
-        coverage["canvas_oauth_behavior_contract"]["commit"]
-        == "84af1b15dfb1dcd84d5ecb70b3bd061b92081b91"
-    )
-    assert canvas_oauth["schema"] == "marty.issuance-canvas-oauth-lifecycle/v1"
-    assert len(canvas_oauth["scope"]["routes"]) == 3
-    assert canvas_oauth["start"]["authorization"]["persisted_state"] == "sha256-only"
-    assert canvas_oauth["callback"]["publication"]["browser_token_disclosure"] is False
-    assert canvas_oauth["disconnect"]["retry"]["durable"] is True
-    assert (
-        hashlib.sha256(canvas_management_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == coverage["canvas_management_behavior_contract"]["sha256"]
-    )
-    assert (
-        coverage["canvas_management_behavior_contract"]["commit"]
-        == "7f09c1e5a767f1401dff3b22adae9f8ae8cc1465"
-    )
-    assert canvas_management["schema"] == "marty.issuance-canvas-management/v1"
-    assert len(canvas_management["scope"]["routes"]) == 31
-    assert (
-        hashlib.sha256(canvas_mirror_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == coverage["canvas_mirror_behavior_contract"]["sha256"]
-    )
-    assert coverage["canvas_mirror_behavior_contract"] == {
-        "path": "contracts/issuance-canvas-mirror.json",
-        "sha256": "26f19ce34b391a2854172acb60d105aee0ebbecbf62226544b994cd36aff130f",
-        "source_repository": "ElevenID/marty-credentials",
-        "source_path": "services/issuance/infrastructure/api/routes.py",
-        "source_commit": "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26",
-    }
-    assert canvas_mirror["schema"] == "marty.issuance-canvas-mirror/v1"
-    assert len(canvas_mirror["routes"]) == 6
-    assert (
         hashlib.sha256(credential_lifecycle_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == coverage["credential_lifecycle_behavior_contract"]["sha256"]
     )
@@ -358,7 +312,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         coverage["credential_lifecycle_behavior_contract"]["commit"]
         == "335c8566af4c873a30f960635db2624723008ae3"
     )
-    assert credential_lifecycle["schema"] == ("marty.issuance-credential-lifecycle/v1")
+    assert credential_lifecycle["schema"] == "marty.issuance-credential-lifecycle/v1"
     assert len(credential_lifecycle["scope"]["http"]) == 4
     assert len(credential_lifecycle["scope"]["grpc"]) == 4
     assert len(credential_lifecycle["transitions"]) == 3
@@ -372,8 +326,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "emit-grpc-stream-event",
         "return-response",
     ]
-    assert credential_lifecycle["publication"]["revocation_profile"] == (
-        "required-before-local-persistence"
+    assert (
+        credential_lifecycle["publication"]["revocation_profile"]
+        == "required-before-local-persistence"
     )
     assert len(credential_lifecycle["failures"]) == 7
     assert len(credential_lifecycle["security_invariants"]) == 4
@@ -381,17 +336,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(application_template_bytes.replace(b"\r\n", b"\n")).hexdigest()
         == coverage["application_template_behavior_contract"]["sha256"]
     )
-    assert coverage["application_template_behavior_contract"]["commit"] == (
-        "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
+    assert (
+        coverage["application_template_behavior_contract"]["commit"]
+        == "f127f55ecfb113ebcdfee55a79e6bae937114dfa"
     )
     assert application_templates["schema"] == "marty.issuance-application-templates/v1"
     assert len(application_templates["surface"]["routes"]) == 8
     assert (
         hashlib.sha256(internal_application_bytes.replace(b"\r\n", b"\n")).hexdigest()
-        == coverage["internal_application_behavior_contract"]["sha256"]
+        == coverage["internal_application_behavior_contract"]["platform_adaptation"]["sha256"]
     )
-    assert coverage["internal_application_behavior_contract"]["commit"] == (
-        "e40c1ce6e807714278ef362d3ed24909dd8686fa"
+    assert (
+        coverage["internal_application_behavior_contract"]["commit"]
+        == "e40c1ce6e807714278ef362d3ed24909dd8686fa"
     )
     assert (
         hashlib.sha256(resource_owner_bytes.replace(b"\r\n", b"\n")).hexdigest()
@@ -426,11 +383,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                     "detail": "Issuance transaction data is temporarily unavailable"
                 },
             },
-            "rationale": (
-                "Reuse the already-native issuance-transaction owner failure boundary "
-                "so all three owner kinds expose one sanitized, DRY internal error "
-                "without a repository cause."
-            ),
+            "rationale": "Reuse the already-native issuance-transaction owner failure boundary so all three owner kinds expose one sanitized, DRY internal error without a repository cause.",
             "gateway_invariant": {
                 "status_code": 500,
                 "content_type": "application/json",
@@ -453,13 +406,15 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "source_path": "services/issuance/infrastructure/api/routes.py",
         "source_commit": "15af5232df376bb9596b5aed3703110bf890fce5",
     }
-    assert issued_credential_adapters["schema"] == (
-        "marty.issuance-issued-credential-adapters/v1"
+    assert (
+        issued_credential_adapters["schema"]
+        == "marty.issuance-issued-credential-adapters/v1"
     )
     assert len(issued_credential_adapters["operations"]) == 5
-    assert hashlib.sha256(
-        oid4vci_authorization_bytes.replace(b"\r\n", b"\n")
-    ).hexdigest() == coverage["oid4vci_authorization_behavior_contract"]["sha256"]
+    assert (
+        hashlib.sha256(oid4vci_authorization_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["oid4vci_authorization_behavior_contract"]["sha256"]
+    )
     assert coverage["oid4vci_authorization_behavior_contract"] == {
         "path": "contracts/issuance-oid4vci-authorization.json",
         "sha256": "5eda9ba42017691d1b9152b4e9c9cbdbf824eb805b054aa2725b8c919db89511",
@@ -483,9 +438,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "VC_JWT",
         "JSON_LD",
     ]
-    assert internal_applications["schema"] == (
-        "marty.issuance-internal-applications/v1"
-    )
+    assert internal_applications["schema"] == "marty.issuance-internal-applications/v1"
     assert len(internal_applications["surface"]["routes"]) == 14
     assert (
         hashlib.sha256(retention_bytes.replace(b"\r\n", b"\n")).hexdigest()
@@ -493,61 +446,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert retention["schema"] == "marty.issuance-retention-management/v1"
     assert len(retention["routes"]) == 2
-    capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
-    assert capability_policy["authority"] == "verified-signed-launch-claims"
-    assert capability_policy["authorization_index"] == "verified_binding_launches"
-    assert capability_policy["carry_prior_requires"] == [
-        "same-binding",
-        "same-course",
-        "same-config",
-    ]
-    assert len(capability_policy["cases"]) == 6
-    orchestration = canvas_lti["launch"]["orchestration"]
-    assert len(orchestration["ordered_stages"]) == 12
-    assert orchestration["invariants"]["state_consumed_before_jwt_verification"] is True
-    assert (
-        orchestration["invariants"]["state_restored_after_downstream_failure"] is False
-    )
-    experience_callback = canvas_lti["experience"]["callback"]
-    assert experience_callback["redirect_only_after_both_persistence_writes"] is True
-    assert len(experience_callback["ordered_stages"]) == 7
-    experience_exchange = canvas_lti["experience"]["exchange"]
-    assert len(experience_exchange["ordered_stages"]) == 11
-    assert experience_exchange["response_after_both_persistence_writes"] is True
-    exchange_request = experience_exchange["request"]
-    assert exchange_request["json_media_types"] == [
-        "application/json",
-        "application/*+json",
-    ]
-    assert exchange_request["body_max_bytes"] == 65536
-    assert exchange_request["non_json_body_behavior"] == {
-        "status_code": 422,
-        "error_type": "model_attributes_type",
-        "input_projection": "raw-decoded-body",
-        "cache_headers": "absent",
-        "cases": [
-            "missing-content-type",
-            "application/x-www-form-urlencoded",
-            "text/plain",
-        ],
-    }
-    experience_session = canvas_lti["experience"]["session_current"]
-    assert len(experience_session["ordered_stages"]) == 9
-    assert len(experience_session["lookup"]["required"]) == 6
-    assert experience_session["cache_headers"] == {
-        "Cache-Control": "no-store",
-        "Pragma": "no-cache",
-    }
-    experience_bootstrap = canvas_lti["experience"]["bootstrap"]
-    assert len(experience_bootstrap["ordered_stages"]) == 12
-    assert len(experience_bootstrap["template"]["failures"]) == 3
-    assert (
-        experience_bootstrap["new_application"]["caller_identifier_forbidden_for_join"]
-        is True
-    )
-    assert experience_bootstrap["sync_enqueue"]["canvas-sync-service-errors"] == (
-        "ignored-so-learner-can-continue"
-    )
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
@@ -566,47 +464,22 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     credential_lifecycle_routes = {
         route["operation"]: route for route in credential_lifecycle["scope"]["http"]
     }
-    canvas_management_operations = {
-        route["operation"] for route in canvas_management["scope"]["routes"]
-    }
-    canvas_mirror_operations = {
-        route["operation"]: route for route in canvas_mirror["routes"]
-    }
     application_template_operations = {
         route["operation"] for route in application_templates["surface"]["routes"]
     }
     internal_application_operations = {
         route["operation"] for route in internal_applications["surface"]["routes"]
     }
-    retention_operations = {
-        route["operation"]: route for route in retention["routes"]
-    }
+    retention_operations = {route["operation"]: route for route in retention["routes"]}
     resource_owner_operations = {
         route["operation"]: route for route in resource_owners["operations"]
     }
     issued_credential_adapter_operations = {
-        route["operation"]: route
-        for route in issued_credential_adapters["operations"]
+        route["operation"]: route for route in issued_credential_adapters["operations"]
     }
     oid4vci_public_operations = {
-        route["operation"]: route
-        for route in oid4vci_authorization["routes"]
+        route["operation"]: route for route in oid4vci_authorization["routes"]
     }
-    canvas_operations_cases = {
-        "enqueue_canvas_application_sync_route": "enqueue",
-        "list_canvas_sync_jobs_route": "jobs",
-        "get_canvas_sync_job_route": "job",
-        "retry_canvas_sync_job_route": "retry",
-        "resolve_canvas_sync_job_route": "resolve_job",
-        "list_canvas_award_candidates_route": "candidates",
-        "list_evidence_policy_reviews_route": "reviews",
-        "resolve_evidence_policy_review_route": "resolve_review",
-    }
-    operations_bytes = text("contracts/issuance-canvas-operations.json").encode()
-    assert hashlib.sha256(operations_bytes).hexdigest() == (
-        "73f4ac04e2158f9b84ca69fdfeff74191434d4739cb4252ca0daf98aa3b69120"
-    )
-    operations_contract = json.loads(operations_bytes)
     renewal_bytes = text("contracts/credential-renewal-python-reference.json").encode()
     assert coverage["renewal_behavior_contract"] == {
         "path": "contracts/credential-renewal-python-reference.json",
@@ -621,44 +494,68 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         hashlib.sha256(renewal_bytes).hexdigest()
         == coverage["renewal_behavior_contract"]["sha256"]
     )
-    assert len(coverage["native_http"]) == 122
-    assert set(native) == (
-        set(discovery_cases)
-        | set(tenant_cases)
-        | set(transaction_cases)
-        | set(credential_lifecycle_routes)
-        | canvas_management_operations
-        | set(canvas_mirror_operations)
-        | application_template_operations
-        | internal_application_operations
-        | set(retention_operations)
-        | set(resource_owner_operations)
-        | set(issued_credential_adapter_operations)
-        | set(oid4vci_public_operations)
-        | set(canvas_operations_cases)
-        | {
-            "didcomm_deliver",
-            "initiate_issuance",
-            "renew_issued_credential",
-            "exchange_token",
-            "nonce_endpoint",
-            "issue_credential",
-            "initiate_canvas_lti_login_route",
-            "initiate_canvas_lti_experience_login_route",
-            "launch_canvas_lti_experience_route",
-            "exchange_canvas_lti_experience_code_route",
-            "get_canvas_lti_experience_session_route",
-            "bootstrap_canvas_lti_experience_application_route",
-            "create_canvas_lti_deep_linking_response_route",
-            "get_canvas_lti_evidence_status",
-            "sync_canvas_lti_evidence",
-            "get_canvas_lti_tool_jwks",
-            "verify_canvas_lti_launch_route",
-            "start_canvas_oauth_connection",
-            "complete_canvas_oauth_connection",
-            "disconnect_canvas_oauth_connection",
-        }
+    retired = coverage["retired_legacy"]
+    frozen_routes = {
+        (route["method"], route["path"], route["operation"])
+        for route in surface["http"]["routes"]
+    }
+    retired_routes = {
+        (route["method"], route["path"], route["operation"])
+        for route in retired["http_routes"]
+    }
+    native_routes = {
+        (route["method"], route["path"], route["operation"])
+        for route in coverage["native_http"]
+    }
+    assert len(retired_routes) == len(retired["http_routes"]) == 59
+    assert retired_routes <= frozen_routes
+    assert retired_routes.isdisjoint(native_routes)
+    assert all(
+        path.startswith("/v1/integrations/canvas/") or "/canvas-" in path
+        for _, path, _ in retired_routes
     )
+    remaining_routes = frozen_routes - native_routes - retired_routes
+    assert len(remaining_routes) == coverage["remaining"]["http"]
+    assert all(path.startswith("/v1/passport/") for _, path, _ in remaining_routes)
+    assert (
+        len(native_routes) + len(retired_routes) + len(remaining_routes)
+        == surface["http"]["route_count"]
+    )
+    retired_environment = set(retired["environment_variables"])
+    assert len(retired_environment) == len(retired["environment_variables"]) == 39
+    assert retired_environment <= set(surface["configuration"]["environment_variables"])
+    assert all(name.startswith("CANVAS_") for name in retired_environment)
+    assert retired_environment.isdisjoint(coverage["native_environment_variables"])
+    assert set(retired["runtime_modes"]) == {"canvas-sync-worker"}
+    assert {mode["name"] for mode in surface["runtime"]["modes"]} == set(
+        coverage["remaining"]["runtime_modes"]
+    ) | set(retired["runtime_modes"])
+    provenance = coverage["internal_application_behavior_contract"]
+    adaptation = provenance["platform_adaptation"]
+    assert adaptation["owner"] == "ElevenID/marty-ui"
+    assert (
+        adaptation["base_sha256"]
+        == provenance["sha256"]
+        == "650f22242055fbd4acbea523749a2d10aa8509a95fad9175d7b134c76433da12"
+    )
+    assert adaptation["reason"].strip()
+    assert len(coverage["native_http"]) == 63
+    assert set(native) == set(discovery_cases) | set(tenant_cases) | set(
+        transaction_cases
+    ) | set(
+        credential_lifecycle_routes
+    ) | application_template_operations | internal_application_operations | set(
+        retention_operations
+    ) | set(resource_owner_operations) | set(
+        issued_credential_adapter_operations
+    ) | set(oid4vci_public_operations) | {
+        "didcomm_deliver",
+        "initiate_issuance",
+        "renew_issued_credential",
+        "exchange_token",
+        "nonce_endpoint",
+        "issue_credential",
+    }
     for operation, coverage_entry in native.items():
         if operation == "renew_issued_credential":
             assert coverage_entry == {
@@ -714,141 +611,26 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "credential_lifecycle_behavior_contract": True,
             }
             continue
-        if operation in {
-            "initiate_canvas_lti_login_route",
-            "initiate_canvas_lti_experience_login_route",
-            "launch_canvas_lti_experience_route",
-            "exchange_canvas_lti_experience_code_route",
-            "get_canvas_lti_experience_session_route",
-            "bootstrap_canvas_lti_experience_application_route",
-            "create_canvas_lti_deep_linking_response_route",
-            "get_canvas_lti_evidence_status",
-            "sync_canvas_lti_evidence",
-            "get_canvas_lti_tool_jwks",
-            "verify_canvas_lti_launch_route",
-        }:
-            expected_case = {
-                "initiate_canvas_lti_login_route": "login",
-                "initiate_canvas_lti_experience_login_route": "experience-login",
-                "launch_canvas_lti_experience_route": "experience",
-                "exchange_canvas_lti_experience_code_route": "experience-exchange",
-                "get_canvas_lti_experience_session_route": "experience-session-current",
-                "bootstrap_canvas_lti_experience_application_route": "experience-bootstrap",
-                "create_canvas_lti_deep_linking_response_route": "experience-deep-linking",
-                "get_canvas_lti_evidence_status": "experience-evidence-status",
-                "sync_canvas_lti_evidence": "experience-evidence-sync",
-                "get_canvas_lti_tool_jwks": "tool-jwks",
-                "verify_canvas_lti_launch_route": "launch",
-            }[operation]
-            if operation == "exchange_canvas_lti_experience_code_route":
-                expected_authentication = "public-one-time-code"
-            elif operation in {
-                "get_canvas_lti_experience_session_route",
-                "bootstrap_canvas_lti_experience_application_route",
-                "create_canvas_lti_deep_linking_response_route",
-                "get_canvas_lti_evidence_status",
-                "sync_canvas_lti_evidence",
-            }:
-                expected_authentication = "lti-session-bearer"
-            elif operation == "get_canvas_lti_tool_jwks":
-                expected_authentication = "public"
-            elif operation in {
-                "launch_canvas_lti_experience_route",
-                "verify_canvas_lti_launch_route",
-            }:
-                expected_authentication = "public-lti-form-post"
-            else:
-                expected_authentication = "public-lti-login"
-            expected_method = (
-                "GET"
-                if operation
-                in {
-                    "get_canvas_lti_experience_session_route",
-                    "get_canvas_lti_evidence_status",
-                    "get_canvas_lti_tool_jwks",
-                }
-                else "POST"
-            )
-            assert coverage_entry["method"] == expected_method
-            assert coverage_entry["canvas_lti_behavior_case"] == expected_case
-            assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                and route["authentication"] == expected_authentication
-                for route in canvas_lti["scope"]["routes"]
-            )
-            continue
-        if operation in {
-            "start_canvas_oauth_connection",
-            "complete_canvas_oauth_connection",
-            "disconnect_canvas_oauth_connection",
-        }:
-            expected_case = {
-                "start_canvas_oauth_connection": "start",
-                "complete_canvas_oauth_connection": "callback",
-                "disconnect_canvas_oauth_connection": "disconnect",
-            }[operation]
-            assert coverage_entry["canvas_oauth_behavior_case"] == expected_case
-            assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                for route in canvas_oauth["scope"]["routes"]
-            )
-            continue
-        if operation in canvas_operations_cases:
-            assert (
-                coverage_entry["canvas_operations_behavior_case"]
-                == canvas_operations_cases[operation]
-            )
-            assert any(
-                route["method"] == coverage_entry["method"]
-                and operations_contract["route_prefix"] + route["path"]
-                == coverage_entry["path"]
-                for route in operations_contract["routes"]
-            )
-            assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                and route["router"] == "canvas_operations_router"
-                for route in surface["http"]["routes"]
-            )
-            continue
-        if operation in canvas_management_operations:
-            assert coverage_entry["canvas_management_behavior_case"] == operation
-            assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                for route in canvas_management["scope"]["routes"]
-            )
-            continue
-        if operation in canvas_mirror_operations:
-            assert coverage_entry == {
-                "method": canvas_mirror_operations[operation]["method"],
-                "path": canvas_mirror_operations[operation]["path"],
-                "operation": operation,
-                "canvas_mirror_behavior_contract": True,
-            }
-            continue
         if operation in application_template_operations:
             assert coverage_entry["application_template_behavior_case"] == operation
             assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                for route in application_templates["surface"]["routes"]
+                (
+                    route["method"] == coverage_entry["method"]
+                    and route["path"] == coverage_entry["path"]
+                    and (route["operation"] == operation)
+                    for route in application_templates["surface"]["routes"]
+                )
             )
             continue
         if operation in internal_application_operations:
             assert coverage_entry["internal_application_behavior_case"] == operation
             assert any(
-                route["method"] == coverage_entry["method"]
-                and route["path"] == coverage_entry["path"]
-                and route["operation"] == operation
-                for route in internal_applications["surface"]["routes"]
+                (
+                    route["method"] == coverage_entry["method"]
+                    and route["path"] == coverage_entry["path"]
+                    and (route["operation"] == operation)
+                    for route in internal_applications["surface"]["routes"]
+                )
             )
             continue
         if operation in retention_operations:
@@ -903,12 +685,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "get_credential_offer": "/v1/issuance/offers/tx-pending",
                 "list_transactions": "/v1/issuance/transactions?organization_id=org-a",
                 "get_transaction": "/v1/issuance/transactions/tx-revoked",
-                "get_transaction_revocation_status": (
-                    "/v1/issuance/transactions/tx-revoked/revocation-status"
-                ),
-                "get_issuance_transaction_owner": (
-                    "/internal/v1/resource-owners/issuance-transactions/tx-pending"
-                ),
+                "get_transaction_revocation_status": "/v1/issuance/transactions/tx-revoked/revocation-status",
+                "get_issuance_transaction_owner": "/internal/v1/resource-owners/issuance-transactions/tx-pending",
             }
             assert transaction_cases[operation]["path"] == expected_paths[operation]
             continue
@@ -921,10 +699,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-            "http": 9,
+        "http": 9,
         "grpc": 0,
-        "runtime_modes": ["api", "canvas-sync-worker"],
-            "literal_environment_variables": 13,
+        "runtime_modes": ["api"],
+        "literal_environment_variables": 12,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
@@ -932,44 +710,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert coverage["native_environment_variables"] == [
         "CORS_ALLOWED_ORIGINS",
         "APP_ENV",
-        "CANVAS_ADMIN_API_TOKEN",
-        "CANVAS_ADMIN_API_TOKEN_FILE",
-        "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
-        "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
-        "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
-        "CANVAS_CREDENTIALS_API_BASE_URL",
-        "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
-        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
-        "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
-        "CANVAS_CREDENTIALS_PUBLISH_URL",
-        "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
-        "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
-        "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-        "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
-        "CANVAS_LTI_DEEP_LINKING_ISSUER",
-        "CANVAS_LTI_EXPERIENCE_BASE_URL",
-        "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
-        "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
-        "CANVAS_LTI_JWKS_TTL_MINUTES",
-        "CANVAS_LTI_STATE_TTL_MINUTES",
-        "CANVAS_LTI_TOOL_ISSUER_DID",
-        "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
-        "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
-        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-        "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
-        "CANVAS_PILOT_ORGANIZATION_IDS",
-        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-        "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
-        "CANVAS_SYNC_SCHEDULE_LIMIT",
-        "CANVAS_SYNC_WORKER_BATCH_SIZE",
-        "CANVAS_SYNC_WORKER_ID",
-        "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
-        "CANVAS_SYNC_WORKER_LEASE_SECONDS",
-        "CANVAS_SYNC_WORKER_POLL_SECONDS",
         "CREDENTIAL_TEMPLATE_SERVICE_URL",
         "CT_GRPC_TARGET",
         "DATABASE_URL",
@@ -979,10 +719,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "DIDCOMM_TLS_CA_FILE",
         "DIDCOMM_UNIVERSAL_RESOLVER_URL",
         "ENVIRONMENT",
-            "GRPC_CA_CERT",
+        "GRPC_CA_CERT",
         "GRPC_SERVICE_TOKEN",
         "GRPC_SERVICE_TOKEN_FILE",
-            "GRPC_TLS_CA_CERT",
+        "GRPC_TLS_CA_CERT",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "ISSUANCE_GRPC_ENABLED",
         "ISSUANCE_GRPC_PORT",
@@ -1008,19 +748,6 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "VCDM_RELATED_RESOURCE_URLS",
     ]
     assert coverage["platform_additive_environment_variables"] == [
-        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
-        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
-        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
-        "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
-        "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-        "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
-        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
-        "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
-        "CANVAS_MIRROR_WORKER_ENABLED",
-        "CANVAS_MIRROR_WORKER_RETRY_FAILED",
-        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
-        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
         "GRPC_INSECURE_ALLOWED",
         "GRPC_TLS_CLIENT_CERT",
         "GRPC_TLS_CLIENT_KMS_ADDR",
@@ -1039,13 +766,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert native_environment_variables <= frozen_environment_variables
     assert additive_environment_variables.isdisjoint(frozen_environment_variables)
     assert coverage["remaining"]["literal_environment_variables"] == len(
-        frozen_environment_variables - native_environment_variables
+        frozen_environment_variables
+        - native_environment_variables
+        - set(coverage["retired_legacy"]["environment_variables"])
     )
 
 
-def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor() -> None:
+def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor() -> (
+    None
+):
     coverage = json.loads(text("contracts/issuance-native-coverage.json"))
-    contract_bytes = (ROOT / "contracts/issuance-oid4vci-authorization.json").read_bytes()
+    contract_bytes = (
+        ROOT / "contracts/issuance-oid4vci-authorization.json"
+    ).read_bytes()
     contract = json.loads(contract_bytes)
     expected_routes = {
         (route["method"], route["path"], route["operation"])
