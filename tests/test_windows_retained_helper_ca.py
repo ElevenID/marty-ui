@@ -279,7 +279,7 @@ def test_context_revalidates_callback_on_same_closing_census(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "remove", "terminal-write", "guard-replacement"]
+    "fault", [None, "remove", "terminal-write", "guard-replacement", "new-participant"]
 )
 def test_unused_retirement_preserves_receipts_and_blocks_partial_outcomes(
     monkeypatch, fault
@@ -316,6 +316,11 @@ def test_unused_retirement_preserves_receipts_and_blocks_partial_outcomes(
                 return CompletedProcess(args, 1, b"", b"PUBLIC_REFUSAL")
             rows[:] = [row for row in rows if row["Id"] != "d" * 64]
             removed.append(args[-1])
+            if fault == "new-participant":
+                unknown = deepcopy(item(staged, cycle))
+                unknown["Id"] = "9" * 64
+                unknown["Name"] = "/PUBLIC_UNEXPECTED_HELPER"
+                rows.append(unknown)
             return CompletedProcess(args, 0, (args[-1] + "\n").encode(), b"")
 
         monkeypatch.setattr(renewal, "run_owned_mutation", remove)

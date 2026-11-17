@@ -295,6 +295,18 @@ def require_closed_retirements(config):
                     )
 
 
+def _require_retired(items, proofs, cycle):
+    require(
+        not any(
+            item["Id"] in {p["id"] for p in proofs.values()}
+            or item.get("Name") in {"/" + p["name"] for p in proofs.values()}
+            or (item.get("Config", {}).get("Labels") or {}).get("marty.windows.renewal")
+            == cycle
+            for item in items
+        )
+    )
+
+
 def _retire_stopped(config, root, proofs, *, kind, evidence):
     """Journal exact stopped records before removing only those records, no -v.
 
@@ -359,14 +371,7 @@ def _retire_stopped(config, root, proofs, *, kind, evidence):
         require(
             result.returncode == 0 and result.stdout.strip() == expected["id"].encode()
         )
-    after = docker.containers()
-    require(
-        not any(
-            item["Id"] in {p["id"] for p in proofs.values()}
-            or item.get("Name") in {"/" + p["name"] for p in proofs.values()}
-            for item in after
-        )
-    )
+    _require_retired(docker.containers(), proofs, cycle)
     return output, intent_raw
 
 
@@ -448,7 +453,11 @@ def retire_unused_stage(config_path, output_dir, *, operator_successor=None):
             )
             # The exact readers are absent; return to the ordinary storage rule.
             context.retained_ca_readers = None
-            context.check(before_intent=True)
+            _require_retired(
+                context.check(before_intent=True),
+                {"failed": lease["failed_helper"]},
+                lease["cycle"],
+            )
             require(
                 {p.name for p in root.iterdir()} == names
                 and not list(Path(cfg["renewed_secrets"]).iterdir())
@@ -456,6 +465,11 @@ def retire_unused_stage(config_path, output_dir, *, operator_successor=None):
                 and renewal.read_private_bytes(staging) == staging_body
             )
         # Project coordination outlives every file-input exit and this rename.
+        _require_retired(
+            renewal.Docker(cfg["docker_host"], cfg["engine_id"]).containers(),
+            {"failed": lease["failed_helper"]},
+            lease["cycle"],
+        )
         with _held_private_input(
             guard, _rename_to=archive, _expected_identities=guard_identities
         ) as held:
@@ -465,6 +479,11 @@ def retire_unused_stage(config_path, output_dir, *, operator_successor=None):
         require(
             not renewal.namespace_entry_exists(guard)
             and renewal.read_private_bytes(staging) == staging_body
+        )
+        _require_retired(
+            renewal.Docker(cfg["docker_host"], cfg["engine_id"]).containers(),
+            {"failed": lease["failed_helper"]},
+            lease["cycle"],
         )
         _retirement_done(output, intent_raw)
         return {
@@ -609,7 +628,14 @@ def retire_selected_helpers(
                 },
             )
             observed["context"].retained_ca_readers = None
-            observed["context"].check(before_intent=True)
+            _require_retired(
+                observed["context"].check(before_intent=True), proofs, cycle
+            )
+        _require_retired(
+            renewal.Docker(cfg["docker_host"], cfg["engine_id"]).containers(),
+            proofs,
+            cycle,
+        )
         _retirement_done(output, intent_raw)
         return {
             "result": "selected-recovery-helpers-retired",
