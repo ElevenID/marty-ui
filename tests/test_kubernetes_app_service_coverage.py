@@ -48,7 +48,7 @@ def test_every_catalog_app_has_a_kubernetes_deployment() -> None:
 
 
 def test_every_request_serving_app_has_a_kubernetes_service() -> None:
-    request_serving_apps = _catalog_app_services() - {"canvas-sync-worker"}
+    request_serving_apps = _catalog_app_services()
     assert request_serving_apps <= _production_resources("Service", _manifest_resources()).keys()
 
 
@@ -97,8 +97,6 @@ def test_catalog_coverage_rejects_duplicate_production_resource(kind: str) -> No
 def test_catalog_coverage_requires_production_namespace(kind: str) -> None:
     resources = _manifest_resources()
     required = _catalog_app_services()
-    if kind == "Service":
-        required.remove("canvas-sync-worker")
     assert required <= _production_resources(kind, resources).keys()
     gateway = next(
         document

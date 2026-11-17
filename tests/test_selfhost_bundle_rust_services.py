@@ -11,7 +11,7 @@ import yaml
 @pytest.fixture
 def gate():
     root = Path(__file__).resolve().parents[1]
-    return runpy.run_path(str(root / "scripts/test_canvas_worker_compose_render.py"))
+    return runpy.run_path(str(root / "scripts/compose_config_model.py"))
 
 
 def assert_service_local_build_resets(document):
@@ -410,3 +410,10 @@ def test_eager_provider_startup_dependencies_are_healthy(model_name, consumer, p
     model = yaml.safe_load((root / model_name).read_text(encoding="utf-8"))
     dependency = model["services"][consumer]["depends_on"][provider]
     assert dependency == {"condition": "service_healthy"}
+
+
+def test_neutral_helper_reads_the_actual_beta_source_matrix(gate):
+    files = gate["beta_release_source_files"]()
+    assert files[0] == "docker-compose.base.yml"
+    assert "docker-compose.beta.yml" in files
+    assert all((gate["ROOT"] / name).is_file() for name in files)

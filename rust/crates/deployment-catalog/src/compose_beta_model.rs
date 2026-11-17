@@ -571,16 +571,13 @@ pub(super) fn physical_services(i: &Value) -> PolicyResult {
             networks.is_object() && names(&networks).is_subset(&names(&m["networks"])),
             "Beta physical provider service network is invalid",
         )?;
-        let bridge = name == "issuance-canvas-localhost-bridge"
-            && service["network_mode"] == "service:issuance"
-            && names(&m["services"]["issuance"]["networks"]) == set(["marty-network"]);
         let envoy = name == "envoy-issuance-bridge"
             && service["network_mode"] == "service:envoy"
             && names(&m["services"]["envoy"]["networks"]) == set(["marty-network"]);
         let init =
             name == "openbao-tls-init" && service["network_mode"] == "none" && !truthy(&networks);
         require(
-            (!truthy(&service["network_mode"]) || bridge || envoy || init)
+            (!truthy(&service["network_mode"]) || envoy || init)
                 && !truthy(&service["volumes_from"]),
             "Beta physical provider service inherited network or volumes",
         )?;
@@ -679,14 +676,6 @@ pub(super) fn physical_before_registry(i: &Value) -> PolicyResult {
                 (
                     "openbao_issuance_credential_grant",
                     "/bao/issuance-credential-grant",
-                ),
-                (
-                    "openbao_issuance_canvas_grant",
-                    "/bao/issuance-canvas-grant",
-                ),
-                (
-                    "openbao_issuance_readiness_grant",
-                    "/bao/issuance-readiness-grant",
                 ),
                 (
                     "openbao_issuance_passport_grant",

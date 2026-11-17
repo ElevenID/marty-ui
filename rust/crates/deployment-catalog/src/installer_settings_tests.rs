@@ -5,13 +5,6 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 
 const SECRET: &[u8] = b"synthetic-private-credential-0123456789abcdef\n";
 
-fn public_modulus() -> String {
-    use base64::Engine as _;
-    let mut bytes = vec![0x80; 256];
-    bytes[255] = 0x81;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
 fn write(path: &Path, bytes: &[u8], mode: u32) {
     if path.exists() {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -83,8 +76,6 @@ fn defaults_restore_registration_without_advertising_unconfigured_mail() {
         "KEYCLOAK_RESET_PASSWORD_ENABLED",
         "KEYCLOAK_SOCIAL_LOGIN_ENABLED",
         "ORGANIZATION_CREATION_ENABLED",
-        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-        "CANVAS_MIRROR_WORKER_ENABLED",
     ] {
         assert_eq!(env[key], "false");
     }
@@ -129,14 +120,10 @@ fn legacy_journal_remains_readable_but_a_partial_new_selection_is_not_adopted() 
     );
     let prepared = prepare(None, true).unwrap();
     let mut secrets = prepared.secrets;
-    for name in [
-        "passport_tenant_api_keys",
-        "personalization_bureau_api_key",
-        "canvas_credentials_api_token",
-    ] {
+    for name in ["passport_tenant_api_keys", "personalization_bureau_api_key"] {
         secrets.remove(name);
     }
-    assert_eq!(secrets.len(), 6);
+    assert_eq!(secrets.len(), 5);
     let record = Selection {
         schema: SELECTION_SCHEMA.into(),
         installation_id: state.journal().installation_id(),
@@ -236,7 +223,6 @@ fn selected_public_values_reach_canonical_environment_and_survive_generation_sel
         "GRPC_INSECURE_ALLOWED='false'",
         "PUBLIC_DOMAIN='primary.test'",
         "GATEWAY_OBSERVE_CLIENT_IP='false'",
-        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL='https://primary.test/console/org/deploy/canvas'",
     ] {
         assert!(text.lines().any(|value| value == line), "missing {line}");
     }
@@ -414,80 +400,131 @@ fn analytics_identifier_is_checked_before_provisioning() {
 }
 
 #[test]
-fn canvas_and_did_capabilities_require_their_specific_dependencies() {
-    for values in [
-        json!({"DID_PUBLIC_FALLBACK_ENABLED":true}),
-        json!({"CANVAS_ALLOW_PRIVATE_BASE_URLS":true}),
-        json!({"CANVAS_PORTABLE_INTEGRATION_ENABLED":true}),
-        json!({"CANVAS_MIRROR_WORKER_ENABLED":true}),
-    ] {
-        assert!(configuration(values, json!({})).environment(true).is_err());
-    }
-    let public = configuration(
-        json!({"DID_PUBLIC_FALLBACK_ENABLED":true,"DID_WEB_ALLOWED_HOSTS":["issuer.test"],
-        "CANVAS_ALLOW_PRIVATE_BASE_URLS":true,"CANVAS_PRIVATE_ORIGIN_ALLOWLIST":["https://canvas.internal.test"]}),
-        json!({}),
+fn did_fallback_requires_its_explicit_hostname_allowlist() {
+    assert!(
+        configuration(json!({"DID_PUBLIC_FALLBACK_ENABLED":true}), json!({}))
+            .environment(true)
+            .is_err()
     );
-    assert!(public.environment(true).is_ok());
-    let mut portable = configuration(
-        json!({"CANVAS_PORTABLE_INTEGRATION_ENABLED":true,
-        "CANVAS_CREDENTIALS_PROVIDER":"badgr_api", "CANVAS_LTI_EXPERIENCE_BASE_URL":"https://app.test",
-        "CANVAS_PILOT_ORGANIZATION_IDS":["00000000-0000-0000-0000-000000000001"],
-        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS":["00000000-0000-0000-0000-000000000002"],
-        "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID":"00000000-0000-0000-0000-000000000001",
-        "CANVAS_LTI_TOOL_ISSUER_DID":"did:web:issuer.test", "CANVAS_LTI_TOOL_ACTIVE_KID":"did:web:issuer.test#lti",
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS":{"keys":[{"kty":"RSA","alg":"RS256","kid":"did:web:issuer.test#lti","n":public_modulus(),"e":"AQAB"}]}}),
-        json!({}),
-    );
-    assert!(portable.environment(true).is_ok());
-    portable.values.insert(
-        "CANVAS_LTI_TOOL_ACTIVE_KID".into(),
-        json!("did:web:issuer.test#missing"),
-    );
-    assert!(portable.environment(true).is_err());
-    portable.values.insert(
-        "CANVAS_LTI_TOOL_ACTIVE_KID".into(),
-        json!("did:web:issuer.test#lti"),
-    );
-    portable
-        .values
-        .insert("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS".into(), json!(601));
-    assert!(portable.environment(true).is_err());
+    assert!(configuration(
+        json!({"DID_PUBLIC_FALLBACK_ENABLED":true,"DID_WEB_ALLOWED_HOSTS":["issuer.test"]}),
+        json!({})
+    )
+    .environment(true)
+    .is_ok());
 }
 
 #[test]
-fn canvas_api_token_is_distinct_required_and_retained_as_an_original_input() {
+fn retired_connector_settings_and_secret_files_are_refused() {
+    let defaults = configuration(json!({}), json!({}))
+        .environment(true)
+        .unwrap();
+    assert!(!defaults.keys().any(|key| key.starts_with("CANVAS_")));
+    for key in [
+        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
+        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
+        "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+        "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
+        "CANVAS_CREDENTIALS_API_BASE_URL",
+        "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+        "CANVAS_CREDENTIALS_API_TOKEN",
+        "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+        "CANVAS_CREDENTIALS_ASSERTION_SCOPE",
+        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+        "CANVAS_CREDENTIALS_BADGECLASS_ID",
+        "CANVAS_CREDENTIALS_ISSUER_ID",
+        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+        "CANVAS_CREDENTIALS_PROVIDER",
+        "CANVAS_CREDENTIALS_PUBLISH_URL",
+        "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
+        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
+        "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+        "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+        "CANVAS_LTI_EXPERIENCE_BASE_URL",
+        "CANVAS_LTI_TOOL_ACTIVE_KID",
+        "CANVAS_LTI_TOOL_ISSUER_DID",
+        "CANVAS_LTI_TOOL_PUBLIC_JWKS",
+        "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+        "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+        "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
+        "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
+        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
+        "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
+        "CANVAS_MIRROR_WORKER_ENABLED",
+        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
+        "CANVAS_MIRROR_WORKER_RETRY_FAILED",
+        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
+        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+        "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
+        "CANVAS_PILOT_ORGANIZATION_IDS",
+        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
+        "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
+        "CANVAS_SYNC_SCHEDULE_LIMIT",
+        "CANVAS_SYNC_WORKER_BATCH_SIZE",
+        "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+        "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+        "CANVAS_SYNC_WORKER_POLL_SECONDS",
+    ] {
+        for value in [
+            json!(false),
+            json!(true),
+            json!("synthetic-secret-never-disclose"),
+            json!({"keys":[]}),
+        ] {
+            for managed in [false, true] {
+                let error = configuration(json!({key:value}), json!({}))
+                    .environment(managed)
+                    .unwrap_err();
+                assert!(!error.contains("synthetic-secret-never-disclose"));
+            }
+        }
+    }
+    for key in [
+        "canvas_credentials_shared_secret",
+        "canvas_credentials_api_token",
+    ] {
+        assert!(
+            configuration(json!({}), json!({key:"/private/retired-connector-secret"}))
+                .environment(true)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn bureau_api_token_is_distinct_required_and_retained_as_an_original_input() {
     use crate::installer_generation_binding::{GenerationFile, GenerationSource};
     let root = private_root();
-    let path = root.path().join("canvas-api-token");
+    let path = root.path().join("bureau-api-token");
     write(&path, SECRET, 0o600);
     let config = configuration(
-        json!({"CANVAS_MIRROR_WORKER_ENABLED":true,
-        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID":"org-production", "CANVAS_CREDENTIALS_PROVIDER":"badgr_api",
-        "CANVAS_CREDENTIALS_ISSUER_ID":"issuer-production", "CANVAS_CREDENTIALS_BADGECLASS_ID":"badge-production"}),
-        json!({"canvas_credentials_api_token":path}),
+        json!({"PASSPORT_NATIVE_HTTP_ENABLED":true,"PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED":true,
+        "PERSONALIZATION_BUREAU_URL":"https://bureau.example.test"}),
+        json!({"personalization_bureau_api_key":path}),
     );
     let prepared = prepare(Some(&source(root.path(), &config)), true).unwrap();
     assert_eq!(
-        prepared.configuration.environment(true).unwrap()["CANVAS_CREDENTIALS_API_TOKEN_FILE"],
-        "/run/secrets/canvas_credentials_api_token"
+        prepared.configuration.environment(true).unwrap()["PERSONALIZATION_BUREAU_API_KEY_FILE"],
+        "/run/secrets/personalization_bureau_api_key"
     );
     assert_eq!(
-        prepared.secrets["canvas_credentials_api_token"],
+        prepared.secrets["personalization_bureau_api_key"],
         fingerprint(SECRET)
     );
-    assert_eq!(
-        prepared.secrets["canvas_credentials_shared_secret"],
-        fingerprint(&[])
-    );
+    assert_eq!(prepared.secrets["smtp_password"], fingerprint(&[]));
     let mut missing = config.clone();
     missing.secret_files.clear();
-    missing
-        .secret_files
-        .insert("canvas_credentials_shared_secret".into(), path);
+    missing.secret_files.insert("smtp_password".into(), path);
     assert!(missing.environment(true).is_err());
     assert!(configuration(
-        json!({"CANVAS_CREDENTIALS_API_TOKEN":"raw-secret"}),
+        json!({"PERSONALIZATION_BUREAU_API_KEY":"raw-secret"}),
         json!({})
     )
     .environment(true)
@@ -505,7 +542,7 @@ fn canvas_api_token_is_distinct_required_and_retained_as_an_original_input() {
         write(&installation.join("secrets").join(name), &bytes, 0o444);
     }
     let files = BTreeMap::from([(
-        "canvas_credentials_api_token".into(),
+        "personalization_bureau_api_key".into(),
         GenerationFile {
             source: GenerationSource::Original,
             sha256: digest(SECRET),
@@ -516,7 +553,7 @@ fn canvas_api_token_is_distinct_required_and_retained_as_an_original_input() {
     )]);
     verify_generation(&installation, &files).unwrap();
     write(
-        &installation.join("secrets/canvas_credentials_api_token"),
+        &installation.join("secrets/personalization_bureau_api_key"),
         b"changed-api-token",
         0o444,
     );

@@ -14,14 +14,12 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application environment differs from the reviewed installation contract";
 const EXAMPLE: &str = include_str!("../../../../.env.selfhost.production.example");
 pub const OPERATOR_EMAIL: &str = "operator@localhost";
-pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 9] = [
+pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 7] = [
     "google_client_id",
     "google_client_secret",
     "google_analytics_measurement_id",
     "google_site_verification",
     "smtp_password",
-    "canvas_credentials_shared_secret",
-    "canvas_credentials_api_token",
     "passport_tenant_api_keys",
     "personalization_bureau_api_key",
 ];
@@ -263,7 +261,6 @@ pub(crate) fn render_selected(
         "ISSUER_BASE_URL",
         "MARTY_ISSUER_BASE_URL",
         "CORS_ORIGINS",
-        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
     ] {
         values.insert(key.into(), p.origin.clone());
     }
@@ -299,20 +296,6 @@ pub(crate) fn render_selected(
             format!("noreply@{}", origin.host()),
         );
     }
-    values
-        .entry("CANVAS_LTI_EXPERIENCE_BASE_URL".into())
-        .or_insert_with(|| p.origin.clone());
-    let experience = values
-        .get("CANVAS_LTI_EXPERIENCE_BASE_URL")
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&p.origin);
-    let completion = format!(
-        "{}/console/org/deploy/canvas",
-        experience.trim_end_matches('/')
-    );
-    values
-        .entry("CANVAS_OAUTH_COMPLETION_REDIRECT_URL".into())
-        .or_insert(completion);
     // Secondary origins extend browser policy only; the generated canonical
     // origin, issuer DID and callback identity remain owned by hosting.
     if let Some(additional) = values

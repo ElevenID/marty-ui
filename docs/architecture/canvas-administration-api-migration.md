@@ -1,5 +1,7 @@
 # Canvas administration API operation migration matrix
 
+
+> Historical migration inventory. The removal candidate retires these provider-specific Marty routes. This table is not a current supported API list and does not authorize reintroducing the adapter. Missing generic Gateway capabilities remain disabled connector TODOs. See [current boundary](canvas-gateway-api-boundary.md).
 Source reviewed: `ui/src/services/canvasIntegrationsApi.js` at Marty-ui main. This file currently calls Marty UI's shared `api.js` helpers (`get/post/put/del`) and idempotency helper. It sends requests from the signed-in Marty console context today; it is not yet a standalone connector API-key client.
 
 ## Mandatory migration behavior

@@ -61,7 +61,6 @@ function ConvertTo-BetaApplicationImageLines {
             else { "      SERVICE_NAME: $($entry.selector)" }
             if ($entry.service -eq "issuance") {
                 "      MARTY_SCHEMA_STARTUP_MODE: validate"
-                "      CANVAS_MIRROR_WORKER_ENABLED: 'false'"
             }
         }
         if ($entry.service -eq "issuance") {

@@ -126,8 +126,6 @@ function New-BetaDeployArguments {
     $arguments = @{
         ArtifactDir = $ArtifactDir
         BetaOrigin = "https://beta.elevenidllc.com"
-        EnablePortableCanvas = $true
-        CanvasOrigin = "https://canvas-test.elevenidllc.com"
         PilotOrganizationId = "00000000-0000-0000-0000-000000000001"
     }
     if ($OfficialStackRelease) {

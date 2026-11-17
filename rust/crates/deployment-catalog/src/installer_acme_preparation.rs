@@ -636,7 +636,6 @@ mod tests {
             "google_analytics_measurement_id",
             "google_site_verification",
             "smtp_password",
-            "canvas_credentials_shared_secret",
         ] {
             let path = installation.join("secrets").join(name);
             std::fs::write(&path, []).unwrap();
@@ -646,17 +645,13 @@ mod tests {
         assert!(!installation
             .join("secrets/passport_tenant_api_keys")
             .exists());
-        for name in [
-            "passport_tenant_api_keys",
-            "personalization_bureau_api_key",
-            "canvas_credentials_api_token",
-        ] {
+        for name in ["passport_tenant_api_keys", "personalization_bureau_api_key"] {
             let path = installation.join("secrets").join(name);
             std::fs::write(&path, []).unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
         }
         let current = state.with_inspection(entries).unwrap();
-        assert_eq!(current.len(), 20);
+        assert_eq!(current.len(), 18);
     }
 
     #[test]

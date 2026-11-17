@@ -35,7 +35,6 @@ pub(crate) const WORKLOADS: &[&str] = &[
     "credential-template",
     "issuance",
     "issuance-native",
-    "canvas-sync-worker",
     "notification",
     "compliance-profile",
     "presentation-policy",
