@@ -661,7 +661,9 @@ async fn provision(
                 || data(&lookup, "orphan")?.as_bool() != Some(true)
                 || value(&lookup, "path")? != "auth/token/create/selfhost-renew-leaf"
                 || !marty_selfhost_identity::renewal_leaf::bounded_metadata(
-                    lookup.get("data").ok_or("renewed TLS token metadata is absent")?,
+                    lookup
+                        .get("data")
+                        .ok_or("renewed TLS token metadata is absent")?,
                 )
             {
                 return Err("renewed TLS token has unexpected authority or lifetime".into());
