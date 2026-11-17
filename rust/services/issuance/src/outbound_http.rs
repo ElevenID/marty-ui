@@ -95,10 +95,7 @@ impl OperationSocket {
         let _ = self
             .phase
             .compare_exchange(0, phase, Ordering::Relaxed, Ordering::Relaxed);
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            "Outbound HTTP operation timed out",
-        )
+        io::Error::new(io::ErrorKind::TimedOut, "Outbound HTTP operation timed out")
     }
 
     fn wrote(&mut self, bytes: &[u8]) {
