@@ -1,9 +1,9 @@
 //! Credential status is authenticated independently of issuer trust and managed
 //! lifecycle identity. Only the native verifier calls this with verified claims.
-use std::{io::Read, time::Duration};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use flate2::read::ZlibDecoder;
+use flate2::{Decompress, FlushDecompress, Status};
 use mmf_platform::OutboundDestinationPolicy;
 use serde_json::{Map, Value};
 use url::Url;
@@ -280,16 +280,18 @@ fn verify_token(
     let compressed = URL_SAFE_NO_PAD
         .decode(list.get("lst").and_then(Value::as_str).ok_or(())?)
         .map_err(|_| ())?;
-    let mut decoder = ZlibDecoder::new(compressed.as_slice());
-    let mut bytes = Vec::new();
-    decoder
-        .by_ref()
-        .take((MAX_LIST_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
+    let mut decoder = Decompress::new(true);
+    let mut bytes = vec![0; MAX_LIST_BYTES + 1];
+    let state = decoder
+        .decompress(&compressed, &mut bytes, FlushDecompress::Finish)
         .map_err(|_| ())?;
-    if bytes.len() > MAX_LIST_BYTES || decoder.total_in() != compressed.len() as u64 {
+    if state != Status::StreamEnd
+        || decoder.total_out() > MAX_LIST_BYTES as u64
+        || decoder.total_in() != compressed.len() as u64
+    {
         return Err(());
     }
+    bytes.truncate(decoder.total_out() as usize);
     let bit_index = reference.index.checked_mul(bits).ok_or(())?;
     let byte = bytes
         .get(usize::try_from(bit_index / 8).map_err(|_| ())?)
@@ -523,6 +525,38 @@ mod tests {
                 1100
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn requires_complete_zlib_stream_even_when_status_byte_exists() {
+        let (reference, key, claims) = fixture();
+        assert!(verify_token(
+            &signed(&claims, Value::Null, 7),
+            &reference,
+            &key,
+            "EdDSA",
+            1100
+        )
+        .is_ok());
+        let original = URL_SAFE_NO_PAD
+            .decode(claims["status_list"]["lst"].as_str().unwrap())
+            .unwrap();
+        for removed in [1, 4] {
+            let mut changed = claims.clone();
+            changed["status_list"]["lst"] =
+                json!(URL_SAFE_NO_PAD.encode(&original[..original.len() - removed]));
+            assert!(
+                verify_token(
+                    &signed(&changed, Value::Null, 7),
+                    &reference,
+                    &key,
+                    "EdDSA",
+                    1100
+                )
+                .is_err(),
+                "a missing zlib checksum/end marker cannot supply status"
+            );
         }
     }
 
