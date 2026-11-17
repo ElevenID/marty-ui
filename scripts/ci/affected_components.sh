@@ -145,7 +145,7 @@ else
     renewal_unit_test_only=true
     for path in "${changed_files[@]}"; do
       case "${path#rust/services/issuance/src/}" in
-        initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|python_format_tests.rs|signing_http_projection_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
+        initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
         *) renewal_unit_test_only=false; break ;;
       esac
     done
