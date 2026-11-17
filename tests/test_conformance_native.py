@@ -152,8 +152,8 @@ def test_token_capacity_is_paired_without_rejecting_legacy_zero(rate):
         None,
         "rate",
         "authorization",
-        "mirror-setting",
-        "missing-mirror",
+        "retired-connector",
+        "missing-ttl",
         "other-field",
         "rewritten-before",
     ],
@@ -170,7 +170,7 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
         return yaml.safe_load((native.ROOT / path).read_text(encoding="utf-8"))
 
     common = gate["complete_common"](source(gate["COMMON"]), source(gate["RUNTIME"]))
-    approved = source(gate["APPROVED_COMMON"])
+    approved = gate["MERGE"]["retired_provider_projection"](source(gate["APPROVED_COMMON"]))
     base = source("docker-compose.base.yml")
 
     def check():
@@ -185,10 +185,10 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
         current["TOKEN_RATE_LIMIT"] = "${TOKEN_RATE_LIMIT:-1200}"
     elif fault == "authorization":
         current["ISSUANCE_AUTH_SESSION_TTL_MINUTES"] = "different"
-    elif fault == "mirror-setting":
+    elif fault == "retired-connector":
         current["CANVAS_MIRROR_WORKER_BATCH_LIMIT"] = "different"
-    elif fault == "missing-mirror":
-        current.pop("CANVAS_MIRROR_WORKER_BATCH_LIMIT")
+    elif fault == "missing-ttl":
+        current.pop("ISSUANCE_AUTH_SESSION_TTL_MINUTES")
     elif fault == "other-field":
         current["UNREVIEWED_SETTING"] = "synthetic"
     elif fault == "rewritten-before":

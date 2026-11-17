@@ -33,17 +33,13 @@ require_selfhost_tests "$("$selfhost_executable" --list)"
 test -x "${MARTY_SELFHOST_TEST_PACKAGER_BINARY:?}"
 test -x "${MARTY_SELFHOST_BUNDLE_TEST_COMPOSE:?}"
 [[ "$(docker image inspect --format '{{.Id}}' "$MARTY_SELFHOST_TEST_IMAGE")" == "$MARTY_SELFHOST_TEST_IMAGE" ]]
-mapfile -t images < <(jq -er '.postgres, .schema_probe' ../contracts/selfhost-runtime-images.json)
-[[ ${#images[@]} == 2 ]]
-for image in "${images[@]}"; do
-  [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
-done
-# Transitional shared schema fixture variable; retire with the fixture rename.
-MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "${images[0]}")"
-export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
-docker pull "${images[1]}"
+postgres_image=$(jq -er '.postgres' ../contracts/platform-test-database.json)
+[[ "$postgres_image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
+MARTY_PLATFORM_TEST_POSTGRES_IMAGE="$(bash "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "$postgres_image")"
+export MARTY_PLATFORM_TEST_POSTGRES_IMAGE
 selfhost_log=$(mktemp "${RUNNER_TEMP:?}/selfhost-acceptance.XXXXXX")
 trap 'rm -f -- "$selfhost_log"' EXIT
+export MARTY_PLATFORM_SCHEMA_TEST=1
 run_timed_rust_test contract selfhost python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
   --name selfhost_acceptance --owner selfhost -- \
   "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"

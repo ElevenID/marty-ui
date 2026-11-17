@@ -166,3 +166,15 @@ def beta_release_source_files():
         files.append(entry[1])
     assert files and files[0] == DEVELOPMENT_BASE and "docker-compose.beta.yml" in files
     return files
+
+
+def retired_provider_projection(value):
+    """Project only the immutable historical reference; never normalize actual input."""
+    def retired(name):
+        return isinstance(name, str) and bool(re.search(r"canvas|issuance[_-]readiness", name, re.I))
+    if isinstance(value, dict):
+        return {key: retired_provider_projection(item) for key, item in value.items() if not retired(key)}
+    if isinstance(value, list):
+        return [retired_provider_projection(item) for item in value
+                if not retired(item) and not (isinstance(item, dict) and retired(item.get("source")))]
+    return value

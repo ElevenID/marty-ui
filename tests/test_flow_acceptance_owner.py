@@ -1,12 +1,10 @@
-"""The Flow split retains one executable owner for each published-schema case."""
-
+"""Retained Flow cases have one platform-owned source, fixture and runner."""
 from pathlib import Path
 import re
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOW = ROOT / "rust/crates/flow-acceptance"
-CANVAS = ROOT / "rust/crates/canvas-acceptance"
 FLOW_OUTER = (
     "didcomm_flow_grpc_provider_preserves_keyed_admission",
     "didcomm_http_admission_recovers_real_keyed_reservation",
@@ -14,6 +12,8 @@ FLOW_OUTER = (
     "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
     "flow_rendered_provider_child",
     "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
+    "platform_fixture_uses_current_owned_schema_without_provider_objects",
+    "platform_fixture_recovery_rejects_foreign_topology_before_removal",
 )
 FLOW_NESTED = (
     "loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
@@ -22,98 +22,56 @@ FLOW_NESTED = (
 )
 
 
+FLOW_SHARED = {
+    "base_runtime_redis::tests::ping_cleanup_failure_is_terminal_not_readiness_retry": "base_runtime_redis.rs",
+    "base_runtime_redis::tests::redis_fixture_requires_exact_owner_storage_and_loopback_without_database_override": "base_runtime_redis.rs",
+    "base_runtime_redis::tests::namespace_redis_rejects_other_networks_and_every_host_publication": "base_runtime_redis.rs",
+    "didcomm_gateway_replay::native_selection_is_unchanged_and_legacy_control_changes_only_direct_owner": "didcomm_gateway_replay.rs",
+    "didcomm_gateway_replay::initiation_native_selection_is_unchanged_and_legacy_control_changes_only_rewritten_post_owner": "didcomm_gateway_replay.rs",
+}
+
+
 def test_flow_cases_have_one_required_source_and_runner_owner():
-    flow_source = (FLOW / "tests/flow_published_schema_contract.rs").read_text()
-    canvas_source = (CANVAS / "tests/canvas_published_schema_contract.rs").read_text()
-    nested_source = (FLOW / "tests/support/flow_public_startup.rs").read_text()
-    runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
-    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
-    assert len(FLOW_OUTER) + len(FLOW_NESTED) == 9
+    source = (FLOW / "tests/flow_published_schema_contract.rs").read_text()
+    nested = (FLOW / "tests/support/flow_public_startup.rs").read_text()
+    inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
+    runner = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
+    assert len(FLOW_OUTER) + len(FLOW_NESTED) + len(FLOW_SHARED) == 16
     for name in FLOW_OUTER:
-        assert len(re.findall(rf"async fn {name}\(\)", flow_source)) == 1
-        assert f"async fn {name}()" not in canvas_source
-        assert runner.count(f"'{name}: test'") == 0
-        assert flow_inventory.count(f"'{name}: test'") == 1
+        assert len(re.findall(rf"(?:async )?fn {name}\(\)", source)) == 1
+        assert inventory.count(f"'{name}: test'") == 1
     for name in FLOW_NESTED:
-        assert len(re.findall(rf"(?:async )?fn {name}\(\)", nested_source)) == 1
-        assert runner.count(f"public_startup::{name}: test'") == 0
-        assert flow_inventory.count(f"public_startup::{name}: test'") == 1
-    assert (
-        'flow_tests=$(bash "$(dirname "${BASH_SOURCE[0]}")/list-flow-acceptance-cases.sh" "$flow_executable")'
-        in runner
-    )
-    assert "--name flow_acceptance --owner canvas --" in runner
-    assert '"$flow_executable" --nocapture --test-threads=4' in runner
-    assert (
-        "Flow executable changed its exact nine-case owner inventory" in flow_inventory
-    )
-    assert "flow_status == 0" in runner
-    flow_only = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
-    assert "list-flow-acceptance-cases.sh" in flow_only
-    assert "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1" in flow_only
-    assert "MARTY_ISSUANCE_TEST_BINARY=" in flow_only
-    assert "--nocapture --test-threads=4" in flow_only
-    assert "--name flow_acceptance --owner flow-pr --" in flow_only
-    assert "rust_db_obligations.py" in flow_only and "rust_db_obligations.py" in runner
-    assert "9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" in flow_only
+        assert len(re.findall(rf"(?:async )?fn {name}\(\)", nested)) == 1
+        assert inventory.count(f"public_startup::{name}: test'") == 1
+    for required in ["list-flow-acceptance-cases.sh", "MARTY_PLATFORM_SCHEMA_TEST=1",
+                     "MARTY_ISSUANCE_TEST_BINARY=", "--name flow_acceptance --owner flow-pr --",
+                     '"$flow_executable" --nocapture --test-threads=4',
+                     "16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]:
+        assert required in runner
+    for name, file in FLOW_SHARED.items():
+        body = (FLOW / "tests/support" / file).read_text()
+        assert len(re.findall(rf"fn {name.rsplit('::', 1)[1]}\(\)", body)) == 1
+        assert inventory.count(f"'{name}: test'") == 1
+    assert "observed_image" not in runner and "canvas" not in runner.lower()
 
 
-def test_shared_fixtures_keep_canvas_unit_tests_once_and_release_scope():
-    canvas_manifest = tomllib.loads((CANVAS / "Cargo.toml").read_text())
-    flow_manifest = tomllib.loads((FLOW / "Cargo.toml").read_text())
-    assert "marty-flow" not in canvas_manifest["dev-dependencies"]
-    assert "marty-flow" in flow_manifest["dev-dependencies"]
-    assert "features" not in canvas_manifest
-    assert "features" not in flow_manifest
-    redis = (
-        ROOT / "rust/acceptance/support/base_runtime_redis.rs"
-    ).read_text()
-    gateway = (
-        ROOT / "rust/acceptance/support/didcomm_gateway_replay.rs"
-    ).read_text()
-    redis_owner = (CANVAS / "tests/support/base_runtime_redis.rs").read_text()
-    gateway_owner = (CANVAS / "tests/support/didcomm_gateway_replay.rs").read_text()
-    flow_owner = (FLOW / "tests/flow_published_schema_contract.rs").read_text()
-    canvas_owner = (CANVAS / "tests/canvas_published_schema_contract.rs").read_text()
-    assert "fn ping_cleanup_failure_is_terminal_not_readiness_retry" not in redis
-    assert "fn ping_cleanup_failure_is_terminal_not_readiness_retry" in redis_owner
-    assert "fn native_selection_is_unchanged" not in gateway
-    assert "fn native_selection_is_unchanged" in gateway_owner
-    assert "include!(" in redis_owner and "include!(" in gateway_owner
-    assert 'include!("../../../../acceptance/support/base_runtime_redis.rs")' in redis_owner
-    assert '#[path = "../../../acceptance/support/base_runtime_redis.rs"]' in flow_owner
-    assert 'include!("../../../../acceptance/support/didcomm_gateway_replay.rs")' in gateway_owner
-    assert '#[path = "../../../acceptance/support/didcomm_gateway_replay.rs"]' in flow_owner
-    for shared_source in ("didcomm_native_grpc_fixture.rs", "issuance_named_peers.rs"):
-        path = ROOT / "rust/acceptance/support" / shared_source
-        assert path.is_file()
-        assert not (ROOT / "rust/services/issuance/tests/support" / shared_source).exists()
-        expected = f'#[path = "../../../acceptance/support/{shared_source}"]'
-        assert flow_owner.count(expected) == 1
-        assert canvas_owner.count(expected) == 1
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "-p marty-flow-acceptance" in workflow
-    assert "--test flow_published_schema_contract" in workflow
-    assert "--exclude marty-flow-acceptance" in workflow
-    database = (
-        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
-    ).read_text()
+def test_shared_platform_fixtures_have_no_provider_owner_dependency():
+    source = (FLOW / "tests/flow_published_schema_contract.rs").read_text()
+    manifest = tomllib.loads((FLOW / "Cargo.toml").read_text())
+    assert "features" not in manifest
+    for name in ["marty-flow", "marty-organization", "marty-credential-template", "marty-issuance-service"]:
+        assert name in manifest["dev-dependencies"]
+    for shared in ["base_runtime_redis.rs", "didcomm_gateway_replay.rs", "didcomm_native_grpc_fixture.rs", "issuance_named_peers.rs"]:
+        assert (ROOT / "rust/acceptance/support" / shared).is_file()
+        if shared in {"base_runtime_redis.rs", "didcomm_gateway_replay.rs"}:
+            assert source.count(f'#[path = "support/{shared}"]') == 1
+            assert f'include!("../../../../acceptance/support/{shared}")' in (FLOW / "tests/support" / shared).read_text()
+        else:
+            assert source.count(f'#[path = "../../../acceptance/support/{shared}"]') == 1
+    assert "mod platform_test_database" in source
+    assert "canvas_published_database" not in source
+    database = (ROOT / "rust/services/issuance/tests/support/platform_test_database.rs").read_text()
     assert 'start.ends_with("rust/crates/flow-acceptance")' in database
-
-
-def test_linux_only_canvas_cases_explain_cross_platform_inventory():
-    source = (CANVAS / "tests/canvas_published_schema_contract.rs").read_text()
-    diagnostics = (CANVAS / "tests/support/runtime_failure_diagnostics.rs").read_text()
-    rendered = (CANVAS / "tests/support/rendered_base_process.rs").read_text()
-    assert re.search(
-        r"#\[cfg\(unix\)\]\s*#\[tokio::test\]\s*async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
-        source,
-    )
-    assert re.search(
-        r"#\[cfg\(unix\)\]\s*#\[test\]\s*fn linked_directory_marker_and_output_are_refused",
-        diagnostics,
-    )
-    assert re.search(
-        r'#\[cfg\(target_os = "linux"\)\]\s*#\[test\]\s*fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy',
-        rendered,
-    )
+    assert "canvas" not in database.lower()
+    for retired in ["observed_image", "start_probe", "extra_fixture", "runpy"]:
+        assert retired not in database

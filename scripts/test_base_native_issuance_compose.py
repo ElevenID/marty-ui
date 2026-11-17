@@ -55,19 +55,11 @@ NATIVE_ONLY = {
     "MARTY_UI_SHA": "${MARTY_UI_SHA:-unknown}",
     "RUST_LOG": "${ISSUANCE_NATIVE_RUST_LOG:-info}",
 }
-CANVAS_PUBLICATION_INPUTS = {
-    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
-    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
-    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL": "${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}",
-    "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
-    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
-}
-# The alias and native instance use the same Rust binary. Only the native
-# instance may run the Canvas mirror automation loop.
+# The alias and native instance share the same provider-neutral Rust binary.
 LEGACY_ONLY = frozenset(
     """
-BAO_TOKEN_FILE CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
-CANVAS_LTI_TOOL_PUBLIC_JWKS
+BAO_TOKEN_FILE
+
 """.split()
 )
 # Exhaustive source-input inventory exclusions, each explained in the companion
@@ -75,11 +67,11 @@ CANVAS_LTI_TOOL_PUBLIC_JWKS
 # Observation ingress and application ownership remain disabled in unqualified profiles.
 UNFORWARDED_LEGACY = frozenset(
     """
-APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
-CANVAS_CREDENTIALS_BASE_URL CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS
-CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS
-CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE CANVAS_LTI_DEEP_LINKING_ISSUER
-CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES
+APP_ENV
+
+
+
+
 CORS_ALLOWED_ORIGINS DIDCOMM_UNIVERSAL_RESOLVER_URL ISSUER_DISPLAY_NAME
 TOKEN_RATE_WINDOW VCDM_RELATED_RESOURCE_MAX_BYTES VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS
 INTEGRATION_SECRET_MASTER_KEY INTEGRATION_SECRET_MASTER_KEY_ENV
@@ -100,8 +92,6 @@ BETA_OVERLAY_ONLY = frozenset(
 EXPLICIT_MOUNTS = frozenset({"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"})
 FILE_SELECTORS = frozenset(
     {
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-        "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
         "GRPC_WORKLOAD_TLS_SERVER_KEY",
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
@@ -153,7 +143,6 @@ def assert_sources(base, profile, runtime):
     native = profile["services"]["issuance-native"]
     env = native["environment"]
     signer = base["services"]["signing-keys"]
-    worker = base["services"]["canvas-sync-worker"]
     assert signer["secrets"] == [
         "dev_integration_secret_server_cert",
         "dev_integration_secret_ca",
@@ -173,8 +162,7 @@ def assert_sources(base, profile, runtime):
     assert signer["environment"][
         "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE"
     ] == ("/run/secrets/signing_keys_tls_kms_token")
-    assert worker["secrets"] == ["dev_integration_secret_ca"]
-    for client in (worker["environment"], env):
+    for client in (env,):
         assert client["INTEGRATION_SECRET_KMS_URL"] == (
             "https://signing-keys:8018/internal"
         )
@@ -251,19 +239,7 @@ def assert_sources(base, profile, runtime):
             assert legacy[key] == "http://gateway:8000/internal/signing-keys"
             assert env[key] == "http://gateway:8000/internal/signing-keys"
             continue
-        if key == "CANVAS_MIRROR_WORKER_ENABLED":
-            assert legacy[key] == "false"
-            continue
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
-    publication_source = (
-        ROOT / "rust/services/issuance/src/canvas_credentials_publication.rs"
-    ).read_text(encoding="utf-8")
-    for key, expression in CANVAS_PUBLICATION_INPUTS.items():
-        assert key in publication_source, f"Native publication no longer reads {key}"
-        assert env.get(key) == expression, f"Native publication input {key} is unbound"
-        assert legacy.get(key) == expression, (
-            f"Base publication input {key} is unpaired"
-        )
     for name in NATIVE["TOKEN_CONSUMERS"]:
         assert (
             base["services"][name]["environment"].get("GRPC_SERVICE_TOKEN")
@@ -326,8 +302,6 @@ def assert_sources(base, profile, runtime):
     ]
     grant_mounts = [
         ("credential", "openbao_issuance_credential_grant"),
-        ("canvas", "openbao_issuance_canvas_grant"),
-        ("readiness", "openbao_issuance_readiness_grant"),
         ("passport", "openbao_issuance_passport_grant"),
     ]
     shared_mounts = [
@@ -347,10 +321,6 @@ def assert_sources(base, profile, runtime):
             assert owner[f"ISSUANCE_{origin.upper()}_SIGN_GRANT_MINT_TOKEN_FILE"] == (
                 f"/bao/issuance-{origin}-grant/token"
             )
-    assert worker["volumes"] == [
-        "openbao_public_ca:/bao/public-ca:ro",
-        "openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro",
-    ]
     EXTRACTION["complete_common"](source(EXTRACTION["COMMON"]), runtime)
     inputs = EXTRACTION["issuance_configuration_inputs"]()
     omitted = (
@@ -421,8 +391,6 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             ],
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
-            "CANVAS_MIRROR_WORKER_ENABLED": inputs.get("CANVAS_MIRROR_WORKER_ENABLED")
-            or "false",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
             or "false",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": inputs.get(
@@ -502,8 +470,6 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
                 }
                 for origin, volume in (
                     ("credential", "openbao_issuance_credential_grant"),
-                    ("canvas", "openbao_issuance_canvas_grant"),
-                    ("readiness", "openbao_issuance_readiness_grant"),
                     ("passport", "openbao_issuance_passport_grant"),
                 )
             ],

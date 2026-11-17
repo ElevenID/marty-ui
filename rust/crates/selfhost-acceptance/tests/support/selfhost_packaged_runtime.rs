@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    canvas_published_database::PublishedDatabase,
+    platform_test_database::PublishedDatabase,
     selfhost_runtime_sidecar::{
         LogExpectation, OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase,
         MANAGEMENT_KEY, ORGANIZATION, TRANSACTION_ID,
@@ -94,7 +94,7 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
         .env("MARTY_SELFHOST_PARENT_SCOPE", &sentinel)
         .env("MARTY_SELFHOST_CHILD_CASE", case.key())
         .env("MARTY_SELFHOST_LOADER_CHILD", "1")
-        .env("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+        .env("MARTY_PLATFORM_SCHEMA_TEST", "1")
         .env("MARTY_SELFHOST_CHILD_SENTINEL", &sentinel);
     for key in [
         "PATH",
@@ -105,11 +105,11 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
     ] {
         command.env(key, std::env::var_os(key).ok_or(ERROR)?);
     }
-    // The outer Canvas runner selected this exact oracle digest after its
+    // The outer platform runner selected this exact PostgreSQL digest after its
     // mirror-first pull. Preserve that choice across the deliberately cleared
-    // child environment; PublishedDatabase validates it against the oracle.
-    if let Some(image) = std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
-        command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);
+    // child environment; PublishedDatabase validates it against the fixed pin.
+    if let Some(image) = std::env::var_os("MARTY_PLATFORM_TEST_POSTGRES_IMAGE") {
+        command.env("MARTY_PLATFORM_TEST_POSTGRES_IMAGE", image);
     }
     // Disable automatic parent cleanup before the child can create anything.
     // Only verified resource absence restores automatic scratch removal.
@@ -401,7 +401,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .execute(&admin)
         .await
         .map_err(|_| ERROR)?;
-    sqlx::query("CREATE DATABASE marty WITH TEMPLATE canvas_published_schema_test OWNER marty")
+    sqlx::query("CREATE DATABASE marty WITH TEMPLATE platform_schema_test OWNER marty")
         .execute(&admin)
         .await
         .map_err(|_| ERROR)?;
@@ -412,7 +412,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .connect(url.as_str())
         .await
         .map_err(|_| ERROR)?;
-    // A database cloned from the frozen oracle template retains the oracle's
+    // A database cloned from the current platform template retains the oracle's
     // object ownership. Production self-host databases are owned by the
     // service role, which must be able to apply additive startup migrations.
     // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
@@ -584,23 +584,10 @@ fn write_synthetic_secrets(
             "synthetic-credential-grant-token",
         ),
         (
-            "sign_grant_mint_issuance_canvas_token",
-            "synthetic-canvas-grant-token",
-        ),
-        (
-            "sign_grant_mint_issuance_readiness_token",
-            "synthetic-readiness-grant-token",
-        ),
-        (
             "sign_grant_mint_issuance_passport_token",
             "synthetic-passport-grant-token",
         ),
         ("token_hmac_key", HMAC),
-        (
-            "canvas_credentials_shared_secret",
-            "synthetic-selfhost-canvas-shared-secret",
-        ),
-        ("canvas_credentials_api_token", ""),
         ("passport_tenant_api_keys", ""),
         ("personalization_bureau_api_key", ""),
         ("grpc_service_token", SERVICE_TOKEN),
@@ -733,7 +720,7 @@ pub(super) struct Preflight {
 pub(super) fn preflight() -> Result<Preflight, String> {
     require(std::env::consts::OS == "linux")?;
     super::selfhost_runtime_sidecar::require_closed_child()?;
-    let repo = super::canvas_published_database::repository_root();
+    let repo = super::platform_test_database::repository_root();
     let image = PublicImage::inspect(
         std::env::var("MARTY_SELFHOST_TEST_IMAGE").map_err(|_| ERROR)?,
         &std::env::var("MARTY_SELFHOST_TEST_REVISION").map_err(|_| ERROR)?,
@@ -850,6 +837,13 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(
+            actual,
+            super::super::selfhost_runtime_sidecar::ISSUANCE_SECRET_MOUNTS
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        assert_eq!(
             KMS_CA_CERT.lines().next(),
             Some("-----BEGIN CERTIFICATE-----")
         );
@@ -877,11 +871,7 @@ mod tests {
         ] {
             let directory = tempfile::tempdir().unwrap();
             let log_values = write_synthetic_secrets(directory.path(), case, KMS_CA_CERT).unwrap();
-            for name in [
-                "canvas_credentials_api_token",
-                "passport_tenant_api_keys",
-                "personalization_bureau_api_key",
-            ] {
+            for name in ["passport_tenant_api_keys", "personalization_bureau_api_key"] {
                 assert_eq!(std::fs::read(directory.path().join(name)).unwrap(), b"");
             }
             assert!(log_values.iter().all(|value| !value.is_empty()));

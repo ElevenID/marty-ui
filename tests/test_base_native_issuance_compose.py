@@ -32,16 +32,12 @@ def test_source_inventory_is_complete_and_base_defaults_native():
     assert any(str(value).endswith(GATE["IMAGES"]) for value in command)
 
 
-@pytest.mark.parametrize("key", sorted(GATE["CANVAS_PUBLICATION_INPUTS"]))
 @pytest.mark.parametrize("owner", ["base", "native"])
-def test_canvas_publication_inputs_cannot_be_dropped_from_either_owner(key, owner):
+def test_retired_connector_inputs_cannot_return_to_either_owner(owner):
     base, profile, runtime = sources()
-    environment = (
-        base["services"]["issuance"]["environment"]
-        if owner == "base"
-        else profile["services"]["issuance-native"]["environment"]
-    )
-    environment.pop(key)
+    environment = (base["services"]["issuance"]["environment"] if owner == "base"
+                   else profile["services"]["issuance-native"]["environment"])
+    environment["CANVAS_PORTABLE_INTEGRATION_ENABLED"] = "false"
     with pytest.raises(AssertionError):
         GATE["assert_sources"](base, profile, runtime)
 
@@ -84,7 +80,7 @@ def test_source_guard_rejects_config_drift(fault):
             "${ALLOWED_REDIRECT_URIS:-https://permissive.invalid}"
         )
     elif fault == "missing-env":
-        native["environment"].pop("CANVAS_CREDENTIALS_STATUS_SYNC_URL")
+        native["environment"].pop("ISSUANCE_OFFER_TTL_MINUTES")
     elif fault == "extra-secret":
         native["environment"]["BAO_TOKEN"] = "synthetic"
     elif fault == "flow-target":
@@ -369,7 +365,7 @@ def test_shared_images_are_not_duplicated_and_packaging_paths_resolve():
     assert "DIDCOMM" not in image and "ports:" not in image
 
 
-def test_migrated_canvas_publication_routes_are_selected_without_legacy_signing_inputs():
+def test_generic_template_routes_remain_and_provider_routes_are_retired():
     document = json.loads((ROOT / GATE["NATIVE"]["CAPABILITY_PATH"]).read_text())
     selected = {(item["method"], item["path"]) for item in document["native_http"]}
     template_contract = json.loads(
@@ -394,22 +390,7 @@ def test_migrated_canvas_publication_routes_are_selected_without_legacy_signing_
         (item["method"], item["path"]) for item in canvas_contract["routes"]
     }
     assert len(canvas_routes) == 6
-    assert canvas_routes <= selected
-    # Actual native signer consumes the same organization/DID identity, not
-    # unreferenced legacy static key/profile-ID environment fields.
-    signer = (
-        ROOT / "rust/services/issuance/src/canvas_lti_tool_signing.rs"
-    ).read_text()
-    assert (
-        "resolve" in signer and "issuer_did" in signer and "organization_id" in signer
-    )
-    for key in (
-        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-        "CANVAS_LTI_TOOL_ACTIVE_KID",
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-    ):
-        assert key in GATE["LEGACY_ONLY"]
-        assert key not in signer
+    assert canvas_routes.isdisjoint(selected)
 
 
 def assert_ci(workflow):

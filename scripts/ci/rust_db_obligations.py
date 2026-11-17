@@ -42,7 +42,7 @@ RUNNER_OWNER = "scripts/ci/run-rust-db-contracts.sh"
 FLOW_OWNERS = {
     "flow-pr": "scripts/ci/run-flow-acceptance-contracts.sh",
 }
-FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/canvas_published_database.rs"
+FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/platform_test_database.rs"
 SELFHOST_OWNER = "scripts/ci/run-selfhost-acceptance-contracts.sh"
 SELFHOST_FIXTURE_OWNER = (
     "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
@@ -284,19 +284,19 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         "marty-flow-acceptance",
         "flow_published_schema_contract",
         (
-            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_PLATFORM_SCHEMA_TEST",
             "MARTY_ISSUANCE_TEST_BINARY",
             "MARTY_BASE_COMPOSE_BINARY",
             "MARTY_DIDCOMM_TEST_PYTHON",
-            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_PLATFORM_TEST_POSTGRES_IMAGE",
         ),
     )
     entries["selfhost_acceptance"] = (
         "marty-selfhost-acceptance",
         "selfhost_public_image_contract",
         (
-            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
-            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_PLATFORM_SCHEMA_TEST",
+            "MARTY_PLATFORM_TEST_POSTGRES_IMAGE",
             "MARTY_SELFHOST_TEST_IMAGE",
             "MARTY_SELFHOST_TEST_REVISION",
             "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
@@ -506,7 +506,7 @@ def flow_source_inputs(owner: str) -> list[dict[str, str]]:
     # These are the runner's direct non-Cargo inputs, not a claim that every
     # internally spawned process or rendered configuration is inventoried.
     paths = (
-        "contracts/canvas-worker-consumer-range-oracle.json",
+        "contracts/platform-test-database.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
         "scripts/ci/list-flow-acceptance-cases.sh",
         FLOW_OWNERS[owner],
@@ -547,13 +547,13 @@ FLOW_RENDERER_RUNPY_EDGES = {
         "scripts/test_conformance_native_compose.py",
     ),
     "scripts/test_selfhost_native_owner_compose.py": (
-        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/compose_config_model.py",
         "scripts/test_beta_application_image_compose.py",
         "scripts/test_conformance_native_compose.py",
         "scripts/test_base_native_issuance_compose.py",
     ),
     "scripts/test_beta_application_image_compose.py": (
-        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/compose_config_model.py",
     )
     * 4,
     "scripts/conformance_native.py": (
@@ -563,10 +563,10 @@ FLOW_RENDERER_RUNPY_EDGES = {
     "scripts/test_conformance_native_compose.py": (
         "scripts/conformance_stack.py",
         "scripts/conformance_native.py",
-        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/compose_config_model.py",
         "scripts/test_beta_application_image_compose.py",
     ),
-    "scripts/test_canvas_worker_compose_render.py": ("scripts/conformance_stack.py",),
+    "scripts/compose_config_model.py": (),
     "scripts/conformance_stack.py": (
         "scripts/local_native_functional_binding.py",
         "scripts/conformance_native.py",
@@ -894,7 +894,7 @@ def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
         ("scripts/test_conformance_native_compose.py", "RUNTIME", compose[2]),
         ("scripts/test_conformance_native_compose.py", "COMMON", compose[5]),
         ("scripts/test_selfhost_native_owner_compose.py", "APPROVED", compose[4]),
-        ("scripts/test_canvas_worker_compose_render.py", "BASE", compose[3]),
+        ("scripts/compose_config_model.py", "BASE", compose[3]),
     ):
         if _flow_literal_assignment(path, name) != expected:
             raise ValueError("flow_renderer_subgraph_drift")
@@ -987,7 +987,7 @@ def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
             compose[2],
             sources[3],
         ),
-        "scripts/test_canvas_worker_compose_render.py": (compose[0], compose[3]),
+        "scripts/compose_config_model.py": (compose[0], compose[3]),
         "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs": (
             sources[0],
         ),
@@ -1004,7 +1004,7 @@ def selfhost_source_inputs(owner: str) -> list[dict[str, str]]:
     # Direct runner/pin inputs only. The caller separately validates the local
     # image ID; this is not retained image provenance or a full source graph.
     paths = [
-        "contracts/selfhost-runtime-images.json",
+        "contracts/platform-test-database.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
         SELFHOST_OWNER,
     ]
@@ -1338,11 +1338,11 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             verify_library_unit_roster(command[1:], expected, ignored)
             evidence["ignored_case_owners"] = LIBRARY_UNIT_IGNORED_OWNERS
         if flow:
-            if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
+            if os.environ.get("MARTY_PLATFORM_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             verify_flow_roster(command[0], expected, ignored)
         if selfhost:
-            if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
+            if os.environ.get("MARTY_PLATFORM_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             # The shell runner owns the exact names. This bounds its selected
             # cardinality without maintaining a second 17-name roster here.

@@ -26,6 +26,8 @@ marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-flow = { path = "../../services/flow" }
 marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
+marty-organization = { path = "../../services/organization" }
+marty-credential-template = { path = "../../services/credential-template" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-presentation-policy = { path = "../../services/presentation-policy" }
 marty-release-evidence = { path = "../release-evidence" }

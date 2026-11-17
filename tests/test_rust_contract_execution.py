@@ -453,11 +453,11 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
         "rust/crates/flow-acceptance/Cargo.toml"
     )
     assert {item["name"] for item in inputs} == {
-        "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+        "MARTY_PLATFORM_SCHEMA_TEST",
         "MARTY_ISSUANCE_TEST_BINARY",
         "MARTY_BASE_COMPOSE_BINARY",
         "MARTY_DIDCOMM_TEST_PYTHON",
-        "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+        "MARTY_PLATFORM_TEST_POSTGRES_IMAGE",
     }
     assert INVENTORY.selection(
         ["--nocapture", "--test-threads=4"], allow_nocapture=True
@@ -469,7 +469,7 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
         INVENTORY.selection(["--nocapture", "--test-threads=4"])
     sources = INVENTORY.flow_source_inputs("flow-pr")
     assert {entry["path"] for entry in sources} == {
-        "contracts/canvas-worker-consumer-range-oracle.json",
+        "contracts/platform-test-database.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
         "scripts/ci/list-flow-acceptance-cases.sh",
         "scripts/ci/run-flow-acceptance-contracts.sh",
@@ -507,7 +507,7 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
     assert INVENTORY.FLOW_RENDERER_RUNPY_EDGES[
         "scripts/test_selfhost_native_owner_compose.py"
     ] == (
-        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/compose_config_model.py",
         "scripts/test_beta_application_image_compose.py",
         "scripts/test_conformance_native_compose.py",
         "scripts/test_base_native_issuance_compose.py",
@@ -806,7 +806,7 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "1")
     binary = str(real_obligation_harness)
     command = [binary, "happy", "--exact", "--nocapture", "--test-threads=4"]
     assert INVENTORY.run_contract("flow_acceptance", command, "flow-pr") == 0
@@ -835,10 +835,10 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     assert record["transitive_source_closure"] == "incomplete"
     assert "child-inherited-stdout" in output
     assert "private-runtime-value" not in json.dumps(record)
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "0")
     assert INVENTORY.run_contract("flow_acceptance", command, "flow-pr") != 0
     assert "missing_published_schema_gate" in capsys.readouterr().out
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "1")
     assert INVENTORY.run_contract("flow_acceptance", command, "contracts") != 0
     assert "invalid_dispatch_owner" in capsys.readouterr().out
     monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
@@ -885,7 +885,7 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "owned-fixture")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "1")
     assert (
         INVENTORY.run_contract(
             "flow_acceptance",
@@ -922,8 +922,8 @@ def test_selfhost_inventory_binds_exact_owner_and_direct_inputs() -> None:
         "rust/crates/selfhost-acceptance/Cargo.toml"
     )
     assert {item["name"] for item in inputs} == {
-        "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
-        "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+        "MARTY_PLATFORM_SCHEMA_TEST",
+        "MARTY_PLATFORM_TEST_POSTGRES_IMAGE",
         "MARTY_SELFHOST_TEST_IMAGE",
         "MARTY_SELFHOST_TEST_REVISION",
         "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
@@ -932,7 +932,7 @@ def test_selfhost_inventory_binds_exact_owner_and_direct_inputs() -> None:
     assert all(item["consumer"] == package for item in inputs)
     sources = INVENTORY.selfhost_source_inputs("selfhost")
     assert {entry["path"] for entry in sources} == {
-        "contracts/selfhost-runtime-images.json",
+        "contracts/platform-test-database.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
         "scripts/ci/run-selfhost-acceptance-contracts.sh",
     }
@@ -966,7 +966,7 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     for item in INVENTORY.obligation("selfhost_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "1")
     monkeypatch.setenv("MARTY_SELFHOST_TEST_IMAGE", "sha256:" + "a" * 64)
     monkeypatch.setenv("MARTY_SELFHOST_TEST_REVISION", "b" * 40)
     packager = tmp_path / "packager"
@@ -1054,7 +1054,7 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
     assert '"failed":1' in capsys.readouterr().out
     monkeypatch.delenv("MARTY_SELFHOST_SYNTHETIC_FAIL")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
+    monkeypatch.setenv("MARTY_PLATFORM_SCHEMA_TEST", "0")
     assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
     assert "missing_published_schema_gate" in capsys.readouterr().out
 
@@ -1062,8 +1062,8 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
 def test_selfhost_runner_keeps_roster_preflight_and_evidence_call_site() -> None:
     source = SELFHOST_RUNNER.read_text(encoding="utf-8")
     assert source.count('require_selfhost_tests "$("$selfhost_executable" --list)"') == 1
-    assert source.index('require_selfhost_tests "$(') < source.index('docker pull')
-    assert source.index('docker pull') < source.index('--name selfhost_acceptance --owner selfhost --')
+    assert source.index('require_selfhost_tests "$(') < source.index('pull-pinned-dockerhub-image.sh')
+    assert source.index('pull-pinned-dockerhub-image.sh') < source.index('--name selfhost_acceptance --owner selfhost --')
     assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
     assert "17 passed; 0 failed; 0 ignored;" in source
 
@@ -1335,7 +1335,7 @@ def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
     (
         (
             "flow_acceptance",
-            "rust/services/issuance/tests/support/canvas_published_database.rs",
+            "rust/services/issuance/tests/support/platform_test_database.rs",
         ),
         (
             "selfhost_acceptance",
@@ -1353,7 +1353,7 @@ def test_acceptance_rust_first_hop_inputs_record_exact_source_hashes(name, fixtu
         assert {
             "rust/services/issuance/tests/support/bounded_fixture_command.rs",
             "rust/services/issuance/tests/support/bounded_fixture_command_tests.rs",
-            "rust/services/issuance/tests/support/canvas_published_database.rs",
+            "rust/services/issuance/tests/support/platform_test_database.rs",
             "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
         } <= set(paths)
     assert all(

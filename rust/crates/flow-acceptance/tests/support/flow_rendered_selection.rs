@@ -84,7 +84,7 @@ impl Drop for Directory {
 }
 
 pub(super) fn root() -> PathBuf {
-    super::super::super::canvas_published_database::repository_root()
+    super::super::super::platform_test_database::repository_root()
         .canonicalize()
         .unwrap()
 }

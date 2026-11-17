@@ -349,12 +349,8 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "signing_keys_issuer_sign_key",
             "signing_keys_integration_secret_key",
             "sign_grant_mint_issuance_credential_token",
-            "sign_grant_mint_issuance_canvas_token",
-            "sign_grant_mint_issuance_readiness_token",
             "sign_grant_mint_issuance_passport_token",
             "token_hmac_key",
-            "canvas_credentials_shared_secret",
-            "canvas_credentials_api_token",
             "passport_tenant_api_keys",
             "personalization_bureau_api_key",
             "grpc_service_token",
@@ -418,10 +414,6 @@ fn secret_field(owner: &str, key: &str) -> Result<&'static str> {
         "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE" => {
             Ok("sign_grant_mint_issuance_credential_token")
         }
-        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_issuance_canvas_token"),
-        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE" => {
-            Ok("sign_grant_mint_issuance_readiness_token")
-        }
         "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE" => {
             Ok("sign_grant_mint_issuance_passport_token")
         }
@@ -430,7 +422,6 @@ fn secret_field(owner: &str, key: &str) -> Result<&'static str> {
         "BAO_CACERT" => Ok("openbao_tls_ca_cert"),
         "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
-        "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
         "BAO_TOKEN_FILE" => Ok("openbao_service_token"),
         "FLOW_WEBHOOK_SECRET_FILE" => Ok("flow_webhook_secret"),
         "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE" => Ok("flow_application_event_hmac_key"),
@@ -517,10 +508,7 @@ impl ClosedSelfhostModel {
             require(environment.get("PASSPORT_TENANT_API_KEYS") == Some(&json!("")))?;
             require(environment.get("PASSPORT_TENANT_API_KEYS_FILE") == Some(&json!("")))?;
             let optional_file_selectors: &[&str] = if *owner == "issuance-native" {
-                &[
-                    "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-                    "PERSONALIZATION_BUREAU_API_KEY_FILE",
-                ]
+                &["PERSONALIZATION_BUREAU_API_KEY_FILE"]
             } else {
                 &[]
             };
@@ -1185,11 +1173,6 @@ fn negative_controls(
     for (owner, selector, secret) in [
         (
             "issuance-native",
-            "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-            "canvas_credentials_api_token",
-        ),
-        (
-            "issuance-native",
             "PERSONALIZATION_BUREAU_API_KEY_FILE",
             "personalization_bureau_api_key",
         ),
@@ -1233,10 +1216,7 @@ fn negative_controls(
         }
     }
     for owner in ["gateway", "flow"] {
-        for secret in [
-            "canvas_credentials_api_token",
-            "personalization_bureau_api_key",
-        ] {
+        for secret in ["personalization_bureau_api_key"] {
             let mut changed = model.full_model.clone();
             changed["services"][owner]["secrets"]
                 .as_array_mut()
@@ -1321,7 +1301,7 @@ fn negative_controls(
         ),
         (
             "/services/issuance-native/environment/ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
-            json!("/run/secrets/sign_grant_mint_issuance_canvas_token"),
+            json!("/run/secrets/sign_grant_mint_issuance_passport_token"),
         ),
         (
             "/services/signing-keys/environment/SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",

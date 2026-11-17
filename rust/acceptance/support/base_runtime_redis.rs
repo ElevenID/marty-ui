@@ -4,7 +4,7 @@
 // tag is resolved locally to an immutable image ID before container creation;
 // this is runtime evidence, not authenticated release provenance.
 
-use super::canvas_published_database::{docker, docker_with_timeout, inspect, PublishedDatabase};
+use super::platform_test_database::{docker, docker_with_timeout, inspect, PublishedDatabase};
 use mmf_security::RedisRateLimiter;
 use serde_json::Value;
 use std::time::{Duration, Instant};

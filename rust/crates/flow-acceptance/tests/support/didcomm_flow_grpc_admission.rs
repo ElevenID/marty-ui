@@ -105,11 +105,11 @@ pub(super) async fn run(database_url: &str) {
         .connect(database_url)
         .await
         .unwrap();
-    let contract: Value = serde_json::from_str(include_str!(
-        "../../../../../contracts/issuance-initiation.json"
+    let wallet_vector: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/issuance-initiation-wallet-vector.json"
     ))
     .unwrap();
-    let vector = &contract["idempotency"]["vector"];
+    let vector = &wallet_vector;
     let mut body = vector["request"].clone();
     body["flow_instance_id"] = json!("synthetic-flow-instance");
     body["idempotency_key"] = vector["key"].clone();
