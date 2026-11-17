@@ -1,6 +1,5 @@
 """Overlap independent database owners, preserving serial execution within each suite."""
 
-import hashlib
 import json
 import os
 import subprocess
@@ -12,249 +11,11 @@ from threading import Lock
 from time import monotonic
 
 HEARTBEAT_SECONDS = 30
-PREFLIGHT_MODES = (
-    "timeout-preflight",
-    "lease-expiry-preflight",
-)
-FULL_QUALIFICATION_PREFLIGHT_MODES = (
-    "mixed-roster-preflight",
-    "timeout-preflight",
-    "body-timeout-preflight",
-    "lease-expiry-preflight",
-)
-EVIDENCE_NAME = "canvas-published-preflights.sha256"
-RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
 TIMING_PREFIX = "MARTY_CI_PHASE_V1 "
 TARGET_TIMING_PREFIX = "MARTY_CI_TARGET_PHASE_V1 "
-TARGET_NAMES = frozenset({"composition", "flow", "worker", "selfhost"})
-TIMING_PHASES = {
-    "container_startup",
-    "database_readiness",
-    "migration_seed",
-    "fixture_seed",
-    "scenario",
-    "cleanup",
-    "contract",
-    "contract_phase",
-    "canvas_serial",
-    "canvas_target",
-    "image_pull",
-    "oracle_case",
-    "oracle_phase",
-}
 TIMING_STATUSES = {"ok", "failed"}
-TARGET_RELAY_PHASES = TIMING_PHASES - {
-    "contract",
-    "canvas_serial",
-    "canvas_target",
-    "image_pull",
-}
-REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
-MATRIX_SCENARIOS = frozenset(
-    {"retry-after", "validation", "roster-failure", "resources-unavailable"}
-)
-# The published-process matrix has more case families than the native HTTPS
-# scenario timer. These are the only checked-in case IDs allowed to leave the
-# Rust probe as migration/seed timing labels.
-PUBLISHED_MATRIX_SCENARIOS = frozenset(
-    {
-        "retry-after",
-        "resource-race",
-        "deadline",
-        "timeout",
-        "body-timeout",
-        "lease-expiry",
-        "dispatch",
-        "mixed-roster",
-    }
-)
-PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
-    f"{scenario}.{case['name']}"
-    for scenario in PUBLISHED_MATRIX_SCENARIOS
-    for case in json.loads(
-        (
-            Path(__file__).resolve().parents[2]
-            / f"contracts/canvas-worker-{scenario}-scenarios.json"
-        ).read_text(encoding="utf-8")
-    )["cases"]
-)
-SCENARIO_NAMES = REST_SCENARIOS | frozenset(
-    f"{scenario}.{case['name']}"
-    for scenario in MATRIX_SCENARIOS
-    for case in json.loads(
-        (
-            Path(__file__).resolve().parents[2]
-            / f"contracts/canvas-worker-{scenario}-scenarios.json"
-        ).read_text(encoding="utf-8")
-    )["cases"]
-)
-JSON_DEPTH_ROUTE_DEPTHS = (
-    1,
-    126,
-    127,
-    128,
-    129,
-    254,
-    255,
-    256,
-    257,
-    980,
-    995,
-    1000,
-    1001,
-    1490,
-    1500,
-    1600,
-)
-JSON_DEPTH_ROUTE_CASE_NAMES = frozenset(
-    f"json_depth_route.json_depth_{shape}_{depth}_{status}"
-    for shape in ("array", "object")
-    for depth in JSON_DEPTH_ROUTE_DEPTHS
-    for status in (200, 403)
-)
-JSON_CONSUMER_SCENARIOS = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "contracts/canvas-json-consumer-scenarios.json"
-    ).read_text(encoding="utf-8")
-)
-JSON_CONSUMER_CASE_NAMES = frozenset(
-    f"json_consumer.{phase}.{case['name']}"
-    for phase in ("validation", "provider")
-    for case in JSON_CONSUMER_SCENARIOS[phase]
-)
-# Fixed, test-owned repository matrices; never derive timing identities from
-# scenario payloads or include them in the fixture/cleanup phase allowlists.
-REPOSITORY_MATRIX_NAMES = frozenset(
-    {
-        "repository_roster_metadata",
-        "repository_roster_expired_before_write",
-        "repository_roster_expired_during_lock",
-        "repository_resource_race",
-        "repository_validation",
-    }
-)
-FIXTURE_NAMES = SCENARIO_NAMES
-CONTRACT_NAMES = frozenset(
-    {
-        "general_contracts",
-        "signing_registry",
-        "signing_document",
-        "issuer_profile",
-        "credential_template",
-        "presentation_policy",
-        "issuance_oid4vci_migration",
-        "issuance_transaction",
-        "issuance_credential",
-        "retention",
-        "passport",
-        "application_template",
-        "internal_application",
-        "credential_template_migration",
-        "trust_profile_migration",
-        "organization_migration",
-        "organization_application",
-        "organization_repository",
-        "canvas_sync_worker_postgres_contract",
-        "canvas_oauth_postgres_contract",
-        "canvas_mirror_postgres_contract",
-        "canvas_management_postgres_contract",
-        "canvas_lti_sync_enqueue_postgres_contract",
-        "canvas_lti_login_postgres_contract",
-        "canvas_lti_evidence_postgres_contract",
-        "canvas_lti_deep_linking_postgres_contract",
-        "canvas_event_status_postgres_contract",
-        "canvas_award_candidate_postgres_contract",
-        "proof_nonce_postgres_contract",
-    }
-)
-# Match the Rust fixture's fixed constructor-origin labels. Do not accept
-# arbitrary probe output, dynamic case text, or paths as timing identities.
-TIMED_PUBLISHED_SCRIPTS = frozenset(
-    {
-        "enqueue_input",
-        "heartbeat_readiness",
-        "issued_review",
-        "json_consumer",
-        "json_depth",
-        "mixed_roster",
-        "operations",
-        "operations_input",
-        "status_provider",
-        "timeout_consumer",
-        "utf7_consumer",
-        "validation_boundary",
-        "worker_concurrent",
-        "worker_provider_completion",
-        "worker_provider_final",
-        "worker_provider_generation",
-        "worker_provider_recovery",
-        "worker_provider_recovery_first",
-        "worker_provider_signals",
-        "worker_reclaimers",
-        "worker_reclaimers_retry",
-    }
-)
-TIMING_NAMES = {
-    "container_startup": frozenset({"postgres_create"}),
-    "database_readiness": frozenset({"postgres_ready"}),
-    "migration_seed": PUBLISHED_MATRIX_PROBE_NAMES
-    | TIMED_PUBLISHED_SCRIPTS
-    | frozenset(
-        {
-            "published_probe",
-            "published_base_restore",
-            "status_native_seed",
-            "worker_validation_template",
-        }
-    ),
-    "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
-    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES | JSON_DEPTH_ROUTE_CASE_NAMES,
-    "oracle_case": JSON_CONSUMER_CASE_NAMES,
-    "oracle_phase": frozenset(
-        {
-            "json_depth.setup",
-            "json_depth.validation",
-            "json_depth.provider",
-            "json_depth.encoding",
-        }
-    ),
-    "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
-    "contract": CONTRACT_NAMES,
-    "contract_phase": frozenset(
-        {
-            "composite_total",
-            "initial_schema",
-            "schedule_recovery_completion",
-            "hinted_retry",
-            "privacy",
-            "signing_guard",
-            "projection_cycles",
-            "consumer_ranges",
-            "owned_lifecycle",
-            "pool_disposal",
-            "process_signals",
-            "renewal_generation",
-            "renewal_write_failures",
-            "renewal_job_outcomes",
-            "pool_close",
-        }
-    ),
-    "canvas_serial": frozenset(
-        {
-            "sql_logging",
-            "json_consumer",
-            "mixed_roster_reference",
-            "oauth_lease_reference",
-            *PREFLIGHT_MODES,
-            "mixed-roster-preflight",
-            "body-timeout-preflight",
-        }
-    ),
-    "canvas_target": frozenset({"composition", "flow", "worker", "selfhost"}),
-    "image_pull": frozenset({"postgres", "published_probe"}),
-}
-
+TIMING_NAMES = {"contract": frozenset(['application_template', 'credential_template', 'credential_template_migration', 'general_contracts', 'internal_application', 'issuance_credential', 'issuance_transaction', 'issuer_profile', 'organization_application', 'organization_migration', 'organization_repository', 'passport', 'presentation_policy', 'proof_nonce_postgres_contract', 'retention', 'signing_document', 'signing_registry', 'trust_profile_migration']), "container_startup": frozenset({"postgres_create"}), "database_readiness": frozenset({"postgres_ready"})}
+TIMING_PHASES = frozenset(TIMING_NAMES)
 
 def _timing_path() -> Path | None:
     runner_temp = os.environ.get("RUNNER_TEMP")
@@ -264,14 +25,6 @@ def _timing_path() -> Path | None:
 
 
 def _safe_phase(line: str, group: str) -> dict[str, object] | None:
-    target = None
-    if line.startswith(TARGET_TIMING_PREFIX):
-        if group != "published-canvas" or len(line) > 280:
-            return None
-        target, separator, payload = line[len(TARGET_TIMING_PREFIX) :].partition(" ")
-        if separator != " " or target not in TARGET_NAMES:
-            return None
-        line = TIMING_PREFIX + payload
     if not line.startswith(TIMING_PREFIX) or len(line) > 256:
         return None
     try:
@@ -291,7 +44,6 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
     if (
         not isinstance(phase, str)
         or phase not in TIMING_PHASES
-        or (target is not None and phase not in TARGET_RELAY_PHASES)
         or not isinstance(name, str)
         or name not in TIMING_NAMES[phase]
         or not 1 <= len(name) <= 96
@@ -307,92 +59,7 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
     ):
         return None
     result = {"schema": "marty.ci.db-phase/v1", "group": group, **value}
-    if target is not None:
-        result["target"] = target
     return result
-
-
-def _run_identity() -> tuple[str, ...] | None:
-    identity = tuple(os.environ.get(name, "") for name in RUN_IDENTITY)
-    return identity if all(identity) else None
-
-
-def _preflight_evidence() -> Path | None:
-    runner_temp = os.environ.get("RUNNER_TEMP")
-    return (
-        Path(runner_temp) / EVIDENCE_NAME if runner_temp and _run_identity() else None
-    )
-
-
-def _canvas_executable() -> Path:
-    runner_temp = os.environ["RUNNER_TEMP"]
-    artifacts = Path(runner_temp) / "rust-test-artifacts.json"
-    with artifacts.open(encoding="utf-8") as source:
-        executables = {
-            artifact["executable"]
-            for line in source
-            if (artifact := json.loads(line)).get("reason") == "compiler-artifact"
-            and "#marty-canvas-worker-acceptance@" in artifact.get("package_id", "")
-            and artifact.get("target", {}).get("name")
-            == "canvas_published_worker_contract"
-            and artifact.get("executable") is not None
-        }
-    if len(executables) != 1:
-        raise ValueError("Expected exactly one Canvas worker contract executable")
-    executable = Path(executables.pop())
-    if not executable.is_file():
-        raise ValueError("Canvas contract executable is missing")
-    return executable
-
-
-def _executable_digest() -> str:
-    digest = hashlib.sha256()
-    with _canvas_executable().open("rb") as executable:
-        for chunk in iter(lambda: executable.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _has_preflight_evidence() -> bool:
-    evidence = _preflight_evidence()
-    if evidence is None or not evidence.is_file():
-        return False
-    try:
-        expected = (
-            "\n".join(
-                (
-                    _executable_digest(),
-                    *_run_identity(),
-                    os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
-                )
-            )
-            + "\n"
-        )
-        return evidence.read_text(encoding="ascii") == expected
-    except (OSError, ValueError, KeyError):
-        return False
-
-
-def _record_preflight_evidence() -> None:
-    evidence = _preflight_evidence()
-    if evidence is None:
-        return  # Local preflight runs retain full coverage in the later suite.
-    digest = _executable_digest()
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="ascii", newline="\n", dir=evidence.parent, delete=False
-    ) as temporary:
-        temporary.write(
-            "\n".join(
-                (
-                    digest,
-                    *_run_identity(),
-                    os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
-                )
-            )
-            + "\n"
-        )
-        temporary_path = Path(temporary.name)
-    os.replace(temporary_path, evidence)
 
 
 def _wait_for_groups(futures: dict[str, Future[int]], started: float) -> dict[str, int]:
@@ -503,112 +170,20 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
 
 
 def main(mode: str = "database") -> int:
+    if mode not in ("database", "rust-db"):
+        raise ValueError("Unsupported platform contract group mode")
     scripts = Path(__file__).resolve().parent
-    qualification = os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0")
-    if qualification not in ("0", "1"):
-        raise ValueError("Invalid Canvas qualification mode")
-    preflight_modes = (
-        FULL_QUALIFICATION_PREFLIGHT_MODES if qualification == "1" else PREFLIGHT_MODES
-    )
-    if mode in ("database", "canvas", "canvas-without-selfhost"):
-        published_mode = ["full-after-preflights"] if _has_preflight_evidence() else []
-        if mode == "canvas-without-selfhost":
-            published_mode = (
-                ["full-after-preflights-without-selfhost"]
-                if published_mode
-                else ["full-without-selfhost"]
-            )
-        commands: dict[str, list[str]] = {
-            "published-canvas": [
-                "bash",
-                str(scripts / "run-published-canvas-contracts.sh"),
-                *published_mode,
-            ],
-        }
-        if mode == "database":
-            commands["rust-db"] = ["bash", str(scripts / "run-rust-db-contracts.sh")]
-    elif mode == "rust-db":
-        commands = {"rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")]}
-    elif mode == "worker-canvas":
-        # Opt-in owner only. The normal canvas group above is unchanged.
-        published_mode = (
-            "worker-full-after-preflights"
-            if _has_preflight_evidence()
-            else "worker-full"
-        )
-        commands = {
-            "published-worker": [
-                "bash",
-                str(scripts / "run-published-canvas-contracts.sh"),
-                published_mode,
-            ]
-        }
-    elif mode == "selfhost-canvas":
-        # Additive diagnostic owner; the full Canvas group remains required.
-        commands = {
-            "published-selfhost": [
-                "bash",
-                str(scripts / "run-published-canvas-contracts.sh"),
-                "selfhost-only",
-            ]
-        }
-    elif mode in ("preflights", "worker-preflights"):
-        evidence = _preflight_evidence()
-        if evidence is not None:
-            evidence.unlink(missing_ok=True)  # A failed rerun cannot reuse old proof.
-        # Two workers overlap independent cases. Each exact preflight owns
-        # its disposable Docker database and dynamically allocated HTTPS ports.
-        commands = {
-            name: [
-                "bash",
-                str(scripts / "run-published-canvas-contracts.sh"),
-                f"worker-{name}" if mode == "worker-preflights" else name,
-            ]
-            for name in preflight_modes
-        }
-    else:
-        raise ValueError("Unsupported contract group mode")
-    prefix = (
-        "marty-preflight-groups-"
-        if mode in ("preflights", "worker-preflights")
-        else "marty-db-groups-"
-    )
-    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
+    commands = {"rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")]}
+    with tempfile.TemporaryDirectory(prefix="marty-db-groups-") as temporary:
         directory = Path(temporary)
         results = run_groups(commands, directory)
         for name, status in results.items():
             print(f"===== {name}: exit {status} =====", flush=True)
             print((directory / f"{name}.log").read_text(encoding="utf-8"), flush=True)
-        failed = any(status != 0 for status in results.values())
-        if mode in ("preflights", "worker-preflights") and set(results) != set(
-            preflight_modes
-        ):
-            failed = True
-        if mode in ("preflights", "worker-preflights") and not failed:
-            try:
-                _record_preflight_evidence()
-            except (OSError, ValueError, KeyError) as error:
-                print(
-                    f"[db-contracts] unable to record preflight evidence: {error}",
-                    file=sys.stderr,
-                )
-                return 1
-        return int(failed)
+        return int(any(status != 0 for status in results.values()))
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in (
-        [],
-        ["preflights"],
-        ["canvas"],
-        ["canvas-without-selfhost"],
-        ["rust-db"],
-        ["worker-preflights"],
-        ["worker-canvas"],
-        ["selfhost-canvas"],
-    ):
-        raise SystemExit(
-            "Usage: run-db-contract-groups.py "
-            "[preflights|canvas|canvas-without-selfhost|rust-db|worker-preflights|worker-canvas|selfhost-canvas]"
-        )
+    if sys.argv[1:] not in ([], ["rust-db"]):
+        raise SystemExit("Usage: run-db-contract-groups.py [rust-db]")
     raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))

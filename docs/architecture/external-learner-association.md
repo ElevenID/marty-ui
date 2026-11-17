@@ -410,3 +410,8 @@ inventory, image identity/revision checks and execution obligation recording
 without dispatching the published Canvas runner. The shared schema fixture's
 legacy PostgreSQL environment variable remains a documented extraction TODO.
 No live container qualification is implied by runner-source validation.
+
+Database group orchestration now accepts only the platform database mode.
+Provider preflights, executable digests and same-run Canvas qualification
+proofs are retired. Streaming logs, completion waits, aggregate failure and
+closed-label generic timing remain. Flow and self-host use dedicated runners.
