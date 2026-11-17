@@ -108,6 +108,9 @@ def website_only(root: Path, changed: bytes) -> bool:
 def validate_flags(flags, matrix, event):
     if not isinstance(flags, dict) or set(flags) != set(FLAGS) or any(type(v) is not bool for v in flags.values()):
         raise ValueError("closed boolean flag roster required")
+    # Preserve the v1 field shape without authorizing the retired leaf mode.
+    if flags["rollback_test_only"]:
+        raise ValueError("retired rollback-only selection")
     broad = {"ui", "website", "python", "rust", "rust_runtime", "openbao", "release", "verification", "security"}
     if flags["all"] and (not all(flags[f] for f in broad) or flags["website_only"]):
         raise ValueError("incomplete full plan")
@@ -124,8 +127,7 @@ def validate_flags(flags, matrix, event):
             raise ValueError("invalid scoped Rust matrix")
     elif matrix != FULL_MATRIX:
         raise ValueError("full Rust matrix required")
-    for leaf, required in (("rollback_test_only", {"release", "security"}),
-                           ("didcomm_release_test_only", {"release"}),
+    for leaf, required in (("didcomm_release_test_only", {"release"}),
                            ("k8s_policy_test_only", {"release"})):
         if flags[leaf] and (event != "pull_request" or {f for f in broad if flags[f]} != required):
             raise ValueError(f"invalid {leaf} plan")

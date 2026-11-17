@@ -1663,7 +1663,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             ("release", "security"),
             selection_overrides={"ROLLBACK_TEST_ONLY": "true"},
         ).returncode
-        == 0
+        != 0
     )
     assert (
         exercise(
@@ -2337,8 +2337,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and three mutually exclusive test-source-only PR invocations.
-        expected_refs = 5 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and two mutually exclusive test-source-only PR invocations.
+        expected_refs = 4 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -2632,7 +2632,7 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "tests/test_ci_workflow_performance.py", "-v", "--tb=short",
     ]
     full_only = (
-        "needs.changes.outputs.rollback_test_only != 'true' && "
+        ""
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
@@ -2795,7 +2795,7 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     # Missing or malformed output must run the existing full path, not the
     # focused one. The other bounded PR modes retain their own exclusions.
     full_only = (
-        "needs.changes.outputs.rollback_test_only != 'true' && "
+        ""
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         f"{focused_flag} != 'true'"
     )
@@ -2821,7 +2821,7 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     )
 
 
-def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
+def test_retired_worker_rollback_leaf_cannot_narrow_validation(
     tmp_path: Path,
 ) -> None:
     _, workflow = _workflow(CI_PATH)
@@ -2842,18 +2842,16 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
 
     exact = classify([source])
     assert exact == {
-        "all": "false",
-        "ui": "false",
-        "python": "false",
-        "rust": "false",
-        "rust_runtime": "false",
-        "rust_matrix": '["contracts","flow","selfhost"]',
-        "openbao": "false",
-        "rollback_test_only": "true",
-        "release": "true",
-        "verification": "false",
-        "security": "true",
+        "all": "true", "ui": "true", "python": "true", "rust": "true",
+        "rust_runtime": "true", "rust_matrix": '["contracts","flow","selfhost"]',
+        "openbao": "true", "rollback_test_only": "false", "release": "true",
+        "verification": "true", "security": "true",
     }
+    from scripts.ci import affected_components as plan
+    forged = dict.fromkeys(plan.FLAGS, False)
+    forged.update(rollback_test_only=True, release=True, security=True)
+    with pytest.raises(ValueError, match="retired rollback-only selection"):
+        plan.validate_flags(forged, plan.FULL_MATRIX, "pull_request")
     assert classify([])["rollback_test_only"] == "false"
     for other in (
         "docs/architecture-feedback-improvement-plan.md",
@@ -2895,22 +2893,13 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
 
     release = workflow["jobs"]["test-release-contracts"]
     steps = {step.get("name"): step for step in release["steps"]}
-    bounded = steps["Run rollback-test-owned PR checks"]
-    assert bounded["if"] == "needs.changes.outputs.rollback_test_only == 'true'"
-    assert bounded["run"].split() == [
-        "python",
-        "-m",
-        "pytest",
-        source,
-        "tests/test_ci_workflow_performance.py",
-        "-v",
-        "--tb=short",
-    ]
+    assert "Run rollback-test-owned PR checks" not in steps
+    assert '[[ "$ROLLBACK_TEST_ONLY" == false ]]' in workflow["jobs"]["ci-gate"]["steps"][0]["run"]
     assert steps["Run repository release checks"]["run"] == (
         RELEASE_TEST_COMMAND
     )
     full_only = (
-        "needs.changes.outputs.rollback_test_only != 'true' && "
+        ""
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )

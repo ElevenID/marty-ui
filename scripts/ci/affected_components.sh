@@ -11,6 +11,7 @@ rust=false
 rust_runtime=false
 rust_matrix='["contracts","flow","selfhost"]'
 openbao=false
+# Reserved false-only field in the v1 plan; the provider harness is retired.
 rollback_test_only=false
 didcomm_release_test_only=false
 k8s_policy_test_only=false
@@ -58,14 +59,6 @@ if [[ "$website_only" == true ]]; then
 elif [[ "$EVENT_NAME" != pull_request ]]; then
   all=true
 else
-  # Only the regular rollback test leaf gets root-pytest feedback.
-  if [[ "$EVENT_NAME" == pull_request &&
-        ${#changed_files[@]} -eq 1 &&
-        "${changed_files[0]}" == tests/test_beta_worker_launch_rollback.py &&
-        -f tests/test_beta_worker_launch_rollback.py &&
-        ! -L tests/test_beta_worker_launch_rollback.py ]]; then
-    rollback_test_only=true
-  fi
   # These exact DIDComm policy tests are collected by root release
   # pytest, not by a service or image. Only one regular test source
   # may narrow a PR; moves, deletion, mixed changes and untrusted
@@ -302,14 +295,6 @@ else
         # pytest only. Their corpora and native Rust consumers keep
         # the existing Rust selection; capture scripts stay broad.
         release=true
-        ;;
-      tests/test_beta_worker_launch_rollback.py)
-        if [[ "$rollback_test_only" == true ]]; then
-          release=true
-          security=true
-        else
-          all=true
-        fi
         ;;
       tests/test_didcomm_native_consumer_ownership.py)
         if [[ "$didcomm_release_test_only" == true ]]; then
