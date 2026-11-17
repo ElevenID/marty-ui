@@ -282,7 +282,8 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
 
 
 @contextmanager
-def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _coordination=None):
+def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _coordination=None,
+                               _failed_keycloak=False):
     """Fresh candidate proof under both guards; never consumes a prior dict."""
     import selfhost_windows_selection as selection
     import selfhost_windows_renewal_native as native
@@ -301,6 +302,10 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _
         stack.enter_context(renewal.hold_storage_namespace(root))
         stack.enter_context(selection._held_private_input(root,directory=True,mutable_directory=True))
         names=set(RECOVERY_RECEIPTS)|{'intent.json','config.private.json'}
+        from selfhost_windows_recovery_leaf_caps import CAP_RECEIPTS, partial_receipts, checked_helpers, completed_receipts
+        cap_names={name for name in CAP_RECEIPTS if renewal.namespace_entry_exists(root/name)}
+        require(not cap_names if _failed_keycloak else not cap_names or cap_names==CAP_RECEIPTS)
+        names.update(cap_names)
         markers=[name for name in ('publication.pending.json','publication.json') if renewal.namespace_entry_exists(root/name)]
         require(len(markers)<=1)
         names.update(markers)
@@ -328,13 +333,38 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _
         require(stack.enter_context(renewal.hold_private_input(root/'config.private.json'))==packed(config))
         receipts={name:stack.enter_context(renewal.hold_private_input(root/name)) for name in RECOVERY_RECEIPTS}
         cycle=root.name.removeprefix('windows-renewal-')
-        hashes,helpers=recovery_phase_receipts(receipts,cfg['project'],cycle,config['native']['helper_image'],
-            observed['model']['services']['signing-keys']['image'])
+        if _failed_keycloak or cap_names:
+            hashes,helpers=partial_receipts(receipts,cfg['project'],cycle,config['native']['helper_image'],
+                observed['model']['services']['signing-keys']['image'])
+            original_helper=checked_helpers(observed['context'].check(before_intent=True),helpers,
+                config,cycle,complete=bool(cap_names))
+            if _failed_keycloak:
+                require(not markers)
+                candidate=Path(config['renewed_secrets'])
+                stack.enter_context(renewal.hold_storage_namespace(candidate))
+                stack.enter_context(selection._held_private_input(candidate,directory=True,mutable_directory=True))
+                expected_candidate_names=set()
+                require(not list(candidate.iterdir()))
+                stack.callback(lambda:require({p.name for p in candidate.iterdir()}==expected_candidate_names))
+                yield {'root':root,'names':names,'config':config,'observed':observed,'stack':stack,
+                    'old_bytes':lease['values'][record['choice']],'original_receipts':hashes,
+                    'failed_helper':original_helper['failed'],'cycle':cycle,'guard_sha256':guard_sha,
+                    'expected_candidate_names':expected_candidate_names,'data_sha256':record['data_sha256']}
+                return
+            cap_raws={name:stack.enter_context(renewal.hold_private_input(root/name)) for name in CAP_RECEIPTS}
+            hashes.update(completed_receipts(cap_raws,hashes,original_helper,config,cycle,guard_sha,
+                                             record['data_sha256']))
+        else:
+            hashes,helpers=recovery_phase_receipts(receipts,cfg['project'],cycle,config['native']['helper_image'],
+                observed['model']['services']['signing-keys']['image'])
         held=stack.enter_context(renewal.hold_private_generation(Path(config['renewed_secrets']),
             sorted(lease['values'][record['choice']])))
         native.preflight_recovery(config['native'],cfg['project'],lease['values'][record['choice']],held,
             observed['docker'].prefix)
-        selection._retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
+        if cap_names:
+            checked_helpers(observed['context'].check(before_intent=True),helpers,config,cycle,complete=True)
+        else:
+            selection._retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
         proof={'schema':'marty.windows-recovery-candidate-publication/v1','guard_sha256':guard_sha,
             'config_sha256':selection.digest(packed(config)),'receipt_sha256':hashes,
             'generation_sha256':selection.fingerprint(held),'sequence':record['sequence'],

@@ -16,6 +16,25 @@ from test_selfhost_windows_inputs import private_fixture
 pytestmark=pytest.mark.skipif(os.name!='nt',reason='Actual private NTFS configuration fixture')
 
 
+@pytest.mark.parametrize('extra',[[],['--renew-once'],['--check-only'],['--wait-for-engine'],
+                                ['--logical-project','marty-selfhost-synthetic'],['--source-journal','PUBLIC_OTHER']])
+def test_cap_reconciliation_is_explicit_and_cannot_mix_automatic_modes(monkeypatch,capsys,extra):
+    import selfhost_windows_recovery_leaf_caps as caps
+    with configured(monkeypatch) as (root,config,_value,calls):
+        def reconcile(selector,output,*,operator_successor):
+            assert selector==root/'selector.json' and output==root/'retained-attempt'
+            assert operator_successor is None
+            calls.append('cap-reconciliation')
+            return {'credential_admission':False,'guards_retained':True}
+        monkeypatch.setattr(caps,'reconcile',reconcile)
+        status=recovery.main(['--configuration',str(config),'--expired-current','reconcile-stage',
+                              '--attempt-directory',str(root/'retained-attempt'),*extra])
+        assert status==(1 if extra else 0)
+        assert calls==([] if extra else ['cap-reconciliation'])
+        assert not (root/'retained-attempt').exists()
+        capsys.readouterr()
+
+
 @contextmanager
 def configured(monkeypatch):
     with private_fixture() as (root,_):

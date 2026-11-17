@@ -2,6 +2,8 @@
 # Run the exact reviewed cargo-deny release without building its Docker action.
 set -euo pipefail
 
+python3 "$(dirname "${BASH_SOURCE[0]}")/check-advisory-exception-expiry.py"
+
 version=0.20.2
 archive="cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz"
 digest=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
