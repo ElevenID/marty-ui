@@ -1,9 +1,6 @@
 use axum::{routing::post, Json, Router};
 use chrono::{Duration, TimeZone, Utc};
 use hmac::{Hmac, Mac};
-use marty_issuance_service::canvas_issuance_guard::{
-    CanvasGuardConfig, PostgresCanvasIssuanceGuard,
-};
 use marty_issuance_service::credential::{
     CredentialAccessTokenGrant, CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
     CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
@@ -647,56 +644,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .unwrap()
         .expect("Python-compatible HMAC token lookup");
     assert_eq!(transaction.nonce.as_deref(), Some(nonce.as_str()));
-    let guard = PostgresCanvasIssuanceGuard::new(
-        pool.clone(),
-        CanvasGuardConfig {
-            enabled: true,
-            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
-            evidence_max_age: StdDuration::from_secs(900),
-            readiness_max_age: StdDuration::from_secs(900),
-        },
-    );
-    let issuer_did = "did:web:issuer.example";
-    let issuer = IssuerContext {
-        issuer_profile_id: "issuer-profile-a".to_owned(),
-        issuer_did: issuer_did.to_owned(),
-        signing_service_id: "kms-service-a".to_owned(),
-        algorithm: "ES256".to_owned(),
-        verification_method_id: Some(format!("{issuer_did}#key-a")),
-        public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
-        certificate_chain: Vec::new(),
-        raw_context: json!({
-            "organization_id":"org-a", "issuer_did":issuer_did,
-            "verification_method_id":format!("{issuer_did}#key-a"),
-            "key_purpose":"vc_jwt_issuer", "algorithm":"ES256",
-            "public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y"},
-            "issuer_profile":{
-                "id":"issuer-profile-a", "status":"active", "organization_id":"org-a",
-                "issuer_did":issuer_did, "verification_method_id":format!("{issuer_did}#key-a"),
-                "key_purpose":"vc_jwt_issuer"
-            },
-            "service":{"id":"kms-service-a","algorithm":"ES256"}
-        }),
-    };
-    assert!(guard.ensure_ready(&transaction, &issuer).await.unwrap());
-    sqlx::query(
-        "UPDATE issuance_service.evidence_facts
-         SET verification = '{\"status\":\"UNVERIFIED\"}'::jsonb WHERE id = 'fact-a'",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    assert!(matches!(
-        guard.ensure_ready(&transaction, &issuer).await,
-        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
-    ));
-    sqlx::query(
-        "UPDATE issuance_service.evidence_facts
-         SET verification = '{\"status\":\"VERIFIED\"}'::jsonb WHERE id = 'fact-a'",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     let credential_id = "urn:uuid:credential-postgres-contract";
     let authorization = CredentialSigningAuthorization {
         transaction: &transaction,

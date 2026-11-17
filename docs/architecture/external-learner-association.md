@@ -334,3 +334,11 @@ provider context are rejected. The source credential lineage, approved
 application state, tenant, current transaction and current credential fences
 are checked under the row lock before the binding compare-and-swap. No Canvas
 marker or platform registration participates in renewal authority.
+
+The issuance crate no longer contains Canvas award candidates, approval
+adapters, platform bindings, legacy issuance guard, LTI/OAuth runtime,
+readiness or management modules. Their provider-only contracts and orphaned
+LTI projection test source are retired. Generic application authority checks
+remain in signing, finalization and renewal. Provider-named shared response
+codecs still require cleanup; they are compatibility utilities, not an
+integration entry point.

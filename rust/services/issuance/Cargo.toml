@@ -143,14 +143,6 @@ name = "signing_error_detail_contract"
 path = "tests/signing_error_detail_contract.rs"
 
 [[test]]
-name = "canvas_award_candidate_approval_behavior"
-path = "tests/canvas_award_candidate_approval_behavior.rs"
-
-[[test]]
-name = "canvas_award_candidate_behavior"
-path = "tests/canvas_award_candidate_behavior.rs"
-
-[[test]]
 name = "application_template_postgres_contract"
 path = "tests/application_template_postgres_contract.rs"
 
