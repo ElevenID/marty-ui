@@ -332,7 +332,7 @@ def volume_witnesses(item, rows, volumes):
     return result
 
 
-def disjoint_storage(items, project, volumes, witnesses=None):
+def disjoint_storage(items, project, volumes, witnesses=None, *, retained_ca_readers=None):
     witnesses = witnesses or {}
     require(all(not (m.get('Type') == 'bind' and m.get('Source') in SOCKETS)
                 for x in items if _project(x) == project for m in x['Mounts']),
@@ -341,10 +341,25 @@ def disjoint_storage(items, project, volumes, witnesses=None):
              for m in x['Mounts'] if m.get('RW')]
     # Read-only consumers also observe data changes made through candidate RW.
     foreign = []
+    public_ca = []
+    readers = {} if retained_ca_readers is None else retained_ca_readers
+    require(type(readers) is dict and all(isinstance(key, str) and re.fullmatch(r'[0-9a-f]{64}', key)
+            and isinstance(value, str) for key, value in readers.items()))
+    matched_readers = set()
     for x in items:
         if _project(x) == project:
             continue
         for m in x['Mounts']:
+            if x['Id'] in readers and m.get('Destination') == '/input/ca.crt':
+                require(m.get('Type') == 'bind' and m.get('RW') is False
+                        and windows_mount_path_equal(m['Source'], readers[x['Id']]),
+                        'Retained helper public CA mount changed')
+                identity = storage_identity(m, volumes)
+                require(identity[0] == 'windows')
+                public_ca.append(identity)
+                require(x['Id'] not in matched_readers)
+                matched_readers.add(x['Id'])
+                continue
             binding = native_bind(m, volumes)
             if binding is None:
                 foreign.append(storage_identity(m, volumes));continue
@@ -358,6 +373,7 @@ def disjoint_storage(items, project, volumes, witnesses=None):
             # Historical reuse is an inference for this exact same-project
             # Source, not a live mount proof or permission to restart that job.
             foreign.append(('volume', evidence['volume']))
+    require(matched_readers == set(readers), 'Retained helper public CA reader missing')
     for a, x in owned:
         for b, y in foreign:
             if a != b:
@@ -367,7 +383,7 @@ def disjoint_storage(items, project, volumes, witnesses=None):
     # Inspect strings do not establish a stable Windows namespace. Return the
     # actual object/ancestor identities so callers can bracket junction changes.
     return sorted((str(value[0]), value[1], sorted(value[2]))
-                  for kind, value in [*owned, *foreign] if kind == 'windows')
+                  for kind, value in [*owned, *foreign, *public_ca] if kind == 'windows')
 
 
 def data_mounts(items):
@@ -530,9 +546,11 @@ class ForeignContext:
     changes by another engine client. Unknown/unsafe context forbids rollback.
     """
 
-    def __init__(self, docker, project, changing, baseline, volumes, helper_image):
+    def __init__(self, docker, project, changing, baseline, volumes, helper_image,
+                 *, retained_ca_readers=None):
         self.docker, self.project, self.changing = docker, project, changing
         self.helper_image = helper_image
+        self.retained_ca_readers = retained_ca_readers
         self.initial = context_snapshot(baseline)
         self.owned = [x for x in baseline if _project(x) == project]
         self.services = {_service(x) for x in self.owned}
@@ -606,7 +624,9 @@ class ForeignContext:
             # Even identical inspect strings do not hold foreign NTFS paths or
             # kernel mounts. Refresh those identities at every write boundary.
             witnesses = self.docker.native_witnesses(items, self.project, volumes, self.helper_image)
-            storage = disjoint_storage(items, self.project, volumes, witnesses)
+            options = {} if self.retained_ca_readers is None else {
+                'retained_ca_readers': self.retained_ca_readers(items)}
+            storage = disjoint_storage(items, self.project, volumes, witnesses, **options)
             after_volumes = self.docker.volumes()
             after = self.docker.containers()
             # Candidate changes during read-only proof are never churn retries.
@@ -616,7 +636,9 @@ class ForeignContext:
             require(time.monotonic() < deadline, 'Storage qualification deadline reached')
             if context_snapshot(after) != snapshot or after_volumes != volumes:
                 continue
-            require(disjoint_storage(after, self.project, after_volumes, witnesses) == storage,
+            closing = {} if self.retained_ca_readers is None else {
+                'retained_ca_readers': self.retained_ca_readers(after)}
+            require(disjoint_storage(after, self.project, after_volumes, witnesses, **closing) == storage,
                     'Windows storage namespace changed during qualification')
             if foreign == self.foreign and volumes == self.volumes:
                 require(time.monotonic() < deadline, 'Storage qualification deadline reached')

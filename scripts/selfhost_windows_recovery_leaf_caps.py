@@ -1,8 +1,9 @@
-"""One explicit cap-only continuation; original failed receipts stay immutable.
+"""Explicit cap reconciliation and journaled stopped-helper retirement.
 
 Only a stopped Keycloak assembler with a fully assembled but unbounded leaf
 generation is eligible. No producer replay, key/CA replacement, activation,
-guard removal, or retry after the new durable intent is admitted here.
+or retry after a durable mutation intent is admitted here. Retirement archives
+only an unused recovery guard, preserving the original failed-current guard.
 """
 
 import hashlib
@@ -134,7 +135,11 @@ def helper_proof(item, config, cycle, *, reconciled):
         "inspection_sha256": selection.digest(
             selection.packed(
                 {
-                    key: item[key]
+                    key: (
+                        sorted(item[key], key=lambda mount: mount["Destination"])
+                        if key == "Mounts"
+                        else item[key]
+                    )
                     for key in (
                         "Config",
                         "HostConfig",
@@ -177,6 +182,442 @@ def checked_helpers(items, helpers, config, cycle, *, complete):
             item, config, cycle, reconciled=repaired
         )
     return proofs
+
+
+def retained_ca_readers(base, root, guard_raw, stack):
+    """Permit only guard-bound stopped helpers' public CA reference.
+
+    This does not classify the helpers as workload roles or exempt their control
+    volume/operator mounts. Full candidate/operator admission still follows.
+    """
+    renewal = selection.renewal
+    require(
+        root.is_absolute()
+        and root.parent == Path(base["current_secrets"]).parent
+        and re.fullmatch(r"windows-renewal-[0-9a-f]{32}", root.name)
+    )
+    guard = selection.decode(guard_raw)
+    require(
+        guard_raw == selection.packed(guard)
+        and guard["schema"] == "marty.windows-expired-renewal-staging/v1"
+        and guard["root"] == str(root)
+    )
+    stack.enter_context(renewal.hold_storage_namespace(root))
+    raw = stack.enter_context(renewal.hold_private_input(root / "config.private.json"))
+    config = selection.decode(raw)
+    require(
+        raw == selection.packed(config)
+        and selection.digest(raw) == guard["config_sha256"]
+        and config["project"] == base["project"]
+    )
+    cycle = root.name.removeprefix("windows-renewal-")
+    for field in ("ca_file", "helper_image", "network", "control_volume"):
+        require(config["native"][field] == base["native"][field])
+    require(
+        config["native"]["network"] == base["project"] + "_default"
+        and config["native"]["control_volume"] == base["project"] + "-renewal-control"
+        and config["native"]["renewed"]
+        == "/control/windows-renewal-" + cycle + "/generation"
+        and config["native"]["token_file"]
+        == "/control/recovery-session-" + cycle + "/token"
+    )
+    snapshots = {}
+
+    def readers(items):
+        found = {}
+        names = {
+            base["project"] + "-renew-keycloak-" + cycle: False,
+            base["project"] + "-renew-cap-reconcile-" + cycle: True,
+        }
+        for item in items:
+            name = item.get("Name", "").removeprefix("/")
+            if name not in names:
+                continue
+            require(name not in found)
+            proof = helper_proof(item, config, cycle, reconciled=names[name])
+            if name in snapshots:
+                require(snapshots[name] == proof)
+            else:
+                snapshots[name] = proof
+            found[name] = item
+        require(base["project"] + "-renew-keycloak-" + cycle in found)
+        require(set(snapshots) == set(found))
+        return {item["Id"]: config["native"]["ca_file"] for item in found.values()}
+
+    return readers
+
+
+def require_closed_retirements(config):
+    """An uncertain helper retirement never silently enables another mutation."""
+    renewal = selection.renewal
+    parent = Path(config["current_secrets"]).parent
+    for kind in ("unused-stage", "selected-helper"):
+        for root in parent.glob("." + config["project"] + "." + kind + "-retirement-*"):
+            prefix = "." + config["project"] + "." + kind + "-retirement-"
+            cycle = root.name.removeprefix(prefix)
+            require(re.fullmatch(r"[0-9a-f]{32}", cycle))
+            with renewal.hold_storage_namespace(root):
+                intent_raw = renewal.read_private_bytes(root / "intent.json")
+                result_raw = renewal.read_private_bytes(root / "result.json")
+                intent, result = (
+                    selection.decode(intent_raw),
+                    selection.decode(result_raw),
+                )
+                require(
+                    intent_raw == selection.packed(intent)
+                    and result_raw == selection.packed(result)
+                    and intent["schema"]
+                    == "marty.windows-recovery-helper-retirement/v1"
+                    and intent["project"] == config["project"]
+                    and intent["kind"] == kind
+                    and intent["attempt"] == str(parent / ("windows-renewal-" + cycle))
+                    and result
+                    == {
+                        "schema": intent["schema"],
+                        "intent_sha256": selection.digest(intent_raw),
+                        "result": "retired",
+                        "volumes_deleted": False,
+                        "credential_admission": False,
+                    }
+                )
+                if kind == "unused-stage":
+                    archive = parent / (
+                        "."
+                        + config["project"]
+                        + ".recovery-unused-retired-"
+                        + cycle
+                        + ".json"
+                    )
+                    require(intent["evidence"]["guard_archive"] == str(archive))
+                    require(
+                        selection.digest(renewal.read_private_bytes(archive))
+                        == intent["evidence"]["guard_sha256"]
+                    )
+
+
+def _retire_stopped(config, root, proofs, *, kind, evidence):
+    """Journal exact stopped records before removing only those records, no -v.
+
+    A partial namespace is intentionally not replayable. It blocks further
+    staging/finalization until explicit operator reconciliation of the saved
+    inspections, removal outcome and any archived guard.
+    """
+    from selfhost_windows_renewal import Docker, run_owned_mutation
+
+    renewal = selection.renewal
+    cycle = root.name.removeprefix("windows-renewal-")
+    require(
+        re.fullmatch(r"[0-9a-f]{32}", cycle)
+        and kind in ("unused-stage", "selected-helper")
+    )
+    output = root.parent / (
+        "." + config["project"] + "." + kind + "-retirement-" + cycle
+    )
+    require(not renewal.namespace_entry_exists(output))
+    docker = Docker(config["docker_host"], config["engine_id"])
+    current = {item["Id"]: item for item in docker.containers()}
+    inspections = {}
+    for role, expected in proofs.items():
+        require(role in ("failed", "reconciled") and expected["id"] in current)
+        item = current[expected["id"]]
+        require(
+            helper_proof(item, config, cycle, reconciled=role == "reconciled")
+            == expected
+        )
+        body = selection.packed(item)
+        require(len(body) <= 65536)
+        inspections[role] = body
+    output.mkdir()
+    intent = {
+        "schema": "marty.windows-recovery-helper-retirement/v1",
+        "project": config["project"],
+        "kind": kind,
+        "attempt": str(root),
+        "helpers": proofs,
+        "evidence": evidence,
+        "inspection_sha256": {
+            role: selection.digest(body) for role, body in inspections.items()
+        },
+        "volumes_deleted": False,
+        "credential_admission": False,
+    }
+    intent_raw = selection.packed(intent)
+    selection._new_private(output / "intent.json", intent_raw)
+    for role, body in inspections.items():
+        selection._new_private(output / (role + ".inspection.private.json"), body)
+    for role, expected in proofs.items():
+        # Re-observe every exact ID immediately before its one removal request.
+        fresh = {item["Id"]: item for item in docker.containers()}
+        require(
+            expected["id"] in fresh
+            and helper_proof(
+                fresh[expected["id"]], config, cycle, reconciled=role == "reconciled"
+            )
+            == expected
+        )
+        result = run_owned_mutation([*docker.prefix, "rm", expected["id"]], timeout=30)
+        require(
+            result.returncode == 0 and result.stdout.strip() == expected["id"].encode()
+        )
+    after = docker.containers()
+    require(
+        not any(
+            item["Id"] in {p["id"] for p in proofs.values()}
+            or item.get("Name") in {"/" + p["name"] for p in proofs.values()}
+            for item in after
+        )
+    )
+    return output, intent_raw
+
+
+def _retirement_done(output, intent_raw):
+    selection._new_private(
+        output / "result.json",
+        selection.packed(
+            {
+                "schema": "marty.windows-recovery-helper-retirement/v1",
+                "intent_sha256": selection.digest(intent_raw),
+                "result": "retired",
+                "volumes_deleted": False,
+                "credential_admission": False,
+            }
+        ),
+    )
+
+
+def retire_unused_stage(config_path, output_dir, *, operator_successor=None):
+    """Abandon only an unpublished failed assembler; preserve both generations.
+
+    This does not revoke or claim expiry of its tokens. It preserves the original
+    failed-current staging guard, permitting a NEW explicit staging nonce after
+    the exact unused recovery guard has been archived by this owner.
+    """
+    from contextlib import ExitStack
+    from selfhost_windows_inputs import _held_private_input, _path_identities
+    from selfhost_windows_staging_recovery import _recovery_candidate_inputs
+
+    renewal = selection.renewal
+    root = Path(output_dir)
+    with ExitStack() as coordination:
+        with _recovery_candidate_inputs(
+            config_path,
+            root,
+            operator_successor,
+            _coordination=coordination,
+            _failed_keycloak=True,
+        ) as lease:
+            cfg, context = lease["config"], lease["observed"]["context"]
+            guard = renewal.recovery_guard(cfg)
+            original = renewal.read_private_bytes(guard)
+            guard_identities = _path_identities(guard)
+            staging = renewal.renewal_staging_guard(cfg)
+            staging_body = renewal.read_private_bytes(staging)
+            names = {p.name for p in root.iterdir()}
+            require(
+                not any(
+                    name.startswith(PREFIX)
+                    or name.startswith("publication")
+                    or name
+                    in ("activation", "selection", "selection.config.private.json")
+                    for name in names
+                )
+            )
+            require(not list(Path(cfg["renewed_secrets"]).iterdir()))
+            archive = guard.parent / (
+                "."
+                + cfg["project"]
+                + ".recovery-unused-retired-"
+                + lease["cycle"]
+                + ".json"
+            )
+            require(not renewal.namespace_entry_exists(archive))
+            context.check(before_intent=True)
+            output, intent_raw = _retire_stopped(
+                cfg,
+                root,
+                {"failed": lease["failed_helper"]},
+                kind="unused-stage",
+                evidence={
+                    "guard_sha256": selection.digest(original),
+                    "original_receipt_sha256": lease["original_receipts"],
+                    "failed_current_guard_sha256": selection.digest(staging_body),
+                    "data_sha256": lease["data_sha256"],
+                    "candidate_unused": True,
+                    "guard_archive": str(archive),
+                },
+            )
+            # The exact readers are absent; return to the ordinary storage rule.
+            context.retained_ca_readers = None
+            context.check(before_intent=True)
+            require(
+                {p.name for p in root.iterdir()} == names
+                and not list(Path(cfg["renewed_secrets"]).iterdir())
+                and renewal.read_private_bytes(guard) == original
+                and renewal.read_private_bytes(staging) == staging_body
+            )
+        # Project coordination outlives every file-input exit and this rename.
+        with _held_private_input(
+            guard, _rename_to=archive, _expected_identities=guard_identities
+        ) as held:
+            require(held == original)
+        with renewal.hold_private_input(archive) as held:
+            require(held == original and _path_identities(archive) == guard_identities)
+        require(
+            not renewal.namespace_entry_exists(guard)
+            and renewal.read_private_bytes(staging) == staging_body
+        )
+        _retirement_done(output, intent_raw)
+        return {
+            "result": "unused-recovery-stage-retired",
+            "guard_archived": True,
+            "failed_current_guard_retained": True,
+            "volumes_deleted": False,
+            "credential_admission": False,
+            "producer_replay": False,
+        }
+
+
+def retire_selected_helpers(
+    config_path, source_dir, output_dir, *, operator_successor=None
+):
+    """Retire two stopped helper records only after sealed, live selection."""
+    from contextlib import ExitStack
+    import selfhost_windows_recovery_journal as recovery
+    from selfhost_windows_recovery_finish import admit
+    from selfhost_windows_continuation import CHECKPOINT
+
+    renewal = selection.renewal
+    source, root = Path(source_dir), Path(output_dir)
+    with ExitStack() as coordination:
+        with selection._session(config_path, _coordination=coordination) as (
+            base,
+            _,
+            expected,
+            target,
+            raw,
+            stack,
+        ):
+            require(
+                root.parent == source.parent == target.parent == Path(expected["root"])
+            )
+            marker_raw = stack.enter_context(
+                renewal.hold_private_input(source / recovery.INTENT)
+            )
+            marker = selection.decode(marker_raw)
+            require(
+                marker_raw == selection.packed(marker)
+                and marker["source_dir"] == str(source)
+                and marker["target_dir"] == str(target)
+                and marker["attempt_dir"] == str(root)
+            )
+            require(not renewal.namespace_entry_exists(source / recovery.PENDING))
+            carry = selection.decode(raw[CHECKPOINT])
+            require(
+                carry["schema"] == recovery.SCHEMA
+                and carry["intent_sha256"] == selection.digest(marker_raw)
+            )
+            intents, records = selection._parse(raw, expected)
+            require(
+                len(intents) == len(records) == 1
+                and intents[1]["operation"] == "recovery-successor"
+                and records[1]["choice"] == "new"
+            )
+            cfg_raw = stack.enter_context(
+                renewal.hold_private_input(Path(intents[1]["config_path"]))
+            )
+            cfg = selection.decode(cfg_raw)
+            require(
+                selection.digest(cfg_raw) == intents[1]["config_file_sha256"]
+                and selection.config_digest(cfg) == intents[1]["config_sha256"]
+            )
+            stage_raw = stack.enter_context(
+                renewal.hold_private_input(root / "intent.json")
+            )
+            stage = selection.decode(stage_raw)
+            staged = selection.decode(
+                stack.enter_context(
+                    renewal.hold_private_input(root / "config.private.json")
+                )
+            )
+            predecessor = selection.decode(
+                stack.enter_context(renewal.hold_private_input(source / "owner.json"))
+            )["binding"]
+            previous_native = dict(staged["native"])
+            for key in recovery.OPERATOR_FIELDS:
+                previous_native[key] = predecessor["native"][key]
+            admit(
+                {"native": previous_native},
+                staged,
+                stage,
+                base,
+                stack,
+                operator_successor,
+            )
+            readers = retained_ca_readers(base, root, stage_raw, stack)
+            values, snapshots = selection._inputs(cfg, stack)
+            require(snapshots == intents[1]["inputs"])
+            require(
+                selection._prove(
+                    cfg,
+                    "new",
+                    values,
+                    stack,
+                    expected_data=records[1]["data_sha256"],
+                    retained_ca_readers=readers,
+                )
+                == records[1]["data_sha256"]
+            )
+            observed = selection._inspect(
+                cfg,
+                "new",
+                values,
+                stack,
+                expected_data=records[1]["data_sha256"],
+                retained_ca_readers=readers,
+            )
+            cycle = root.name.removeprefix("windows-renewal-")
+            proofs = checked_helpers(
+                observed["context"].check(before_intent=True),
+                {},
+                staged,
+                cycle,
+                complete=True,
+            )
+            cap_intent = selection.decode(
+                stack.enter_context(
+                    renewal.hold_private_input(root / (PREFIX + "intent.json"))
+                )
+            )
+            cap_helper = selection.decode(
+                stack.enter_context(
+                    renewal.hold_private_input(root / (PREFIX + "helper.json"))
+                )
+            )
+            require(
+                proofs["failed"] == cap_intent["failed_helper"]
+                and proofs["reconciled"] == cap_helper
+            )
+            output, intent_raw = _retire_stopped(
+                staged,
+                root,
+                proofs,
+                kind="selected-helper",
+                evidence={
+                    "selection_sha256": selection.digest(marker_raw),
+                    "data_sha256": records[1]["data_sha256"],
+                    "selected_and_sealed": True,
+                },
+            )
+            observed["context"].retained_ca_readers = None
+            observed["context"].check(before_intent=True)
+        _retirement_done(output, intent_raw)
+        return {
+            "result": "selected-recovery-helpers-retired",
+            "helpers": 2,
+            "volumes_deleted": False,
+            "guards_retained": True,
+            "credential_admission": False,
+        }
 
 
 def completed_receipts(raws, original, helpers, config, cycle, guard_sha, data_sha):
