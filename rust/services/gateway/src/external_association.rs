@@ -116,6 +116,9 @@ pub fn required_permission(path: &str) -> Option<&'static str> {
         Access::Learner => None,
     }
 }
+pub fn requires_own_session(path: &str) -> bool {
+    route(path).is_some_and(|(access, _)| access == Access::Learner)
+}
 pub fn operation(path: &str, access: Access) -> serde_json::Value {
     use serde_json::json;
     let action = path.rsplit('/').next().expect("static association route");

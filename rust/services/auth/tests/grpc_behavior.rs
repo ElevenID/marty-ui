@@ -77,6 +77,36 @@ fn service(session: Option<Session>) -> AuthGrpcService {
 }
 
 #[tokio::test]
+async fn own_session_assertion_is_positive_only_without_any_impersonation_context() {
+    for context in [
+        None,
+        Some(json!({"active":true})),
+        Some(json!({"active":false})),
+    ] {
+        let mut session = session();
+        session.user.impersonation = context.clone().map(|v| serde_json::from_value(v).unwrap());
+        let response = service(Some(session))
+            .validate_session(Request::new(ValidateSessionRequest {
+                session_id: "session-1".into(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.valid);
+        assert_eq!(response.non_impersonated_session, Some(context.is_none()));
+    }
+    let response = service(None)
+        .validate_session(Request::new(ValidateSessionRequest {
+            session_id: "missing".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!response.valid);
+    assert_eq!(response.non_impersonated_session, None);
+}
+
+#[tokio::test]
 async fn deployed_auth_grpc_rejects_missing_or_invalid_service_tokens() {
     let token = "s".repeat(32);
     let service = AuthGrpcService::new(

@@ -692,6 +692,11 @@ async fn observation_middleware(
             }
         } else if identity.source == AuthenticationSource::Session && identity.api_key_id.is_none()
         {
+            if crate::external_association::requires_own_session(request.uri().path())
+                && identity.non_impersonated_session != Some(true)
+            {
+                return detail_response(403, "learner_own_session_required");
+            }
             let mut origins = request.headers().get_all(header::ORIGIN).iter();
             let origin = origins.next().and_then(|v| v.to_str().ok());
             let allowed =
@@ -733,6 +738,12 @@ async fn observation_middleware(
     let Some(identity) = request.extensions().get::<GatewayIdentity>().cloned() else {
         return detail_response(401, "observation_authentication_required");
     };
+    if ownership
+        && request.uri().path().rsplit('/').next() == Some("confirm")
+        && identity.non_impersonated_session != Some(true)
+    {
+        return detail_response(403, "learner_own_session_required");
+    }
     let result = if producer {
         crate::external_observation::admit(
             request,

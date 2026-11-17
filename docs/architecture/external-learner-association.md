@@ -110,6 +110,21 @@ immutable-column/journal updates and destructive table privileges. Reachable
 memberships are checked even when their inheritance flag is false. The explicit
 required function and mutable-column grants must also exist.
 
+## Authenticated own-session consent
+
+Auth's validated session response positively attests `non_impersonated_session`.
+Gateway preserves the optional protobuf assertion through its production identity
+provider and requires `Some(true)` for every learner association operation,
+including reads, receipts and unlink, and for application-ownership confirmation.
+An absent assertion from an older Auth version and any retained impersonation
+context fail closed before forwarding or cache handling. Browser checks,
+authentication time, roles and caller headers cannot supply this assertion.
+Deploy compatible Auth and Gateway versions before enabling either feature.
+Administrator proposal/revocation keep their separate current permission policy.
+A local connected regression uses the actual Auth gRPC service, production
+Gateway gRPC provider and Gateway router with synthetic sessions; deployed
+identity-provider and canonical issuance composition still require qualification.
+
 ## Local qualification
 
 The accumulating browser implementation exposes
