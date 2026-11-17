@@ -1297,9 +1297,9 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         sqlx::query(
             "INSERT INTO issuance_service.credential_delivery_records
                  (id, credential_id, transaction_id, organization_id, delivery_target,
-                  delivery_mode, status, canvas_account_id, last_error, metadata,
+                  delivery_mode, status, last_error, metadata,
                   created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, $6, NULL, NULL, $7,
+             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, $6, NULL, $7,
                      clock_timestamp(), clock_timestamp())",
         )
         .bind(delivery_record_id(&credential.id, "didcomm_v2", None))

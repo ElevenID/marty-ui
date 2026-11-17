@@ -2,7 +2,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
+const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v2";
 const HISTORICAL_ALEMBIC_ERROR: &str =
     "historical issuance Alembic schema is unsupported; start with a fresh KMS-only database";
 const BASE_CATALOG: &str = include_str!("../migrations/0000_issuance_service_catalog.json");
@@ -80,20 +80,6 @@ const BASE_TABLES: &[&str] = &[
     "application_templates",
     "applications",
     "authorization_sessions",
-    "canvas_award_candidates",
-    "canvas_candidate_observations",
-    "canvas_event_receipts",
-    "canvas_evidence_sync_jobs",
-    "canvas_evidence_sync_targets",
-    "canvas_learner_identities",
-    "canvas_lti_launch_states",
-    "canvas_oauth_authorizations",
-    "canvas_oauth_connections",
-    "canvas_platform_state_backups",
-    "canvas_platforms",
-    "canvas_program_binding_requirement_backups",
-    "canvas_program_bindings",
-    "canvas_worker_heartbeats",
     "credential_delivery_records",
     "evidence_fact_heads",
     "evidence_facts",
@@ -179,7 +165,7 @@ pub async fn migrate_owned_schema(pool: &PgPool, organization_id: Uuid) -> Resul
         .await?;
         if !baseline_claimed {
             return Err(sqlx::Error::Protocol(
-                "issuance Rust ledger has no baseline claim".into(),
+                "issuance schema requires baseline v2; legacy upgrade is not implemented; no data was changed".into(),
             ));
         }
     }
@@ -342,8 +328,7 @@ async fn validate_base_catalog(connection: &mut sqlx::PgConnection) -> Result<()
                 'table', t.relname, 'name', i.relname, 'unique', x.indisunique,
                 'valid', x.indisvalid, 'ready', x.indisready,
                 'primary', x.indisprimary, 'key_count', x.indnkeyatts,
-                'definition', CASE WHEN i.relname = 'ux_canvas_sync_jobs_one_active_target'
-                    THEN NULL ELSE pg_get_indexdef(i.oid) END
+                'definition', pg_get_indexdef(i.oid)
             )) AS value
             FROM pg_index x
             JOIN pg_class i ON i.oid = x.indexrelid
@@ -389,31 +374,6 @@ async fn validate_base_catalog(connection: &mut sqlx::PgConnection) -> Result<()
                 )));
             }
         }
-    }
-    validate_canvas_sync_index(connection).await
-}
-
-async fn validate_canvas_sync_index(
-    connection: &mut sqlx::PgConnection,
-) -> Result<(), sqlx::Error> {
-    let index: Option<(String, String)> = sqlx::query_as(
-        "SELECT pg_get_indexdef(x.indexrelid, 1, false),
-                pg_get_expr(x.indpred, x.indrelid)
-         FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
-         WHERE i.oid = to_regclass('issuance_service.ux_canvas_sync_jobs_one_active_target')",
-    )
-    .fetch_optional(&mut *connection)
-    .await?;
-    let accepted_predicates = [
-        "((status)::text = ANY ((ARRAY['queued'::character varying, 'leased'::character varying, 'retry'::character varying])::text[]))",
-        "((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('leased'::character varying)::text, ('retry'::character varying)::text]))",
-    ];
-    if !index.is_some_and(|(key, predicate)| {
-        key == "target_id" && accepted_predicates.contains(&predicate.as_str())
-    }) {
-        return Err(sqlx::Error::Protocol(
-            "Canvas sync one-active-target index changed".into(),
-        ));
     }
     Ok(())
 }
