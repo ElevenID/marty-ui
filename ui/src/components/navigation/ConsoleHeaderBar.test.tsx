@@ -381,16 +381,16 @@ describe('ConsoleHeaderBar', () => {
     expect(screen.queryByText('Vendor')).not.toBeInTheDocument()
   })
 
-  it('uses the Canvas learner name when the LTI username is opaque', () => {
+  it('uses the account name when the username is opaque', () => {
     Object.assign(mockAuthState, {
       user: {
-        user_id: 'canvas-lti-abc123',
+        user_id: 'user-abc123',
         username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
         given_name: 'ElevenID Test',
         family_name: '',
         email: 'learner@example.edu',
         picture: null,
-        roles: ['applicant', 'canvas_lti_learner'],
+        roles: ['applicant'],
         organizations: [{ id: 'org-123', display_name: 'Marty Org', membership: { roles: [] } }],
       },
       isVendor: false,
@@ -408,7 +408,7 @@ describe('ConsoleHeaderBar', () => {
     expect(getAccountMenuDisplayName(mockAuthState.user)).toBe(expectedDisplayName)
   })
 
-  it('derives account menu labels for normal and Canvas sessions', () => {
+  it('derives account menu labels from canonical profile fields', () => {
     expect(getAccountMenuDisplayName({
       given_name: 'Maree',
       family_name: 'Smith',
@@ -416,26 +416,26 @@ describe('ConsoleHeaderBar', () => {
     })).toBe('Maree Smith')
 
     expect(getAccountMenuDisplayName({
-      user_id: 'canvas-lti-abc123',
-      username: 'canvas-user-1',
+      user_id: 'user-abc123',
+      username: 'learner-1',
       given_name: 'ElevenID Test',
-      roles: ['canvas_lti_learner'],
-    })).toBe('canvas-user-1')
+      roles: ['applicant'],
+    })).toBe('ElevenID Test')
 
     expect(getAccountMenuDisplayName({
-      user_id: 'canvas-lti-abc123',
+      user_id: 'user-abc123',
       username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
       given_name: 'ElevenID',
       family_name: 'Test',
       email: 'learner@example.edu',
-      roles: ['canvas_lti_learner'],
+      roles: ['applicant'],
     })).toBe('ElevenID Test')
 
     expect(getAccountAvatarInitial({
-      user_id: 'canvas-lti-abc123',
+      user_id: 'user-abc123',
       username: '06e74e0c-1858-4642-a834-ffa0b03acfcd',
       given_name: 'ElevenID Test',
-      roles: ['canvas_lti_learner'],
+      roles: ['applicant'],
     })).toBe('E')
   })
 

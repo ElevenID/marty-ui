@@ -49,8 +49,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import SchoolIcon from '@mui/icons-material/School';
-import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
@@ -176,7 +174,6 @@ function normaliseCredential(doc) {
     status: doc.status?.toLowerCase() || 'active',
     step: null,
     deliveries: Array.isArray(doc.deliveries) ? doc.deliveries : [],
-    canvasContext: doc.canvas_context || doc.metadata?.canvas || null,
     subjectClaimsHash: doc.subject_claims_hash || null,
     imageUrl,
   };
@@ -209,7 +206,6 @@ function normaliseApplication(app) {
     offerExpiresAt: app.offer_expires_at || null,
     formData,
     integrationContext,
-    canvasContext: integrationContext.canvas || formData.canvas_context || null,
     evidenceSubmissions: Array.isArray(app.evidence_submissions) ? app.evidence_submissions : [],
     issuanceTransactionId: app.issuance_transaction_id || null,
     deliveryMode: integrationContext.delivery_mode || integrationContext.delivery?.mode || null,
@@ -267,56 +263,6 @@ function claimStatusForRow(row = {}) {
   if (['credentialed', 'issued'].includes(row.status)) return 'Claimed';
   if (row.status === 'rejected') return 'Not claimable';
   return 'Not ready to claim';
-}
-
-function canvasDetailsForRow(row = {}) {
-  const canvas = row.canvasContext || {};
-  const formData = row.formData || {};
-  const nestedContext = canvas.canvas_context || {};
-  return [
-    {
-      label: 'Course',
-      value: firstPresent(
-        canvas.canvas_course_name,
-        canvas.course_name,
-        canvas.title,
-        nestedContext.title,
-        formData.canvas_course_name,
-        formData.course_name,
-      ),
-    },
-    {
-      label: 'Canvas activity',
-      value: firstPresent(
-        canvas.canvas_assignment_name,
-        canvas.assignment_name,
-        canvas.resource_link_title,
-        nestedContext.resource_link_title,
-        formData.canvas_assignment_name,
-        formData.quiz_name,
-      ),
-    },
-    {
-      label: 'Canvas account',
-      value: firstPresent(canvas.canvas_account_id, row.integrationContext?.canvas_account_id, formData.canvas_account_id),
-    },
-    {
-      label: 'Program binding',
-      value: firstPresent(canvas.canvas_program_binding_id, row.integrationContext?.canvas_program_binding_id),
-    },
-  ].filter((item) => item.value);
-}
-
-function canvasDeliveriesForRow(row = {}) {
-  return (row.deliveries || []).filter((delivery) => (
-    delivery.delivery_target === 'canvas_credentials'
-    || delivery.provider === 'canvas_credentials'
-  ));
-}
-
-function formatDeliveryStatus(status) {
-  if (!status) return 'Unknown';
-  return String(status).replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,65 +1284,6 @@ function MyIdentityPage() {
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   {t('identity.guidance.additionalInformation', 'The issuer needs more information. Contact the issuer for instructions on how to provide it.')}
                 </Alert>
-              )}
-
-              {canvasDetailsForRow(selectedApp).length > 0 && (
-                <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-source">
-                  <Stack spacing={1.25}>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                      <SchoolIcon color="primary" fontSize="small" />
-                      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                        Canvas course source
-                      </Typography>
-                    </Stack>
-                    <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' } }}>
-                      {canvasDetailsForRow(selectedApp).map((item) => (
-                        <Box key={item.label}>
-                          <Typography variant="caption" color="text.secondary">{item.label}</Typography>
-                          <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{item.value}</Typography>
-                        </Box>
-                      ))}
-                    </Box>
-                  </Stack>
-                </Paper>
-              )}
-
-              {canvasDeliveriesForRow(selectedApp).length > 0 && (
-                <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 1 }} data-testid="identity-canvas-delivery">
-                  <Stack spacing={1.25}>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                      <SyncAltIcon color="primary" fontSize="small" />
-                      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                        Canvas Credentials display
-                      </Typography>
-                    </Stack>
-                    {canvasDeliveriesForRow(selectedApp).map((delivery) => (
-                      <Box key={delivery.id || delivery.external_credential_id || delivery.delivery_target}>
-                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
-                          <Chip
-                            label={formatDeliveryStatus(delivery.status)}
-                            size="small"
-                            color={delivery.status === 'delivered' ? 'success' : delivery.status === 'failed' ? 'error' : 'default'}
-                            variant="outlined"
-                          />
-                          {delivery.external_credential_id && (
-                            <Chip label="Mirror linked" size="small" color="success" variant="outlined" />
-                          )}
-                        </Stack>
-                        {delivery.external_credential_id && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
-                            Canvas credential ID: {delivery.external_credential_id}
-                          </Typography>
-                        )}
-                        {delivery.last_error && (
-                          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
-                            {delivery.last_error}
-                          </Typography>
-                        )}
-                      </Box>
-                    ))}
-                  </Stack>
-                </Paper>
               )}
 
               {/* Timeline */}
