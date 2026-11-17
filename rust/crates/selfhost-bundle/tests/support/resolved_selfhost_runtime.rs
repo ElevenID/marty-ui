@@ -1216,16 +1216,13 @@ fn negative_controls(
         }
     }
     for owner in ["gateway", "flow"] {
-        for secret in ["personalization_bureau_api_key"] {
-            let mut changed = model.full_model.clone();
-            changed["services"][owner]["secrets"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({"source": secret, "target": format!("/run/secrets/{secret}")}));
-            assert!(
-                ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err()
-            );
-        }
+        let secret = "personalization_bureau_api_key";
+        let mut changed = model.full_model.clone();
+        changed["services"][owner]["secrets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"source": secret, "target": format!("/run/secrets/{secret}")}));
+        assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
     }
     let mut changed = model.full_model.clone();
     changed["services"]["issuance-native"]["environment"]["UNQUALIFIED_SECRET_FILE"] = json!("");
