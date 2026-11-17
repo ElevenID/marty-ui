@@ -112,6 +112,47 @@ required function and mutable-column grants must also exist.
 
 ## Local qualification
 
+The accumulating browser implementation exposes
+`/console/identity/associations/{organization_id}/{challenge_id}`. Its first
+module dependency captures the canonical `#code=` fragment in memory and removes
+the query and fragment before application initialization. Both application entry
+points import that dependency before their application graph. The code is never
+placed in session/local storage or a login redirect; logout clears it. A learner
+who needs authentication signs in in a separate tab, then explicitly checks the
+original page again.
+
+The page reads the exact application, source and binding through the public
+same-origin Gateway. Confirm, deny and relink require an explicit click. The
+client binds each action to the account displayed during review, checks that
+account again before persistence and dispatch, and verifies it after current
+inspection. An account switch requires another review. Inactive identities
+require the explicit relink action and expected identity revision. The browser
+uses session cookies, no bearer/API-key credentials or caller-supplied trusted
+identity headers.
+
+Before dispatch, the browser persists only the immutable original operation,
+scope, reviewed actor, action and expected revisions in session storage. It
+never persists the code or a cached authority response. Transport failure after
+dispatch is uncertain. Reloads and the check button recover the original
+receipt and separately inspect current state; they never resubmit consent.
+An old successful receipt does not show a revoked connection as active.
+
+The client calls `fetch` once per explicit consent action without application
+retries. Chromium can independently replay an HTTP POST after a pre-header
+connection failure. Canonical Core original-operation idempotency is therefore
+required even when application retries are absent. The local Chromium fixture
+observed two identical wire attempts for one application `fetch`, retaining one
+original operation. It then recovered the receipt on reload without another
+mutation. The fixture builds the actual page/client/helper with Vite and uses
+synthetic same-origin HTTPS authority responses; it does not prove actual
+Gateway authentication or Core persistence.
+
+Run `ui/scripts/association-consent-browser.mjs` with the absolute path to the
+existing pinned Playwright 1.59.1 module and, optionally, an existing absolute
+Chromium executable. It creates and removes its own loopback HTTPS fixture,
+temporary build and source entry. No installation, deployed configuration or
+production credential is required.
+
 `python3 scripts/run_application_ownership_contract.py --source-contract` uses a
 disposable pinned PostgreSQL 16 instance, an actual restricted LOGIN, exact
 production Rust modules and production-lock registry dependencies. It exercises

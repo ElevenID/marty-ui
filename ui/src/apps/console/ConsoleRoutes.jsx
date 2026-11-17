@@ -9,6 +9,7 @@ import AuthCallback from '../../components/AuthCallback';
 import AuthUnavailable from '../../components/AuthUnavailable';
 import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
+import AssociationConsentPage from '../../components/identity/AssociationConsentPage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
@@ -166,6 +167,7 @@ function ConsoleRoutes() {
   return (
     <Routes>
       <Route path="/console" element={<ConsoleEntryRoute />} />
+      <Route path="/console/identity/associations/:organizationId/:challengeId" element={<AssociationConsentPage />} />
       <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
