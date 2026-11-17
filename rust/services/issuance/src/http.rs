@@ -1423,7 +1423,7 @@ impl IntoResponse for CredentialIssuanceHttpError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({"detail": "The Credential Template has no Revocation Profile."}),
             ),
-            Error::CanvasEligibilityDenied => (
+            Error::ApplicationEligibilityDenied => (
                 StatusCode::BAD_REQUEST,
                 json!({
                     "error": "invalid_credential_request",

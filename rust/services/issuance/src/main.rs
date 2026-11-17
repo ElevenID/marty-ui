@@ -8,7 +8,6 @@ use marty_issuance_service::{
     application_template_catalog::runtime_catalog,
     application_template_postgres::PostgresApplicationTemplateRepository,
     application_template_service::{ApplicationTemplateService, SystemApplicationTemplateClock},
-    canvas_issuance_guard::CanvasGuardConfig,
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -277,12 +276,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.signing_keys_internal_api_key.as_deref(),
         config.dependency_timeout,
     )?);
-    let canvas_guard_config = CanvasGuardConfig {
-        enabled: config.canvas_portable_enabled,
-        pilot_organizations: config.canvas_pilot_organizations.clone(),
-        evidence_max_age: config.canvas_evidence_max_age,
-        readiness_max_age: config.canvas_readiness_max_age,
-    };
     let credential_repository = Arc::new(PostgresCredentialRepository::new(
         pool.clone(),
         token_hmac_key,
@@ -299,7 +292,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.revocation_profile_service_url.clone(),
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
-        canvas_guard_config.clone(),
     )?);
     let mut didcomm_envelope = NativeDidcommEnvelope::new(
         config.didcomm_universal_resolver_url.as_deref(),

@@ -114,7 +114,7 @@ impl PostgresCanvasIssuanceGuard {
             Ok(guarded) => Ok(guarded),
             Err(code) => {
                 warn!(transaction_id = %transaction.id, denial_code = code, "Canvas pre-signing guard denied credential issuance");
-                Err(CredentialIssuanceError::CanvasEligibilityDenied)
+                Err(CredentialIssuanceError::ApplicationEligibilityDenied)
             }
         }
     }

@@ -272,3 +272,11 @@ OID4VCI authorization and passport requests use the provider-independent
 and numeric formatting remain unchanged. The retired Canvas session claim
 handler is removed from the application service; connector claims must use
 supported public Gateway contracts with Core-owned authority.
+
+The live pre-signing guard reads only the canonical application. An
+application-bound transaction requires its current tenant, approved status,
+exact transaction binding and supported delivery-only integration context.
+Missing applications and unsupported legacy integration contexts fail closed.
+Provider rollout switches, platform registrations, bindings and remote
+readiness do not authorize the signing path. Transactions without applications
+retain the platform's existing issuer/proof checks.

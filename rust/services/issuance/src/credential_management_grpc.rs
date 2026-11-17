@@ -752,7 +752,7 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         | Error::InvalidTransactionState
         | Error::IssuanceInProgress
         | Error::RevocationProfileRequired
-        | Error::CanvasEligibilityDenied => Status::failed_precondition(error.to_string()),
+        | Error::ApplicationEligibilityDenied => Status::failed_precondition(error.to_string()),
         Error::IssuerUnavailable(_)
         | Error::SigningUnavailable(_)
         | Error::LifecycleUnavailable(_) => Status::unavailable(error.to_string()),

@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::canvas_issuance_guard::{CanvasGuardConfig, PostgresCanvasIssuanceGuard};
 use crate::credential::{
     AllocatedCredentialStatus, CredentialIssuanceError, CredentialLifecycle, CredentialTransaction,
     IssuedCredential, IssuerContext,
@@ -283,7 +282,6 @@ struct ProcessRevocationResponse {
 #[derive(Clone, Debug)]
 pub struct PostgresCredentialLifecycle {
     pool: PgPool,
-    canvas_guard: PostgresCanvasIssuanceGuard,
     status: HttpCredentialStatusAllocator,
 }
 
@@ -293,12 +291,9 @@ impl PostgresCredentialLifecycle {
         revocation_base_url: Url,
         service_token: Option<&str>,
         timeout: Duration,
-        canvas_config: CanvasGuardConfig,
     ) -> Result<Self, CredentialIssuanceError> {
-        let canvas_guard = PostgresCanvasIssuanceGuard::new(pool.clone(), canvas_config);
         Ok(Self {
             pool,
-            canvas_guard,
             status: HttpCredentialStatusAllocator::new(
                 revocation_base_url,
                 service_token,
@@ -636,12 +631,28 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
     async fn ensure_ready(
         &self,
         transaction: &CredentialTransaction,
-        issuer: &IssuerContext,
+        _issuer: &IssuerContext,
     ) -> Result<(), CredentialIssuanceError> {
-        self.canvas_guard
-            .ensure_ready(transaction, issuer)
-            .await
-            .map(|_| ())
+        let Some(application_id) = transaction.application_id.as_deref() else {
+            return Ok(());
+        };
+        let application = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT jsonb_build_object('organization_id', organization_id,
+             'status', status, 'issuance_transaction_id', issuance_transaction_id,
+             'integration_context', integration_context)
+             FROM issuance_service.applications WHERE id = $1",
+        )
+        .bind(application_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+        if application.as_ref().is_some_and(|application| {
+            application_issuance_context_matches(application, transaction)
+        }) {
+            Ok(())
+        } else {
+            Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+        }
     }
 
     async fn allocate_status(
@@ -999,4 +1010,49 @@ mod tests {
         }
         server.abort();
     }
+    #[test]
+    fn application_signing_requires_current_platform_authority() {
+        let transaction = transaction();
+        let valid = json!({
+            "organization_id": transaction.organization_id,
+            "status": "approved",
+            "issuance_transaction_id": transaction.id,
+            "integration_context": {"delivery_mode": "wallet_only"}
+        });
+        assert!(super::application_issuance_context_matches(
+            &valid,
+            &transaction
+        ));
+        for (key, value) in [
+            ("organization_id", json!("other-tenant")),
+            ("status", json!("pending")),
+            ("issuance_transaction_id", json!("other-transaction")),
+            ("integration_context", json!({"canvas": {"eligible": true}})),
+            ("integration_context", json!({"unknown_provider": {}})),
+            ("integration_context", json!(null)),
+        ] {
+            let mut rejected = valid.clone();
+            rejected[key] = value;
+            assert!(
+                !super::application_issuance_context_matches(&rejected, &transaction),
+                "{key}"
+            );
+        }
+    }
+}
+
+fn application_issuance_context_matches(
+    application: &serde_json::Value,
+    transaction: &CredentialTransaction,
+) -> bool {
+    application["organization_id"].as_str() == Some(transaction.organization_id.as_str())
+        && application["status"].as_str() == Some("approved")
+        && application["issuance_transaction_id"].as_str() == Some(transaction.id.as_str())
+        && application["integration_context"]
+            .as_object()
+            .is_some_and(|context| {
+                context
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+            })
 }

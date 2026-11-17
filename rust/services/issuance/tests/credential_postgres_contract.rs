@@ -688,7 +688,7 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .unwrap();
     assert!(matches!(
         guard.ensure_ready(&transaction, &issuer).await,
-        Err(CredentialIssuanceError::CanvasEligibilityDenied)
+        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
     ));
     sqlx::query(
         "UPDATE issuance_service.evidence_facts
@@ -777,12 +777,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         revocation_url,
         Some("contract-service-token"),
         StdDuration::from_secs(1),
-        CanvasGuardConfig {
-            enabled: true,
-            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
-            evidence_max_age: StdDuration::from_secs(900),
-            readiness_max_age: StdDuration::from_secs(900),
-        },
     )
     .unwrap();
     lifecycle
