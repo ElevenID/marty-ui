@@ -386,9 +386,11 @@ Use `scripts/selfhost_windows_recovery.py --configuration <managed.json>` with:
 | `--expired-current inspect` | none | Read-only failed-attempt evidence |
 | `--expired-current stage` | `--attempt-directory <empty-private-windows-renewal-uuid> --logical-project <marty-selfhost-name>` | Guarded fresh credentials through existing producers |
 | `--expired-current reconcile-stage` | `--attempt-directory <retained-attempt>` | One explicit cap-only continuation for the exact stopped assembler boundary described below |
+| `--expired-current retire-unused-stage` | `--attempt-directory <retained-attempt>` | Retire an unused failed assembler and archive only its unused recovery guard; preserve failed-current guard and all credential material |
 | `--expired-current publish` | `--attempt-directory <attempt>` | Fresh candidate proof and metadata publication |
 | `--expired-current activate` | `--attempt-directory <attempt>` | Recreate the existing owned dependency layers once; no expired rollback |
 | `--expired-current select` | `--attempt-directory <attempt> --source-journal <predecessor>` | Fresh running-generation proof, sealed successor selection; guards retained |
+| `--expired-current retire-helpers` | `--attempt-directory <attempt> --source-journal <predecessor>` | After sealed selection, retire exactly the two stopped reconciliation helper records; preserve volumes and guards |
 | `--expired-current finalize` | `--attempt-directory <attempt> --source-journal <predecessor>` | Repeat complete-chain/operator/current proof, archive exact guards without deleting evidence |
 
 These explicit phases cannot be combined with ordinary renewal, check-only or
@@ -428,6 +430,36 @@ and this complete continuation evidence. The two terminal helper records are
 retained and freshly checked before activation. Missing, partial, rebound, or
 uncertain continuation evidence forbids another invocation. An interrupted
 rename is preserved for inspection; it is never rolled back or blindly retried.
+
+Retained helpers do not carry Compose service ownership. Their exact stopped
+identity and guard-bound configuration permit only their read-only public CA
+mount at `/input/ca.crt` to overlap the project's CA directory. The full helper
+proof is repeated against the same opening and closing container censuses.
+Its NTFS object and ancestor identities remain in the storage witness; no
+other reader, writable bind, control volume, or operator mount is exempted.
+
+If the unused failed assembler can no longer be reconciled, use the explicit
+`retire-unused-stage` alternative before creating a new staging nonce. Windows
+materialization, cap reconciliation, publication, activation and selection must
+not have begun. Under project coordination the owner records private inspection
+evidence and intent, removes only the exact exited helper with `docker rm <id>`
+(no force or volume deletion), then rechecks all held inputs. Only then does it
+archive the exact unused recovery guard without overwriting an archive. It
+preserves the original failed-current guard, all original receipts, empty
+Windows candidate directory, and control-volume material. Retirement does not
+revoke credentials or claim that any token has expired. The old attempt is never
+replayed; a new explicit `stage` uses a new empty directory and nonce.
+
+After a reconciled candidate is activated and its successor is sealed, run
+`retire-helpers` before finalization. It replays the selected chain, operator
+admission and live native/storage proofs, binds both stopped helper inspections
+to the sealed cap receipts, and removes only those two records. Both guards
+remain until normal finalization. Retirement metadata lives beside the attempt,
+so the selected attempt evidence is never rewritten. A missing terminal result
+or uncertain removal/guard archival blocks common managed selection sessions,
+new staging and finalization. Preserve that private metadata and obtain explicit
+operator reconciliation of the saved inspections, exact IDs and archive outcome;
+these phases never automatically retry a partial removal or mint.
 
 The next ordinary renewal uses a newly staged configuration with the selected
 operator. Resolution replays the complete stored-owner chain before admitting

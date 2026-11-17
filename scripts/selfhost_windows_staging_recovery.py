@@ -71,7 +71,8 @@ def inspect_failed_current(config_path):
 
 
 @contextmanager
-def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordination=None):
+def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordination=None,
+                           _retained_root=None):
     """Read-only held proof of the stopped phase, never credential admission.
 
     The result is published to the caller only after all input/namespace exit
@@ -130,8 +131,17 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordina
                     for name in _stage_names()}
         require(receipts.pop('intent.json') == guard == packed(stage))
         receipt_hashes = failed_current_receipts(receipts)
+        reader_options = {}
+        if _retained_root is not None:
+            require(recovery_guard_sha256 is not None)
+            recovery_guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(base)))
+            require(selection.digest(recovery_guard_raw) == recovery_guard_sha256)
+            from selfhost_windows_recovery_leaf_caps import retained_ca_readers
+            reader_options['retained_ca_readers'] = retained_ca_readers(
+                config, Path(_retained_root), recovery_guard_raw, stack)
         observed = selection._inspect(config, record['choice'], values, stack,
-                                      expected_data=record['data_sha256'], require_ready=False)
+                                      expected_data=record['data_sha256'], require_ready=False,
+                                      **reader_options)
         layers = renewal.dependency_layers(observed['model'], observed['services'],
                                            renewal.owned_roles(observed['model'], observed['services']))
         next_raw = stack.enter_context(renewal.hold_private_input(root/'activation/config.private.json'))
@@ -186,6 +196,8 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
     renewal = selection.renewal
     with _failed_current_inputs(config_path) as lease:
         cfg, record, observed, stack = (lease[name] for name in ('config', 'record', 'observed', 'stack'))
+        from selfhost_windows_recovery_leaf_caps import require_closed_retirements
+        require_closed_retirements(cfg)
         require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}', logical_project))
         root = Path(output_dir)
         require(root.parent == Path(cfg['current_secrets']).parent
@@ -291,7 +303,11 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _
     base = selection.decode(renewal.read_private_bytes(Path(config_path)))
     guard_raw = renewal.read_private_bytes(renewal.recovery_guard(base))
     guard_sha = selection.digest(guard_raw)
-    with _failed_current_inputs(config_path, recovery_guard_sha256=guard_sha,_coordination=_coordination) as lease:
+    reader_options = {}
+    if _failed_keycloak or renewal.namespace_entry_exists(Path(output_dir)/'cap-reconciliation.intent.json'):
+        reader_options['_retained_root'] = Path(output_dir)
+    with _failed_current_inputs(config_path, recovery_guard_sha256=guard_sha,_coordination=_coordination,
+                                **reader_options) as lease:
         cfg, record, observed, stack = (lease[name] for name in ('config','record','observed','stack'))
         intent = selection.decode(guard_raw)
         root = Path(output_dir)

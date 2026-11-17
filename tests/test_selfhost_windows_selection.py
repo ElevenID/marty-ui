@@ -80,7 +80,7 @@ def fixture(monkeypatch, *, initial_current=False):
                 'project': PROJECT, 'candidate_only': True, 'production_admission': False,
                 'automatic_lifecycle': False, 'result': result}), encoding='utf-8')
         def prove(cfg, choice, _values, _stack, *, expected_data=None, authority_file=None,
-                  initial_current=False):
+                  initial_current=False, retained_ca_readers=None):
             prefix = 'renewed' if choice == 'new' else 'current'
             selection.require(phase['both'] or Path(cfg[prefix+'_secrets']) == phase['active'])
             if expected_data is not None:selection.require(expected_data == phase['data'])

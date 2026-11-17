@@ -59,7 +59,9 @@ def activate_recovery_candidate(config_path, output_dir, *, operator_successor=N
             owned=[item for item in baseline if renewal._project(item)==project]
             data_before=renewal.data_mounts(owned)
             selection.require(selection.digest(selection.packed(data_before))==lease['proof']['data_sha256'])
-            context=renewal.ForeignContext(docker,project,changing,baseline,docker.volumes(),cfg['native']['helper_image'])
+            readers=getattr(observed['context'],'retained_ca_readers',None)
+            options={} if readers is None else {'retained_ca_readers':readers}
+            context=renewal.ForeignContext(docker,project,changing,baseline,docker.volumes(),cfg['native']['helper_image'],**options)
             native.preflight_recovery(cfg['native'],project,lease['old_bytes'],lease['new_bytes'],docker.prefix)
             context.check(before_intent=True)
             intent={'schema':'marty.windows-recovery-activation/v1','project':project,

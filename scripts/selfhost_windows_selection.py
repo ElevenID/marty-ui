@@ -226,6 +226,8 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
                 renewal.recovery_guard, renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
                 renewal.model_repair_guard, renewal.continuation_guard)))
         stack.enter_context(renewal.hold_storage_namespace(parent))
+        from selfhost_windows_recovery_leaf_caps import require_closed_retirements
+        require_closed_retirements(config)
         if create and not renewal.namespace_entry_exists(root):
             with _held_private_input(parent, directory=True):pass
             root.mkdir()
@@ -296,7 +298,8 @@ def _inputs(config, stack, *, initial_current=False):
     return values, snapshots
 
 
-def _inspect(config, choice, values, stack, *, expected_data=None, require_ready=True):
+def _inspect(config, choice, values, stack, *, expected_data=None, require_ready=True,
+             retained_ca_readers=None):
     """Local/runtime identity and isolation only; never native admission."""
     prefix = 'renewed' if choice == 'new' else 'current'
     docker = renewal.Docker(config['docker_host'], config['engine_id'])
@@ -331,16 +334,19 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
                     for x in owned if renewal._service(x) not in changing))
     volumes = docker.volumes()
     witnesses = docker.native_witnesses(baseline, config['project'], volumes, config['native']['helper_image'])
-    renewal.disjoint_storage(baseline, config['project'], volumes, witnesses)
+    reader_options = {} if retained_ca_readers is None else {
+        'retained_ca_readers': retained_ca_readers(baseline)}
+    renewal.disjoint_storage(baseline, config['project'], volumes, witnesses, **reader_options)
     for item in owned:
         for mount in item['Mounts']:
             if mount.get('RW') and mount.get('Type') == 'bind':
                 path = renewal.windows_source(mount['Source']);require(path is not None)
                 stack.enter_context(renewal.hold_storage_namespace(path))
     require(mounts > 0)
+    context_options = {} if retained_ca_readers is None else {'retained_ca_readers': retained_ca_readers}
     return {'data_sha256': data_hash, 'docker': docker, 'baseline': baseline,
             'context': renewal.ForeignContext(docker, config['project'], set(), baseline, volumes,
-                                              config['native']['helper_image']),
+                                              config['native']['helper_image'], **context_options),
             'owned': owned, 'services': services, 'model': models[choice], 'command': commands[choice],
             'cwd': Path(config['compose_file']).parent}
 
@@ -371,9 +377,10 @@ def _native_current(config, choice, values, docker, authority_file, *, initial_c
 
 
 def _prove(config, choice, values, stack, *, expected_data=None, authority_file=None,
-           initial_current=False):
+           initial_current=False, retained_ca_readers=None):
     """Full readiness plus signed native current-custody/lifetime admission."""
-    observed = _inspect(config, choice, values, stack, expected_data=expected_data)
+    options = {} if retained_ca_readers is None else {'retained_ca_readers': retained_ca_readers}
+    observed = _inspect(config, choice, values, stack, expected_data=expected_data, **options)
     docker = observed['docker']
     _native_current(config, choice, values, docker, authority_file,
                     initial_current=initial_current)
