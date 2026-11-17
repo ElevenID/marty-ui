@@ -293,3 +293,9 @@ and legacy-ingest implementations are removed from the issuance crate. Their
 dedicated behavior/replay tests are retired with the implementation. Any
 future connector implementation must use public Gateway contracts rather than
 restoring platform runtime provider adapters.
+
+Canvas review resolution, job operations, LTI evidence projection and LTI
+sync-enqueue modules are retired from the platform issuance crate. Canonical
+credential status transition/recovery APIs and generic external evidence
+remain platform capabilities; provider review and synchronization workflows
+belong in the independent connector through the public Gateway.

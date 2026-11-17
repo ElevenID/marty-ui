@@ -171,11 +171,6 @@ name = "application_template_http_behavior"
 path = "tests/application_template_http_behavior.rs"
 
 [[test]]
-name = "canvas_lti_sync_enqueue_postgres_contract"
-path = "tests/canvas_lti_sync_enqueue_postgres_contract.rs"
-
-
-[[test]]
 name = "credential_admission_behavior"
 path = "tests/credential_admission_behavior.rs"
 
