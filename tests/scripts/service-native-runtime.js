@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // Closed policies for the original service pair and D05 native offer successor.
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -15,7 +16,7 @@ function expectedWithPolicy(profile,{boundJson,verifyBoundFile,expectedRuntime,r
  const base=boundJson(profile.baseProfile);
  if(policy===POLICIES.service)assert(base.authNativeOverlay&&!base.serviceNativeOverlay,'Exact Auth mixed predecessor required');
  else assert(base.runtimeResume&&!base.issuanceOfferNativeOverlay,'Exact retained beta predecessor required');
- const prior=expectedRuntime(base);assert.equal(prior.length,22);
+ const prior=expectedRuntime(base);assertPlatformRuntimeRoles(prior.map(row=>row.role));assert.equal(prior.length,PLATFORM_RUNTIME_ROLES.length);
  if(policy===POLICIES.issuance){const previous=prior.find(row=>row.role==='issuance-native');
   assert(previous&&previous.kind==='SIGNED_NIGHTLY_IMAGE'&&previous.source==='225818494f4ba716e75df7225d6c43d71b038879');
   assert.equal(previous.binary,'marty-issuance-service');assert.deepEqual(previous.requiredObservation.binaryMounts,[]);}

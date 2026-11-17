@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // Functional-only binding for the reviewed restart of retained beta containers.
 const assert=require('node:assert/strict');
 const PHASES=['infrastructure','keycloak','clients','edge'];
@@ -26,9 +27,10 @@ function authority(profile,{boundJson,verifyBoundFile,expectedRuntime}){
  assert.deepEqual(original,prior,'Resume must preserve the exact previous functional profile');
  const before=boundJson(plan.sources.retainedAfter),allIds=Object.keys(before).sort();
  const started=plan.proposal.startOrder;
- assert(Array.isArray(started)&&started.length===28);
+ assert(Array.isArray(started)&&started.length===PLATFORM_RUNTIME_ROLES.length+6);
  const targets=new Map(started.map(row=>[row.role,row.cid]));
- assert.equal(targets.size,28);assert.equal(new Set(targets.values()).size,28);
+ assert.deepEqual([...targets.keys()].sort(),[...PLATFORM_RUNTIME_ROLES,'postgres','redis','openbao','keycloak','docs','nginx-proxy'].sort(),'PLATFORM_RESUME_ROLE_SET_CHANGED');
+ assert.equal(targets.size,PLATFORM_RUNTIME_ROLES.length+6);assert.equal(new Set(targets.values()).size,PLATFORM_RUNTIME_ROLES.length+6);
  const groups=[['postgres','redis','openbao'],['keycloak'],
   started.map(row=>row.role).filter(role=>!['postgres','redis','openbao','keycloak','ui-prod','docs','nginx-proxy'].includes(role)),
   ['ui-prod','docs','nginx-proxy']];
@@ -57,9 +59,10 @@ function authority(profile,{boundJson,verifyBoundFile,expectedRuntime}){
    generations.set(row.cid,row);
   }
  }
- assert.equal(generations.size,28,'Every reviewed beta target must complete');
+ assert.equal(generations.size,PLATFORM_RUNTIME_ROLES.length+6,'Every reviewed beta target must complete');
  const expected=expectedRuntime(base);
- assert.equal(expected.length,22);assert.equal(new Set(expected.map(row=>row.role)).size,22);
+ assertPlatformRuntimeRoles(expected.map(row=>row.role));
+ assert.equal(expected.length,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(expected.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
  const rows=expected.map(row=>{
   const cid=row.requiredContainerId||row.requiredObservation?.containerId,actual=generations.get(cid);
   assert(actual&&actual.role===row.role,'Functional role was not restarted as reviewed');

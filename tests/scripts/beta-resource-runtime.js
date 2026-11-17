@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
 const fs=require('node:fs');
@@ -36,7 +37,8 @@ function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
  assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  const r=profile.resourceRecreation;assert(r&&profile.baseProfile,'RESOURCE_PROFILE_REQUIRED');
  const base=boundJson(profile.baseProfile),old=expectedRuntime(base);
- assert.equal(old.length,22,'RESOURCE_BASE_ROLE_COUNT_CHANGED');assert.equal(new Set(old.map(x=>x.role)).size,old.length);assert.equal(old.filter(x=>x.role==='ui-prod').length,1);
+ assertPlatformRuntimeRoles(old.map(row=>row.role));
+ assert.equal(old.length,PLATFORM_RUNTIME_ROLES.length,'RESOURCE_BASE_ROLE_COUNT_CHANGED');assert.equal(new Set(old.map(x=>x.role)).size,old.length);assert.equal(old.filter(x=>x.role==='ui-prod').length,1);
  const cap=boundJson(r.capResult),input=boundJson(cap.baseRef),ui=boundJson(r.uiResult),uiStarted=boundJson(r.uiStarted),uiLive=boundJson(r.uiObservation),kc=boundJson(r.keycloakResult),heap=boundJson(r.keycloakHeap),configs=boundJson(r.configDigests);
  assert(Object.values(receiptDigests(base)).includes(r.engineAuthority.sha256),'RESOURCE_ENGINE_AUTHORITY_NOT_IN_BASE');
  const engine=boundJson(r.engineAuthority);assert.match(engine.engineId,/^[a-f0-9-]{36}$/);
@@ -80,7 +82,7 @@ function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
   assert(HASH.test(after.id)&&after.id!==before.id);
   assert(Number.isFinite(Date.parse(after.startedAt))&&Date.parse(after.startedAt)>Date.parse(before.startedAt));
   assert(Number.isInteger(after.pid)&&after.pid>0);
-  assert(after.health==='healthy'||row.role==='canvas-sync-worker'&&after.health===null,'RESOURCE_ROLE_HEALTH:'+row.role);
+  assert.equal(after.health,'healthy','RESOURCE_ROLE_HEALTH:'+row.role);
   const observation=row.requiredObservation?{...row.requiredObservation,containerId:after.id,startedAt:after.startedAt,hostPid:after.pid}:undefined;
   return {...row,requiredContainerId:after.id,requiredStartedAt:after.startedAt,requiredHostPid:after.pid,...(observation?{requiredObservation:observation}:{})};
  });
@@ -149,7 +151,7 @@ function resourceSuccessor(previousRef,profile,context){
  const cid=row=>row.requiredContainerId||row.requiredObservation?.containerId;
  const ancillary=['docs','nginx-proxy','openbao','postgres','redis','keycloak'];
  const roles=[...before.map(row=>row.role).filter(role=>role!=='ui-prod'),...ancillary].sort();
- assert.equal(roles.length,27);assert.equal(new Set(roles).size,27,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
+ assert.equal(roles.length,PLATFORM_RUNTIME_ROLES.length+5);assert.equal(new Set(roles).size,PLATFORM_RUNTIME_ROLES.length+5,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
  assert.deepEqual(Object.keys(a.input.before).sort(),roles,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
  assert.deepEqual(Object.keys(a.cap.allRunningRoles).sort(),roles,'RESOURCE_SUCCESSOR_ROLES_CHANGED');
  const fixed=new Set(['openbao','postgres','redis','keycloak']);
@@ -165,12 +167,12 @@ function resourceSuccessor(previousRef,profile,context){
  replacements.push({role:'ui-prod',oldCid:a.ui.oldCid,newCid:a.ui.newCid});
  const oldIds=replacements.map(row=>row.oldCid),newIds=replacements.map(row=>row.newCid);
  assert(oldIds.every(id=>HASH.test(id))&&newIds.every(id=>HASH.test(id)));
- assert.equal(new Set(oldIds).size,28,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
- assert.equal(new Set(newIds).size,28,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
+ assert.equal(new Set(oldIds).size,PLATFORM_RUNTIME_ROLES.length+6,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
+ assert.equal(new Set(newIds).size,PLATFORM_RUNTIME_ROLES.length+6,'RESOURCE_SUCCESSOR_DUPLICATE_ID');
  for(const row of replacements)assert(row.newCid===row.oldCid||!oldIds.includes(row.newCid),
   'RESOURCE_SUCCESSOR_REUSED_ID');
  for(const [rows,key]of [[before,'oldCid'],[after,'newCid']]){
-  assert.equal(rows.length,22);assert.equal(new Set(rows.map(row=>row.role)).size,22);
+  assert.equal(rows.length,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(rows.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
   for(const row of rows)assert.equal(replacements.find(next=>next.role===row.role)?.[key],cid(row),
    'RESOURCE_SUCCESSOR_RETAINED_ROLE_CHANGED');
  }

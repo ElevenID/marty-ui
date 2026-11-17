@@ -8,7 +8,7 @@ const {verifyFunctionalRuntime}=require('./functional-debug-runtime');
 const sha=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const hex=n=>n.toString(16).padStart(64,'0');
 const START='2026-11-01T00:00:00Z',AFTER='2026-11-04T00:00:00Z';
-const roles=[...Array.from({length:21},(_,i)=>'functional-'+i),'docs','nginx-proxy','openbao','postgres','redis','keycloak'];
+const roles=[...require('./platform-runtime-roles').PLATFORM_RUNTIME_ROLES.filter(role=>role!=='ui-prod'),'docs','nginx-proxy','openbao','postgres','redis','keycloak'];
 function fixture(){
  const base={},before={},all={},targets={},models={},live={},modelPath='C:/private/reviewed-model.json',image='sha256:'+hex(999);
  const model={services:{}};
@@ -45,8 +45,8 @@ function fixture(){
  return {profile,context,read,live,values,refs,uiNew};
 }
 test('functional resource successor accepts only bound generation and live configuration',()=>{
- const f=fixture();assert.equal(authority(f.profile,f.context).rows.length,22);
- assert.equal(verifyAncillary(f.profile,f.read,f.context).rows.length,22);
+ const f=fixture();assert.equal(authority(f.profile,f.context).rows.length,21);
+ assert.equal(verifyAncillary(f.profile,f.read,f.context).rows.length,21);
 });
 test('tampered receipt and supplied observation transport are refused',()=>{
  const f=fixture();f.profile.resourceRecreation.engineAuthority.sha256=hex(999);
@@ -99,7 +99,7 @@ test('v2 live Keycloak config accepts reviewed aliases and refuses path/type/rw 
   if(changed==='Type')row.Mounts[0].Type='volume';
   if(changed==='RW')row.Mounts[0].RW=true;
   if(changed)assert.throws(()=>verifyAncillary(f.profile,f.read,f.context),/KEYCLOAK_MOUNT_CHANGED/);
-  else assert.equal(verifyAncillary(f.profile,f.read,f.context).rows.length,22);
+  else assert.equal(verifyAncillary(f.profile,f.read,f.context).rows.length,21);
  }
 });
 
@@ -109,7 +109,7 @@ test('resource v2 refuses an old unversioned-normalization config proof',()=>{
 });
 
 function restartedFixture(){
- const f=fixture(),role='functional-0',cid=f.values.cap.allRunningRoles[role].id;
+ const f=fixture(),role='applicant',cid=f.values.cap.allRunningRoles[role].id;
  for(const row of Object.values(f.live)){row.State.Paused=false;row.State.OOMKilled=false;}
  f.live[f.values.kc.newCid].State.StartedAt='2026-11-05T00:00:00Z';
  const prior=f.context.expectedRuntime;
@@ -129,13 +129,13 @@ function restartedFixture(){
 test('resource restart binds a real changed generation while old profile refuses it',()=>{
  const x=restartedFixture();
  assert.deepEqual(x.produced.historicalGenerationUnknown,['keycloak']);
- assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context),/RESOURCE_GENERATION_CHANGED:functional-0/);
+ assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context),/RESOURCE_GENERATION_CHANGED:applicant/);
  const bound=restartAuthority(x.successor,x.context);
- assert.equal(bound.rows.length,22);assert.equal(bound.generations.size,28);
- assert.equal(verifyAncillary(x.f.profile,x.read,x.context,bound.generations).rows.length,22);
+ assert.equal(bound.rows.length,21);assert.equal(bound.generations.size,27);
+ assert.equal(verifyAncillary(x.f.profile,x.read,x.context,bound.generations).rows.length,21);
 });
 test('Keycloak first pin alone cannot qualify a restart',()=>{
- const x=restartedFixture(),row=x.f.values.restart.roles.find(r=>r.role==='functional-0');
+ const x=restartedFixture(),row=x.f.values.restart.roles.find(r=>r.role==='applicant');
  row.startedAt=AFTER;row.pid=101;
  assert.throws(()=>restartAuthority(x.successor,x.context),/RESOURCE_RESTART_NO_CHANGE/);
 });
@@ -150,9 +150,9 @@ test('resource restart rejects tampered source, ID, generation and unchanged PID
  for(const kind of ['source','cid','oldTime','sameTimeWrongPid']){
   const x=restartedFixture(),receipt=x.f.values.restart;
   if(kind==='source')receipt.sourceSha256=hex(1);
-  if(kind==='cid')receipt.roles.find(r=>r.role==='functional-0').cid=hex(1);
-  if(kind==='oldTime')receipt.roles.find(r=>r.role==='functional-0').startedAt=START;
-  if(kind==='sameTimeWrongPid')receipt.roles.find(r=>r.role==='functional-0').startedAt=AFTER;
+  if(kind==='cid')receipt.roles.find(r=>r.role==='applicant').cid=hex(1);
+  if(kind==='oldTime')receipt.roles.find(r=>r.role==='applicant').startedAt=START;
+  if(kind==='sameTimeWrongPid')receipt.roles.find(r=>r.role==='applicant').startedAt=AFTER;
   assert.throws(()=>restartAuthority(x.successor,x.context),/RESOURCE_RESTART_/);
  }
 });
@@ -173,7 +173,7 @@ test('resource restart refuses paused or OOM ancillary while preserving generati
  for(const state of ['Paused','OOMKilled']){
   const x=restartedFixture();x.f.live[x.cid].State[state]=true;
   const bound=restartAuthority(x.successor,x.context);
-  assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context,bound.generations),/RESOURCE_RESTART_STATE_CHANGED:functional-0/);
+  assert.throws(()=>verifyAncillary(x.f.profile,x.read,x.context,bound.generations),/RESOURCE_RESTART_STATE_CHANGED:applicant/);
  }
 });
 
@@ -207,8 +207,8 @@ function successorFixture(){
 
 test('resource successor derives only exact cap/UI/Keycloak replacements from validated receipts',()=>{
  const f=successorFixture(),result=resourceSuccessor(f.profile.baseProfile,f.profile,f.context);
- assert.equal(result.kind,'resource-recreation');assert.equal(result.replacements.length,28);
- assert.equal(result.replacements.filter(row=>row.oldCid!==row.newCid).length,25);
+ assert.equal(result.kind,'resource-recreation');assert.equal(result.replacements.length,27);
+ assert.equal(result.replacements.filter(row=>row.oldCid!==row.newCid).length,24);
  assert.deepEqual(result.replacements.filter(row=>row.oldCid===row.newCid).map(row=>row.role).sort(),
   ['openbao','postgres','redis']);
  assert.equal(result.replacements.find(row=>row.role==='keycloak').newCid,f.values.kc.newCid);

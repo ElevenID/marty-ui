@@ -199,7 +199,7 @@ test('historical archive packages independently, accepts checkout CRLF and rejec
  const dir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'historical-maintenance-package-'));
  t.after(()=>fs.rmSync(dir,{recursive:true}));
  fs.mkdirSync(path.join(dir,'tests/scripts'),{recursive:true});fs.mkdirSync(path.join(dir,'contracts'));
- for(const name of ['native-maintenance-runtime','passport-maintenance-runtime','native-maintenance-metadata','functional-debug-runtime'])fs.copyFileSync(path.join(__dirname,name+'.js'),path.join(dir,'tests/scripts',name+'.js'));
+ for(const name of ['native-maintenance-runtime','passport-maintenance-runtime','native-maintenance-metadata','functional-debug-runtime','platform-runtime-roles'])fs.copyFileSync(path.join(__dirname,name+'.js'),path.join(dir,'tests/scripts',name+'.js'));
  const archive=path.join(dir,'contracts/scoped-full-build-legacy-reference.json');
  const original=fs.readFileSync(path.join(__dirname,'../../contracts/scoped-full-build-legacy-reference.json'),'utf8').replace(/\r\n/g,'\n');
  const run=()=>require('node:child_process').spawnSync(process.execPath,['-e',"const assert=require('node:assert/strict'),m=require('./tests/scripts/native-maintenance-runtime');assert.equal(m.ALL29.length,29);assert(Object.isFrozen(m.ALL29));assert.throws(()=>m.produceLatestProfile(),/RETIRED_NATIVE_MAINTENANCE_GENERATION/);"],{cwd:dir,encoding:'utf8'});

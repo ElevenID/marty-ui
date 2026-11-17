@@ -184,3 +184,17 @@ as a current platform receipt. Original implementation: UI commit
 `tests/scripts/nightly-functional-runtime.js` (Git blob `032ee9269796d3a810bcec9b95586ec7a7ad8a7b`).
 TODO (platform runtime owner): qualify a fresh platform signed-image profile and
 observer separately; this cleanup does not require or enable that replacement.
+
+
+Current shared runtime admission and resource/restart projections use the closed
+21-role platform inventory in `tests/scripts/platform-runtime-roles.js`. They
+reject the retired worker binary and old, unknown, missing or duplicate roles;
+every current functional role requires healthy-state evidence. Frozen historical
+maintenance readers retain their original observation semantics only inside
+explicitly historical reports that cannot admit a runtime.
+
+TODO (platform runtime/build owners): review fresh 21-role build, source, resume
+plan and operator receipts before any live use. Existing immutable hashes remain
+unchanged; source cleanup and synthetic local tests do not upgrade old 22-role
+receipts, authorize a deployment, or qualify a production integration. Unsupported
+old cohorts must stay refused until separately qualified.

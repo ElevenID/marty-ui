@@ -19,6 +19,12 @@ const CONTRACTS=Object.freeze({
 function contract(selection){const value=CONTRACTS[selection.profile];assert(value,'Unreviewed maintenance scope');return value;}
 
 
+function validateHistoricalObservation(row,actual,ignoreGeneration=false){
+ const observed=runtime.validateRuntimeIdentity(row,actual,ignoreGeneration);
+ if(row.requiredObservation&&Object.hasOwn(row.requiredObservation,'health'))assert.equal(actual.health,row.requiredObservation.health,'Unchanged role health differs');
+ assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Historical role health not established');
+ return observed;
+}
 function validateGenerations(expected,before,selection,observed){
  assert.equal(expected.length,22);assert.equal(new Set(expected.map(row=>row.role)).size,22);
  assert.deepEqual(before.map(row=>row.role).sort(),expected.map(row=>row.role).sort());
@@ -38,7 +44,7 @@ function validateGenerations(expected,before,selection,observed){
   assert(Date.parse(actual.startedAt)>Date.parse(old.startedAt),'All22 require a new maintenance generation');
   if(!roles[row.role]){
    assert.equal(actual.containerId,old.containerId,'Unselected container recreated');
-   const validated=runtime.validateRuntimeObservation(row,actual,true);
+   const validated=validateHistoricalObservation(row,actual,true);
    return {...validated,requiredObservation:{...row.requiredObservation,startedAt:actual.startedAt,hostPid:actual.hostPid},
     ...(row.requiredStartedAt!==undefined?{requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid}:{})};
   }
@@ -56,7 +62,7 @@ function validateGenerations(expected,before,selection,observed){
    requiredContainerId:actual.containerId,requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid,
    requiredEffectiveUid:10001,...(selection.profile===LATEST_PROFILE?{requiredEffectiveGid:10001}:{}),requiredBinaryMounts:actual.binaryMounts};
   delete next.requiredObservation;
-  return runtime.validateRuntimeObservation(next,actual);
+  return validateHistoricalObservation(next,actual);
  });
 }
 

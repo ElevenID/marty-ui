@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // Opt-in local functionality only. This cannot qualify a release or a recording.
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -102,6 +103,8 @@ function expectedRuntime(profile){
   retained[role]={source:row.source,sha256:row.binarySha256};
  }
  const rows=baseline.images;assert(Array.isArray(rows)&&new Set(rows.map(row=>row.service)).size===rows.length);
+ assertPlatformRuntimeRoles(rows.map(row=>row.service));
+ assert(!build.actualBinaryOutputs.some(row=>row.name==='marty-canvas-sync-worker'),'RETIRED_PROVIDER_BINARY_INVENTORY');
  if(prior)assert.deepEqual(prior.rows.map(row=>row.service).sort(),rows.filter(row=>row.service!=='ui-prod').map(row=>row.service).sort(),'Prior overlay must cover exactly the reviewed native roles');
  const expected=rows.map(row=>{
   const role=row.service,binary=role==='ui-prod'?null:binaryFor(role);
@@ -122,7 +125,7 @@ function expectedRuntime(profile){
 function expectedIssuanceOverlay(profile){
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  const base=boundJson(profile.baseProfile);assert.equal(base.schema,'marty.functional-mixed-runtime/v1');
- const expected=expectedRuntime(base);assert.equal(expected.length,22);
+ const expected=expectedRuntime(base);assert.equal(expected.length,PLATFORM_RUNTIME_ROLES.length);
  const overlay=profile.issuanceOverlay,build=boundJson(overlay.buildReceipt),deployed=boundJson(overlay.deploymentReceipt);
  assert.equal(build.scope,'ISSUANCE_ONLY_NATIVE_FUNCTIONAL_OVERLAY');assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);
  assert.equal(build.profile,'dev');assert.equal(build.sourceRevision,ISSUANCE_SOURCE);assert.equal(build.coreRevision,ISSUANCE_CORE);
@@ -169,8 +172,9 @@ function applyNativeOverlayRows(expected,before,deployed,selection){
  return applyNativeOverlayObservations(expected,before.roles,deployed,selection);
 }
 function applyNativeOverlayObservations(expected,priorRoles,deployed,selection){
- assert.equal(expected.length,22);assert.equal(new Set(expected.map(row=>row.role)).size,22);
- assert.equal(priorRoles.length,22);assert.equal(new Set(priorRoles.map(row=>row.role)).size,22);assert.equal(new Set(priorRoles.map(row=>row.containerId)).size,22);
+ assertPlatformRuntimeRoles(expected.map(row=>row.role));assertPlatformRuntimeRoles(priorRoles.map(row=>row.role));
+ assert.equal(expected.length,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(expected.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
+ assert.equal(priorRoles.length,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(priorRoles.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(priorRoles.map(row=>row.containerId)).size,PLATFORM_RUNTIME_ROLES.length);
  assert.deepEqual(Object.keys(deployed.roles).sort(),[...selection.roles].sort());
  for(const row of expected){
   const old=priorRoles.find(item=>item.role===row.role);assert(old,'Missing prior role identity');
@@ -181,7 +185,7 @@ function applyNativeOverlayObservations(expected,priorRoles,deployed,selection){
   assert(Number.isInteger(old.effectiveUid)&&old.effectiveUid>=0);assert(Number.isInteger(old.configuredRuntimeUid)&&old.configuredRuntimeUid>=0);
   assert(Array.isArray(old.binaryMounts));assert(old.binaryMounts.every(mount=>mount.writable===false));
   assert.equal(old.processExecutableSha256,row.sha256);assert.equal(old.executablePath,row.binary?'/usr/local/bin/'+row.binary:null);
-  assert(old.health==='healthy'||(row.role==='canvas-sync-worker'&&old.health===null));
+  assert.equal(old.health,'healthy');
   if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(Object.hasOwn(old,field)?old[field]:old.requiredObservation?.[field],value,'Prior runtime generation drift');
   for(const [required,field]of [['requiredStartedAt','startedAt'],['requiredHostPid','hostPid'],['requiredEffectiveUid','effectiveUid'],['requiredBinaryMounts','binaryMounts']])
    if(row[required]!==undefined)assert.deepEqual(old[field],row[required],'Prior runtime generation drift');
@@ -220,9 +224,9 @@ function expectedUnqualifiedNativePreimage(expected,before,raw,disposition,selec
  assert.equal(selection.source,D02_NATIVE.source);assert.equal(selection.coreSource,D02_NATIVE.core);
  assert.deepEqual([...selection.roles].sort(),Object.keys(D02_NATIVE.roles).sort());
  assert.equal(selection.kind,'SCOPED_NATIVE_FUNCTIONAL_OVERLAY');
- assert.equal(raw.releaseQualified,false);assert.equal(raw.rows.length,22);
- assert.equal(new Set(raw.rows.map(row=>row.role)).size,22);
- assert.equal(new Set(raw.rows.map(row=>row.containerId)).size,22);
+ assert.equal(raw.releaseQualified,false);assert.equal(raw.rows.length,PLATFORM_RUNTIME_ROLES.length);
+ assert.equal(new Set(raw.rows.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
+ assert.equal(new Set(raw.rows.map(row=>row.containerId)).size,PLATFORM_RUNTIME_ROLES.length);
  assert.deepEqual(raw.rows.map(row=>row.role).sort(),expected.map(row=>row.role).sort());
  const deployed={roles:Object.fromEntries(selection.roles.map(role=>{
   const actual=raw.rows.find(row=>row.role===role);assert.equal(actual.binaryMounts.length,1);
@@ -310,8 +314,8 @@ function expectedHeaderSuccessor(profile,base,expected){
  assert.equal(deployed.predecessorAuthoritySha256,prior.failedAuthority.sha256);
  for(const field of ['productionTouched','imagesBuilt','releaseQualified','recordingQualified'])assert.equal(deployed[field],false);
  validateHeaderSuccessorGate(deployed,boundJson(authority.value.headerGateFailure.signingDomainReadback));
- const current=boundJson(deployed.beforeObservedRuntime);assert.equal(current.releaseQualified,false);assert.equal(current.rows.length,22);
- assert.equal(new Set(current.rows.map(row=>row.role)).size,22);
+ const current=boundJson(deployed.beforeObservedRuntime);assert.equal(current.releaseQualified,false);assert.equal(current.rows.length,PLATFORM_RUNTIME_ROLES.length);
+ assert.equal(new Set(current.rows.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
  const priorRoles=preimage.map(row=>validateRuntimeObservation(row,current.rows.find(actual=>actual.role===row.role)));
  return applyNativeOverlayObservations(preimage,priorRoles,deployed,{roles:['signing-keys'],source:build.uiRevision,coreSource:build.coreRevision,
   kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:Object.fromEntries(Object.entries(build.binaries).map(([binary,row])=>[binary,row.sha256]))});
@@ -403,8 +407,8 @@ function expectedMaintenanceRestart(profile,expected){
  const original={...profile};delete original.maintenanceRestart;
  assert.deepEqual(original,base,'Maintenance restart must retain the exact prior profile');
  const authority=maintenanceAuthority(receipt.authority,expected);assert.equal(receipt.engineId,authority.engineId);
- assert(Array.isArray(receipt.roles)&&receipt.roles.length===22);assert.equal(new Set(receipt.roles.map(row=>row.role)).size,22);
- assert.equal(new Set(receipt.roles.map(row=>row.containerId)).size,22);
+ assert(Array.isArray(receipt.roles)&&receipt.roles.length===PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(receipt.roles.map(row=>row.role)).size,PLATFORM_RUNTIME_ROLES.length);
+ assert.equal(new Set(receipt.roles.map(row=>row.containerId)).size,PLATFORM_RUNTIME_ROLES.length);
  return expected.map(row=>{
   const actual=receipt.roles.find(item=>item.role===row.role);assert(actual,'Restart role missing');
   validateRestartObservation(row,actual);
@@ -593,12 +597,12 @@ function mdocConfigurationData(profile){
   for(const uri of Object.values(row.certificate)){assert(typeof uri==='string'&&uri.length<=2048&&!/[^\x21-\x7e]/.test(uri)&&!/[?#\\]/.test(uri));const parsed=new URL(uri);assert(['http:','https:'].includes(parsed.protocol)&&parsed.hostname&&!parsed.username&&!parsed.password&&!parsed.host.includes('@')&&!uri.slice(uri.indexOf('://')+3).split('/')[0].includes('@'));}
  }
  const evidence=boundJson(deployed.configurationEvidence);assert.equal(evidence.schema,'marty.mdoc-config-evidence/v1');assert.equal(evidence.baseProfileSha256,profile.baseProfile.sha256);assert.equal(evidence.authoritySha256,overlay.authority.sha256);
- const snapshot=boundJson(evidence.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));assert.equal(snapshot.binding.roles.length,22);
+ const snapshot=boundJson(evidence.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));assert.equal(snapshot.binding.roles.length,PLATFORM_RUNTIME_ROLES.length);
  assert.equal(snapshot.binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(snapshot.binding.scope,'FUNCTIONAL_ONLY');assert.equal(snapshot.binding.releaseQualified,false);assert.equal(snapshot.binding.recordingQualified,false);
  const classification=runtimeClassification(base);
  privateEqual({mixedSourceStack:snapshot.binding.mixedSourceStack,runtimeKind:snapshot.binding.runtimeKind},
   {mixedSourceStack:classification.mixedSourceStack,runtimeKind:classification.runtimeKind},'MDOC_BASE_RUNTIME_CLASSIFICATION_CHANGED');
- assert.equal(new Set(snapshot.binding.roles.map(r=>r.role)).size,22);assert.equal(new Set(snapshot.binding.roles.map(r=>r.containerId)).size,22);
+ assert.equal(new Set(snapshot.binding.roles.map(r=>r.role)).size,PLATFORM_RUNTIME_ROLES.length);assert.equal(new Set(snapshot.binding.roles.map(r=>r.containerId)).size,PLATFORM_RUNTIME_ROLES.length);
  const known=validateMdocKnownOutcome(authority,deployed);assert.deepEqual(known.receipt.roles,deployed.roles);assert.deepEqual(Object.keys(deployed.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(evidence.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.state.new).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.intent.beforeConfigs).sort(),MDOC_ROLES);
  const configs={};const ids=new Set();
  // A verified binding retains lineage/identity, while live observations also
@@ -651,9 +655,9 @@ const defaultDockerRead=args=>execFileSync('docker',args,{encoding:'utf8',timeou
 function freshExactAncillaryRead(readDocker,authority){
  assert.equal(typeof readDocker,'function');
  const roles=Object.entries(authority.cap.allRunningRoles);
- assert.equal(roles.length,27,'RESOURCE_BATCH_COHORT_CHANGED');
+ assert.equal(roles.length,PLATFORM_RUNTIME_ROLES.length+5,'RESOURCE_BATCH_COHORT_CHANGED');
  const ids=[...roles.map(([role,row])=>role==='keycloak'?authority.kc.newCid:row.id),authority.ui.newCid];
- assert(ids.every(id=>HASH.test(id))&&new Set(ids).size===28,'RESOURCE_BATCH_ID_SET_CHANGED');
+ assert(ids.every(id=>HASH.test(id))&&new Set(ids).size===PLATFORM_RUNTIME_ROLES.length+6,'RESOURCE_BATCH_ID_SET_CHANGED');
  const expected=new Set(ids);let snapshot=null;
  return args=>{
   if(args?.[0]!=='inspect')return readDocker(args);
@@ -663,7 +667,7 @@ function freshExactAncillaryRead(readDocker,authority){
    assert(typeof raw==='string'&&Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=4*1024*1024,
     'RESOURCE_BATCH_OUTPUT_BOUNDS');
    let rows;try{rows=JSON.parse(raw);}catch{throw Error('RESOURCE_BATCH_INVALID_JSON');}
-   assert(Array.isArray(rows)&&rows.length===28,'RESOURCE_BATCH_ROW_COUNT_CHANGED');
+   assert(Array.isArray(rows)&&rows.length===PLATFORM_RUNTIME_ROLES.length+6,'RESOURCE_BATCH_ROW_COUNT_CHANGED');
    const found=new Map();
    for(const row of rows){
     assert(row&&typeof row==='object'&&!Array.isArray(row)&&HASH.test(row.Id)&&expected.has(row.Id),
@@ -749,7 +753,7 @@ function validateRuntimeIdentity(row,actual,ignoreGeneration=false){
 function validateRuntimeObservation(row,actual,ignoreGeneration=false){
  const observed=validateRuntimeIdentity(row,actual,ignoreGeneration);
  if(row.requiredObservation&&Object.hasOwn(row.requiredObservation,'health'))assert.equal(actual.health,row.requiredObservation.health,'Unchanged role health differs');
- assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
+ assert.equal(actual.health,'healthy','Role health not established');
  return observed;
 }
 function validateRestartObservation(row,actual){
