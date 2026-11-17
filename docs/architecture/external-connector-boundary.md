@@ -252,3 +252,11 @@ passport fence source inventory retains all platform authority files and omits
 the two removed provider Compose profiles. Its exact source, approval, release,
 identity and database checks remain; old approvals need separate requalification
 against the changed protected source before any future operation.
+
+
+Platform service and Flow acceptance manifests select credential issuer formats
+directly and omit the pinned Core SDK's legacy LTI discovery feature. Test-only
+dependencies cannot enable that provider client through feature unification.
+Core retains its separately owned generic launch-verification API; connector
+protocols remain outside the platform. Existing immutable source pins are not
+rewritten as part of this feature selection.

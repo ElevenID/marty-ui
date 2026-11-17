@@ -563,20 +563,20 @@ mod tests {
                 Some("synthetic; note=\"x; charset=ascii\"; CHARSET=\"ISO 8859-1\"; charset=ascii")
             )
             .unwrap(),
-            "Ã©"
+            "é"
         );
         let bom = b"\xef\xbb\xbfcaf\xc3\xa9";
         assert_eq!(
             response_text(bom, Some("text/plain; charset=utf-8-sig")).unwrap(),
-            "cafÃ©"
+            "café"
         );
         assert_eq!(
             response_text(bom, Some("text/plain; charset=utf-8")).unwrap(),
-            "\u{feff}cafÃ©"
+            "\u{feff}café"
         );
         assert_eq!(
             response_text(bom, Some("text/plain; charset=ascii")).unwrap(),
-            "ï¿½ï¿½ï¿½cafï¿½ï¿½"
+            "���caf��"
         );
     }
 }

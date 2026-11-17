@@ -61,7 +61,7 @@ mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
-marty-oid4vci = { workspace = true, features = ["issuer", "jwt_vc_json", "lti", "mso_mdoc", "sd_jwt"] }
+marty-oid4vci = { workspace = true, features = ["issuer", "jwt_vc_json", "mso_mdoc", "sd_jwt"] }
 marty-didcomm = { workspace = true, features = ["did_web", "encrypted-envelope"] }
 marty-crypto.workspace = true
 marty-verification = { workspace = true, features = ["csca"] }
