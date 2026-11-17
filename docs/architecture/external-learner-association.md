@@ -377,3 +377,10 @@ platform services. Dedicated Canvas Compose profiles, obsolete no-Canvas
 overlay and Canvas portability schemas are retired. These are source changes;
 no running workload, secret, volume or database is modified. Remaining
 profile/catalog consumers must be reconciled before final integration.
+
+Canvas-only runtime qualification steps are retired from the shared Rust CI
+job: hosted/OSS parity, provider HTTPS, worker preflight, provider KMS fixtures
+and full-main provider attestations. Platform CI jobs and retained Rust steps
+remain. Mixed lane selection and compile/database orchestration still need
+reconciliation; this intermediate branch is not ready for protected
+integration until that work and its local checks are complete.
