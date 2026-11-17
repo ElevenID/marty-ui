@@ -658,7 +658,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     from scripts import probe_passport_beta_negative_callbacks as negative
     from scripts.probe_passport_beta_aggregate_kms import private_signing_request
     from scripts.probe_passport_beta_host import production_snapshot, production_attachment_sha256
-    from scripts.canvas_oss_beta_lifecycle import assert_beta
+    from scripts.beta_public_health import assert_beta
     from playwright.sync_api import sync_playwright
 
     capture._passport_failure_stage = "DIRECT_TRANSPORT"
