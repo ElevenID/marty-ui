@@ -17,7 +17,7 @@ use url::Url;
 
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
-    canvas_award_candidate::python_canonical_json,
+    canonical_json::python_canonical_json,
     canvas_network_timeout::CanvasNetworkTimeout,
     canvas_operation_http::CanvasOperationHttpClient,
     canvas_provider_http::{is_private_ip, CanvasOriginPolicy},

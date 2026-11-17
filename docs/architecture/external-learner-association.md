@@ -265,3 +265,10 @@ adapters, and roster sync processor/worker persistence are retired from the
 issuance crate. Connector-owned replacements may remain TODOs. Remaining
 legacy provider domain/guard modules are transitional removal work, not
 supported integration interfaces.
+
+Platform application templates, external evidence, issued-record idempotency,
+OID4VCI authorization and passport requests use the provider-independent
+`canonical_json` serializer. Its sorted, ASCII-escaped compatibility output
+and numeric formatting remain unchanged. The retired Canvas session claim
+handler is removed from the application service; connector claims must use
+supported public Gateway contracts with Core-owned authority.

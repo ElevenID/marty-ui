@@ -16,7 +16,7 @@ use crate::{
         ApprovalPolicyValidationState, ApprovalPolicyValidationView,
         CredentialTemplateValidationState, CredentialTemplateValidationView,
     },
-    canvas_award_candidate::python_canonical_json,
+    canonical_json::python_canonical_json,
     initiation::normalize_idempotency_key,
     management_security::ManagementSecurity,
     transaction_reads::TransactionReadError,
