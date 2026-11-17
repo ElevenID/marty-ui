@@ -42,7 +42,6 @@ def finish(config_path, source_dir, output_dir, *, operator_successor=None):
     from selfhost_windows_inputs import _held_private_input
     from selfhost_windows_model import history, effective_config
     from selfhost_windows_continuation import checkpoint
-    from selfhost_windows_staging_recovery import RECOVERY_RECEIPTS
     renewal=selection.renewal;require=selection.require
     source,root=Path(source_dir),Path(output_dir)
     require(source.is_absolute() and root.is_absolute())
@@ -90,7 +89,10 @@ def finish(config_path, source_dir, output_dir, *, operator_successor=None):
             elif renewal.read_private_bytes(ordinary_path)==b'':
                 renewal.write_empty_private_file(ordinary_path,ordinary_raw.decode())
             require(stack.enter_context(renewal.hold_private_input(ordinary_path))==ordinary_raw)
-            names=set(RECOVERY_RECEIPTS)|{'intent.json','config.private.json','publication.json','renewed.env',
+            from selfhost_windows_recovery_leaf_caps import receipt_names
+            publication=selection.decode(stack.enter_context(renewal.hold_private_input(root/'publication.json')))
+            require(type(publication['receipt_sha256']) is dict and receipt_names(publication['receipt_sha256']))
+            names=set(publication['receipt_sha256'])|{'intent.json','config.private.json','publication.json','renewed.env',
                 'selection.config.private.json',*(p.relative_to(root).as_posix() for p in outputs(staged)+outputs(ordinary))}
             evidence={name:selection.digest(stack.enter_context(renewal.hold_private_input(root/name,
                 max_bytes=2*1024*1024))) for name in names}

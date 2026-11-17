@@ -169,6 +169,7 @@
     "scripts/selfhost_windows_recovery_journal.py",
     "scripts/selfhost_windows_recovery_operator.py",
     "scripts/selfhost_windows_recovery_finish.py",
+    "scripts/selfhost_windows_recovery_leaf_caps.py",
     "scripts/provision_selfhost_snapshot_rotator.py",
     "scripts/export-selfhost-openbao.py",
     "scripts/start_selfhost_disposable_openbao.py",
