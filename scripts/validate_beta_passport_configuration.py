@@ -77,14 +77,6 @@ def physical_source_for_name_check(source, kind, repository_root):
     return f"{source} {resolved_source.as_posix()}"
 
 
-def is_known_beta_canvas_config(source, service_name, repository_root):
-    """Allow only the checked-in Canvas config without a symlinked parent."""
-    expected = Path(repository_root).resolve() / "config/canvas/production-local.rb"
-    candidate = Path(source).absolute() if isinstance(source, str) else None
-    return (service_name == "canvas-real" and candidate == expected
-            and not candidate.is_symlink() and candidate.resolve() == expected)
-
-
 def is_known_openbao_bootstrap_file(source, service_name, repository_root):
     """Allow only the two KMS-owned Raft bootstrap inputs in beta."""
     allowed = {
@@ -394,12 +386,9 @@ def validate_physical_model(model, files, provider_registry=None):
                                  and physical_secret_root not in bound_path.parents
                                  and bound_path not in physical_secret_root.parents,
                                  "Beta physical secret root was bind-mounted")
-            known_beta_canvas_config = is_known_beta_canvas_config(
-                source, name, Path(__file__).resolve().parents[1])
             source_for_name_check = physical_source_for_name_check(
                 source, kind, Path(__file__).resolve().parents[1])
-            physical_require(known_beta_canvas_config
-                             or is_known_openbao_bootstrap_file(
+            physical_require(is_known_openbao_bootstrap_file(
                                  source, name, Path(__file__).resolve().parents[1])
                              or not re.search(r"prod|production|selfhost",
                                               source_for_name_check,

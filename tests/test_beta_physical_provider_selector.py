@@ -65,7 +65,7 @@ def model(tmp_path: Path) -> dict:
             "volumes": {f"openbao_{name}_grant": {
                 "name": f"elevenid-beta_openbao_{name}_grant"} for name in (
                 "gateway", "flow", "verify", "issuance_credential",
-                "issuance_canvas", "issuance_readiness", "issuance_passport")},
+                "issuance_passport")},
             "networks": {
                 "marty-network": {"name": "elevenid-beta-network", "ipam": {}},
                 "passport-provider-signing": {
@@ -96,8 +96,7 @@ def model(tmp_path: Path) -> dict:
             "GRPC_SERVICE_TOKEN": GRPC,
         }},
         "issuance-native": {"networks": {"marty-network": {}},
-            "volumes": grant_volumes("issuance_credential", "issuance_canvas",
-                                     "issuance_readiness", "issuance_passport"),
+            "volumes": grant_volumes("issuance_credential", "issuance_passport"),
             "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
@@ -220,21 +219,16 @@ def test_physical_bind_name_check_ignores_checkout_parent_but_not_resource(
     assert forbidden.search(source(str(alias), "bind", root))
 
 
-def test_canvas_config_exception_rejects_symlinked_parent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected = ROOT / "config/canvas/production-local.rb"
-    known = VALIDATOR["is_known_beta_canvas_config"]
-    assert known(str(expected), "canvas-real", ROOT)
-    target = tmp_path / "marty-selfhost-prod" / "production-local.rb"
-    original_resolve = Path.resolve
-
-    def resolve(path: Path, *args, **kwargs) -> Path:
-        return target if path == expected else original_resolve(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", resolve)
-    assert not known(str(expected), "canvas-real", ROOT)
-
+@pytest.mark.parametrize("service", ["auth", "canvas-real"])
+def test_retired_connector_config_has_no_production_bind_exception(tmp_path, service):
+    candidate = model(tmp_path)
+    candidate["services"][service] = {
+        "networks": {"marty-network": {}},
+        "volumes": [{"source": str(ROOT / "config/canvas/production-local.rb"),
+                     "target": "/config", "type": "bind"}],
+    }
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="production volume"):
+        validate(candidate)
 
 def test_physical_mode_is_separate_and_default_off(tmp_path: Path) -> None:
     candidate = model(tmp_path)
@@ -588,8 +582,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
     files = [
         "docker-compose.base.yml", "docker-compose.beta.yml",
         "docker-compose.profile.dev.yml", "docker-compose.profile.tunnel.yml",
-        "docker-compose.profile.waltid.yml", "docker-compose.profile.canvas-real.yml",
-        "docker-compose.profile.canvas-sandbox.yml", *PROFILES,
+        "docker-compose.profile.waltid.yml", *PROFILES,
     ]
     command = ["docker", "compose", "--project-name", "elevenid-beta"]
     for name in files:
