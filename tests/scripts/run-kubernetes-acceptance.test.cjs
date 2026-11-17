@@ -12,7 +12,7 @@ const { createRequire } = require('node:module');
 const REPO = path.resolve(__dirname, '../..');
 const DRIVER = path.join(__dirname, 'run-kubernetes-acceptance.cjs');
 const SOURCE = fs.readFileSync(DRIVER, 'utf8');
-const HELPER = path.join(__dirname, 'run-canvas-oss-standard-contract.js');
+const HELPER = path.join(__dirname, 'platform-credential-verification.js');
 const routes = require('../../contracts/gateway-routes.json').routes;
 const issuanceSchema = require('../../contracts/gateway-public-openapi-schemas.json')
   .schemas.schemas__issuance_request;

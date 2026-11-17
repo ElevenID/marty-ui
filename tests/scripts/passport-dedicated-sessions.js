@@ -74,10 +74,10 @@ async function prepare(input,state){
  const parent=fs.realpathSync(path.join(os.homedir(),'.codex/private/beta-v258-deployment-20261019'));
  const directory=path.join(parent,'d12-functional-'+input.runId),fixture=path.join(directory,'fixture.json');
  check(!fs.existsSync(directory),'PASSPORT_PRIOR_CUSTODY_RETAINED');
- const {retireCanvasBetaSession,createOriginalCookieSessionContext}=require('./run-canvas-oss-standard-contract');
+ const {retirePlatformSession,createOriginalCookieSessionContext}=require('./platform-session-custody');
  const requestFactory=require('@playwright/test').request;
  const lock=require(path.join(recorder,'src/recordingLock')).acquireRecordingLock(
-  require(path.join(recorder,'src/canvasCaptureHost')).canonicalArtifacts(recorder),{action:'d12-dedicated-session-provision',runId:input.runId});
+  require(path.join(recorder,'src/captureFiles')).canonicalArtifacts(recorder),{action:'d12-dedicated-session-provision',runId:input.runId});
  let browser,complete=false,failure,dispose,interrupted=false,browserCloseAttempted=false;const contexts={};
  const active=()=>check(!interrupted,'PASSPORT_SESSION_PREPARATION_ABORTED');
  const journal={schema:'marty.passport-dedicated-sessions/v1',organizationId:input.organizationId,sessions:{},complete:false};
@@ -134,7 +134,7 @@ async function prepare(input,state){
      journal.sessions[role]={...journal.sessions[role],cookie:'sessionId='+cookies[0].value,cookies};
      try{write(journalFile,journal);}catch{journal.persistenceFailure=true;}}
     const selected=await createOriginalCookieSessionContext(requestFactory,cookies);isolated=selected.isolated;
-    const retirement=await retireCanvasBetaSession(selected.session,{retain(label,value){
+    const retirement=await retirePlatformSession(selected.session,{retain(label,value){
      check(label==='betaAdminSession','PASSPORT_SESSION_CUSTODY_ROLE_CHANGED');
      journal.sessions[role].cookies=JSON.parse(value);write(journalFile,journal);
     }});

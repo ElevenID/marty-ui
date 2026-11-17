@@ -24,16 +24,17 @@ test('ambiguous or nonboolean modes refuse before IPC or product calls',async()=
 test('primary shares owned receipt, exact account, retirement and readiness gates while SDK assertions stay scoped',()=>{
  for(const required of ['const ownedMembership = retainedFirstParty || retainedMembership','retainSummary: ownedMembership','report.cleanup = await control.cleanup()','report.authoringSessionsRetired === true','walletSession?.evidence.closed === true','applyLocalNativeReadiness(report, evidence','report.completion.authenticatedEmail?.toLowerCase() !== inputs.email.toLowerCase()'])assert(source.includes(required),required);
  assert(source.includes('if (retainedFirstParty) {\n        report.firstPartyControlAssertions'));
- assert(source.includes('do not qualify holder cancellation, untrusted-issuer or expired-offer behavior, or an independent wallet'));
+ assert(source.includes('Holder decline is observed through the first-party test wallet. This run does not qualify untrusted-issuer, expired-offer or independent-wallet behavior.'));
+ assert(source.includes('Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.'));
 });
 
 function retirementFixture({denied=true}={}) {
  let stored=null,retired=0,disposed=0,sent=null;
  const custody={retain(role,v){assert.equal(role,'betaAdminSession');stored=JSON.parse(v);},retire(){retired++;return true;}};
  const body=source.slice(source.indexOf('function membershipSessionRetirement('),source.indexOf('\nasync function runCredentialLogin('));
- const factory=vm.runInNewContext(body+'\nmembershipSessionRetirement',{assert,BETA_ORIGIN:'https://beta.elevenidllc.com',request:{},createCanvasCaptureCustody:()=>custody,
+ const factory=vm.runInNewContext(body+'\nmembershipSessionRetirement',{assert,BETA_ORIGIN:'https://beta.elevenidllc.com',request:{},createPlatformCaptureCustody:()=>custody,
   createOriginalCookieSessionContext:async(_,cookies)=>{sent=cookies;return {isolated:{dispose:async()=>{disposed++;}},session:{original:cookies}};},
-  retireCanvasBetaSession:async(session,c)=>{assert.equal(session.original[0].value,'ORIGINAL');assert.equal(c,custody);if(!denied)throw Error('Original cookie still authorized');return {logoutStatus:302,oldCookieAuthenticated:false};}});
+  retirePlatformSession:async(session,c)=>{assert.equal(session.original[0].value,'ORIGINAL');assert.equal(c,custody);if(!denied)throw Error('Original cookie still authorized');return {logoutStatus:302,oldCookieAuthenticated:false};}});
  return {factory,state:()=>({stored,retired,disposed,sent})};
 }
 test('logout and denial use captured original cookie after browser jar clears; benign preference retained',async()=>{

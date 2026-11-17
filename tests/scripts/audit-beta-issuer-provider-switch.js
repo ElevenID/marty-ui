@@ -14,15 +14,14 @@ const {
   selectOrg,
 } = require('./audit-beta-credential-lifecycle');
 const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
+const {createPlatformCaptureCustody,retirePlatformSession}=require('./platform-session-custody');
 const {
-  createCanvasCaptureCustody,
-  retireCanvasBetaSession,
   didWebResolutionUrl,
   receiveAndVerifyCredential,
   verificationMethodFromDidDocument,
   verifyCompactJws,
   verifyCompactJwsStructure,
-} = require('./run-canvas-oss-standard-contract');
+} = require('./platform-credential-verification');
 const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
@@ -748,7 +747,7 @@ async function retireProviderAdminSession(context, custody) {
     if (custody.retire() !== true) throw new Error('D02 private session retirement unconfirmed');
     return {authenticatedSessionCreated:false,oldCookieAuthenticated:null,privateCookieRetired:true};
   }
-  const proof = await retireCanvasBetaSession(context, custody);
+  const proof = await retirePlatformSession(context, custody);
   if (proof.oldCookieAuthenticated !== false || custody.retire() !== true) {
     throw new Error('D02 admin session retirement unconfirmed');
   }
@@ -820,7 +819,7 @@ async function main() {
       });
       if (functionalSessionRetirement) {
         if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(process.env.DEMO_CAPTURE_LAUNCH_ID || '')) throw new Error('D02 owned session identity required');
-        betaSessionCustody = createCanvasCaptureCustody('d02-'+process.env.DEMO_CAPTURE_LAUNCH_ID);
+        betaSessionCustody = createPlatformCaptureCustody('d02-'+process.env.DEMO_CAPTURE_LAUNCH_ID);
       }
       const page = await context.newPage();
       evidence.bindPage(page);

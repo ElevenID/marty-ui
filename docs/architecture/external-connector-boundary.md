@@ -198,3 +198,18 @@ plan and operator receipts before any live use. Existing immutable hashes remain
 unchanged; source cleanup and synthetic local tests do not upgrade old 22-role
 receipts, authorize a deployment, or qualify a production integration. Unsupported
 old cohorts must stay refused until separately qualified.
+
+
+Retained demo sessions use `platform-session-custody.js`, which accepts only the
+run-owned platform administrator session; provider sessions and client secrets
+cannot enter that custody. Credential verification and exact template/issuer
+binding live in neutral public-protocol helpers, without loading the removed
+provider harness. Recorder interoperability uses `platformNativeRuntime.js` and
+`captureFiles.js`. No compatibility import revives provider administration.
+
+TODO (platform wallet/demo owner): provide a reviewed adapter for owned-wallet
+credential reception if required. That optional legacy adapter refuses before
+network access; the retained generic OID4VCI verifier and demo wallet session
+owners keep their existing cryptographic, receipt and cleanup checks. Existing
+source-pinned operators and private journals require separate owner review;
+neutral names do not migrate or qualify their historical state.
