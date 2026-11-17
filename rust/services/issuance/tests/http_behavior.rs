@@ -1493,7 +1493,6 @@ async fn native_credential_lifecycle_http_routes_preserve_auth_parity_and_one_ha
             "load-credential",
             "publish-status:suspend",
             "persist-local-status",
-            "synchronize-canvas:suspend",
             "emit-event:suspended",
         ]
     );
@@ -1580,7 +1579,6 @@ async fn native_credential_lifecycle_http_request_schema_is_strict_optional_and_
                 "load-credential",
                 "publish-status:suspend",
                 "persist-local-status",
-                "synchronize-canvas:suspend",
                 "emit-event:suspended",
             ]
         );

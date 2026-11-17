@@ -1393,7 +1393,7 @@ mod tests {
         assert!(response.status_updated_at.ends_with("+00:00"));
         assert_eq!(
             *calls.lock().expect("calls"),
-            ["load", "publish:suspend", "persist", "canvas:suspend"]
+            ["load", "publish:suspend", "persist"]
         );
 
         let event = events.next().await.expect("stream item").expect("event");

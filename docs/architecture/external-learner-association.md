@@ -246,3 +246,10 @@ Core policy, or retire those applications. Do not clear their integration
 context merely to bypass the issuance restriction. Production migration and
 connector reconciliation adapters remain deferred; unsupported paths stay
 disabled while source removal continues.
+
+Credential lifecycle status transitions publish canonical status, persist the
+Core state and audit record, and emit the lifecycle event without invoking a
+provider mirror callback. Revocation recovery republishes canonical status.
+TODO (connector owner): implement any mirror status propagation in the connector
+using supported public Gateway contracts. It must not become a prerequisite
+for canonical revocation or restore the platform-to-provider callback.

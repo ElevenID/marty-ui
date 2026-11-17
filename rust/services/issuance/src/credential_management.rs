@@ -404,18 +404,6 @@ impl CredentialManagementService {
             .await
             .map_err(|error| CredentialManagementError::RepositoryUnavailable(error.0))?;
 
-        self.repository
-            .synchronize_canvas(&updated, action, reason)
-            .await
-            .map_err(|error| match error {
-                CanvasLifecycleSyncError::Port(error) => {
-                    CredentialManagementError::CanvasRetryUnavailable(error.0)
-                }
-                CanvasLifecycleSyncError::TextEncoding => {
-                    CredentialManagementError::CanvasTextEncoding
-                }
-            })?;
-
         self.events
             .emit(CredentialLifecycleEvent {
                 event_type: action.event_type().to_owned(),
@@ -437,7 +425,7 @@ impl CredentialManagementService {
     ///
     /// A transaction revocation can fail after the credential row is written
     /// but before the transaction row is committed. Retrying must therefore
-    /// republish the idempotent canonical status bit and retry Canvas sync even
+    /// republish the idempotent canonical status bit even
     /// when the local credential is already revoked.
     pub async fn reconcile_revocation(
         &self,
@@ -515,21 +503,6 @@ impl CredentialManagementService {
             )
             .await
             .map_err(|error| CredentialManagementError::PublicationUnavailable(error.0))?;
-        self.repository
-            .synchronize_canvas(
-                credential,
-                CredentialLifecycleAction::Revoke,
-                persisted_reason,
-            )
-            .await
-            .map_err(|error| match error {
-                CanvasLifecycleSyncError::Port(error) => {
-                    CredentialManagementError::CanvasRetryUnavailable(error.0)
-                }
-                CanvasLifecycleSyncError::TextEncoding => {
-                    CredentialManagementError::CanvasTextEncoding
-                }
-            })?;
         Ok(status_view(
             credential,
             credential.revocation_reason.clone(),
@@ -798,7 +771,6 @@ mod tests {
                 "persist",
                 "load",
                 "publish:revoke",
-                "canvas:revoke",
             ]
         );
         assert!(harness.events.lock().expect("events").is_empty());
@@ -887,7 +859,7 @@ mod tests {
         );
         assert_eq!(
             *harness.calls.lock().expect("calls"),
-            ["load", "publish:revoke", "canvas:revoke"]
+            ["load", "publish:revoke"]
         );
         assert!(harness.events.lock().expect("events").is_empty());
         assert!(harness.audits.lock().expect("audits").is_empty());
@@ -1014,7 +986,6 @@ mod tests {
                     "load",
                     &format!("publish:{}", action.as_str()),
                     "persist",
-                    &format!("canvas:{}", action.as_str()),
                     "event",
                 ]
             );
@@ -1121,33 +1092,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canvas_retry_recording_failure_never_emits_a_success_event() {
+    async fn canonical_status_transition_does_not_invoke_retired_provider_sync() {
         let harness = Harness::new(ManagedCredentialStatus::Active);
-        *harness.canvas_failure.lock().expect("canvas failure") =
-            Some("retry storage unavailable".to_owned());
-
-        let error = harness
+        *harness.canvas_failure.lock().expect("provider failure") =
+            Some("retired provider is unavailable".to_owned());
+        let status = harness
             .service()
             .transition(
                 "credential-a",
-                None,
+                Some("org-a"),
                 CredentialLifecycleAction::Suspend,
                 None,
             )
             .await
-            .expect_err("retry recording failure");
-
-        assert_eq!(
-            error,
-            CredentialManagementError::CanvasRetryUnavailable(
-                "retry storage unavailable".to_owned()
-            )
-        );
+            .expect("canonical status transition");
+        assert_eq!(status.status, "suspended");
         assert_eq!(
             *harness.calls.lock().expect("calls"),
-            ["load", "publish:suspend", "persist", "canvas:suspend"]
+            ["load", "publish:suspend", "persist", "event"]
         );
-        assert!(harness.events.lock().expect("events").is_empty());
+        assert_eq!(harness.events.lock().expect("events").len(), 1);
     }
 
     #[tokio::test]

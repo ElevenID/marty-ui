@@ -914,7 +914,6 @@ async fn revocation_orders_canonical_and_local_credential_before_transaction_com
             "credential:get",
             "canonical:publish",
             "credential:persist",
-            "canvas:sync",
             "event:emit",
             "transaction:save"
         ]
@@ -948,7 +947,6 @@ async fn revocation_rechecks_a_credential_finalized_during_the_transaction_fence
             "credential:get",
             "canonical:publish",
             "credential:persist",
-            "canvas:sync",
             "event:emit",
         ]
     );
@@ -1016,11 +1014,7 @@ async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
     assert_eq!(body["revocation_reason"], "original reason");
     assert_eq!(
         *reasons.lock().unwrap(),
-        vec![
-            "canonical:original reason",
-            "canvas:original reason",
-            "transaction:original reason"
-        ]
+        vec!["canonical:original reason", "transaction:original reason"]
     );
     assert_eq!(
         *order.lock().unwrap(),
@@ -1029,7 +1023,6 @@ async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
             "credential-binding:get",
             "credential:get",
             "canonical:publish",
-            "canvas:sync",
             "transaction:save"
         ]
     );
