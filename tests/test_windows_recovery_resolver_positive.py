@@ -10,14 +10,15 @@ from test_selfhost_windows_renewal import states
 import selfhost_windows_selection as selection
 import selfhost_windows_recovery_journal as recovery
 import selfhost_windows_renewal_native as native
-from selfhost_windows_staging_recovery import RECOVERY_PHASES, RECOVERY_RECEIPTS, failed_current_receipts
+from selfhost_windows_staging_recovery import RECOVERY_PHASES, failed_current_receipts
 
 
 @pytest.mark.parametrize('operator_successor',[False,True])
 @pytest.mark.parametrize('failed_fault',[None,'selected','config'])
 @pytest.mark.parametrize('commit_owner',['replay','finish','resume','proof-failure','guard-failure',
                                       'namespace-race','pending-race','empty-pending'])
-def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault,commit_owner):
+def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault,commit_owner,
+                                                                       cap_reconciled=False):
     if failed_fault and commit_owner!='replay':pytest.skip('Replay integrity covered independently')
     with fixture(monkeypatch) as (root,phase,tx,outcome,path,cfg):
         model=selection.decode(Path(cfg['compose_file']).read_bytes())
@@ -91,6 +92,11 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
                 'image':model['services']['signing-keys']['image'] if p=='tls' else cfg['native']['helper_image']}
             receipts[p+'.helper.json']=selection.packed({'phase':p,'event':'helper','metadata':metadata})
             if p=='tls':receipts['tls.created.json']=selection.packed({'phase':p,'event':'created','metadata':metadata})
+        if cap_reconciled:
+            from test_windows_recovery_leaf_caps import partial_from_complete, cap_receipts
+            receipts=partial_from_complete(receipts)
+            receipts.update(cap_receipts({n:selection.digest(b) for n,b in receipts.items()},
+                staged,'e'*32,selection.digest(selection.packed(stage)),record['data_sha256']))
         for name,body in receipts.items():(attempt/name).write_bytes(body)
         with ExitStack() as held:
             values,snapshots=selection._inputs(staged,held)
@@ -309,3 +315,10 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
             with selection.selected_inputs(entrypoint) as lease:
                 assert lease.generation_sequence==3 and lease.sequence==2
                 assert lease.secrets_dir==phase['active'] and lease.check_current()==record['data_sha256']
+
+
+@pytest.mark.parametrize('operator_successor',[False,True])
+@pytest.mark.parametrize('commit_owner',['replay','finish','resume'])
+def test_cap_reconciled_history_survives_selection_and_ordinary_renewal(monkeypatch,operator_successor,commit_owner):
+    test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(
+        monkeypatch,operator_successor,None,commit_owner,cap_reconciled=True)

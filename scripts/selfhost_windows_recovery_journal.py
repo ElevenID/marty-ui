@@ -71,7 +71,6 @@ def derive_seed(*, previous_binding, previous_intent, previous_record, config_pa
     """
     from selfhost_windows_continuation import CHECKPOINT
     from selfhost_windows_model import model_binding
-    from selfhost_windows_staging_recovery import RECOVERY_RECEIPTS
     require=selection.require
     config=selection.decode(config_raw)
     require(config_raw==selection.packed(config) and Path(config_path).is_absolute()
@@ -92,7 +91,8 @@ def derive_seed(*, previous_binding, previous_intent, previous_record, config_pa
     require(set(publication)=={'schema','guard_sha256','config_sha256','receipt_sha256',
                               'generation_sha256','sequence','data_sha256','credential_admission','guards_retained'})
     require(set(intent)=={'schema','project','publication_sha256','data_mounts_before','layers','rollback_to_expired'})
-    require(type(publication['receipt_sha256']) is dict and set(publication['receipt_sha256'])==RECOVERY_RECEIPTS
+    from selfhost_windows_recovery_leaf_caps import receipt_names
+    require(type(publication['receipt_sha256']) is dict and receipt_names(publication['receipt_sha256'])
             and all(type(value) is str and re.fullmatch(r'[0-9a-f]{64}',value)
                     for value in publication['receipt_sha256'].values()))
     require(publication['schema']=='marty.windows-recovery-candidate-publication/v1'
@@ -260,20 +260,30 @@ def seed(raw,expected,current_model,marker,stack):
     stack.enter_context(_held_private_input(root/'selection',directory=True))
     require({path.name for path in (root/'selection').iterdir()}=={path.name for path in selection_paths})
     require(all(stack.enter_context(renewal.hold_private_input(path))==b'' for path in selection_paths))
-    expected_files={*RECOVERY_RECEIPTS,'intent.json','config.private.json','publication.json','renewed.env',
+    from selfhost_windows_recovery_leaf_caps import CAP_RECEIPTS, PREFIX, partial_receipts, completed_receipts
+    cap_names=set(CAP_RECEIPTS) if PREFIX+'intent.json' in marker['evidence_sha256'] else set()
+    expected_files={*RECOVERY_RECEIPTS,*cap_names,'intent.json','config.private.json','publication.json','renewed.env',
                     'selection.config.private.json',
                     *(str(path.relative_to(root)).replace('\\','/') for path in selection_paths),
                     *(str(path.relative_to(root)).replace('\\','/') for path in paths)}
     require(set(marker['evidence_sha256'])==expected_files)
-    require({path.name for path in root.iterdir()}==set(RECOVERY_RECEIPTS)|
+    require({path.name for path in root.iterdir()}==set(RECOVERY_RECEIPTS)|cap_names|
         {'intent.json','config.private.json','publication.json','renewed.env','activation','selection','selection.config.private.json'})
     stack.enter_context(_held_private_input(root/'activation',directory=True))
     require({path.name for path in (root/'activation').iterdir()}=={path.name for path in paths})
     bodies={name:stack.enter_context(renewal.hold_private_input(root/name,max_bytes=2*1024*1024)) for name in expected_files}
     require(all(selection.digest(body)==marker['evidence_sha256'][name] for name,body in bodies.items()))
     receipts={name:bodies[name] for name in RECOVERY_RECEIPTS}
-    hashes,_=recovery_phase_receipts(receipts,expected['project'],root.name.removeprefix('windows-renewal-'),
+    cycle=root.name.removeprefix('windows-renewal-')
+    hashes,_=(partial_receipts if cap_names else recovery_phase_receipts)(receipts,expected['project'],cycle,
         config['native']['helper_image'],model['services']['signing-keys']['image'])
+    if cap_names:
+        cap_raws={name:bodies[name] for name in cap_names}
+        cap_intent=selection.decode(cap_raws[PREFIX+'intent.json'])
+        helper_values={'failed':cap_intent['failed_helper'],
+                       'reconciled':selection.decode(cap_raws[PREFIX+'helper.json'])}
+        hashes.update(completed_receipts(cap_raws,hashes,helper_values,config,cycle,
+            selection.digest(bodies['intent.json']),prior['data_sha256']))
     publication=selection.decode(bodies['publication.json'])
     require(publication['receipt_sha256']==hashes and publication['guard_sha256']==selection.digest(bodies['intent.json']))
     for index,layer in enumerate(layers):

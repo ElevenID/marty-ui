@@ -385,6 +385,7 @@ Use `scripts/selfhost_windows_recovery.py --configuration <managed.json>` with:
 | --- | --- | --- |
 | `--expired-current inspect` | none | Read-only failed-attempt evidence |
 | `--expired-current stage` | `--attempt-directory <empty-private-windows-renewal-uuid> --logical-project <marty-selfhost-name>` | Guarded fresh credentials through existing producers |
+| `--expired-current reconcile-stage` | `--attempt-directory <retained-attempt>` | One explicit cap-only continuation for the exact stopped assembler boundary described below |
 | `--expired-current publish` | `--attempt-directory <attempt>` | Fresh candidate proof and metadata publication |
 | `--expired-current activate` | `--attempt-directory <attempt>` | Recreate the existing owned dependency layers once; no expired rollback |
 | `--expired-current select` | `--attempt-directory <attempt> --source-journal <predecessor>` | Fresh running-generation proof, sealed successor selection; guards retained |
@@ -399,6 +400,32 @@ release tag, run ID/attempt, binary SHA256), `gh`, `cosign`, and trusted
 `verifier_sha256` pins. The owner repeats release/run, signature/provenance,
 binary identity and capability verification; local metadata is insufficient.
 Historical runtime, model, images, CA and storage bindings stay unchanged.
+
+`reconcile-stage` handles only a completed prepare/TLS stage followed by an
+exited, non-OOM Keycloak assembler with exit status 1. Keycloak completion,
+export, Windows materialization, candidate admission and activation must not
+have started. The owner verifies the original helper's image, command, mounts,
+network, resource/security settings and terminal identity. Both original guards
+and every failed phase receipt remain immutable.
+
+Before creating any new leaf, the continuation requires the signed operator's
+generation, retained-certificate, scope and new-certificate proofs to pass. Its
+recovery proof must refuse specifically because the existing 21 orphan service
+leaves have `explicit_max_ttl=0`. A separately recorded, exclusively created
+`cap-reconciliation.intent.json` then permits one helper to mint replacements
+for those same policies with an explicit eight-hour maximum. No policy, key, CA,
+certificate, account, database, or application setting is replaced. Response
+bytes remain private, and the original unbounded control-volume generation is
+retained as `generation-unbounded-retained`.
+
+The helper rechecks the complete recovery candidate before and after publishing
+the repaired control-volume mirror. Export, Windows materialization and fresh
+native admission have separate `cap-reconciliation.*` receipts. Publication,
+activation and successor-history replay bind both the original failed receipts
+and this complete continuation evidence. The two terminal helper records are
+retained and freshly checked before activation. Missing, partial, rebound, or
+uncertain continuation evidence forbids another invocation. An interrupted
+rename is preserved for inspection; it is never rolled back or blindly retried.
 
 The next ordinary renewal uses a newly staged configuration with the selected
 operator. Resolution replays the complete stored-owner chain before admitting
