@@ -158,15 +158,19 @@ def main():
    GRANT SELECT,INSERT ON issuance_service.external_association_challenges TO association_runtime;
    GRANT SELECT,INSERT ON issuance_service.external_association_identities,issuance_service.external_association_bindings TO association_runtime;
    GRANT UPDATE(phase,revision,updated_at) ON issuance_service.external_association_challenges TO association_runtime;
-   GRANT UPDATE(active,revision,updated_at) ON issuance_service.external_association_identities TO association_runtime;
+   GRANT UPDATE(active,consent_generation,revision,updated_at) ON issuance_service.external_association_identities TO association_runtime;
    GRANT UPDATE(binding_revision,challenge_id,active,revision,updated_at) ON issuance_service.external_association_bindings TO association_runtime;
    GRANT EXECUTE ON FUNCTION issuance_service.external_association_lock_context(uuid,uuid,uuid,bigint,text,bigint),
     issuance_service.create_external_association_challenge(uuid,uuid,uuid,uuid,uuid,bigint,text,bigint,text,bigint,text,bigint),
-    issuance_service.mutate_external_association_consent(uuid,text,uuid,uuid,text,bigint,text) TO association_runtime;""")
+    issuance_service.mutate_external_association_consent(uuid,text,uuid,uuid,text,bigint,text,bigint),
+    issuance_service.read_external_association_challenge(uuid,text,text,uuid,uuid),
+    issuance_service.close_external_association_challenge(uuid,uuid,uuid,uuid,text,bigint),
+    issuance_service.unlink_external_association(uuid,text,uuid,uuid,bigint),
+    issuance_service.read_external_association_unlink_receipt(uuid,text,uuid,uuid) TO association_runtime;""")
   challenge=str(uuid.uuid4());challenge_op=str(uuid.uuid4())
   challenge_expiry=int(sql("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint+120000;"))
-  def create_challenge(op=challenge_op,resource=challenge,selected_key=key,source_revision=2,binding_revision=1,proof='a'*64,expiry=challenge_expiry):
-   raw=sql('SELECT issuance_service.create_external_association_challenge('+','.join(map(q,[ORG,selected_key,op,resource,challenge_grant,source_revision,'binding-one',binding_revision,'b'*64,1,proof,expiry]))+');',True)
+  def create_challenge(op=challenge_op,resource=challenge,selected_key=key,source_revision=2,binding_revision=1,proof='a'*64,expiry=challenge_expiry,selected_binding='binding-one'):
+   raw=sql('SELECT issuance_service.create_external_association_challenge('+','.join(map(q,[ORG,selected_key,op,resource,challenge_grant,source_revision,selected_binding,binding_revision,'b'*64,1,proof,expiry]))+');',True)
    return json.loads(raw) if raw else None
   assert create_challenge(selected_key=foreign_key) is None
   assert create_challenge(source_revision=1) is None
@@ -185,8 +189,8 @@ def main():
   # A code hash is one-use globally, even under another original operation.
   try:create_challenge(op=str(uuid.uuid4()),resource=str(uuid.uuid4()));raise AssertionError('reused challenge proof hash')
   except AssertionError as error:assert 'duplicate key' in str(error)
-  def consent(action='confirm',op=None,resource=challenge,actor='learner-one',proof='a'*64,revision=1):
-   raw=sql('SELECT issuance_service.mutate_external_association_consent('+','.join(map(q,[ORG,actor,op or str(uuid.uuid4()),resource,action,revision,proof]))+');',True)
+  def consent(action='confirm',op=None,resource=challenge,actor='learner-one',proof='a'*64,revision=1,identity_revision=None):
+   raw=sql('SELECT issuance_service.mutate_external_association_consent('+','.join(map(q,[ORG,actor,op or str(uuid.uuid4()),resource,action,revision,proof,identity_revision]))+');',True)
    return json.loads(raw) if raw else None
   assert consent(actor='admin-one') is None
   assert consent(actor=key) is None,'producer key is not a learner identity'
@@ -217,6 +221,94 @@ def main():
   assert consent() is None,'consumed challenge cannot authorize another operation'
   assert consent('deny') is None,'terminal challenge cannot be rewritten'
   assert consent(op=consent_op,proof='e'*64) is None
+  def inspect_challenge(resource=challenge,actor='learner-one',actor_type='user',op=None):
+   raw=sql('SELECT issuance_service.read_external_association_challenge('+','.join(map(q,[ORG,actor_type,actor,resource,op]))+');',True)
+   return json.loads(raw) if raw else None
+  learner_record=inspect_challenge()['record'];assert learner_record['current'] is True
+  assert learner_record['application_id']=='application-one' and learner_record['subject_id']=='canonical-subject'
+  producer_record=inspect_challenge(actor=key,actor_type='api_key')['record']
+  assert producer_record['current'] is True and all(producer_record[k] is None for k in ['application_id','subject_id','identity'])
+  assert inspect_challenge(actor='admin-one') is None
+  assert inspect_challenge(actor=other_key,actor_type='api_key') is None
+  assert inspect_challenge(op=consent_op)=={'kind':'receipt','receipt':confirmed[0]}
+  assert inspect_challenge(actor=key,actor_type='api_key',op=consent_op) is None
+  assert inspect_challenge(op=challenge_op) is None
+  assert inspect_challenge(actor=key,actor_type='api_key',op=challenge_op)=={'kind':'receipt','receipt':challenge_results[0]}
+  sql(f"UPDATE organization_service.api_keys SET scopes=ARRAY['evidence:submit'] WHERE id='{key}';")
+  assert inspect_challenge()['record']['current'] is False
+  assert inspect_challenge(actor=key,actor_type='api_key') is None
+  sql(f"UPDATE organization_service.api_keys SET scopes=ARRAY['identity:attest'] WHERE id='{key}';")
+  # Confirm another binding of the same canonical identity before unlinking.
+  sql(f"INSERT INTO issuance_service.external_observation_bindings VALUES('binding-two','{ORG}','challenge-source','application-one','canonical-subject',true,1);")
+  second=str(uuid.uuid4());old_pending=str(uuid.uuid4());old_pending_other=str(uuid.uuid4())
+  assert create_challenge(op=str(uuid.uuid4()),resource=second,proof='7'*64,selected_binding='binding-two')['phase']=='pending'
+  assert consent(resource=second,proof='7'*64)['phase']=='confirmed'
+  assert create_challenge(op=str(uuid.uuid4()),resource=old_pending,proof='9'*64)['phase']=='pending'
+  assert create_challenge(op=str(uuid.uuid4()),resource=old_pending_other,proof='4'*64,selected_binding='binding-two')['phase']=='pending'
+  identity=learner_record['identity']['identity_id'];unlink_op=str(uuid.uuid4())
+  def unlink(op=unlink_op,actor='learner-one',revision=1):
+   raw=sql('SELECT issuance_service.unlink_external_association('+','.join(map(q,[ORG,actor,op,identity,revision]))+');',True)
+   return json.loads(raw) if raw else None
+  assert unlink(actor='admin-one') is None
+  identity_before=sql('SELECT row_to_json(i) FROM issuance_service.external_association_identities i;')
+  edges_before=sql('SELECT jsonb_agg(to_jsonb(e) ORDER BY binding_id) FROM issuance_service.external_association_bindings e;')
+  operations_before=sql('SELECT count(*) FROM issuance_service.external_association_operations;')
+  sql(f"""CREATE FUNCTION issuance_service.test_unlink_edge_revival() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$BEGIN
+    UPDATE issuance_service.external_association_bindings SET active=true,revision=revision+1,updated_at=clock_timestamp() WHERE identity_id='{identity}';RETURN NEW;END;$$;
+   CREATE TRIGGER zz_test_unlink_edge_revival AFTER INSERT ON issuance_service.external_association_operations
+    FOR EACH ROW WHEN(NEW.action='association.unlink') EXECUTE FUNCTION issuance_service.test_unlink_edge_revival();""")
+  try:unlink(op=str(uuid.uuid4()));raise AssertionError('accepted audit-time binding revival during unlink')
+  except AssertionError as error:assert 'unlink authority or audit changed' in str(error)
+  assert sql('SELECT row_to_json(i) FROM issuance_service.external_association_identities i;')==identity_before
+  assert sql('SELECT jsonb_agg(to_jsonb(e) ORDER BY binding_id) FROM issuance_service.external_association_bindings e;')==edges_before
+  assert sql('SELECT count(*) FROM issuance_service.external_association_operations;')==operations_before
+  sql('DROP TRIGGER zz_test_unlink_edge_revival ON issuance_service.external_association_operations;')
+  with ThreadPoolExecutor(max_workers=8) as executor:
+   unlinked=list(executor.map(lambda _:unlink(),range(8)))
+  assert all(v==unlinked[0] for v in unlinked) and unlinked[0]['active'] is False and unlinked[0]['revision']==2
+  def unlink_receipt(actor='learner-one',resource=identity,op=unlink_op):
+   raw=sql('SELECT issuance_service.read_external_association_unlink_receipt('+','.join(map(q,[ORG,actor,resource,op]))+');',True)
+   return json.loads(raw) if raw else None
+  assert unlink_receipt()=={'kind':'receipt','receipt':unlinked[0]}
+  assert unlink_receipt(actor='admin-one') is None
+  assert unlink_receipt(resource=str(uuid.uuid4())) is None
+  assert int(sql('SELECT count(*) FROM issuance_service.external_association_bindings WHERE active;'))==0
+  assert inspect_challenge()['record']['current'] is False
+  assert inspect_challenge(resource=old_pending)['record']['can_relink'] is False
+  assert consent('relink',resource=old_pending,proof='9'*64,identity_revision=2) is None,'relink requires a fresh post-unlink challenge'
+  fresh=str(uuid.uuid4());relink_op=str(uuid.uuid4())
+  assert create_challenge(op=str(uuid.uuid4()),resource=fresh,proof='8'*64)['phase']=='pending'
+  assert inspect_challenge(resource=fresh)['record']['can_relink'] is True
+  assert consent(resource=fresh,proof='8'*64) is None,'normal confirmation cannot implicitly relink'
+  assert consent('relink',resource=fresh,proof='8'*64,identity_revision=1) is None
+  relinked=consent('relink',op=relink_op,resource=fresh,proof='8'*64,identity_revision=2)
+  assert relinked['phase']=='confirmed'
+  assert consent(resource=old_pending,proof='9'*64) is None,'pre-unlink code stays unusable after another fresh challenge relinks'
+  assert inspect_challenge(resource=old_pending)['record']['current'] is False
+  assert consent(resource=old_pending_other,proof='4'*64) is None,'pre-unlink other-binding code also stays invalid after relink'
+  assert inspect_challenge(resource=old_pending_other)['record']['current'] is False
+  assert inspect_challenge(resource=fresh)['record']['current'] is True
+  assert inspect_challenge()['record']['current'] is False,'new consent supersedes the old challenge for this binding'
+  assert inspect_challenge(resource=second)['record']['current'] is False,'relink does not revive other old application bindings'
+  assert int(sql('SELECT count(*) FROM issuance_service.external_association_bindings WHERE active;'))==1
+  assert unlink()==unlinked[0] and inspect_challenge(resource=fresh)['record']['current'] is True,'old unlink replay cannot revoke a newer explicit relink'
+  def close(resource,action='abandon',op=None,selected_key=key):
+   raw=sql('SELECT issuance_service.close_external_association_challenge('+','.join(map(q,[ORG,selected_key,op or str(uuid.uuid4()),resource,action,1]))+');',True)
+   return json.loads(raw) if raw else None
+  abandoned=str(uuid.uuid4());abandon_op=str(uuid.uuid4())
+  assert create_challenge(op=str(uuid.uuid4()),resource=abandoned,proof='6'*64)['phase']=='pending'
+  assert close(abandoned,'expire') is None
+  assert close(abandoned,selected_key=other_key) is None
+  with ThreadPoolExecutor(max_workers=8) as executor:
+   closed=list(executor.map(lambda _:close(abandoned,op=abandon_op),range(8)))
+  assert all(v==closed[0] for v in closed) and closed[0]['phase']=='abandoned'
+  assert consent(resource=abandoned,proof='6'*64) is None
+  expired=str(uuid.uuid4());expiry=int(sql("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint+1500;"))
+  assert create_challenge(op=str(uuid.uuid4()),resource=expired,proof='5'*64,expiry=expiry)['phase']=='pending'
+  time.sleep(1.6)
+  assert inspect_challenge(resource=expired)['record']['expired'] is True
+  assert inspect_challenge(resource=expired)['record']['current'] is False
+  assert close(expired,'expire')['phase']=='expired'
   pending=str(uuid.uuid4())
   assert create_challenge(op=str(uuid.uuid4()),resource=pending,proof='e'*64)['phase']=='pending'
   assert mutate('revoke',2,resource=challenge_grant)['active'] is False
@@ -227,6 +319,7 @@ def main():
   assert create_challenge(op=str(uuid.uuid4()),resource=str(uuid.uuid4()),proof='d'*64) is None
   print('Actual restricted-LOGIN PostgreSQL challenge creation: confirmed canonical ownership, exact source/binding revisions, short lifetime,8-way original replay, global proof-hash uniqueness and no automatic identity association PASS')
   print('Actual restricted-LOGIN PostgreSQL consent: intended session user plus original proof,8-way one-use confirmation, atomic identity/binding/audit, audit-time authority rollback, revocation and explicit denial PASS')
+  print('Actual restricted-LOGIN current/receipt reads, producer privacy,8-way global unlink and abandonment, explicit fresh-code relink with old-binding non-revival, actual expiry PASS')
   if rust_contract:
    sql(f"INSERT INTO issuance_service.external_observation_bindings VALUES('binding-rust','{ORG}','synthetic-source','application-one','canonical-subject',true,1);")
    port=subprocess.check_output(['docker','port',name,'5432/tcp'],text=True).strip()

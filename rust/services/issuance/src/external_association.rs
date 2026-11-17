@@ -135,6 +135,7 @@ pub struct LearnerScope<'a> {
 }
 pub enum ConsentAction {
     Confirm,
+    Relink { expected_identity_revision: i64 },
     Deny,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -220,12 +221,20 @@ pub async fn consent(
         return Err(AssociationError::InvalidRequest);
     }
     let proof_hash = request.proof_hash()?;
-    let (action, phase) = match action {
-        ConsentAction::Confirm => ("confirm", "confirmed"),
-        ConsentAction::Deny => ("deny", "denied"),
+    let (action, phase, identity_revision) = match action {
+        ConsentAction::Confirm => ("confirm", "confirmed", None),
+        ConsentAction::Deny => ("deny", "denied", None),
+        ConsentAction::Relink {
+            expected_identity_revision,
+        } => {
+            if !(1..MAX).contains(&expected_identity_revision) {
+                return Err(AssociationError::InvalidRequest);
+            }
+            ("relink", "confirmed", Some(expected_identity_revision))
+        }
     };
     let value: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT issuance_service.mutate_external_association_consent($1,$2,$3,$4,$5,$6,$7)",
+        "SELECT issuance_service.mutate_external_association_consent($1,$2,$3,$4,$5,$6,$7,$8)",
     )
     .bind(scope.organization)
     .bind(scope.user_id)
@@ -234,6 +243,7 @@ pub async fn consent(
     .bind(action)
     .bind(request.expected_revision)
     .bind(proof_hash)
+    .bind(identity_revision)
     .fetch_one(pool)
     .await
     .map_err(mutation_error)?;
@@ -421,6 +431,302 @@ pub async fn inspect_source(
         _ => false,
     };
     if !valid {
+        return Err(AssociationError::Unavailable);
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IdentitySummary {
+    pub identity_id: Uuid,
+    pub revision: i64,
+    pub active: bool,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentChallenge {
+    pub challenge_id: Uuid,
+    pub source_id: String,
+    pub binding_id: String,
+    pub revision: i64,
+    pub phase: String,
+    pub current: bool,
+    pub expired: bool,
+    pub expires_at_ms: i64,
+    pub application_id: Option<String>,
+    pub subject_id: Option<String>,
+    pub identity: Option<IdentitySummary>,
+    pub can_relink: bool,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ChallengeInspection {
+    Current { record: CurrentChallenge },
+    Receipt { receipt: ChallengeReceipt },
+}
+
+pub enum ChallengeReader<'a> {
+    Producer {
+        scope: ProducerScope,
+        challenge_id: Uuid,
+    },
+    Learner(LearnerScope<'a>),
+}
+
+pub async fn inspect_challenge(
+    pool: &PgPool,
+    reader: ChallengeReader<'_>,
+    original_operation: Option<Uuid>,
+) -> Result<ChallengeInspection, AssociationError> {
+    let (organization, actor_type, actor, challenge, producer) = match reader {
+        ChallengeReader::Producer {
+            scope,
+            challenge_id,
+        } => {
+            if scope.api_key_id.is_nil() {
+                return Err(AssociationError::InvalidRequest);
+            }
+            (
+                scope.organization,
+                "api_key",
+                scope.api_key_id.to_string(),
+                challenge_id,
+                true,
+            )
+        }
+        ChallengeReader::Learner(scope) => (
+            scope.organization,
+            "user",
+            scope.user_id.to_owned(),
+            scope.challenge_id,
+            false,
+        ),
+    };
+    if organization.is_nil()
+        || challenge.is_nil()
+        || !id(&actor)
+        || !actor.as_bytes()[0].is_ascii_alphanumeric()
+        || original_operation.is_some_and(|op| op.is_nil())
+    {
+        return Err(AssociationError::InvalidRequest);
+    }
+    let value: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT issuance_service.read_external_association_challenge($1,$2,$3,$4,$5)",
+    )
+    .bind(organization)
+    .bind(actor_type)
+    .bind(actor)
+    .bind(challenge)
+    .bind(original_operation)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| AssociationError::Unavailable)?;
+    let result: ChallengeInspection =
+        serde_json::from_value(value.ok_or(AssociationError::NotAuthorized)?)
+            .map_err(|_| AssociationError::Unavailable)?;
+    let valid = match (&result, original_operation) {
+        (ChallengeInspection::Current { record }, None) => {
+            record.challenge_id == challenge
+                && id(&record.source_id)
+                && id(&record.binding_id)
+                && version(record.revision)
+                && version(record.expires_at_ms)
+                && matches!(
+                    record.phase.as_str(),
+                    "pending" | "confirmed" | "denied" | "abandoned" | "expired"
+                )
+                && (!record.current
+                    || record.phase == "confirmed"
+                    || (record.phase == "pending" && !record.expired))
+                && record
+                    .identity
+                    .as_ref()
+                    .is_none_or(|i| !i.identity_id.is_nil() && version(i.revision))
+                && if producer {
+                    record.application_id.is_none()
+                        && record.subject_id.is_none()
+                        && record.identity.is_none()
+                        && !record.can_relink
+                } else {
+                    record.application_id.as_ref().is_some_and(|v| id(v))
+                        && record
+                            .subject_id
+                            .as_ref()
+                            .is_some_and(|v| !v.is_empty() && v.len() <= 1024)
+                        && (!record.can_relink
+                            || (record.phase == "pending"
+                                && !record.expired
+                                && !record.current
+                                && record.identity.as_ref().is_some_and(|i| !i.active)))
+                }
+        }
+        (ChallengeInspection::Receipt { receipt }, Some(op)) => {
+            receipt.operation_id == op
+                && receipt.challenge_id == challenge
+                && version(receipt.revision)
+                && match (receipt.action.as_str(), receipt.phase.as_str()) {
+                    ("create", "pending") | ("abandon", "abandoned") | ("expire", "expired") => {
+                        producer
+                    }
+                    ("confirm" | "relink", "confirmed") | ("deny", "denied") => !producer,
+                    _ => false,
+                }
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(AssociationError::Unavailable);
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeChange {
+    pub operation_id: Uuid,
+    pub expected_revision: i64,
+}
+pub enum CloseAction {
+    Abandon,
+    Expire,
+}
+pub async fn close_challenge(
+    pool: &PgPool,
+    scope: ProducerScope,
+    challenge: Uuid,
+    action: CloseAction,
+    request: &ChallengeChange,
+) -> Result<ChallengeReceipt, AssociationError> {
+    if scope.organization.is_nil()
+        || scope.api_key_id.is_nil()
+        || challenge.is_nil()
+        || request.operation_id.is_nil()
+        || !(1..MAX).contains(&request.expected_revision)
+    {
+        return Err(AssociationError::InvalidRequest);
+    }
+    let (action, phase) = match action {
+        CloseAction::Abandon => ("abandon", "abandoned"),
+        CloseAction::Expire => ("expire", "expired"),
+    };
+    let value: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT issuance_service.close_external_association_challenge($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(scope.organization)
+    .bind(scope.api_key_id)
+    .bind(request.operation_id)
+    .bind(challenge)
+    .bind(action)
+    .bind(request.expected_revision)
+    .fetch_one(pool)
+    .await
+    .map_err(mutation_error)?;
+    let receipt: ChallengeReceipt =
+        serde_json::from_value(value.ok_or(AssociationError::NotAuthorized)?)
+            .map_err(|_| AssociationError::CommitUnknown)?;
+    if receipt.operation_id != request.operation_id
+        || receipt.challenge_id != challenge
+        || receipt.action != action
+        || receipt.phase != phase
+        || receipt.revision != request.expected_revision + 1
+    {
+        return Err(AssociationError::CommitUnknown);
+    }
+    Ok(receipt)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UnlinkReceipt {
+    pub operation_id: Uuid,
+    pub identity_id: Uuid,
+    pub action: String,
+    pub revision: i64,
+    pub active: bool,
+}
+#[derive(Clone, Copy)]
+pub struct IdentityScope<'a> {
+    pub organization: Uuid,
+    pub user_id: &'a str,
+    pub identity_id: Uuid,
+}
+pub async fn unlink(
+    pool: &PgPool,
+    scope: IdentityScope<'_>,
+    request: &ChallengeChange,
+) -> Result<UnlinkReceipt, AssociationError> {
+    if scope.organization.is_nil()
+        || scope.identity_id.is_nil()
+        || !id(scope.user_id)
+        || !scope.user_id.as_bytes()[0].is_ascii_alphanumeric()
+        || request.operation_id.is_nil()
+        || !(1..MAX).contains(&request.expected_revision)
+    {
+        return Err(AssociationError::InvalidRequest);
+    }
+    let value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT issuance_service.unlink_external_association($1,$2,$3,$4,$5)")
+            .bind(scope.organization)
+            .bind(scope.user_id)
+            .bind(request.operation_id)
+            .bind(scope.identity_id)
+            .bind(request.expected_revision)
+            .fetch_one(pool)
+            .await
+            .map_err(mutation_error)?;
+    let receipt: UnlinkReceipt =
+        serde_json::from_value(value.ok_or(AssociationError::NotAuthorized)?)
+            .map_err(|_| AssociationError::CommitUnknown)?;
+    if receipt.operation_id != request.operation_id
+        || receipt.identity_id != scope.identity_id
+        || receipt.action != "unlink"
+        || receipt.active
+        || receipt.revision != request.expected_revision + 1
+    {
+        return Err(AssociationError::CommitUnknown);
+    }
+    Ok(receipt)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum UnlinkRecovery {
+    Receipt { receipt: UnlinkReceipt },
+}
+pub async fn recover_unlink(
+    pool: &PgPool,
+    scope: IdentityScope<'_>,
+    original_operation: Uuid,
+) -> Result<UnlinkRecovery, AssociationError> {
+    if scope.organization.is_nil()
+        || scope.identity_id.is_nil()
+        || !id(scope.user_id)
+        || !scope.user_id.as_bytes()[0].is_ascii_alphanumeric()
+        || original_operation.is_nil()
+    {
+        return Err(AssociationError::InvalidRequest);
+    }
+    let value: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT issuance_service.read_external_association_unlink_receipt($1,$2,$3,$4)",
+    )
+    .bind(scope.organization)
+    .bind(scope.user_id)
+    .bind(scope.identity_id)
+    .bind(original_operation)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| AssociationError::Unavailable)?;
+    let result: UnlinkRecovery =
+        serde_json::from_value(value.ok_or(AssociationError::NotAuthorized)?)
+            .map_err(|_| AssociationError::Unavailable)?;
+    let UnlinkRecovery::Receipt { receipt } = &result;
+    if receipt.operation_id != original_operation
+        || receipt.identity_id != scope.identity_id
+        || receipt.action != "unlink"
+        || receipt.active
+        || !version(receipt.revision)
+    {
         return Err(AssociationError::Unavailable);
     }
     Ok(result)

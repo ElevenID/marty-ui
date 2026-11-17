@@ -245,6 +245,193 @@ async fn restricted_login_source_adapter_preserves_replay_and_live_revocation() 
         consent(&pool, learner, ConsentAction::Confirm, &new_operation).await,
         Err(AssociationError::NotAuthorized)
     );
+    use crate::external_association::{
+        close_challenge, inspect_challenge, recover_unlink, unlink, ChallengeChange,
+        ChallengeInspection, ChallengeReader, CloseAction, IdentityScope, UnlinkRecovery,
+    };
+    let current = inspect_challenge(&pool, ChallengeReader::Learner(learner), None)
+        .await
+        .unwrap();
+    let ChallengeInspection::Current { record } = current else {
+        panic!("expected current state")
+    };
+    assert!(record.current);
+    let identity = record.identity.unwrap();
+    let identity_scope = IdentityScope {
+        organization,
+        user_id: "learner-one",
+        identity_id: identity.identity_id,
+    };
+    let producer_current = inspect_challenge(
+        &pool,
+        ChallengeReader::Producer {
+            scope: producer,
+            challenge_id: created.challenge_id,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(producer_current, ChallengeInspection::Current { record } if record.current && record.subject_id.is_none() && record.application_id.is_none() && record.identity.is_none())
+    );
+    assert_eq!(
+        inspect_challenge(
+            &pool,
+            ChallengeReader::Learner(learner),
+            Some(consent_request.operation_id)
+        )
+        .await
+        .unwrap(),
+        ChallengeInspection::Receipt {
+            receipt: confirmed.clone()
+        }
+    );
+    assert_eq!(
+        inspect_challenge(
+            &pool,
+            ChallengeReader::Producer {
+                scope: producer,
+                challenge_id: created.challenge_id
+            },
+            Some(consent_request.operation_id)
+        )
+        .await,
+        Err(AssociationError::NotAuthorized)
+    );
+    let old_pending_request = CreateChallenge {
+        operation_id: Uuid::new_v4(),
+        challenge_id: Uuid::new_v4(),
+        code_hash: format!("{:x}", Sha256::digest([8_u8; 32])),
+        ..challenge_request.clone()
+    };
+    create_challenge(&pool, producer, &old_pending_request)
+        .await
+        .unwrap();
+    let unlink_request = ChallengeChange {
+        operation_id: Uuid::new_v4(),
+        expected_revision: identity.revision,
+    };
+    let unlinked = unlink(&pool, identity_scope, &unlink_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        recover_unlink(&pool, identity_scope, unlink_request.operation_id)
+            .await
+            .unwrap(),
+        UnlinkRecovery::Receipt {
+            receipt: unlinked.clone()
+        }
+    );
+    assert_eq!(
+        recover_unlink(
+            &pool,
+            IdentityScope {
+                user_id: "admin-one",
+                ..identity_scope
+            },
+            unlink_request.operation_id
+        )
+        .await,
+        Err(AssociationError::NotAuthorized)
+    );
+    assert!(
+        matches!(inspect_challenge(&pool, ChallengeReader::Learner(learner), None).await.unwrap(), ChallengeInspection::Current { record } if !record.current)
+    );
+    let fresh_request = CreateChallenge {
+        operation_id: Uuid::new_v4(),
+        challenge_id: Uuid::new_v4(),
+        code_hash: format!("{:x}", Sha256::digest([9_u8; 32])),
+        ..challenge_request.clone()
+    };
+    create_challenge(&pool, producer, &fresh_request)
+        .await
+        .unwrap();
+    let fresh_learner = LearnerScope {
+        challenge_id: fresh_request.challenge_id,
+        ..learner
+    };
+    assert!(
+        matches!(inspect_challenge(&pool, ChallengeReader::Learner(fresh_learner), None).await.unwrap(), ChallengeInspection::Current { record } if !record.current && record.can_relink)
+    );
+    let relink_request = ChallengeConsent {
+        operation_id: Uuid::new_v4(),
+        expected_revision: 1,
+        code: URL_SAFE_NO_PAD.encode([9_u8; 32]),
+    };
+    assert_eq!(
+        consent(
+            &pool,
+            fresh_learner,
+            ConsentAction::Confirm,
+            &relink_request
+        )
+        .await,
+        Err(AssociationError::NotAuthorized)
+    );
+    let relinked = consent(
+        &pool,
+        fresh_learner,
+        ConsentAction::Relink {
+            expected_identity_revision: unlinked.revision,
+        },
+        &relink_request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(relinked.action, "relink");
+    let old_learner = LearnerScope {
+        challenge_id: old_pending_request.challenge_id,
+        ..learner
+    };
+    let stale_request = ChallengeConsent {
+        operation_id: Uuid::new_v4(),
+        expected_revision: 1,
+        code: URL_SAFE_NO_PAD.encode([8_u8; 32]),
+    };
+    assert_eq!(
+        consent(&pool, old_learner, ConsentAction::Confirm, &stale_request).await,
+        Err(AssociationError::NotAuthorized)
+    );
+    assert!(
+        matches!(inspect_challenge(&pool, ChallengeReader::Learner(old_learner), None).await.unwrap(), ChallengeInspection::Current { record } if !record.current && !record.can_relink)
+    );
+    assert_eq!(
+        unlink(&pool, identity_scope, &unlink_request)
+            .await
+            .unwrap(),
+        unlinked
+    );
+    assert!(
+        matches!(inspect_challenge(&pool, ChallengeReader::Learner(fresh_learner), None).await.unwrap(), ChallengeInspection::Current { record } if record.current)
+    );
+    let abandon_request = ChallengeChange {
+        operation_id: Uuid::new_v4(),
+        expected_revision: 1,
+    };
+    let abandoned = close_challenge(
+        &pool,
+        producer,
+        old_learner.challenge_id,
+        CloseAction::Abandon,
+        &abandon_request,
+    )
+    .await
+    .unwrap();
+    assert_eq!(abandoned.phase, "abandoned");
+    assert_eq!(
+        inspect_challenge(
+            &pool,
+            ChallengeReader::Producer {
+                scope: producer,
+                challenge_id: old_learner.challenge_id
+            },
+            Some(abandon_request.operation_id)
+        )
+        .await
+        .unwrap(),
+        ChallengeInspection::Receipt { receipt: abandoned }
+    );
     mutate_source(
         &pool,
         scope,
