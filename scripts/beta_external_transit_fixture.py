@@ -1,6 +1,7 @@
 """D02/D10 scoped Transit custody using the existing beta TLS/API authority.
 
-This provisions test custody, not fixture, demo, release or wallet qualification.
+Execution is disabled pending a platform-owned native verifier. Pure custody
+contracts and source-only checks remain; they qualify no demo, release or wallet.
 No provider bootstrap, private-key export, Docker-by-name operation or legacy
 runtime receipt is used. The incoming historical producer remains immutable.
 """
@@ -89,38 +90,13 @@ def load_owner(ref):
     return module
 
 
-# This static adapter calls the existing full native verifier. No replacement
-# observer, cached success flag, native mount policy or runtime proof is invented.
-NATIVE_GUARD = r"""
-const fs=require('fs'),assert=require('assert/strict'),crypto=require('crypto');
-const c=JSON.parse(fs.readFileSync(0,'utf8')),r=c.runtime;
-const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-const binding=require(r.recorderRepository+'/src/externalQualification');
-binding.assertSourceBinding(r.recorderRepository,r.recorderRevision);
-for(const ref of Object.values(r.sourceFiles))assert.equal(hash(ref.path),ref.sha256);
-for(const ref of [r.observation,r.profile,r.dockerTransport,r.dockerCanary])assert.equal(hash(ref.path),ref.sha256);
-const transport=require(r.recorderRepository+'/src/canvasDockerTransport');
-process.env[transport.ENV]=r.dockerTransport.path;process.env[transport.ENV+'_SHA256']=r.dockerTransport.sha256;
-process.env[transport.CANARY_ENV]=r.dockerCanary.path;process.env[transport.CANARY_ENV+'_SHA256']=r.dockerCanary.sha256;
-if(c.protectOutput)require(r.recorderRepository+'/src/ownedNativeWallet').protectOwnedDirectory(c.protectOutput,require('path').dirname(c.protectOutput));
-const actual=require(r.recorderRepository+'/src/localNativeLiveBinding').verifyFunctionalLiveBinding({receipt:r.observation.path,sha256:r.observation.sha256,profile:r.profile.path,functionalRerun:true,origin:'https://beta.elevenidllc.com',imageSourceId:r.imageSourceId});
-assert.equal(actual.binding.roles.length,22);
-console.log(JSON.stringify({state:'CURRENT_NATIVE_22_LIVE_VERIFIED',profileSha256:r.profile.sha256,receiptSha256:r.observation.sha256,driver:actual.driver,bindingSha256:crypto.createHash('sha256').update(JSON.stringify(actual.binding)).digest('hex'),roles:22}));
-"""
+# The historical recorder-bound verifier is retired. A new qualified platform
+# verifier is an owned TODO; no cached success flag enables this entrypoint.
 
 
 def native_guard(config, *, protect_output=None):
-    runtime = config["runtime"]
-    node = bound(runtime["nodeExecutable"])
-    observed = subprocess.run([str(node), "-e", NATIVE_GUARD],
-                              input=json.dumps({"runtime": runtime, "protectOutput": str(protect_output) if protect_output else None}).encode(),
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, check=False)
-    require(observed.returncode == 0 and len(observed.stdout) <= 32768,
-            "CURRENT_NATIVE_RUNTIME_REFUSED")
-    result = json.loads(observed.stdout)
-    require(result.get("state") == "CURRENT_NATIVE_22_LIVE_VERIFIED" and result.get("roles") == 22,
-            "CURRENT_NATIVE_RUNTIME_SCHEMA")
-    return result
+    """Disabled until the platform owns a qualified provider-neutral verifier."""
+    require(False, "PLATFORM_NATIVE_RUNTIME_VERIFIER_PENDING")
 
 
 def job_helper(config):
@@ -425,6 +401,8 @@ def main():
     parser.add_argument("--action", choices=("provision", "revoke"), required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    if not args.check:
+        native_guard({})  # Refuse before authority input reads or output creation.
     config = load({"path": str(args.input), "sha256": args.sha256})
     if args.check:
         # Exercise the same input/source/authority guards, without native/API calls.

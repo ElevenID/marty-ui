@@ -124,3 +124,28 @@ TODO (platform data owner): review historical provider destination records and
 references before any separately authorized data migration. Source retirement
 neither deletes tenant records nor rewrites them as generic destinations. No
 provider publication workflow is enabled by this split.
+
+
+Provider-scoped maintenance is retired. The Northstar exception that admitted a
+paused stock-provider stack is unavailable; current callers inherit the shared
+strict registration-ID checks. Old scoped receipts fail admission rather than
+falling back to a weaker census. Existing jobs and their source-bound recovery
+operators remain historical; this source change does not operate on them.
+Metadata derivation and retained-role checks reject retired connector roles,
+and retained running services require healthy observations without exceptions.
+
+The external-transit CLI's old recorder transport is removed. Execution now
+refuses before authority input reads or output creation; source-only checks remain.
+TODO (platform maintenance owner): qualify a provider-neutral native verifier
+before reenabling this entrypoint or migrating old maintenance profiles. This
+replacement and production rollout are outside the Canvas split. Preserve old
+receipts and use their original source-bound recovery owner for existing jobs.
+
+Older metadata/Northstar helpers retain their source-bound 22-role evidence shape;
+they do not admit the current 21-role profile or authorize a migration. Their
+retired provider role names are rejected before runtime inspection. A fresh
+maintenance generation remains a separate TODO, outside the split.
+
+The [pre-retirement source](https://github.com/ElevenID/marty-ui/tree/32c30274abdebf657378653aa71821cf023113df/scripts)
+preserves the old scoped operators for their original source-bound jobs. This
+reference is historical evidence and does not authorize a new operation.
