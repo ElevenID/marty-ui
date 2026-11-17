@@ -195,6 +195,8 @@ pub struct CredentialVerificationContext {
     pub presentation_only: bool,
     /// Verifier-owned assertion key, separate from trust acceptance. Never copied from request context.
     pub resolved_issuer_key: Option<ResolvedIssuerKey>,
+    /// Set only by the deployment adapter, never request JSON or trust profiles.
+    pub external_status_fixture_transport: Option<crate::ExternalStatusFixtureTransport>,
     pub format: DetectedCredentialFormat,
     pub token: Value,
     pub nonce: Option<String>,
@@ -574,6 +576,7 @@ impl VerifiedFactsOrchestrator {
             sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format,
             token: request.vp_token.clone(),
             nonce: sd_jwt_dcql

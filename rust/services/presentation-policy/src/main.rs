@@ -84,6 +84,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.did_web_allowed_hosts.clone(),
         ),
     ));
+    if let Some(transport) = &config.external_status_fixture_transport {
+        resolving_kernel =
+            resolving_kernel.with_external_status_fixture_transport(transport.clone());
+    }
     if let Some(key) = &config.signing_registry_api_key {
         resolving_kernel = resolving_kernel.with_registry(Arc::new(
             marty_issuer_key_resolution::registry::HttpOrganizationIssuerResolver::new(

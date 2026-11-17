@@ -63,6 +63,7 @@ fn context(format: DetectedCredentialFormat, token: Value) -> CredentialVerifica
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format,
         token,
         nonce: Some("behavioral-challenge".into()),

@@ -15,6 +15,46 @@ const MAX_LIST_BYTES: usize = 1024 * 1024;
 const MAX_AGE_SECONDS: u64 = 300;
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Deployment-owned, exact-origin exception for isolated HTTPS qualification.
+/// Public destinations never inherit this CA or private-address permission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalStatusFixtureTransport {
+    origin: String,
+    ca_pem: Vec<u8>,
+}
+
+impl ExternalStatusFixtureTransport {
+    pub fn new(origin: &str, ca_pem: Vec<u8>) -> Result<Self, &'static str> {
+        let url = Url::parse(origin).map_err(|_| "invalid fixture origin")?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.path() != "/"
+            || url.origin().ascii_serialization() != origin
+            || ca_pem.is_empty()
+            || ca_pem.len() > 256 * 1024
+        {
+            return Err("invalid fixture origin or CA");
+        }
+        let roots =
+            reqwest::Certificate::from_pem_bundle(&ca_pem).map_err(|_| "invalid fixture CA")?;
+        if roots.is_empty() {
+            return Err("missing fixture CA");
+        }
+        Ok(Self {
+            origin: origin.into(),
+            ca_pem,
+        })
+    }
+
+    fn matches(&self, url: &Url) -> bool {
+        url.origin().ascii_serialization() == self.origin
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct StatusReference {
     uri: String,
@@ -22,7 +62,10 @@ struct StatusReference {
 }
 
 // Missing status is distinct from a declared but malformed/unsupported status.
-fn reference(claims: &Map<String, Value>) -> Result<Option<StatusReference>, ()> {
+fn reference(
+    claims: &Map<String, Value>,
+    fixture: Option<&ExternalStatusFixtureTransport>,
+) -> Result<Option<StatusReference>, ()> {
     let Some(status) = claims.get("status") else {
         return Ok(None);
     };
@@ -43,10 +86,10 @@ fn reference(claims: &Map<String, Value>) -> Result<Option<StatusReference>, ()>
         .filter(|s| s.len() <= 4096)
         .ok_or(())?;
     let url = Url::parse(uri).map_err(|_| ())?;
-    // Public transport intentionally has no deployment-private host exceptions.
+    // A nonstandard port is admitted only for the exact deployment-owned origin.
     if url.scheme() != "https"
         || url.host_str().is_none()
-        || url.port().is_some()
+        || (url.port().is_some() && !fixture.is_some_and(|f| f.matches(&url)))
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -64,25 +107,40 @@ fn reference(claims: &Map<String, Value>) -> Result<Option<StatusReference>, ()>
     }))
 }
 
-async fn fetch(uri: &str) -> Result<String, ()> {
+async fn fetch(uri: &str, fixture: Option<&ExternalStatusFixtureTransport>) -> Result<String, ()> {
     // The timeout includes DNS resolution, connection, TLS and streamed body.
     tokio::time::timeout(TIMEOUT, async {
         let url = Url::parse(uri).map_err(|_| ())?;
         let host = url.host_str().ok_or(())?;
-        let addresses: Vec<_> = tokio::net::lookup_host((host, 443))
-            .await
-            .map_err(|_| ())?
-            .collect();
-        OutboundDestinationPolicy::public_https()
-            .validate_resolved(&url, &addresses)
+        let addresses: Vec<_> =
+            tokio::net::lookup_host((host, url.port_or_known_default().ok_or(())?))
+                .await
+                .map_err(|_| ())?
+                .collect();
+        let fixture = fixture.filter(|fixture| fixture.matches(&url));
+        let mut policy = OutboundDestinationPolicy::public_https();
+        let mut validation_url = url.clone();
+        if fixture.is_some() {
+            policy.allowed_non_public_hosts.insert(host.into());
+            // MMF's public URL validator rejects custom ports. This exact
+            // configured origin alone uses its explicitly bound HTTPS port.
+            validation_url.set_port(None).map_err(|_| ())?;
+        }
+        policy
+            .validate_resolved(&validation_url, &addresses)
             .map_err(|_| ())?;
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(TIMEOUT)
-            .resolve_to_addrs(host, &addresses)
-            .build()
-            .map_err(|_| ())?;
+            .resolve_to_addrs(host, &addresses);
+        if let Some(fixture) = fixture {
+            // Do not mix system roots or this private CA into public requests.
+            builder = builder.tls_certs_only(
+                reqwest::Certificate::from_pem_bundle(&fixture.ca_pem).map_err(|_| ())?,
+            );
+        }
+        let client = builder.build().map_err(|_| ())?;
         // No workload token, cookies, service credentials or caller headers.
         let mut response = client
             .get(url)
@@ -244,14 +302,15 @@ pub(crate) async fn sd_jwt_status(
     claims: &Map<String, Value>,
     key: &ResolvedIssuerKey,
     algorithm: &str,
+    fixture: Option<&ExternalStatusFixtureTransport>,
 ) -> (CredentialStatusEvidence, Option<u64>) {
-    let selected = reference(claims);
+    let selected = reference(claims, fixture);
     if matches!(selected, Ok(None)) {
         return (CredentialStatusEvidence::default(), None);
     }
     let checked_at = chrono::Utc::now().timestamp().max(0) as u64;
     let result = match selected {
-        Ok(Some(reference)) => match fetch(&reference.uri).await {
+        Ok(Some(reference)) => match fetch(&reference.uri, fixture).await {
             Ok(token) => verify_token(
                 &token,
                 &reference,
@@ -485,13 +544,13 @@ mod tests {
 
     #[test]
     fn distinguishes_missing_from_malformed_status_and_rejects_url_authority_changes() {
-        assert!(matches!(reference(&Map::new()), Ok(None)));
+        assert!(matches!(reference(&Map::new(), None), Ok(None)));
         for status in [
             Value::Null,
             json!({}),
             json!({"status_list":{"idx":"3","uri":"https://status.example/list"}}),
         ] {
-            assert!(reference(json!({"status":status}).as_object().unwrap()).is_err());
+            assert!(reference(json!({"status":status}).as_object().unwrap(), None).is_err());
         }
         for uri in [
             "http://status.example/list",
@@ -503,7 +562,8 @@ mod tests {
             assert!(reference(
                 json!({"status":{"status_list":{"idx":3,"uri":uri}}})
                     .as_object()
-                    .unwrap()
+                    .unwrap(),
+                None
             )
             .is_err());
         }
@@ -511,9 +571,138 @@ mod tests {
 
     #[tokio::test]
     async fn transport_rejects_local_metadata_without_network_access() {
-        assert!(fetch("https://127.0.0.1/list").await.is_err());
-        assert!(fetch("https://169.254.169.254/latest/meta-data")
+        assert!(fetch("https://127.0.0.1/list", None).await.is_err());
+        assert!(fetch("https://169.254.169.254/latest/meta-data", None)
             .await
             .is_err());
+    }
+    #[test]
+    fn fixture_transport_requires_an_exact_origin_and_real_certificates() {
+        let public: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let pem = public["certificate_pem"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        for origin in [
+            "http://localhost",
+            "https://localhost/",
+            "https://u:p@localhost",
+            "https://localhost/path",
+            "https://localhost?q=1",
+            "https://localhost#x",
+        ] {
+            assert!(ExternalStatusFixtureTransport::new(origin, pem.clone()).is_err());
+        }
+        assert!(ExternalStatusFixtureTransport::new("https://localhost:8443", Vec::new()).is_err());
+        assert!(
+            ExternalStatusFixtureTransport::new("https://localhost:8443", b"not PEM".to_vec())
+                .is_err()
+        );
+        let transport = ExternalStatusFixtureTransport::new("https://localhost:8443", pem).unwrap();
+        for (uri, allowed) in [
+            ("https://localhost:8443/list", true),
+            ("https://localhost:8444/list", false),
+            ("https://other:8443/list", false),
+        ] {
+            assert_eq!(
+                reference(
+                    json!({"status":{"status_list":{"idx":3,"uri":uri}}})
+                        .as_object()
+                        .unwrap(),
+                    Some(&transport)
+                )
+                .is_ok(),
+                allowed
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned loopback HTTPS fixture and generated ephemeral certificates"]
+    async fn live_fixture_https_transport_and_signed_status() {
+        let origin = std::env::var("STATUS_HTTPS_TEST_ORIGIN").unwrap();
+        let pem = std::fs::read(std::env::var("STATUS_HTTPS_TEST_CA").unwrap()).unwrap();
+        let transport = ExternalStatusFixtureTransport::new(&origin, pem).unwrap();
+        let (_, key, _) = fixture();
+        let now = chrono::Utc::now().timestamp() as u64;
+        for (path, expected) in [("valid", 0), ("revoked", 1)] {
+            let uri = format!("{origin}/{path}");
+            assert!(
+                fetch(&uri, None).await.is_err(),
+                "default must deny private address"
+            );
+            let token = fetch(&uri, Some(&transport)).await.unwrap();
+            let reference = StatusReference { uri, index: 3 };
+            assert_eq!(
+                verify_token(&token, &reference, &key, "EdDSA", now)
+                    .unwrap()
+                    .0,
+                expected
+            );
+        }
+        for path in ["redirect", "wrong-content", "oversized"] {
+            assert!(fetch(&format!("{origin}/{path}"), Some(&transport))
+                .await
+                .is_err());
+        }
+        for path in ["expired", "bad-signature"] {
+            let uri = format!("{origin}/{path}");
+            let token = fetch(&uri, Some(&transport)).await.unwrap();
+            assert!(verify_token(
+                &token,
+                &StatusReference { uri, index: 3 },
+                &key,
+                "EdDSA",
+                now
+            )
+            .is_err());
+        }
+        let wrong_ca = ExternalStatusFixtureTransport::new(
+            &origin,
+            std::fs::read(std::env::var("STATUS_HTTPS_TEST_WRONG_CA").unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            fetch(&format!("{origin}/valid"), Some(&wrong_ca))
+                .await
+                .is_err(),
+            "wrong TLS root must fail"
+        );
+        let wrong_host = origin.replace("localhost", "127.0.0.1");
+        let wrong_host_transport =
+            ExternalStatusFixtureTransport::new(&wrong_host, transport.ca_pem.clone()).unwrap();
+        assert!(
+            fetch(&format!("{wrong_host}/valid"), Some(&wrong_host_transport))
+                .await
+                .is_err(),
+            "TLS hostname must be checked"
+        );
+        let values = |origin: &str, ca: &str| {
+            [
+                ("ENVIRONMENT".into(), "test".into()),
+                ("DATABASE_URL".into(), "postgres://localhost/test".into()),
+                (
+                    "PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN".into(),
+                    origin.into(),
+                ),
+                (
+                    "PRESENTATION_POLICY_STATUS_FIXTURE_CA_FILE".into(),
+                    ca.into(),
+                ),
+            ]
+        };
+        let ca = std::env::var("STATUS_HTTPS_TEST_CA").unwrap();
+        let config =
+            crate::PresentationPolicyServiceConfig::from_values(values(&origin, &ca)).unwrap();
+        assert_eq!(config.external_status_fixture_transport, Some(transport));
+        assert!(crate::PresentationPolicyServiceConfig::from_values(values(
+            &origin,
+            "/missing-ca"
+        ))
+        .is_err());
     }
 }

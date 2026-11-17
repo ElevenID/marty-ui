@@ -27,6 +27,7 @@ struct DataIntegrityDocument<'a> {
 /// Resolves public signature keys through deployment-bounded transport. This does
 /// not alter the policy's trust profile or mark any issuer as trusted.
 pub struct ResolvingCredentialKernel {
+    external_status_fixture_transport: Option<crate::ExternalStatusFixtureTransport>,
     resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
     registry: Option<
         std::sync::Arc<dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver>,
@@ -34,6 +35,18 @@ pub struct ResolvingCredentialKernel {
 }
 
 impl ResolvingCredentialKernel {
+    fn deployment_context(
+        &self,
+        context: &CredentialVerificationContext,
+    ) -> CredentialVerificationContext {
+        let mut resolved = context.clone();
+        // Neither request JSON nor a supplied kernel context can expand this
+        // adapter's signature-key or private transport authority.
+        resolved.resolved_issuer_key = None;
+        resolved.external_status_fixture_transport = self.external_status_fixture_transport.clone();
+        resolved
+    }
+
     async fn prepare_document_sources(
         &self,
         context: &mut CredentialVerificationContext,
@@ -242,7 +255,16 @@ impl ResolvingCredentialKernel {
         Self {
             resolver,
             registry: None,
+            external_status_fixture_transport: None,
         }
+    }
+
+    pub fn with_external_status_fixture_transport(
+        mut self,
+        transport: crate::ExternalStatusFixtureTransport,
+    ) -> Self {
+        self.external_status_fixture_transport = Some(transport);
+        self
     }
 
     pub fn with_registry(
@@ -270,10 +292,7 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
         {
             return Ok(rejected(OB2_RETIRED));
         }
-        let mut resolved = context.clone();
-        // The public request map cannot supply this field. Clear even caller
-        // hints so this adapter only admits its own bounded resolver result.
-        resolved.resolved_issuer_key = None;
+        let mut resolved = self.deployment_context(context);
         if context.token.is_object()
             && matches!(
                 context.format,
@@ -1268,7 +1287,13 @@ async fn verify_sd_jwt(
         .and_then(Value::as_u64)
         .or_else(|| credential.and_then(issued_at));
     let (status, external_status_valid_until_epoch_seconds) =
-        crate::external_status::sd_jwt_status(&claims, &issuer_key, &algorithm).await;
+        crate::external_status::sd_jwt_status(
+            &claims,
+            &issuer_key,
+            &algorithm,
+            context.external_status_fixture_transport.as_ref(),
+        )
+        .await;
     // Network resolution must not extend either the credential or KB-JWT's
     // verification window, including the ordinary (non-DCQL) verifier path.
     let still_valid = if let Some(query) = &context.sd_jwt_dcql {
@@ -2282,6 +2307,7 @@ mod tests {
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
             nonce: None,
@@ -2293,6 +2319,47 @@ mod tests {
                 document,
             }),
         }
+    }
+
+    #[test]
+    fn deployment_adapter_replaces_supplied_private_transport_hints() {
+        let public: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let pem = public["certificate_pem"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        let supplied = crate::ExternalStatusFixtureTransport::new(
+            "https://supplied.invalid:8443",
+            pem.clone(),
+        )
+        .unwrap();
+        let configured =
+            crate::ExternalStatusFixtureTransport::new("https://configured.invalid:9443", pem)
+                .unwrap();
+        let kernel = ResolvingCredentialKernel::new(std::sync::Arc::new(
+            marty_issuer_key_resolution::NativeIssuerKeyResolver::new(Vec::new(), Vec::new()),
+        ));
+        let mut context = context(json!({}));
+        context.external_status_fixture_transport = Some(supplied);
+        context.verifier_context.insert(
+            "external_status_fixture_transport".into(),
+            json!({"origin":"https://supplied.invalid:8443"}),
+        );
+        assert!(kernel
+            .deployment_context(&context)
+            .external_status_fixture_transport
+            .is_none());
+        let kernel = kernel.with_external_status_fixture_transport(configured.clone());
+        assert_eq!(
+            kernel
+                .deployment_context(&context)
+                .external_status_fixture_transport,
+            Some(configured)
+        );
     }
 
     #[test]

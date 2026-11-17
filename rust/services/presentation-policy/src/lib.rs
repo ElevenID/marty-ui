@@ -38,6 +38,7 @@ pub use domain::{
     DisplayMetadata, FreshnessPolicy, HolderBinding, IssuerConstraints, PolicyDomainError,
     PolicyStatus, PrerequisiteEvidenceProfile, PresentationPolicy, RequestPurpose, RequestedClaim,
 };
+pub use external_status::ExternalStatusFixtureTransport;
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
