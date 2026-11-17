@@ -1,4 +1,4 @@
-"""Preview-only all22-role maintenance for closed native subsets.
+"""Preview-only full-cohort maintenance for closed native subsets.
 
 It renders bounded, no-SIGKILL graceful stop/start commands and validates
 observations. It never executes Docker, SQL, backup, credential operations or
@@ -8,13 +8,14 @@ consume a durable private intent, and authenticate every actual observation.
 from __future__ import annotations
 from copy import deepcopy
 import re
-from scoped_native_runtime import RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES, read_ref, require, runtime_roles, selected_sources
+from scoped_native_runtime import RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES, read_ref, require, runtime_roles, selected_sources, reject_retired_runtime_roles
 
 
 def exact_roles(observed, profile=None):
     rows = observed["roles"]
-    require(len(rows) == 22 and {row["role"] for row in rows} == runtime_roles(profile), "EXACT_22_ROLE_SET_REQUIRED")
-    require(len({row["containerId"] for row in rows}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in rows),
+    cohort = runtime_roles(profile)
+    require(len(rows) == len(cohort) and {row["role"] for row in rows} == runtime_roles(profile), "EXACT_RUNTIME_ROLE_SET_REQUIRED")
+    require(len({row["containerId"] for row in rows}) == len(cohort) and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in rows),
             "UNIQUE_BOUND_CONTAINER_IDS_REQUIRED")
     return {row["role"]: row for row in rows}
 
@@ -106,7 +107,7 @@ def _restore_order(models, rows, reviewed_cross_edges, cohort):
     for role, dependency in reviewed_cross_edges:
         dependencies[role].add(dependency)
     order = []
-    while len(order) != 22:
+    while len(order) != len(cohort):
         ready = sorted(role for role in cohort - set(order) if dependencies[role].issubset(order))
         require(ready, "MAINTENANCE_DEPENDENCY_CYCLE_REQUIRES_REVIEW")
         order.extend(ready)
@@ -135,17 +136,20 @@ def preview(plan, before, compose_models):
     selected = overlay_roles(profile)
     cohort = runtime_roles(profile)
     rows = exact_roles(before, profile)
-    require(set(plan["stopContracts"]) == cohort, "ALL_22_STOP_CONTRACTS_REQUIRED")
+    require(set(plan["stopContracts"]) == cohort, "ALL_RUNTIME_STOP_CONTRACTS_REQUIRED")
     for row in rows.values():
         require(row.get("running") is True and row.get("paused") is False and type(row.get("hostPid")) is int
                 and row["hostPid"] > 0, "RUNNING_UNPAUSED_BASELINE_REQUIRED")
     import json
     require(set(plan["composeModels"]) == PROJECTS and set(compose_models) == PROJECTS, "EXACT_TWO_COMPOSE_PROJECTS_REQUIRED")
+    for model in compose_models.values():
+        require(isinstance(model, dict) and isinstance(model.get("services"), dict), "COMPOSE_SERVICES_REQUIRED")
+        reject_retired_runtime_roles(model["services"])
     for project, bound in plan["composeModels"].items():
         frozen = json.loads(read_ref(bound).read_bytes())
         require(frozen == compose_models[project], "FROZEN_COMPOSE_MODEL_CHANGED:" + project)
     restore = _restore_order(compose_models, rows, _reviewed_cross_edges(plan, cohort), cohort)
-    # Fence public ingress first, then reverse dependency order. All22 must be
+    # Fence public ingress first, then reverse dependency order. All roles must be
     # terminal before any privileged SQL, not merely the selected replacement roles.
     order = ["gateway", *[role for role in reversed(restore) if role != "gateway"]]
     stops = []
@@ -160,11 +164,11 @@ def preview(plan, before, compose_models):
         "additionalUnselectedRestartRoles": sorted(cohort - set(selected)),
         "existingLocksRequired": ["beta_operation_lock", "canonical_recording_lock_without_nested_acquire"],
         "durableOneShotIntentRequiredBeforeFirstStop": True,
-        "phaseGates": ["actual22_and_retained_D12_D05_readonly_baseline", "all22_owned_stops_terminal_pid0_noOom",
+        "phaseGates": ["actual_roles_and_retained_D12_D05_readonly_baseline", "all_roles_owned_stops_terminal_pid0_noOom",
             "consistent_current_database_backup", "existing_fully_fenced_source_bound_SQL_and_zero_app_connections",
             "version_checked_additive_migrations_and_0009_ledger", "existing_ACL_finalizer_denials_and_owner_receipt",
-            "reviewed_exact4_binary_and_applicant_user_state_transition" if len(selected) == 4 else f"reviewed_exact{len(selected)}_binary_overlay", "all22_start_pass_before_any_health_wait",
-            "all22_health_source_uid_mounts_and_retained_data_proof", "new_explicit_runtime_generation_profile"],
+            "reviewed_exact4_binary_and_applicant_user_state_transition" if len(selected) == 4 else f"reviewed_exact{len(selected)}_binary_overlay", "all_roles_start_pass_before_any_health_wait",
+            "all_roles_health_source_uid_mounts_and_retained_data_proof", "new_explicit_runtime_generation_profile"],
         "noHistoricalJobMutation": True, "noAutomaticRollback": True, "noApplyAuthority": True,
         "releaseQualified": False, "recordingQualified": False}
 
@@ -184,7 +188,7 @@ def validate_quiescent(before, stopped, outcomes, profile=None):
         require(row.get("running") is False and row.get("paused") is False and type(row.get("hostPid")) is int and row["hostPid"] == 0
                 and type(row.get("containerExitCode")) is int and row["containerExitCode"] == 0
                 and row.get("oomKilled") is False and row.get("state") == "exited", "ROLE_NOT_CLEANLY_QUIESCENT:" + role)
-    return {"all22Quiescent": True, "databaseConnectionsStillRequireIndependentFencedSQLCheck": True,
+    return {"allRolesQuiescent": True, "databaseConnectionsStillRequireIndependentFencedSQLCheck": True,
             "noApplyAuthority": True}
 
 
@@ -198,7 +202,7 @@ def restore_commands(before, current, outcomes, restore_order, profile=None):
     original, now = exact_roles(before, profile), exact_roles(current, profile)
     require(set(outcomes) == cohort and all(outcomes[r].get("terminal") is True for r in cohort),
             "UNRESOLVED_STOP_REFUSES_AUTOMATIC_RESTORE")
-    require(len(restore_order) == 22 and set(restore_order) == cohort, "FROZEN_RESTORE_ORDER_REQUIRED")
+    require(len(restore_order) == len(cohort) and set(restore_order) == cohort, "FROZEN_RESTORE_ORDER_REQUIRED")
     result = []
     for role in restore_order:
         prior = original[role]
@@ -236,8 +240,11 @@ def observed_role_state(bound, actual):
 
 def with_observed_state(binding, inspections):
     """Project only allowlisted Docker State metadata; never Env or arguments."""
+    names = {row["role"] for row in binding["roles"]}
+    require(names in (RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES)
+            and len(binding["roles"]) == len(names), "EXACT_RUNTIME_ROLE_SET_REQUIRED")
     by_id = {item["Id"]: item for item in inspections}
-    require(len(by_id) == len(inspections) == 22, "EXACT_22_INSPECTIONS_REQUIRED")
+    require(len(by_id) == len(inspections) == len(names), "EXACT_RUNTIME_INSPECTIONS_REQUIRED")
     rows = [observed_role_state(bound, by_id[bound["containerId"]]) for bound in binding["roles"]]
     return {"scope": "D12_STATE_PROJECTION_ONLY", "roles": rows, "sourceFactsBoundToPriorReceiptNotNewElfProbe": True,
             "releaseQualified": False, "recordingQualified": False}

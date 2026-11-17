@@ -39,8 +39,8 @@ def models():
     return before, after, binaries
 
 
-def runtime_rows():
-    names = sorted(shared.MARTY_CLIENTS | {"gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"})
+def runtime_rows(profile=None):
+    names = sorted(shared.runtime_roles(profile))
     before = {"roles": []}
     _, _, binaries = models()
     for index, role in enumerate(names):
@@ -61,6 +61,13 @@ def runtime_rows():
 
 
 class ScopeTests(unittest.TestCase):
+    def test_legacy_connector_service_is_not_silently_retained_by_delta_validation(self):
+        for role in ("canvas-sync-worker", "canvas_sandbox", "marty-canvas-real", "issuance-canvas-localhost-bridge"):
+            before, after, binaries = models()
+            before["services"][role] = after["services"][role] = {}
+            with self.assertRaisesRegex(ValueError, "RETIRED_CONNECTOR_RUNTIME_ROLE"):
+                overlay.validate_delta(before, after, binaries)
+
     def test_current_d12_profile_is_closed_and_old_lineage_stays_distinct(self):
         current = profiles.D12_PASSPORT_CURRENT
         self.assertEqual(current.ui_revision, "449ab93ca80d147622ae61283f7d8084f7c62884")
@@ -90,11 +97,7 @@ class ScopeTests(unittest.TestCase):
                 shared.selected_sources(changed, changed["rolloutProfile"])
 
     def test_current_d12_runtime_requires_exact_selected_source_and_core(self):
-        before, after, binaries = runtime_rows()
-        # The current D12 cohort uses event-stream; the historical default
-        # runtime_rows fixture intentionally retains canvas-sandbox.
-        for snapshot in (before, after):
-            next(row for row in snapshot["roles"] if row["role"] == "canvas-sandbox")["role"] = "event-stream"
+        before, after, binaries = runtime_rows("d12-passport-current-functional")
         current = profiles.D12_PASSPORT_CURRENT
         for row in after["roles"]:
             if row["role"] in binaries:
@@ -320,7 +323,7 @@ class OverlayTests(unittest.TestCase):
             for snapshot in (before, after):
                 row = next(r for r in snapshot["roles"] if r["role"] == omitted)
                 row["role"] = "foreign-replacement"
-            with self.assertRaisesRegex(ValueError, "EXACT_22_ROLE_SET_REQUIRED"):
+            with self.assertRaisesRegex(ValueError, "EXACT_RUNTIME_ROLE_SET_REQUIRED"):
                 overlay.validate_runtime_after(before, after, binaries, [])
 
     def test_foreign_selected_image_uid_lineage_or_inode_never_becomes_overlay(self):

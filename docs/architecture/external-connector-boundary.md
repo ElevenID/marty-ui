@@ -77,3 +77,16 @@ projecting platform-owned scenarios; retired provider routes are unavailable in
 both fetched and prerendered pages. A next-edition draft does not update VERSION,
 the public release index, qualification evidence or publication state. The draft
 generator refuses to overwrite a different existing edition.
+
+## Local maintenance boundaries
+
+Source-pinned maintenance helpers accept closed platform cohorts: twenty base
+roles, or twenty-one for the current cohort with event-stream. Provider roles
+cannot appear in an observed cohort or hide as extra Compose services. Old
+twenty-two-role receipts cannot authorize a current operation. Existing cache
+volume names are retained allocation identities, not connector integration.
+
+TODO (platform maintenance owner): prepare fresh, complete runtime observations
+and orphan-workload absence evidence before a separately qualified rollout.
+Local source tests and previews do not authorize stopping, starting or migrating
+a running deployment. This operational qualification remains outside the split.

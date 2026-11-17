@@ -60,16 +60,6 @@ CURRENT_ISSUER_POLICY_SIGNING_COMPACT = BuildProfile(
     "current-issuer-ready-native",
 )
 
-CANVAS_SCOPED_JOBS = BuildProfile(
-    "canvas-issuer-scoped-jobs",
-    "fce109daf47a7712c1ff5779b0e33def57bbce20",
-    (("issuance-native", "marty-issuance-service"),),
-    ("marty-issuance-service",),
-    "marty-canvas-scoped-jobs-",
-    "canvas-scoped-jobs-native",
-    "44040270000f93b7e7499cbec31b3bb3dd7e3df1",
-)
-
 D12_PASSPORT_CURRENT = BuildProfile(
     "d12-passport-current-three-role",
     "449ab93ca80d147622ae61283f7d8084f7c62884",
@@ -164,7 +154,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, D05_MEMBERSHIP_LATEST, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, D05_MEMBERSHIP_LATEST, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

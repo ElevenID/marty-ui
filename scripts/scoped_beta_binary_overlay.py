@@ -8,7 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
-    MARTY_CLIENTS, MIGRATIONS, daemon_source, read_ref, require, runtime_roles, selected_sources, started_later)
+    MARTY_CLIENTS, MIGRATIONS, daemon_source, read_ref, require, runtime_roles, selected_sources, started_later, reject_retired_runtime_roles)
 
 SQL_FILES = ("passport-beta-db-maintenance-start.sql", "passport-beta-batch-acl-finalize.sql",
     "passport-beta-db-enable-app-login.sql", "passport-beta-rust-owner-transition.sql", "passport-beta-rust-owner-verify.sql")
@@ -36,7 +36,7 @@ def overlay_roles(profile=None, selected_roles=None):
         return roles
     from scoped_native_profiles import reviewed_profile
     roles = dict(reviewed_profile(profile).roles)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs",
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform",
                         "d12-passport-current-three-role"), "UNREVIEWED_OVERLAY_PROFILE")
     selected = set(roles) if selected_roles is None else set(selected_roles)
     require(selected and selected.issubset(roles) and (selected_roles is None or len(selected) == len(selected_roles)), "EXACT_SELECTED_OVERLAY_ROLES_REQUIRED")
@@ -62,7 +62,7 @@ def image_owned_baseline(role, binary, native_preimage, bound=None):
             and set(native_preimage)=={"binding","inspections"},"CURRENT10_IMAGE_PREIMAGE_REQUIRED")
     binding=json.loads(read_ref(native_preimage["binding"]).read_bytes())
     rows=binding.get("roles",[])
-    require(len(rows)==len({x["role"] for x in rows})==22
+    require(len(rows)==len({x["role"] for x in rows})==len(runtime_roles(CURRENT10))
             and {x["role"] for x in rows}==runtime_roles(CURRENT10),"EXACT_CURRENT10_IMAGE_COHORT_REQUIRED")
     row=next(x for x in rows if x["role"]==role)
     target="/usr/local/bin/"+binary
@@ -75,7 +75,7 @@ def image_owned_baseline(role, binary, native_preimage, bound=None):
             and row.get("effectiveUid")==row.get("configuredRuntimeUid")==10001
             and row.get("binaryMounts")==[],"CURRENT10_IMAGE_OWNED_EXECUTABLE_REQUIRED")
     inspected=json.loads(read_ref(native_preimage["inspections"]).read_bytes())
-    require(isinstance(inspected,list) and len(inspected)==len({x["Id"] for x in inspected})==22,
+    require(isinstance(inspected,list) and len(inspected)==len({x["Id"] for x in inspected})==len(runtime_roles(CURRENT10)),
             "EXACT_CURRENT10_IMAGE_INSPECTIONS_REQUIRED")
     actual=next((x for x in inspected if x["Id"]==row["containerId"]),None)
     require(actual is not None and actual.get("role")==role and actual["Image"]==row["imageId"]
@@ -140,6 +140,8 @@ def binary_overlay(binaries, profile=None, selected_roles=None, before=None, *, 
 
 
 def validate_delta(before, after, binaries, profile=None, selected_roles=None, *, native_preimage=None):
+    reject_retired_runtime_roles(before["services"])
+    reject_retired_runtime_roles(after["services"])
     roles = overlay_roles(profile, selected_roles)
     require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
     require({k: v for k, v in before.items() if k != "services"} == {k: v for k, v in after.items() if k != "services"}, "PROJECT_SETTINGS_CHANGED")
@@ -212,8 +214,8 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
     old = {row["role"]: row for row in before["roles"]}
     new = {row["role"]: row for row in after["roles"]}
     cohort = runtime_roles(profile)
-    require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new) == cohort, "EXACT_22_ROLE_SET_REQUIRED")
-    require(len({row["containerId"] for row in new.values()}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
+    require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == len(cohort) and set(old) == set(new) == cohort, "EXACT_RUNTIME_ROLE_SET_REQUIRED")
+    require(len({row["containerId"] for row in new.values()}) == len(cohort) and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
     require(set(maintenance_restart_roles).issubset(cohort - set(roles if profile == "d05-membership-current-functional" else ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
     changes = []
     for role, prior in old.items():
@@ -269,7 +271,7 @@ def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, sel
     require(frozen_arguments[:4] in (["docker", "compose", "-p", "elevenid-beta"],
                                      ["docker", "compose", "--project-name", "elevenid-beta"]), "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
     require(isinstance(no_start, bool) and (not no_start or profile in
-            ("canvas-issuer-scoped-jobs", "d12-passport-canonical-subset", "d12-passport-current-functional", "d05-membership-current-functional",
+            ("d12-passport-canonical-subset", "d12-passport-current-functional", "d05-membership-current-functional",
              "native-devtest-passport-four-role")), "REVIEWED_NO_START_PROFILE_REQUIRED")
     require(profile not in ("d12-passport-canonical-subset", "d12-passport-current-functional", "d05-membership-current-functional",
                             "native-devtest-passport-four-role") or no_start, "D12_CREATE_BEFORE_INSPECTION_REQUIRED")

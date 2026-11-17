@@ -44,7 +44,6 @@ class OfficialNativeBuildTests(unittest.TestCase):
         expected = (
             ("d02-signing-cas", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
             ("d02-signing-cas-no-transform", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
-            ("canvas-issuer-scoped-jobs", "44040270000f93b7e7499cbec31b3bb3dd7e3df1", "dev", "d05-rust-target-20261026"),
             (self.profile.name, "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "release", "marty-oid4vc-native-d2de-target-20261028"),
         )
         plan = {"runId": "SOURCE_ONLY", "journalBackend": {"backend": "SOURCE_ONLY"}}
@@ -56,12 +55,17 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 self.assertEqual(scope["cargoProfile"], cargo)
                 self.assertEqual(scope["volumes"], ("ui-canvas-cargo", target))
                 self.assertIs(build.build_journal(plan, private, name), factory.return_value)
-            self.assertEqual(factory.call_count, 4)
+            self.assertEqual(factory.call_count, 3)
             factory.reset_mock()
-            for unsupported in (None, "unreviewed-profile"):
+            for unsupported in (None, "unreviewed-profile", "canvas-issuer-scoped-jobs"):
                 with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
                     build.build_journal(plan, private, unsupported)
             factory.assert_not_called()
+        for selection in (profiles.reviewed_profile, build.build_scope, build.cargo_arguments):
+            with self.assertRaisesRegex(ValueError, "UNKNOWN_REVIEWED_BUILD_PROFILE"):
+                selection("canvas-issuer-scoped-jobs")
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_REVIEWED_BUILD_PROFILE"):
+            build.build_journal({}, private, "canvas-issuer-scoped-jobs")
 
     def test_canonical_29_release_outputs_and_kms_proof_are_required(self):
         build.verify_official_inputs(self.freeze, self.seed, self.script, self.scope)

@@ -1,4 +1,4 @@
-"""Current D12 cohort stays distinct from the historical Canvas cohort."""
+"""Closed platform cohorts reject retired connector roles before mutation."""
 import copy
 import json
 from pathlib import Path
@@ -17,21 +17,7 @@ from test_scoped_passport_maintenance import fixture, freeze_models
 PROFILE = "d12-passport-current-functional"
 
 def current_fixture(directory):
-    plan, before, stopped, outcomes, models = fixture(directory)
-    for snapshot in (before, stopped):
-        next(row for row in snapshot["roles"] if row["role"] == "canvas-sandbox")["role"] = "event-stream"
-    outcomes["event-stream"] = outcomes.pop("canvas-sandbox")
-    models["elevenid-beta"]["services"]["event-stream"] = models["elevenid-beta"]["services"].pop("canvas-sandbox")
-    old_policy = json.loads(Path(plan["stopContracts"].pop("canvas-sandbox")["path"]).read_text())
-    old_policy["role"] = "event-stream"
-    source = directory / "event-stream-source.json"
-    proof = json.loads(Path(old_policy["sourceProof"]["path"]).read_text())
-    proof["role"] = "event-stream"
-    source.write_text(json.dumps(proof))
-    old_policy["sourceProof"] = ref(source)
-    policy = directory / "event-stream-stop.json"
-    policy.write_text(json.dumps(old_policy))
-    plan["stopContracts"]["event-stream"] = ref(policy)
+    plan, before, stopped, outcomes, models = fixture(directory, PROFILE)
     plan.update(rolloutProfile=PROFILE, buildProfile=None,
                 uiRevision=D12_PASSPORT_CURRENT.ui_revision,
                 coreRevision=D12_PASSPORT_CURRENT.core_revision,
@@ -39,21 +25,21 @@ def current_fixture(directory):
     freeze_models(plan, models, directory)
     return plan, before, stopped, outcomes, models
 
-def test_current_cohort_previews_exact_event_stream_and_historical_default_remains(tmp_path):
-    # Separate directories preserve immutable historical contracts.
+def test_current_cohort_has_event_stream_and_base_cohort_stays_closed(tmp_path):
+    # Distinct fixtures pin both closed platform cohorts.
     historical = tmp_path / "historical"
     historical.mkdir()
     old_plan, old_before, _, _, old_models = fixture(historical)
-    assert "canvas-sandbox" in maintenance.preview(old_plan, old_before, old_models)["allStopRoles"]
+    assert len(maintenance.preview(old_plan, old_before, old_models)["allStopRoles"]) == 20
     current = tmp_path / "current"
     current.mkdir()
     plan, before, stopped, outcomes, models = current_fixture(current)
     value = maintenance.preview(plan, before, models)
-    assert len(value["allStopRoles"]) == 22
+    assert len(value["allStopRoles"]) == 21
     assert set(value["allStopRoles"]) == D12_CURRENT_RUNTIME_ROLES
     assert "event-stream" in value["allStopRoles"] and "canvas-sandbox" not in value["allStopRoles"]
-    assert maintenance.validate_quiescent(before, stopped, outcomes, PROFILE)["all22Quiescent"]
-    assert len(maintenance.restore_commands(before, stopped, outcomes, value["restoreOrder"], PROFILE)["startPass"]) == 22
+    assert maintenance.validate_quiescent(before, stopped, outcomes, PROFILE)["allRolesQuiescent"]
+    assert len(maintenance.restore_commands(before, stopped, outcomes, value["restoreOrder"], PROFILE)["startPass"]) == 21
     assert runtime_roles(None) == RUNTIME_ROLES
 
 def test_current_refuses_historical_role_substitution_and_unknown_profile(tmp_path):
@@ -62,9 +48,9 @@ def test_current_refuses_historical_role_substitution_and_unknown_profile(tmp_pa
     plan, before, stopped, outcomes, models = current_fixture(current)
     wrong = copy.deepcopy(before)
     next(row for row in wrong["roles"] if row["role"] == "event-stream")["role"] = "canvas-sandbox"
-    with pytest.raises(ValueError, match="EXACT_22_ROLE_SET_REQUIRED"):
+    with pytest.raises(ValueError, match="EXACT_RUNTIME_ROLE_SET_REQUIRED"):
         maintenance.preview(plan, wrong, models)
-    with pytest.raises(ValueError, match="EXACT_22_ROLE_SET_REQUIRED"):
+    with pytest.raises(ValueError, match="EXACT_RUNTIME_ROLE_SET_REQUIRED"):
         maintenance.validate_quiescent(wrong, stopped, outcomes, PROFILE)
     with pytest.raises(ValueError, match="UNREVIEWED_RUNTIME_ROLE_PROFILE"):
         runtime_roles("foreign")
@@ -77,7 +63,7 @@ def test_current_executor_inspects_event_stream_not_canvas_sandbox(tmp_path):
     inspected = []
     executor = D12CurrentExecution({"inspect_role": lambda role: (inspected.append(role), by_role[role])[1]},
                                    {"runId": "00000000-0000-4000-8000-000000000001"}, object())
-    assert len(executor.inspect_all22()["roles"]) == 22
+    assert len(executor.inspect_all22()["roles"]) == 21
     assert set(inspected) == D12_CURRENT_RUNTIME_ROLES
 
 
@@ -158,3 +144,19 @@ def test_current_executor_reaches_exact_current_22_start_ack_gate(tmp_path, monk
     assert set(saved["d12-start-acks.private.json"]["acks"]) == D12_CURRENT_RUNTIME_ROLES
     assert "event-stream" in saved["d12-start-acks.private.json"]["acks"]
     assert "canvas-sandbox" not in saved["d12-start-acks.private.json"]["acks"]
+
+
+@pytest.mark.parametrize("role", ["canvas-sync-worker", "canvas-sandbox", "canvas_sync_worker", "canvas_sandbox"])
+def test_legacy_connector_cohort_is_refused_before_stop_preview(tmp_path, role):
+    plan, before, stopped, outcomes, models = current_fixture(tmp_path)
+    before["roles"].append({**before["roles"][0], "role": role, "containerId": "f" * 64})
+    with pytest.raises(ValueError, match="EXACT_RUNTIME_ROLE_SET_REQUIRED"):
+        maintenance.preview(plan, before, models)
+
+
+@pytest.mark.parametrize("role", ["canvas-sync-worker", "canvas-sandbox", "canvas_sync_worker", "issuance-canvas-localhost-bridge"])
+def test_legacy_connector_service_cannot_hide_outside_observed_cohort(tmp_path, role):
+    plan, before, stopped, outcomes, models = current_fixture(tmp_path)
+    models["elevenid-beta"]["services"][role] = {}
+    with pytest.raises(ValueError, match="RETIRED_CONNECTOR_RUNTIME_ROLE"):
+        maintenance.preview(plan, before, models)

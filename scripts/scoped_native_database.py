@@ -1,11 +1,12 @@
 """Closed beta database phase shared by four-role and current D12 windows.
 
-Call only from the reviewed host while it owns both locks and all22 are stopped.
+Call only from the reviewed host while it owns both locks and the complete cohort is stopped.
 Import/check perform no operations. This is not a historical SQL handoff runner:
 business migrations execute the selected Rust binaries; only fixed operational
 SQL is streamed from the shared source renderer. Unknown outcomes never retry.
 """
 from __future__ import annotations
+from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES
 import base64
 from datetime import datetime, timezone
 import json
@@ -582,7 +583,8 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
                 "FRESH_D12_RUNTIME_PREIMAGE_FOR_COMPATIBILITY_REQUIRED")
         before = json.loads(read_ref(self.runtime_before).read_bytes())
         prior = {row["role"]: row for row in before["roles"]}
-        require(len(before["roles"]) == len(prior) == 22, "EXACT_22_ROLE_SET_REQUIRED")
+        require(len(before["roles"]) == len(prior) == len(D12_CURRENT_RUNTIME_ROLES)
+                and set(prior) == D12_CURRENT_RUNTIME_ROLES, "EXACT_RUNTIME_ROLE_SET_REQUIRED")
         proof = _validate_compatibility(selection, plan_ref, result_ref, self.role_binaries, 10001)
         rows = json.loads(read_ref(result_ref).read_bytes())["rows"]
         for role, binary in self.role_binaries.items():

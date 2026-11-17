@@ -111,9 +111,8 @@ def test_current_runtime_positive_keeps_selected_source_and_retained_generations
     from test_scoped_passport_maintenance import fixture
     from scoped_beta_binary_overlay import validate_runtime_after
     build=current_rollout_build(profile);roles=dict(build.roles)
-    _,before,_,_,_=fixture(tmp_path)
+    _,before,_,_,_=fixture(tmp_path,profile)
     for row in before["roles"]:
-        if row["role"]=="canvas-sandbox":row["role"]="event-stream"
         binary=roles.get(row["role"],row["binary"])
         row.update(binary=binary,effectiveUid=10001,configuredRuntimeUid=10001,
                    health="healthy",coreSource="old",kind="native",processExecutableSha256=row["sha256"],
@@ -131,7 +130,7 @@ def test_current_runtime_positive_keeps_selected_source_and_retained_generations
                        requiredHostPid=row["hostPid"],requiredEffectiveUid=10001,requiredBinaryMounts=deepcopy(row["binaryMounts"]))
     proof=validate_runtime_after(before,after,binaries,D12_CURRENT_RUNTIME_ROLES-set(roles),profile)
     assert proof["uiRevision"]==build.ui_revision and proof["coreRevision"]==build.core_revision
-    assert proof["roleBinaries"]==roles and len(proof["maintenanceRestartRoles"])==22-len(roles)
+    assert proof["roleBinaries"]==roles and len(proof["maintenanceRestartRoles"])==21-len(roles)
 
 
 @pytest.mark.parametrize("change",[None,"changed","outside"])
