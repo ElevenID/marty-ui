@@ -586,7 +586,12 @@ impl UpstreamClient for SuccessfulUpstream {
             let body: Value =
                 serde_json::from_slice(request.body.as_deref().expect("DIDComm delivery body"))
                     .expect("DIDComm delivery JSON");
-            assert_eq!(body["organization_id"], "org-1");
+            assert_eq!(
+                body["organization_id"],
+                request
+                    .header("x-organization-id")
+                    .expect("trusted tenant header")
+            );
             assert!(body.get("universal_resolver_url").is_none());
         }
         if request.path == "/v1/integrations/canvas/lti/jwks" {
@@ -1470,6 +1475,74 @@ async fn ownerless_system_wallet(request: Request) -> Response {
         })),
     )
         .into_response()
+}
+
+async fn forbidden_wallet_owner(request: Request) -> Response {
+    assert_eq!(request.method(), axum::http::Method::GET);
+    assert_eq!(request.uri().path(), "/v1/wallet-registry/foreign-wallet");
+    assert_eq!(request.headers().get("x-user-id").unwrap(), "user-1");
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"detail":"foreign-owner-private-data"})),
+    )
+        .into_response()
+}
+
+#[tokio::test]
+async fn forbidden_wallet_owner_is_terminal_without_tenant_fallback_or_proxy() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback(axum::routing::any(forbidden_wallet_owner)),
+        )
+        .await
+        .unwrap();
+    });
+    for (method, suffix) in [
+        ("GET", ""),
+        ("PATCH", ""),
+        ("DELETE", ""),
+        ("GET", "/open-link"),
+    ] {
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), origin.clone())]),
+            "internal-signing-key",
+            None,
+            Some("s".repeat(32)),
+            Some(4096),
+        )
+        .unwrap();
+        let upstream = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), upstream.clone());
+        Arc::get_mut(&mut state).unwrap().owners = Arc::new(owners);
+        let response = gateway_router(state).oneshot(
+            Request::builder().method(method)
+                .uri(format!("/v1/wallet-registry/foreign-wallet{suffix}?organization_id=org-1&inner_uri=openid-credential-offer%3A%2F%2F"))
+                .header("cookie", "sessionId=valid")
+                .header("content-type", "application/json")
+                .header("x-organization-id", "org-1")
+                .body(Body::from(r#"{"organization_id":"org-1","name":"forged"}"#))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {suffix}"
+        );
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"detail":"Forbidden"})
+        );
+        assert!(
+            upstream.0.lock().unwrap().is_empty(),
+            "denial must precede business proxy"
+        );
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]
@@ -5247,6 +5320,37 @@ async fn issuance_management_responses_are_rewritten_and_privacy_projected() {
     let create: Value = serde_json::from_slice(&create_body).expect("json");
     assert_eq!(create["id"], "iss-1");
     assert!(create.get("pre_auth_code").is_none());
+}
+
+#[tokio::test]
+async fn didcomm_delivery_uses_authorized_selected_tenant_instead_of_session_default() {
+    // RuntimeProvider's session defaults to org-1, but it grants live membership
+    // in org-2 and explicitly denies org-other. The spoofed header is not authority.
+    for (organization_id, expected) in [
+        ("org-2", StatusCode::OK),
+        ("org-other", StatusCode::FORBIDDEN),
+    ] {
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/issuance/didcomm/deliver")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .header("x-organization-id", "org-1")
+                    .body(Body::from(
+                        json!({
+                            "organization_id":organization_id, "transaction_id":"tx-123",
+                            "holder_did":"did:peer:2.EzExample",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{organization_id}");
+    }
 }
 
 #[tokio::test]
