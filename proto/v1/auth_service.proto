@@ -66,6 +66,9 @@ message ValidateSessionResponse {
   UserInfo user = 2;       // populated only when valid=true
   string expires_at = 3;   // ISO 8601
   optional int64 authentication_time_unix = 4; // verified OIDC auth_time, absent when unavailable
+  // Positive assertion from the validated persisted session. Missing/false must
+  // fail closed for operations requiring the user's own explicit consent.
+  optional bool non_impersonated_session = 5;
 }
 
 message CreateSessionRequest {

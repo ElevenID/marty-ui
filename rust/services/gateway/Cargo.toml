@@ -54,6 +54,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-auth = { path = "../auth" }
 marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 hex.workspace = true
 hmac.workspace = true

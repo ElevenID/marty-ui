@@ -220,6 +220,7 @@ fn identity(kind: &str) -> Option<GatewayIdentity> {
             "api_key:key-1".into()
         },
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: organization.map(str::to_owned),
@@ -291,7 +292,9 @@ impl GatewayIdentityProvider for RuntimeProvider {
         session_id: &str,
     ) -> Result<Option<SessionIdentity>, SecurityError> {
         let organization_id = match session_id {
-            "observation-session" => Some("20000000-0000-4000-8000-000000000001"),
+            "observation-session" | "observation-impersonated" | "observation-legacy" => {
+                Some("20000000-0000-4000-8000-000000000001")
+            }
             "valid" => Some("org-1"),
             "valid-org-2" => Some("org-2"),
             "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
@@ -300,6 +303,11 @@ impl GatewayIdentityProvider for RuntimeProvider {
         };
         Ok(Some(SessionIdentity {
             user_id: "user-1".into(),
+            non_impersonated_session: match session_id {
+                "observation-impersonated" => Some(false),
+                "observation-legacy" => None,
+                _ => Some(true),
+            },
             organization_id: organization_id.map(str::to_owned),
             ..SessionIdentity::default()
         }))
@@ -3207,6 +3215,7 @@ fn scoped_api_key_forwards_only_the_authorized_permission() {
         source: AuthenticationSource::ApiKey,
         user_id: "key-owner".into(),
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: Some("org-1".into()),
@@ -3254,6 +3263,7 @@ fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
         source: AuthenticationSource::Session,
         user_id: "user-1".into(),
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: Some("stale-session-org".into()),
@@ -7657,4 +7667,147 @@ async fn public_verification_keeps_anonymous_request_limits_and_ignores_capabili
         calls[1].1.header("x-verification-session"),
         Some("capability-1")
     );
+}
+
+struct ConsentSessionService;
+
+#[async_trait]
+impl marty_auth::AuthSessionService for ConsentSessionService {
+    async fn validate_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<marty_auth::Session>, tonic::Status> {
+        let mut user: marty_auth::AuthenticatedUser = serde_json::from_value(json!({
+            "user_id":"user-1","email":"synthetic@example.test",
+            "organization_id":"20000000-0000-4000-8000-000000000001"
+        }))
+        .unwrap();
+        user.impersonation = match session_id {
+            "own-session" => None,
+            "impersonated-session" => Some(serde_json::from_value(json!({"active":true})).unwrap()),
+            "retained-impersonation" => {
+                Some(serde_json::from_value(json!({"active":false})).unwrap())
+            }
+            _ => return Ok(None),
+        };
+        let mut session = marty_auth::Session::create(marty_auth::SessionSpec {
+            user,
+            ttl_seconds: 3600,
+            now: chrono::Utc::now(),
+            ip_address: None,
+            user_agent: None,
+            id_token: None,
+            refresh_token: None,
+            oidc_claims: None,
+        });
+        session.session_id = session_id.into();
+        Ok(Some(session))
+    }
+    async fn invalidate_session(&self, _: &str) -> Result<bool, tonic::Status> {
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn real_auth_grpc_provenance_survives_gateway_provider_and_consent_admission() {
+    let token = "synthetic-grpc-session-provenance-key-0001";
+    let service =
+        marty_auth::AuthGrpcService::new(Arc::new(ConsentSessionService), Some(token.into()), true)
+            .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(
+                marty_auth::auth_proto::auth_service_server::AuthServiceServer::new(service),
+            )
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = stopped.await;
+                },
+            ),
+    );
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let provider = Arc::new(crate::providers::GrpcIdentityProvider::new(
+        channel.clone(),
+        channel,
+        std::time::Duration::from_secs(5),
+        Some(token.into()),
+    ));
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let mut state = Arc::try_unwrap(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ))
+    .ok()
+    .unwrap();
+    state.identities = provider;
+    let router = gateway_router(Arc::new(state));
+    let org = "20000000-0000-4000-8000-000000000001";
+    let paths = [format!(
+        "/v1/organizations/{org}/application-ownerships/application-one/confirm"
+    )];
+    for (session, expected) in [
+        ("impersonated-session", StatusCode::FORBIDDEN),
+        ("retained-impersonation", StatusCode::FORBIDDEN),
+        ("own-session", StatusCode::OK),
+    ] {
+        for path in &paths {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("cookie", format!("sessionId={session}"))
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("x-non-impersonated-session", "true")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{session}: {path}");
+        }
+    }
+    assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn ownership_confirmation_rejects_impersonation_and_missing_auth_assertions() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    let path="/v1/organizations/20000000-0000-4000-8000-000000000001/application-ownerships/application-one/confirm";
+    for session in ["observation-impersonated", "observation-legacy"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("cookie", format!("sessionId={session}"))
+                    .header("origin", "https://beta.elevenidllc.com")
+                    .header("content-type", "application/json")
+                    .header("x-non-impersonated-session", "true")
+                    .header("idempotency-key", "original-ownership-confirmation")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
 }

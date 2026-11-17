@@ -106,6 +106,8 @@ impl MipError {
 pub struct SessionIdentity {
     pub user_id: String,
     pub authentication_time_unix: Option<i64>,
+    #[serde(default)]
+    pub non_impersonated_session: Option<bool>,
     pub email: Option<String>,
     pub username: Option<String>,
     pub given_name: Option<String>,
@@ -156,6 +158,7 @@ pub struct GatewayIdentity {
     pub source: AuthenticationSource,
     pub user_id: String,
     pub authentication_time_unix: Option<i64>,
+    pub non_impersonated_session: Option<bool>,
     pub user_email: Option<String>,
     pub user_domain: Option<String>,
     pub session_organization_id: Option<String>,
@@ -283,6 +286,7 @@ fn session_context(identity: SessionIdentity) -> GatewayIdentity {
         source: AuthenticationSource::Session,
         user_id: identity.user_id,
         authentication_time_unix: identity.authentication_time_unix,
+        non_impersonated_session: identity.non_impersonated_session,
         user_email: identity.email,
         user_domain,
         session_organization_id: identity.organization_id,
@@ -302,6 +306,7 @@ fn api_key_context(identity: ApiKeyIdentity) -> GatewayIdentity {
         source: AuthenticationSource::ApiKey,
         user_id: format!("api_key:{api_key_id}"),
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: identity.organization_id,
