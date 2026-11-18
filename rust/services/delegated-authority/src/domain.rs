@@ -307,6 +307,9 @@ pub fn validate_transition(previous: &DelegationGrant, current: &DelegationGrant
     if current.updated_at <= previous.updated_at {
         return Err(GrantValidationError::TransitionTimeDidNotAdvance);
     }
+    if current.status != GrantStatus::Expired && current.updated_at >= current.terms.valid_until {
+        return Err(GrantValidationError::InvalidActivationTime);
+    }
     let allowed = match previous.status {
         GrantStatus::Pending => matches!(current.status, GrantStatus::Active | GrantStatus::Revoked | GrantStatus::Expired),
         GrantStatus::Active => matches!(current.status, GrantStatus::Suspended | GrantStatus::Revoked | GrantStatus::Expired),
