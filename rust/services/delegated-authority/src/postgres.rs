@@ -3,7 +3,7 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::{DelegationGrant, DelegationGrantRepository, GrantStatus, RepositoryError};
+use crate::{validate_transition, DelegationGrant, DelegationGrantRepository, GrantStatus, RepositoryError};
 
 #[derive(Clone)]
 pub struct PgDelegationGrantRepository {
@@ -48,12 +48,8 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
         replacement: DelegationGrant) -> Result<DelegationGrant, RepositoryError> {
         let current = self.get(organization_id, grant_id).await?.ok_or(RepositoryError::NotFound)?;
         if current.revision != expected_revision { return Err(RepositoryError::RevisionConflict); }
-        if replacement.id != current.id || replacement.organization_id != current.organization_id
-            || replacement.revision != expected_revision + 1
-            || replacement.terms != current.terms || replacement.terms_digest != current.terms_digest
-            || replacement.authority != current.authority || replacement.created_at != current.created_at {
-            return Err(RepositoryError::Failure("replacement changed immutable grant data or has invalid identity/revision".into()));
-        }
+        validate_transition(&current, &replacement)
+            .map_err(|error| RepositoryError::Failure(error.to_string()))?;
         let document = serde_json::to_value(&replacement)
             .map_err(|error| RepositoryError::Failure(error.to_string()))?;
         let old_terms = serde_json::to_value(&current.terms)
