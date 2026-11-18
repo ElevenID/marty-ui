@@ -4,7 +4,7 @@
 
 The production application, public manifest contract, and local recorder tooling are implemented. **Credential Lifecycle Foundation** is published as a `DRAFT` evidence preview for **ElevenID LLC Credential Platform v2026.07.0**, with `PARTIAL` coverage and MIP `0.3.1` metadata.
 
-The preview does not claim release-level public-demo approval. The ElevenID LLC YouTube channel and release playlist are configured, and the **Organization and MIP Primitives** scenario has completed ElevenID LLC publication review with privacy-enhanced playback. Remaining scenario recordings, the isolated ElevenID Demo Wallet package, independent-wallet qualification, portable Canvas execution, and a composed lifecycle video remain release evidence work.
+The preview does not claim release-level public-demo approval. The ElevenID LLC YouTube channel and release playlist are configured, and the **Organization and MIP Primitives** scenario has completed ElevenID LLC publication review with privacy-enhanced playback. Remaining scenario recordings, the isolated ElevenID Demo Wallet package, independent-wallet qualification and a composed lifecycle video remain platform release evidence work. Provider-specific execution and recording belong to the independent [Canvas connector](https://github.com/ElevenID/canvas-integration), with unsupported flows disabled; historical public manifests and recordings retain their original provenance.
 
 Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tesseract, and in-process ZXing QR decoding.
 
@@ -61,7 +61,7 @@ Run the pinned public browser gate from `tests` with `npm run test:demo-platform
 - Android tooling is absent: Android SDK/ADB/emulator, Appium UiAutomator2, and a pinned EUDI reference-wallet APK/profile.
 - The Google OAuth app remains in Testing mode. Its publisher refresh token is short-lived until the app completes the production-readiness process.
 - Existing browser recordings predate the versioned recorder and are retained only as protected preview evidence.
-- Canvas has a portable scenario contract, but the adapter implementation must expose the portable test outcomes before recording.
+- Retired provider scenarios are excluded from the current platform portfolio. Provider-only recording and adapter qualification are connector-owned follow-up, not platform release blockers or permission to restore retired routes.
 
 These blockers keep coverage `PARTIAL`; they do not change the underlying ElevenID LLC platform release decision.
 

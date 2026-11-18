@@ -9,7 +9,10 @@
   "destination_settings_checkpoint": {
     "date": "2026-11-15",
     "timezone": "America/Denver",
-    "repositories": ["platform", "website"],
+    "repositories": [
+      "platform",
+      "website"
+    ],
     "ruleset_target": "default-branch",
     "ruleset_enforcement": "active",
     "pull_request_required": true,
@@ -29,7 +32,16 @@
     "observed_files": 79,
     "scope": "static-source-imports-only",
     "qualified_export_manifest": false,
-    "remaining_audits": ["assets", "locales", "tests", "packages", "prerender", "docker", "workflows", "provenance"]
+    "remaining_audits": [
+      "assets",
+      "locales",
+      "tests",
+      "packages",
+      "prerender",
+      "docker",
+      "workflows",
+      "provenance"
+    ]
   },
   "targets": [
     {
@@ -118,13 +130,14 @@
       "notes": "Do not move broad directories wholesale. Retain only application-owned code after import and route classification."
     },
     {
-      "repository": "canvas",
+      "repository": "canvas-integration",
       "responsibility": "independent-canvas-integration",
       "source_candidates": [
-        "Canvas-related source, workflows, contracts and tests"
+        "Provider-specific protocols, credentials, administration, workers and connector-owned storage"
       ],
-      "migration": "parallel-existing-workstream",
-      "notes": "Follow the active Canvas extraction plan; do not assume all Canvas-named files belong in one repository."
+      "migration": "source-split-complete",
+      "notes": "Existing ElevenID repository; source split merged. Public Common Gateway is the sole platform interface; Core/platform retains canonical identity, ownership, evidence, approval, signing and audit. Production adapters, activation and cutover remain separately owned TODOs with unsupported flows disabled. Keep historical provenance, graphics APIs and generic rejection guards with their actual owners; do not move files by Canvas name alone.",
+      "repository_url": "https://github.com/ElevenID/canvas-integration"
     }
   ],
   "constraints": [
