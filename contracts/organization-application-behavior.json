@@ -17,7 +17,7 @@
       "plan": "free",
       "is_discoverable": true,
       "owner_status": "active",
-      "permission_count": 111,
+      "permission_count": 113,
       "required_permission_keys": ["application:manage-ownership", "external-observation:manage", "audit:ingest", "mdoc-certificate:issue-iaca", "mdoc-certificate:issue"]
     }
   },
