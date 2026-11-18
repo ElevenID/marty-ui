@@ -290,3 +290,17 @@ remain. Old inventories are not implicitly upgraded. The migration image no long
 builds or copies the retired provider seed. Historical seed/catalog observations
 remain read-only; the current system delivery catalog contains two platform wallets. Custom
 destinations keep their generic tenant/admin authorization.
+
+
+The source-bound legacy Kubernetes credential recovery commands are unavailable
+in current source. Their historical initializer hash remains unchanged; current
+platform inventories cannot reinterpret old connector authority. All operational
+entrypoints refuse before credential/file/network access. The original implementation
+and safety tests remain in Git at `658228a4`, with frozen legacy reference fixtures
+unchanged. Current application activation independently accepts exactly nine
+platform runtime token inputs and rejects the retired eleven-input cohort.
+
+TODO (platform recovery owner): qualify a separate provider-neutral recovery path
+if needed. Recover existing jobs with their retained exact source-bound operator;
+preserve private journals, credentials and original evidence. Source retirement
+neither stops jobs nor upgrades old observations or grants production readiness.

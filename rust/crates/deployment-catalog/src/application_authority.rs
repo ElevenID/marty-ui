@@ -330,8 +330,9 @@ fn initializer_policies(source: &str) -> Result<BTreeMap<String, String>> {
     Ok(policies)
 }
 
-/// The initializer remains the policy owner for read-only legacy inspection too.
-pub(crate) fn compiled_initializer_policies() -> Result<BTreeMap<String, String>> {
+/// Exercise the current initializer policy inventory without a runtime adapter.
+#[cfg(test)]
+fn compiled_initializer_policies() -> Result<BTreeMap<String, String>> {
     initializer_policies(INITIALIZER)
 }
 
@@ -558,39 +559,6 @@ fn auth_metadata(auth: &Value, policies: &[String], ttl: u64, leaf: bool) -> Res
             .as_u64()
             .is_some_and(|value| (1..=ttl).contains(&value))
         || (leaf && auth["renewable"] != false)
-    {
-        return Err(REFUSAL);
-    }
-    Ok(())
-}
-
-/// The explicit legacy recovery path uses the same bounded leaf proof owner,
-/// without changing AppRole enrollment or routine replacement admission.
-#[cfg(target_os = "linux")]
-pub(crate) fn legacy_recovery_leaf(
-    created: &Value,
-    lookup: &Value,
-    value: &str,
-    policies: &[String],
-    ttl: u64,
-) -> Result<()> {
-    token(value)?;
-    auth_metadata(&created["auth"], policies, ttl, true)?;
-    let remaining = metadata(
-        &lookup["data"],
-        value,
-        policies,
-        ttl,
-        &["auth/token/create"],
-        Some(false),
-        false,
-    )?;
-    if remaining < 7 * 3600
-        || !mint_warnings(
-            &created["warnings"],
-            ttl,
-            created["auth"]["lease_duration"].as_u64().ok_or(REFUSAL)?,
-        )
     {
         return Err(REFUSAL);
     }
@@ -962,7 +930,7 @@ async fn verify_enrollment_with(
         &output.join("complete.json"),
         &json!({
             "schema":"marty.application-enrollment-verification/v1","binding":binding,
-            "count":11,"minimumTtlSeconds":minimum_ttl,"transientRevoked":true,
+            "count":9,"minimumTtlSeconds":minimum_ttl,"transientRevoked":true,
             "enrollmentReplayed":false,"credentialsIssued":false,
         }),
         4096,
@@ -1958,8 +1926,8 @@ mod tests {
     #[test]
     fn policy_bodies_are_extracted_from_one_closed_initializer_inventory() {
         let policies = initializer_policies(INITIALIZER).unwrap();
-        assert_eq!(policies.len(), 12);
-        assert_eq!(policies["sign-grant-verify"].lines().count(), 7);
+        assert_eq!(policies.len(), 10);
+        assert_eq!(policies["sign-grant-verify"].lines().count(), 5);
         for name in [
             "credential-service",
             "signing-keys-managed",
@@ -1969,7 +1937,7 @@ mod tests {
             assert!(INITIALIZER.contains(policies[name].trim_end_matches('\n')));
         }
         let acl = policy().unwrap();
-        assert_eq!(acl.matches("path \"auth/token/create/").count(), 11);
+        assert_eq!(acl.matches("path \"auth/token/create/").count(), 9);
         for forbidden in [
             "kms-bootstrap",
             "openbao-service-token",
@@ -2233,7 +2201,7 @@ mod tests {
 
     #[tokio::test]
     async fn enrollment_uncertainty_retains_binding_and_cannot_replay() {
-        for position in [0, 1, 11, 12, 13, 14] {
+        for position in 0..(runtime_specs().len() + 4) {
             let f = Fixture::new(false, false);
             let api = Fake::new(&f, false, "enrollment", position);
             assert_eq!(
@@ -2353,7 +2321,7 @@ mod tests {
         let value = stage_with(&api, &f.identity, f.staging()).await.unwrap();
         assert_eq!(
             value,
-            json!({"ready":true,"inputs":f.operation.join("inputs"),"count":11})
+            json!({"ready":true,"inputs":f.operation.join("inputs"),"count":9})
         );
         assert!(!value.to_string().contains("synthetic"));
         let input_names = crate::generation::entries(&f.operation.join("inputs")).unwrap();
@@ -2369,20 +2337,20 @@ mod tests {
             );
         }
         assert!(f.operation.join("login-response.json").is_file());
-        assert!(f.operation.join("mint-response-10.json").is_file());
+        assert!(f.operation.join("mint-response-08.json").is_file());
         let complete: Value =
             serde_json::from_str(&private_file(&f.operation.join("complete.json")).unwrap())
                 .unwrap();
         assert_eq!(complete["state"], "minted-inputs-ready");
         assert_eq!(current_tokens(&f.current, false).unwrap(), before);
         let state = api.state.lock().unwrap();
-        assert_eq!((state.logins, state.mints, state.revokes), (1, 11, 1));
+        assert_eq!((state.logins, state.mints, state.revokes), (1, 9, 1));
         assert_eq!(state.calls.last().unwrap().1, "auth/token/revoke-self");
     }
 
     #[tokio::test]
     async fn each_uncertain_mint_retains_attempt_captures_and_inputs_without_replay() {
-        for position in 0..11 {
+        for position in 0..runtime_specs().len() {
             let f = Fixture::new(true, true);
             let before = current_tokens(&f.current, false).unwrap();
             let api = Fake::new(&f, true, "mint", position);
@@ -2475,10 +2443,10 @@ mod tests {
         let f = Fixture::new(true, true);
         let api = Fake::new(&f, true, "ttl-capped", 3);
         let result = stage_with(&api, &f.identity, f.staging()).await.unwrap();
-        assert_eq!(result["count"], 11);
+        assert_eq!(result["count"], 9);
         assert!(f.operation.join("complete.json").is_file());
         let state = api.state.lock().unwrap();
-        assert_eq!((state.logins, state.mints, state.revokes), (1, 11, 1));
+        assert_eq!((state.logins, state.mints, state.revokes), (1, 9, 1));
     }
 
     fn verification_api(f: &Fixture, fault: &'static str, at: usize) -> Fake {
@@ -2555,7 +2523,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             value,
-            json!({"ready":true,"count":11,"minimumTtlSeconds":1800})
+            json!({"ready":true,"count":9,"minimumTtlSeconds":1800})
         );
         let complete: Value =
             serde_json::from_str(&private_file(&f.operation.join("complete.json")).unwrap())
@@ -2598,7 +2566,7 @@ mod tests {
                 .iter()
                 .filter(|(_, path)| path == "auth/token/lookup")
                 .count(),
-            22
+            18
         );
         assert!(!state
             .calls

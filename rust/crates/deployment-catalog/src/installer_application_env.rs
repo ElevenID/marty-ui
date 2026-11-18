@@ -478,7 +478,7 @@ mod tests {
             .all(|line| !line.split_once('=').unwrap().1.contains("REPLACE_")));
         assert!(!text.contains("_PASSWORD="));
         assert!(!result.operator_account_created);
-        assert_eq!(result.optional_empty_secrets.len(), 9);
+        assert_eq!(result.optional_empty_secrets.len(), 7);
     }
     #[test]
     fn console_only_hosting_keeps_login_and_logout_on_the_enabled_section() {
