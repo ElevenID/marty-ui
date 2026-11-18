@@ -41,7 +41,7 @@ The current `deploy-config/catalog/services.json` describes actual runtime servi
 - Product/application/service repositories: service images, service implementation, database migrations and service-specific runtime behavior.
 - `core` / `protocol`: protocol implementation and normative contracts.
 - `subscriptions`: private billing and commerce.
-- Canvas repository: Canvas source and Canvas-specific runtime components, under the parallel Canvas migration.
+- [`canvas-integration`](https://github.com/ElevenID/canvas-integration): provider-specific source/runtime components in the completed independent source split. Integration uses only the public Common Gateway, with canonical identity and authority retained by Core/platform. Deployment qualification and unsupported adapters remain separate owned TODOs; extraction does not qualify a connector release.
 - Shared release contract: versioned service catalog/schema and product release manifest, with a single declared owner and compatibility policy.
 
 Do not copy service source into `platform`. Do not move a deployment file until its owner, consumers and update cadence are known.

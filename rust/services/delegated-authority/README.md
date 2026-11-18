@@ -24,6 +24,10 @@ domain operation.
   current grantor authority. An injected service clock rechecks both grant and
   evidence deadlines after asynchronous verification. Resolution rereads the
   authoritative snapshot to detect intervening revocation or revision changes.
+  Activation and reinstatement carry a guard bound to the exact grant revision
+  and complete approval into persistence. The repository rechecks it under its
+  lock and against a fresh database clock after writes, immediately before
+  commit. Expiration rolls back the grant update and lifecycle journal together.
 - Authority, identity, terms, digest, creation time and existing approval are
   immutable. Both repositories validate initial states, stored snapshots and
   transitions under their atomic write boundary. Revisions are bounded by the
@@ -47,6 +51,88 @@ the authenticated actor, key/session binding, exact scope, domain constraints,
 policy, current revision and replay protections. Revocation after a successful
 read is possible, so a previously resolved candidate cannot be reused as a
 status cache or bearer authorization.
+
+## Configured trusted consent records
+
+`ConfiguredConsentEvidenceVerifier` is a concrete verifier for authenticated
+server-record adapters. Configure each allowed approval profile with an exact
+numeric three-part version and SHA-256 artifact digest. The pin describes the
+reviewed adapter contract; the verifier compares configured metadata and does
+not measure a running executable or authenticate arbitrary signed JSON.
+Unknown profiles, mismatched pins and malformed configuration fail closed.
+
+Consent and representation authority come from separate provider ports. Each
+must bind the organization, grant ID, terms digest, complete grantor/subject/issuer
+principals, and both evidence references. The digest also commits the delegate,
+key/session binding, scopes, validity and constraints. Identical grantor/subject
+identifiers never bypass the authority check. Both lookups share a five-second
+timeout and return sanitized failures.
+
+The verifier keeps these clocks distinct:
+
+| Timestamp | Meaning |
+| --- | --- |
+| `confirmed_at` | Original explicit confirmation from the trusted surface; immutable. |
+| `GrantApproval.approved_at` | Admission of that confirmation into the managed grant. |
+| `asserted_at` | Independent authority check by the configured authority producer. |
+| `observed_at` | Current read of confirmation withdrawal or authority status. |
+
+Confirmation must occur between grant creation and approval admission. Initial
+activation also applies the configured maximum confirmation age. Reinstatement
+and resolution preserve the original confirmation while requiring fresh
+withdrawal observations and representation authority. Each age limit is an
+explicit configuration value between 1 and 3,600 seconds. Returned validity is
+bounded by the earliest relevant grant, evidence, observation and authority
+assertion deadline. A database read never renews an old authority assertion.
+
+`PgConsentEvidenceProvider` resolves these records from the authoritative
+PostgreSQL database, with statement-start observation timestamps. It never
+fetches an evidence-reference URI. Migration 0003 adds:
+
+- Immutable consent confirmations and terminal withdrawal records.
+- Immutable representation-authority source bindings.
+- Append-only authority assertions with increasing revisions and assertion times.
+- Terminal authority revocation; a revoked source cannot be refreshed.
+- Database binding, timing, immutability and truncation guards.
+
+`PgTrustedConsentWriter::record_consent` is called only after a trusted surface
+has authenticated the real grantor and obtained explicit confirmation of the
+exact displayed terms. `record_authority` and `refresh_authority` are called only
+after the independent authority producer has rechecked representation authority.
+`withdraw_consent` and `revoke_authority` record terminal withdrawal/revocation.
+These methods take typed internal inputs, not public request DTOs. Record types
+do not derive `Deserialize`; possessing an identifier or digest proves nothing.
+The module does not provide a public evidence-ingestion route or turn login into
+consent. No generic approval JWS format is invented or borrowed from decision
+receipts.
+
+Use distinct credentials for the two producers even though the writer type
+supports both sets of methods:
+
+| Component | Evidence-table access |
+| --- | --- |
+| Lifecycle verifier | SELECT on all four evidence tables. |
+| Trusted confirmation producer | SELECT/INSERT on confirmations and withdrawals. |
+| Independent authority producer | SELECT/INSERT on authority sources and assertions. |
+| Migration owner | Schema/object ownership and migration administration. |
+
+Each role needs schema USAGE; the confirmation producer also needs EXECUTE on
+the pure `grant_instant(TEXT)` check helper. Neither producer needs UPDATE, DELETE,
+TRUNCATE, trigger management or object ownership. Do not give the confirmation
+surface authority-assertion INSERT privileges. Existing grant persistence and
+journal privileges are described below. Roles are provisioned by deployment,
+not automatically created in production by this crate.
+
+Duplicate or stale producer operations fail without changing earlier records.
+After an uncertain transport result, reconcile the original evidence reference
+and expected revision; do not silently generate a new confirmation or retry a
+mutation with a replacement intent.
+
+Evidence reads and grant activation are bounded freshness observations, not one
+distributed transaction spanning every source. A source can be withdrawn after a
+successful observation. Final-use resolution and operation authorization must
+still recheck current evidence and status; no instantaneous global-revocation or
+bearer-permit guarantee is implied.
 
 ## Protocol and strict decoding
 
@@ -72,7 +158,11 @@ ordinary JSON decoding or JSONB storage. It rejects duplicate fields, unknown
 fields, malformed Unicode, floating-point values, explicit nulls, documents over
 65,536 bytes, nesting over 24 levels and documents over 8,192 JSON nodes. It
 checks the digest over the original string values before deserializing a DTO.
-Typed programmatic writes enforce the same serialized byte limit.
+The visitor also rejects the private numeric-map representation used when
+workspace feature unification enables `serde_json/arbitrary_precision`; floats
+and oversized integers cannot become ordinary objects. Regression coverage
+includes both ordinary and unified JSON feature modes. Typed programmatic writes
+enforce the same serialized byte limit.
 
 This adapter deliberately supports the string spellings emitted by its Rust
 DTOs: lowercase hyphenated UUIDs and UTC `Z` timestamps with canonical fractional
@@ -141,12 +231,18 @@ Tests cover the pinned protocol digest, strict parsing, typed-identity rejection
 withdrawn consent/authority, expiration during verification, evidence freshness,
 clock regression, concurrent revocation, tenant isolation, immutable-term
 substitution with a recomputed digest, competing updates, atomic journal rollback,
-terminal states, migration/readiness and timestamp precision.
+terminal states, migration/readiness and timestamp precision. They also cover
+complete evidence/pin substitutions, confirmation versus authority freshness,
+provider timeout, trusted-record activation and withdrawal, explicit authority
+renewal, independent producer permissions, activation lock delays, post-write
+expiry rollback and rejection when an application clock is frozen.
 
 ## Remaining runtime qualification
 
-- A production consent-evidence verifier integrated with an authenticated trusted
-  approval surface and current grantor-authority evidence.
+- Connect the configured verifier and typed producer APIs to an authenticated
+  trusted approval surface and the current grantor-authority source. This still
+  requires own-session confirmation, fresh challenges and organization action
+  authorization; database records alone do not establish those guarantees.
 - External authority and fresh status resolution with configured trusted sources.
 - Authenticated delegate proof and key/session establishment verification.
 - Delegation-aware Cedar evaluation, domain-constraint evidence, signed receipts

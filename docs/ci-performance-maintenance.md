@@ -49,10 +49,18 @@ Six independent issuance behavior test modules now share `issuance-behavior`;
 their assertions and fixtures are unchanged. Filter by module to run one group:
 
 ```sh
-cargo test --manifest-path rust/Cargo.toml -p marty-issuance-service --test issuance-behavior canvas_worker_result_oracle
+cargo +1.95.0 test --locked --manifest-path rust/Cargo.toml -p marty-issuance-service --test issuance-behavior -- --list
 ```
 
-## Renewal contracts
+## Historical provider renewal and parity record
+
+The following records the pre-split Canvas optimization and regression work.
+Its worker, parity runner and provider suites are retired from this repository;
+commands and integration prescriptions below are historical, not current CI
+instructions. Keep generic Flow/self-host and credential safeguards with their
+current owners, and use `.github/workflows/ci.yml` for the executable inventory.
+Provider tests belong to `canvas-integration` through the public Gateway boundary.
+Do not restore removed suites or weaken retained tests to match this record.
 
 The frozen renewal outcome matrix still exercises all 60 combinations with the
 real worker, PostgreSQL clock, 20-second renewals and 30-second deadlines. Its three

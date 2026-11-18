@@ -6,8 +6,10 @@ use sqlx::{postgres::PgRow, PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
-    decode_grant_snapshot, repository::validate_initial, validate_transition, DelegationGrant,
-    DelegationGrantRepository, GrantAuditEvent, GrantStatus, RepositoryError,
+    decode_grant_snapshot,
+    repository::{check_activation_guard, validate_initial},
+    validate_transition, ActivationCommitGuard, DelegationGrant, DelegationGrantRepository,
+    GrantAuditEvent, GrantStatus, RepositoryError,
 };
 
 const MIGRATIONS: &[(i32, &str)] = &[
@@ -15,6 +17,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (
         2,
         include_str!("../migrations/0002_atomic_lifecycle_journal.sql"),
+    ),
+    (
+        3,
+        include_str!("../migrations/0003_trusted_consent_evidence.sql"),
     ),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
@@ -95,7 +101,11 @@ impl PgDelegationGrantRepository {
         let tables = sqlx::query_scalar::<_, bool>(
             "SELECT to_regclass('delegated_authority_service.schema_migrations') IS NOT NULL
                  AND to_regclass('delegated_authority_service.delegation_grants') IS NOT NULL
-                 AND to_regclass('delegated_authority_service.grant_lifecycle_events') IS NOT NULL",
+                 AND to_regclass('delegated_authority_service.grant_lifecycle_events') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.consent_confirmations') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.consent_withdrawals') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.representation_authority_sources') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.representation_authority_assertions') IS NOT NULL",
         )
         .fetch_one(&self.pool)
         .await
@@ -125,12 +135,20 @@ impl PgDelegationGrantRepository {
                  (tgrelid = 'delegated_authority_service.delegation_grants'::regclass
                   AND tgname IN ('delegation_grants_guard','delegation_grants_journal','delegation_grants_no_truncate'))
                  OR (tgrelid = 'delegated_authority_service.grant_lifecycle_events'::regclass
-                     AND tgname IN ('grant_lifecycle_events_append_only','grant_lifecycle_events_no_truncate')))",
+                     AND tgname IN ('grant_lifecycle_events_append_only','grant_lifecycle_events_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.consent_confirmations'::regclass
+                     AND tgname IN ('consent_confirmations_binding','consent_confirmations_immutable','consent_confirmations_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.consent_withdrawals'::regclass
+                     AND tgname IN ('consent_withdrawals_stamp','consent_withdrawals_immutable','consent_withdrawals_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.representation_authority_sources'::regclass
+                     AND tgname IN ('representation_authority_sources_binding','representation_authority_sources_immutable','representation_authority_sources_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.representation_authority_assertions'::regclass
+                     AND tgname IN ('representation_authority_assertions_guard','representation_authority_assertions_immutable','representation_authority_assertions_no_truncate')))",
         )
         .fetch_one(&self.pool)
         .await
         .map_err(map_database)?;
-        if triggers != 5 {
+        if triggers != 17 {
             return Err(RepositoryError::SchemaNotReady);
         }
         Ok(())
@@ -181,12 +199,13 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
         row.map(decode).transpose()
     }
 
-    async fn compare_and_swap(
+    async fn compare_and_swap_guarded(
         &self,
         organization_id: Uuid,
         grant_id: Uuid,
         expected_revision: u64,
         replacement: DelegationGrant,
+        activation: Option<ActivationCommitGuard>,
     ) -> Result<DelegationGrant, RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(map_database)?;
         let row = sqlx::query(
@@ -206,6 +225,8 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
             return Err(RepositoryError::RevisionConflict);
         }
         validate_transition(&current, &replacement)?;
+        // Pool acquisition and row-lock waits must not reuse an earlier clock.
+        check_activation_guard(&replacement, activation.as_ref(), None)?;
         let document = encode(&replacement)?;
         let row = sqlx::query(
             "UPDATE delegated_authority_service.delegation_grants
@@ -227,6 +248,16 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
         .map_err(map_database)?
         .ok_or(RepositoryError::RevisionConflict)?;
         let result = decode(row)?;
+        if activation.is_some() {
+            // The UPDATE and its journal trigger have completed. Read a fresh
+            // database clock (not transaction-start CURRENT_TIMESTAMP) just
+            // before commit. Failure rolls back both grant and journal writes.
+            let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_database)?;
+            check_activation_guard(&result, activation.as_ref(), Some(database_now))?;
+        }
         // The trigger's journal write and grant state are committed together.
         transaction.commit().await.map_err(map_database)?;
         Ok(result)
@@ -579,7 +610,7 @@ mod tests {
         // transaction and always roll back before asserting, even if a guard broke.
         for sql in [
             "TRUNCATE delegated_authority_service.grant_lifecycle_events",
-            "TRUNCATE delegated_authority_service.delegation_grants, delegated_authority_service.grant_lifecycle_events",
+            "TRUNCATE delegated_authority_service.delegation_grants, delegated_authority_service.grant_lifecycle_events CASCADE",
         ] {
             let mut transaction = pool.begin().await.unwrap();
             let result = sqlx::query(sql).execute(&mut *transaction).await;
@@ -691,6 +722,155 @@ mod tests {
             assert_eq!(events[0].occurred_at, precise.updated_at);
             assert_eq!(events[1].occurred_at, precise_next.updated_at);
         }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn activation_expiry_after_database_write_rolls_back_state_and_journal() {
+        let Ok(url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPool::connect(&url).await.unwrap();
+        let repository = PgDelegationGrantRepository::new(pool.clone());
+        repository.migrate().await.unwrap();
+        let mut grant = pending_grant();
+        let created = Utc::now() - Duration::seconds(1);
+        grant.created_at = created;
+        grant.updated_at = created;
+        grant.terms.valid_from = created;
+        grant.terms.valid_until = created + Duration::hours(1);
+        grant.terms_digest = grant.calculate_terms_digest().unwrap();
+        repository.insert(grant.clone()).await.unwrap();
+        let mut active = grant.clone();
+        active.status = GrantStatus::Active;
+        active.revision = 2;
+        active.updated_at = Utc::now();
+        active.approval = Some(crate::GrantApproval {
+            profile: "urn:example:consent:v1".into(),
+            grant_id: grant.id,
+            approver: grant.terms.grantor.clone(),
+            evidence_ref: "urn:example:consent:1".into(),
+            authority_evidence_ref: "urn:example:authority:1".into(),
+            terms_digest: grant.terms_digest.clone(),
+            approved_at: active.updated_at,
+        });
+        struct ExpiringClock {
+            calls: std::sync::atomic::AtomicUsize,
+            start: DateTime<Utc>,
+            end: DateTime<Utc>,
+        }
+        impl crate::DelegationClock for ExpiringClock {
+            fn now(&self) -> DateTime<Utc> {
+                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    self.start
+                } else {
+                    self.end
+                }
+            }
+        }
+        let deadline = active.updated_at + Duration::minutes(1);
+        let clock = std::sync::Arc::new(ExpiringClock {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            start: active.updated_at,
+            end: deadline,
+        });
+        let guard = ActivationCommitGuard::for_verified(
+            &active,
+            crate::VerifiedConsent {
+                valid_until: deadline,
+            },
+            clock.clone(),
+        );
+        assert_eq!(
+            repository
+                .compare_and_swap_guarded(grant.organization_id, grant.id, 1, active, Some(guard))
+                .await,
+            Err(RepositoryError::ActivationEvidenceExpired)
+        );
+        // The second clock read is after UPDATE and its journal trigger.
+        assert_eq!(clock.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            repository
+                .get(grant.organization_id, grant.id)
+                .await
+                .unwrap(),
+            Some(grant.clone())
+        );
+        assert_eq!(
+            repository
+                .audit(grant.organization_id, grant.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn database_clock_rejects_activation_from_a_frozen_application_clock() {
+        let Ok(url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPool::connect(&url).await.unwrap();
+        let repository = PgDelegationGrantRepository::new(pool.clone());
+        repository.migrate().await.unwrap();
+        let mut grant = pending_grant();
+        let created = Utc::now() - Duration::hours(2);
+        grant.created_at = created;
+        grant.updated_at = created;
+        grant.terms.valid_from = created;
+        grant.terms.valid_until = created + Duration::hours(1);
+        grant.terms_digest = grant.calculate_terms_digest().unwrap();
+        repository.insert(grant.clone()).await.unwrap();
+        let mut active = grant.clone();
+        active.status = GrantStatus::Active;
+        active.revision = 2;
+        active.updated_at = created + Duration::seconds(1);
+        active.approval = Some(crate::GrantApproval {
+            profile: "urn:example:consent:v1".into(),
+            grant_id: grant.id,
+            approver: grant.terms.grantor.clone(),
+            evidence_ref: "urn:example:consent:1".into(),
+            authority_evidence_ref: "urn:example:authority:1".into(),
+            terms_digest: grant.terms_digest.clone(),
+            approved_at: active.updated_at,
+        });
+        struct FrozenClock(DateTime<Utc>);
+        impl crate::DelegationClock for FrozenClock {
+            fn now(&self) -> DateTime<Utc> {
+                self.0
+            }
+        }
+        let clock = std::sync::Arc::new(FrozenClock(active.updated_at));
+        let guard = ActivationCommitGuard::for_verified(
+            &active,
+            crate::VerifiedConsent {
+                valid_until: grant.terms.valid_until,
+            },
+            clock,
+        );
+        assert_eq!(
+            repository
+                .compare_and_swap_guarded(grant.organization_id, grant.id, 1, active, Some(guard))
+                .await,
+            Err(RepositoryError::ActivationEvidenceExpired)
+        );
+        assert_eq!(
+            repository
+                .get(grant.organization_id, grant.id)
+                .await
+                .unwrap(),
+            Some(grant.clone())
+        );
+        assert_eq!(
+            repository
+                .audit(grant.organization_id, grant.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         pool.close().await;
     }
 }

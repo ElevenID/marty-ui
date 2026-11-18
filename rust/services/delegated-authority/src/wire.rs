@@ -217,6 +217,14 @@ impl<'de> Visitor<'de> for BoundedValue<'_> {
         let mut values = Map::new();
         while let Some(key) = object.next_key::<String>()? {
             self.count_node(self.depth + 1)?;
+            // Workspace feature unification can enable serde_json's
+            // arbitrary_precision mode. It presents decimal/exponent numbers
+            // and out-of-range integers to a visitor as this private map,
+            // instead of calling visit_f64. No v1 field has this reserved name;
+            // reject both the representation and attempts to supply it as JSON.
+            if key == "$serde_json::private::Number" {
+                return Err(A::Error::custom("unsupported JSON numeric representation"));
+            }
             if values.contains_key(&key) {
                 return Err(A::Error::custom("duplicate JSON field"));
             }
@@ -358,6 +366,9 @@ mod tests {
             r#"{"revision":1.0}"#,
             r#"{"revision":1e0}"#,
             r#"{"revision":1e999}"#,
+            r#"{"revision":18446744073709551616}"#,
+            r#"{"revision":{"$serde_json::private::Number":"1.0"}}"#,
+            r#"{"$serde_json::private::Number":"1"}"#,
             r#"{"x":NaN}"#,
             r#"{"x":-Infinity}"#,
             r#"{"x":"\ud800"}"#,

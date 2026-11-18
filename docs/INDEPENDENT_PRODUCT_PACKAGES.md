@@ -102,14 +102,16 @@ The server renderer preserves backend health checks, mounts, commands, secrets
 and dependency conditions while binding the server image roles and release
 version. It removes the UI dependency and UI-only secrets, selects the existing
 console-free edge behavior, and omits the legacy vendor tunnel services for
-direct API ingress. The existing Canvas backend worker remains; this is not a
-minimal or no-Canvas distribution. External runtime images in the supplied base
+direct API ingress. The renderer rejects the retired Canvas worker; provider
+integration belongs to the external connector through the public Common Gateway.
+This source composition does not qualify a minimal distribution. External runtime images in the supplied base
 must already be digest-pinned. Unresolved includes/extensions, unbound source
 builds and hidden frontend dependencies fail instead of becoming runtime inputs.
 Existing combined deployment defaults and installer scripts are unchanged.
 The base is an existing fully resolved runtime layout, not an installer recipe.
-With all current profiles selected, the source model changes from 32 services
-to 28 by excluding the UI and three tunnel services. Bootstrap profile selection,
+The renderer excludes the UI and three tunnel services from the selected
+platform-only base. Service totals depend on that resolved base and its profiles;
+older pre-split counts are not a current inventory. Bootstrap profile selection,
 backend mounts, commands and health/dependency conditions stay with that layout.
 The installer owner's legacy full-stack DAG validator therefore needs an
 explicit independent-product mode when consuming this output; its current

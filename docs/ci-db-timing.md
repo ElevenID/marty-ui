@@ -1,4 +1,13 @@
-# DB and Canvas CI timing evidence
+# DB and Canvas CI timing evidence — historical source snapshot
+
+> Historical pre-split measurements and recommendations. Canvas provider workers,
+> scripts and suites named below are retired from the platform; these commands
+> are not current operator instructions or a plan to restore them. Current
+> executable owners are the workflow and Cargo manifests. See the
+> [connector boundary](architecture/external-connector-boundary.md) and
+> [current CI execution guide](ci-release-execution.md). Preserve the original
+> measurements as provenance; remeasure current lanes before performance claims.
+
 
 The existing database-contract step appends `db-contract-timing.jsonl` to the
 two-day `rust-build-evidence` artifact. Each line is `marty.ci.db-phase/v1` with

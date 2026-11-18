@@ -43,9 +43,11 @@ aliases or incomplete mail prerequisites. The same display-name scenario is
 also checked through the native source package and Compose hosting models.
 The chart refuses known credential settings in `config` before producing a
 ConfigMap; provision them through the existing Secret contract. File paths,
-public settings and KMS key names remain ordinary configuration. Optional
-`canvasWorker.enabled` must be a YAML boolean, so `false` disables the worker
-without the ambiguity of a quoted string.
+public settings and KMS key names remain ordinary configuration. The retired
+`canvasWorker` values object is rejected entirely, including `enabled: false`.
+Provider flags, credentials and workers belong to the independent connector,
+not Helm values or platform Secrets. See the
+[public Gateway integration boundary](architecture/external-connector-boundary.md).
 
 ## Shared datastore behavior
 

@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    validate_transition, AuthorityMode, DelegationGrant, GrantStatus, GrantValidationError,
+    validate_transition, AuthorityMode, DelegationClock, DelegationGrant, GrantStatus,
+    GrantValidationError, VerifiedConsent,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -30,6 +31,10 @@ pub enum RepositoryError {
     MigrationMismatch,
     #[error("delegation schema is not ready")]
     SchemaNotReady,
+    #[error("activation requires grant-bound verified consent")]
+    ActivationGuardRequired,
+    #[error("activation evidence expired or clock changed before commit")]
+    ActivationEvidenceExpired,
 }
 
 /// A minimal lifecycle journal entry, committed atomically with its grant revision.
@@ -63,6 +68,81 @@ impl GrantAuditEvent {
     }
 }
 
+/// A service-created freshness bound for one exact activation revision.
+/// This is an internal persistence capability, not a serialized authorization
+/// token. It cannot replace actor proof, scope checks or final-use evaluation.
+#[derive(Clone)]
+pub struct ActivationCommitGuard {
+    organization_id: Uuid,
+    grant_id: Uuid,
+    revision: u64,
+    terms_digest: String,
+    approval: Option<crate::GrantApproval>,
+    verified_at: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
+    clock: Arc<dyn DelegationClock>,
+}
+
+impl ActivationCommitGuard {
+    pub(crate) fn for_verified(
+        grant: &DelegationGrant,
+        consent: VerifiedConsent,
+        clock: Arc<dyn DelegationClock>,
+    ) -> Self {
+        Self {
+            organization_id: grant.organization_id,
+            grant_id: grant.id,
+            revision: grant.revision,
+            terms_digest: grant.terms_digest.clone(),
+            approval: grant.approval.clone(),
+            verified_at: grant.updated_at,
+            valid_until: consent.valid_until.min(grant.terms.valid_until),
+            clock,
+        }
+    }
+
+    /// Recheck under the repository's atomic write boundary. Database adapters
+    /// supply a freshly sampled database clock after their awaited writes.
+    pub fn check(
+        &self,
+        grant: &DelegationGrant,
+        database_now: Option<DateTime<Utc>>,
+    ) -> Result<(), RepositoryError> {
+        if grant.status != GrantStatus::Active
+            || grant.organization_id != self.organization_id
+            || grant.id != self.grant_id
+            || grant.revision != self.revision
+            || grant.terms_digest != self.terms_digest
+            || grant.approval.is_none()
+            || grant.approval != self.approval
+            || grant.updated_at != self.verified_at
+        {
+            return Err(RepositoryError::ActivationGuardRequired);
+        }
+        for now in std::iter::once(self.clock.now()).chain(database_now) {
+            if now < self.verified_at || now < grant.terms.valid_from || now >= self.valid_until {
+                return Err(RepositoryError::ActivationEvidenceExpired);
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn check_activation_guard(
+    grant: &DelegationGrant,
+    guard: Option<&ActivationCommitGuard>,
+    database_now: Option<DateTime<Utc>>,
+) -> Result<(), RepositoryError> {
+    if grant.status == GrantStatus::Active {
+        guard
+            .ok_or(RepositoryError::ActivationGuardRequired)?
+            .check(grant, database_now)?;
+    } else if guard.is_some() {
+        return Err(RepositoryError::ActivationGuardRequired);
+    }
+    Ok(())
+}
+
 /// Trusted persistence port. This does not authenticate or authorize callers.
 /// Implementations must validate snapshots/transitions and commit the lifecycle
 /// journal atomically. Importing arbitrary active or external snapshots is not a
@@ -81,6 +161,25 @@ pub trait DelegationGrantRepository: Send + Sync {
         grant_id: Uuid,
         expected_revision: u64,
         replacement: DelegationGrant,
+    ) -> Result<DelegationGrant, RepositoryError> {
+        self.compare_and_swap_guarded(
+            organization_id,
+            grant_id,
+            expected_revision,
+            replacement,
+            None,
+        )
+        .await
+    }
+    /// Activation must carry the service's exact grant-bound freshness deadline.
+    /// Implementations check it under their lock and after awaited database writes.
+    async fn compare_and_swap_guarded(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+        expected_revision: u64,
+        replacement: DelegationGrant,
+        activation: Option<ActivationCommitGuard>,
     ) -> Result<DelegationGrant, RepositoryError>;
     /// Lists stored lifecycle states. Expiry must still be evaluated at use time.
     async fn list(
@@ -152,12 +251,13 @@ impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
         Ok(grant.cloned())
     }
 
-    async fn compare_and_swap(
+    async fn compare_and_swap_guarded(
         &self,
         organization_id: Uuid,
         grant_id: Uuid,
         expected_revision: u64,
         replacement: DelegationGrant,
+        activation: Option<ActivationCommitGuard>,
     ) -> Result<DelegationGrant, RepositoryError> {
         let mut state = self.state.write().await;
         let current = state
@@ -174,6 +274,7 @@ impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
             return Err(RepositoryError::RevisionConflict);
         }
         validate_transition(current, &replacement)?;
+        check_activation_guard(&replacement, activation.as_ref(), None)?;
         let event = GrantAuditEvent::from_grant(&replacement, Some(current.status));
         state.audit.entry(grant_id).or_default().push(event);
         state.grants.insert(grant_id, replacement.clone());
@@ -374,6 +475,154 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    fn active(grant: &DelegationGrant, at: DateTime<Utc>) -> DelegationGrant {
+        let mut next = grant.clone();
+        next.status = GrantStatus::Active;
+        next.revision += 1;
+        next.updated_at = at;
+        next.approval = Some(crate::GrantApproval {
+            profile: "urn:example:consent:v1".into(),
+            grant_id: grant.id,
+            approver: grant.terms.grantor.clone(),
+            evidence_ref: "urn:example:consent:1".into(),
+            authority_evidence_ref: "urn:example:authority:1".into(),
+            terms_digest: grant.terms_digest.clone(),
+            approved_at: at,
+        });
+        next
+    }
+
+    struct MutableClock(std::sync::Mutex<DateTime<Utc>>);
+    impl DelegationClock for MutableClock {
+        fn now(&self) -> DateTime<Utc> {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn active_writes_require_exact_verified_revision_guard() {
+        let repository = InMemoryDelegationGrantRepository::default();
+        let grant = pending_grant();
+        repository.insert(grant.clone()).await.unwrap();
+        let next = active(&grant, grant.created_at + Duration::seconds(1));
+        assert_eq!(
+            repository
+                .compare_and_swap(grant.organization_id, grant.id, 1, next.clone())
+                .await,
+            Err(RepositoryError::ActivationGuardRequired)
+        );
+        let clock = Arc::new(MutableClock(std::sync::Mutex::new(next.updated_at)));
+        let mut wrong = next.clone();
+        wrong.id = Uuid::new_v4();
+        let guard = ActivationCommitGuard::for_verified(
+            &wrong,
+            VerifiedConsent {
+                valid_until: grant.terms.valid_until,
+            },
+            clock.clone(),
+        );
+        assert_eq!(
+            repository
+                .compare_and_swap_guarded(
+                    grant.organization_id,
+                    grant.id,
+                    1,
+                    next.clone(),
+                    Some(guard)
+                )
+                .await,
+            Err(RepositoryError::ActivationGuardRequired)
+        );
+        let guard = ActivationCommitGuard::for_verified(
+            &next,
+            VerifiedConsent {
+                valid_until: grant.terms.valid_until,
+            },
+            clock,
+        );
+        let mut substituted = next.clone();
+        substituted.approval.as_mut().unwrap().evidence_ref =
+            "urn:example:substituted-consent".into();
+        assert_eq!(
+            repository
+                .compare_and_swap_guarded(
+                    grant.organization_id,
+                    grant.id,
+                    1,
+                    substituted,
+                    Some(guard.clone())
+                )
+                .await,
+            Err(RepositoryError::ActivationGuardRequired)
+        );
+        assert_eq!(
+            repository
+                .compare_and_swap_guarded(
+                    grant.organization_id,
+                    grant.id,
+                    1,
+                    next.clone(),
+                    Some(guard)
+                )
+                .await
+                .unwrap(),
+            next
+        );
+        assert_eq!(
+            repository
+                .audit(grant.organization_id, grant.id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn expiry_during_memory_lock_wait_commits_neither_grant_nor_journal() {
+        let repository = InMemoryDelegationGrantRepository::default();
+        let grant = pending_grant();
+        repository.insert(grant.clone()).await.unwrap();
+        let next = active(&grant, grant.created_at + Duration::seconds(1));
+        let clock = Arc::new(MutableClock(std::sync::Mutex::new(next.updated_at)));
+        let deadline = next.updated_at + Duration::seconds(1);
+        let guard = ActivationCommitGuard::for_verified(
+            &next,
+            VerifiedConsent {
+                valid_until: deadline,
+            },
+            clock.clone(),
+        );
+        let held_lock = repository.state.write().await;
+        let cloned = repository.clone();
+        let organization_id = grant.organization_id;
+        let grant_id = grant.id;
+        let write = tokio::spawn(async move {
+            cloned
+                .compare_and_swap_guarded(organization_id, grant_id, 1, next, Some(guard))
+                .await
+        });
+        tokio::task::yield_now().await;
+        *clock.0.lock().unwrap() = deadline;
+        drop(held_lock);
+        assert_eq!(
+            write.await.unwrap(),
+            Err(RepositoryError::ActivationEvidenceExpired)
+        );
+        assert_eq!(
+            repository.get(organization_id, grant_id).await.unwrap(),
+            Some(grant)
+        );
+        assert_eq!(
+            repository
+                .audit(organization_id, grant_id)
+                .await
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    domain::validate_authority, validate_transition, Authority, AuthorityMode, DelegationGrant,
-    DelegationGrantRepository, GrantApproval, GrantStatus, GrantTerms, GrantValidationError,
-    Principal, RepositoryError, MAX_GRANT_REVISION,
+    domain::validate_authority, validate_transition, ActivationCommitGuard, Authority,
+    AuthorityMode, DelegationGrant, DelegationGrantRepository, GrantApproval, GrantStatus,
+    GrantTerms, GrantValidationError, Principal, RepositoryError, MAX_GRANT_REVISION,
 };
 
 /// Identifiers of evidence from a configured, trusted approval surface. These
@@ -168,7 +168,9 @@ impl DelegationAuthorityService {
             .verify_consent(&grant, ConsentVerificationPurpose::Activation, now)
             .await?;
         grant.updated_at = self.check_freshness(&grant, verified, now)?;
-        self.persist(&previous, grant).await
+        let activation = ActivationCommitGuard::for_verified(&grant, verified, self.clock.clone());
+        self.persist_guarded(&previous, grant, Some(activation))
+            .await
     }
 
     pub async fn suspend(
@@ -208,7 +210,9 @@ impl DelegationAuthorityService {
             .verify_consent(&grant, ConsentVerificationPurpose::Reinstatement, now)
             .await?;
         grant.updated_at = self.check_freshness(&grant, verified, now)?;
-        self.persist(&previous, grant).await
+        let activation = ActivationCommitGuard::for_verified(&grant, verified, self.clock.clone());
+        self.persist_guarded(&previous, grant, Some(activation))
+            .await
     }
 
     pub async fn revoke(
@@ -351,15 +355,25 @@ impl DelegationAuthorityService {
         previous: &DelegationGrant,
         grant: DelegationGrant,
     ) -> Result<DelegationGrant, ServiceError> {
+        self.persist_guarded(previous, grant, None).await
+    }
+
+    async fn persist_guarded(
+        &self,
+        previous: &DelegationGrant,
+        grant: DelegationGrant,
+        activation: Option<ActivationCommitGuard>,
+    ) -> Result<DelegationGrant, ServiceError> {
         // Also checked by both repositories under the atomic write boundary.
         validate_transition(previous, &grant)?;
         Ok(self
             .repository
-            .compare_and_swap(
+            .compare_and_swap_guarded(
                 previous.organization_id,
                 previous.id,
                 previous.revision,
                 grant,
+                activation,
             )
             .await?)
     }

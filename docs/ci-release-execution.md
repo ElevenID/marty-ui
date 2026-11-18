@@ -110,9 +110,11 @@ The cache namespace binds the builder digest, architecture, sccache version,
 Cargo lock and manifests, and the full compile recipe/profile configuration.
 All Bookworm lanes share the same profile/linker settings and cache namespace;
 sccache additionally keys each object by its compiler inputs and features.
-Only a successful full Canvas qualification on trusted repository `main`, from
-a scheduled or manually dispatched run, saves shared objects. Pull requests and
-merge groups only restore the shared cache. The first trusted full run after a
+The current `CI` workflow saves shared objects only from a successful trusted
+repository `main` scheduled or manually dispatched run in the `flow` lane, and
+only when private-fork mode permits shared caching. Pull requests and merge
+groups only restore the shared cache. The retired Canvas qualification is not
+a cache authority or a platform execution lane. The first trusted full run after a
 key change populates it. Download, restore, save or cache-daemon failure leaves
 the Rust checks compiling directly. Cache objects never replace the test-result
 or source-attestation gates.
@@ -142,7 +144,7 @@ Run the focused policy suites with the repository Python requirements installed:
 ```sh
 python -m pytest -q tests/test_affected_components.py tests/test_bookworm_compiler_cache.py \
   tests/test_release_preflight.py tests/test_nightly_native_artifact.py \
-  tests/test_ci_workflow_performance.py tests/test_ci_canvas_compile_scope.py
+  tests/test_ci_workflow_performance.py
 cargo +1.95.0 test --locked --manifest-path rust/Cargo.toml \
   -p marty-deployment-catalog --lib installer_acme::tests::polling_tests
 ```
