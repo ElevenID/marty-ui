@@ -1205,7 +1205,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_trust_profile_migration_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_trust_profile_migration_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test marty_delegated_authority_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
           # createdb above must succeed: never mark an existing installation.
@@ -1282,6 +1282,7 @@ jobs:
             MARTY_DEMO_SEED_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test \
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
+            DELEGATED_AUTHORITY_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_delegated_authority_test \
               cargo test --locked --workspace --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
@@ -3438,3 +3439,4 @@ jobs:
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
+

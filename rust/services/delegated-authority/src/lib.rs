@@ -3,12 +3,14 @@
 //! Domain-operation evaluation, Cedar integration, public Gateway routes,
 //! and production signing are separate qualification milestones.
 pub mod domain;
-pub mod repository;
 pub mod postgres;
+pub mod repository;
 pub mod service;
 #[cfg(test)]
 pub mod test_support;
+pub mod wire;
 pub use domain::*;
-pub use repository::*;
 pub use postgres::PgDelegationGrantRepository;
+pub use repository::*;
 pub use service::*;
+pub use wire::{decode_grant_snapshot, GrantWireError};
