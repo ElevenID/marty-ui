@@ -87,13 +87,7 @@ pub struct GrantTerms {
     pub constraints: Constraints,
 }
 impl GrantTerms {
-    /// Deterministic for this fixed v1 struct. Cross-language canonicalization
-    /// must be frozen before claiming interoperability qualification.
-    pub fn digest(&self) -> Result<String, GrantValidationError> {
-        let bytes = serde_json::to_vec(self).map_err(|_| GrantValidationError::TermsSerialization)?;
-        Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
-    }
-    pub fn validate(&self, now: DateTime<Utc>) -> Result<(), GrantValidationError> {
+    pub fn validate(&self) -> Result<(), GrantValidationError> {
         validate_principal(&self.grantor)?;
         validate_principal(&self.subject)?;
         validate_principal(&self.delegate)?;
@@ -102,7 +96,6 @@ impl GrantTerms {
         }
         if self.subdelegation_allowed { return Err(GrantValidationError::SubdelegationUnsupported); }
         if self.valid_until <= self.valid_from { return Err(GrantValidationError::InvalidValidity); }
-        if self.valid_until <= now { return Err(GrantValidationError::AlreadyExpired); }
         for set in [&self.actions, &self.audiences, &self.resources] {
             if set.is_empty() || set.len() > 64 { return Err(GrantValidationError::InvalidScopeSet); }
             let mut unique = std::collections::BTreeSet::new();
@@ -139,6 +132,38 @@ impl GrantTerms {
             }
         }
         Ok(())
+    }
+}
+fn canonical_json(value: &serde_json::Value) -> Result<Vec<u8>, GrantValidationError> {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            let mut out = Vec::from(b"{".as_slice());
+            for (index, key) in keys.iter().enumerate() {
+                if index > 0 { out.push(b','); }
+                out.extend(serde_json::to_string(key).map_err(|_| GrantValidationError::TermsSerialization)?.as_bytes());
+                out.push(b':');
+                out.extend(canonical_json(&map[*key])?);
+            }
+            out.push(b'}');
+            Ok(out)
+        }
+        Value::Array(values) => {
+            let mut out = Vec::from(b"[".as_slice());
+            for (index, item) in values.iter().enumerate() {
+                if index > 0 { out.push(b','); }
+                out.extend(canonical_json(item)?);
+            }
+            out.push(b']');
+            Ok(out)
+        }
+        Value::String(value) => Ok(serde_json::to_string(value)
+            .map_err(|_| GrantValidationError::TermsSerialization)?.into_bytes()),
+        Value::Bool(value) => Ok(if *value { b"true".to_vec() } else { b"false".to_vec() }),
+        Value::Null => Ok(b"null".to_vec()),
+        Value::Number(_) => Err(GrantValidationError::UnsupportedCanonicalNumber),
     }
 }
 fn validate_principal(p: &Principal) -> Result<(), GrantValidationError> {
@@ -200,37 +225,71 @@ pub struct DelegationGrant {
 impl DelegationGrant {
     pub fn pending(organization_id: Uuid, authority: Authority, terms: GrantTerms, now: DateTime<Utc>)
         -> Result<Self, GrantValidationError> {
-        terms.validate(now)?;
-        validate_authority(&authority, now)?;
-        let terms_digest = terms.digest()?;
-        Ok(Self { profile: GRANT_PROFILE.into(), id: Uuid::new_v4(), organization_id,
-            authority, terms, terms_digest, approval: None, status: GrantStatus::Pending,
-            revision: 1, created_at: now, updated_at: now })
+        terms.validate()?;
+        if terms.valid_until <= now { return Err(GrantValidationError::AlreadyExpired); }
+        validate_authority(&authority)?;
+        if authority.mode == AuthorityMode::External
+            && authority.source_expires_at.is_none_or(|expiry| terms.valid_until > expiry) {
+            return Err(GrantValidationError::InvalidAuthority);
+        }
+        let id = Uuid::new_v4();
+        let mut grant = Self { profile: GRANT_PROFILE.into(), id, organization_id,
+            authority, terms, terms_digest: String::new(), approval: None,
+            status: GrantStatus::Pending, revision: 1, created_at: now, updated_at: now };
+        grant.terms_digest = grant.calculate_terms_digest()?;
+        Ok(grant)
     }
     pub fn validate(&self, now: DateTime<Utc>) -> Result<(), GrantValidationError> {
         if self.profile != GRANT_PROFILE || self.revision == 0 {
             return Err(GrantValidationError::InvalidEnvelope);
         }
-        self.terms.validate(now)?;
-        validate_authority(&self.authority, now)?;
-        if self.terms.digest()? != self.terms_digest { return Err(GrantValidationError::TermsDigestMismatch); }
+        self.terms.validate()?;
+        validate_authority(&self.authority)?;
+        if self.authority.mode == AuthorityMode::External
+            && self.authority.source_expires_at.is_none_or(|expiry| self.terms.valid_until > expiry) {
+            return Err(GrantValidationError::InvalidAuthority);
+        }
+        if self.calculate_terms_digest()? != self.terms_digest { return Err(GrantValidationError::TermsDigestMismatch); }
+        if self.created_at > self.updated_at { return Err(GrantValidationError::InvalidTemporalOrdering); }
         if matches!(self.status, GrantStatus::Active | GrantStatus::Suspended) && self.approval.is_none() {
             return Err(GrantValidationError::ApprovalRequired);
         }
         if let Some(a) = &self.approval {
             if a.grant_id != self.id || a.terms_digest != self.terms_digest
-                || !valid_uri(Some(&a.evidence_ref)) || !valid_uri(Some(&a.authority_evidence_ref)) {
+                || a.approver != self.terms.grantor
+                || !valid_uri(Some(&a.profile))
+                || !valid_uri(Some(&a.evidence_ref)) || !valid_uri(Some(&a.authority_evidence_ref))
+                || a.approved_at < self.created_at || a.approved_at > self.updated_at
+                || a.approved_at >= self.terms.valid_until {
                 return Err(GrantValidationError::InvalidApproval);
             }
         }
+        if self.status == GrantStatus::Active
+            && !(self.terms.valid_from <= self.updated_at && self.updated_at < self.terms.valid_until) {
+            return Err(GrantValidationError::InvalidActivationTime);
+        }
+        if self.status == GrantStatus::Expired && self.updated_at < self.terms.valid_until {
+            return Err(GrantValidationError::PrematureExpiration);
+        }
         Ok(())
+    }
+    pub fn calculate_terms_digest(&self) -> Result<String, GrantValidationError> {
+        let projection = serde_json::json!({
+            "profile": self.profile,
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "authority": self.authority,
+            "terms": self.terms
+        });
+        let canonical = canonical_json(&projection)?;
+        Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
     }
     pub fn current_status(&self, now: DateTime<Utc>) -> GrantStatus {
         if matches!(self.status, GrantStatus::Pending | GrantStatus::Active | GrantStatus::Suspended)
             && self.terms.valid_until <= now { GrantStatus::Expired } else { self.status }
     }
 }
-fn validate_authority(a: &Authority, now: DateTime<Utc>) -> Result<(), GrantValidationError> {
+fn validate_authority(a: &Authority) -> Result<(), GrantValidationError> {
     validate_principal(&a.issuer)?;
     if !a.status_ref.starts_with("https://") || !valid_uri(Some(&a.status_ref)) {
         return Err(GrantValidationError::InvalidAuthority);
@@ -241,7 +300,7 @@ fn validate_authority(a: &Authority, now: DateTime<Utc>) -> Result<(), GrantVali
         AuthorityMode::External if valid_uri(a.source_profile.as_deref())
             && valid_uri(a.source_evidence_ref.as_deref())
             && valid_digest(a.source_evidence_digest.as_deref())
-            && a.source_expires_at.is_some_and(|expiry| expiry > now) => Ok(()),
+            && a.source_expires_at.is_some() => Ok(()),
         _ => Err(GrantValidationError::InvalidAuthority),
     }
 }
@@ -259,7 +318,11 @@ pub enum GrantValidationError {
     #[error("constraint profile is invalid or ambiguous")] InvalidConstraints,
     #[error("authority source is invalid or expired")] InvalidAuthority,
     #[error("terms serialization failed")] TermsSerialization,
+    #[error("numeric values are not supported in Delegated Authority v1 canonical projections")] UnsupportedCanonicalNumber,
     #[error("terms digest does not match immutable terms")] TermsDigestMismatch,
     #[error("active or suspended grant requires approval")] ApprovalRequired,
     #[error("approval evidence is invalid")] InvalidApproval,
+    #[error("grant creation/update timestamps are inconsistent")] InvalidTemporalOrdering,
+    #[error("activation timestamp is outside the grant validity interval")] InvalidActivationTime,
+    #[error("grant was marked expired before its validity ended")] PrematureExpiration,
 }
