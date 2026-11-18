@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import ui_release as ui
 import web_auth as auth
+import website_producer_policy as policy
 
 TOKEN = "ghs_" + "a" * 36
 ENCODED = base64.b64encode(("operator:" + TOKEN).encode()).decode()
@@ -100,6 +101,25 @@ def reader(tmp_path, monkeypatch, **changes):
     values = dict(gh=gh, repository=ui.REPOSITORY, run_id="21", attempt="2", kind="website", token_env="GH_TOKEN")
     values.update(changes)
     return auth.GitHubReader(**values)
+
+
+def test_standalone_reader_scopes_selected_token_to_website_actions_gets(tmp_path, monkeypatch):
+    selected = reader(tmp_path, monkeypatch, repository=policy.STANDALONE_REPOSITORY)
+    endpoints = []
+    def execute(args, *, env, **_kwargs):
+        endpoints.append(args[-1])
+        assert env["GH_TOKEN"] == TOKEN
+        assert "GITHUB_TOKEN" not in env and "DOCKER_CONFIG" not in env
+        return b"{}"
+    monkeypatch.setattr(auth, "command", execute)
+    selected.attempt()
+    selected.artifacts()
+    assert endpoints == [
+        "repos/ElevenID/website/actions/runs/21/attempts/2",
+        "repos/ElevenID/website/actions/runs/21/artifacts?name=web-website-21-2&per_page=100",
+    ]
+    with pytest.raises(ValueError, match="producer role"):
+        reader(tmp_path, monkeypatch, repository=policy.STANDALONE_REPOSITORY, kind="application")
 
 
 def test_api_metadata_and_zip_share_one_explicit_token_without_registry_auth(tmp_path, monkeypatch):

@@ -23,6 +23,12 @@ on:
         description: Compose mode only; successful original website producer run
         required: false
         type: string
+      website_repository:
+        description: Compose mode only; owner of the original signed website release
+        type: choice
+        options: [ElevenID/marty-ui, ElevenID/website]
+        default: ElevenID/marty-ui
+        required: false
       website_run_attempt:
         description: Compose mode only; exact website producer attempt
         required: false
@@ -345,6 +351,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WEBSITE_RUN: ${{ inputs.website_run_id }}
           WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt }}
+          WEBSITE_REPOSITORY: ${{ inputs.website_repository || 'ElevenID/marty-ui' }}
           APPLICATION_RUN: ${{ inputs.application_run_id }}
           APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt }}
         shell: bash
@@ -353,7 +360,7 @@ jobs:
           umask 077
           gh="$RUNNER_TEMP/web-verifiers/gh"
           cosign="$RUNNER_TEMP/web-verifiers/cosign"
-          python scripts/web_release_intake.py website --repository ElevenID/marty-ui \
+          python scripts/web_release_intake.py website --repository "$WEBSITE_REPOSITORY" \
             --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
             --gh "$gh" --cosign "$cosign"
           python scripts/web_release_intake.py application --repository ElevenID/marty-ui \

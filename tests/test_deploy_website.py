@@ -11,11 +11,12 @@ import subprocess
 import pytest
 import yaml
 
-from tests.test_package_web_composition import candidate, write_json, WEBSITE_SOURCE
+from tests.test_package_web_composition import candidate, standalone_website, write_json, WEBSITE_SOURCE
 import deploy_website as deploy
 import package_web_composition as composition
 import ui_release as ui
 import website_release as web
+import website_producer_policy as policy
 
 
 class Host:
@@ -92,11 +93,14 @@ def host_candidate(candidate, tmp_path):
     return host, kwargs, manifest, calls, verifiers
 
 
-def another_release(kwargs, source):
+def another_release(kwargs, source, *, standalone=False):
     root = kwargs["website_assets"].parent / "source"
     plan = web.plan(root, source)
     release = web.record(root, plan, source_sha=source, metadata=web.image_metadata(plan),
                          digest="sha256:" + source[0] * 64, run_id="200", run_attempt="1")
+    if standalone:
+        release = standalone_website(source, web.read(kwargs["website_assets"] / "web-surface-routes.json"),
+                                     run_id="200", run_attempt="1")
     write_json(kwargs["website_assets"] / "website-release.json", release)
     selected = {**kwargs, "output": kwargs["output"].parent / ("output-" + source)}
     manifest = composition.package(**selected)
@@ -104,6 +108,50 @@ def another_release(kwargs, source):
         for suffix in (".sigstore.json", ".provenance.jsonl"):
             (selected["output"] / (name + suffix)).write_bytes(b"outer proof fixture")
     return selected["output"], manifest
+
+
+@pytest.mark.parametrize("candidate", ["legacy", "standalone"], indirect=True)
+def test_retained_rollback_crosses_website_repository_ownership_in_both_directions(host_candidate):
+    host, kwargs, manifest, calls, verifiers = host_candidate
+    first_owner = manifest["website"]["producer"]["repository"]
+    original_bytes = {name: (kwargs["website_assets"] / name).read_bytes() for name in composition.WEBSITE_FILES}
+    before, _ = host.snapshot()
+    first = deploy.apply(host, kwargs["output"], **verifiers)
+    assets, replacement = another_release(kwargs, "c" * 40, standalone=first_owner == ui.REPOSITORY)
+    second_owner = replacement["website"]["producer"]["repository"]
+    assert {first_owner, second_owner} == {ui.REPOSITORY, policy.STANDALONE_REPOSITORY}
+    replacement_bytes = {name: (kwargs["website_assets"] / name).read_bytes() for name in composition.WEBSITE_FILES}
+    second = deploy.apply(host, assets, **verifiers)
+    assert second["product"] == before and second["active"] != first["active"]
+    calls.clear()
+    rolled = deploy.rollback(host, **verifiers)
+    assert rolled["active"] == first["active"] and rolled["product"] == before
+    assert [call[2]["repository"] for call in calls if call[0] in {"subject", "image"}] == [first_owner, first_owner]
+    calls.clear()
+    restored = deploy.rollback(host, **verifiers)
+    assert restored["active"] == second["active"] and restored["product"] == before
+    assert [call[2]["repository"] for call in calls if call[0] in {"subject", "image"}] == [second_owner, second_owner]
+    for source, expected in ((WEBSITE_SOURCE, original_bytes), ("c" * 40, replacement_bytes)):
+        for name, raw in expected.items():
+            assert (host.directory / "receipts" / source / name).read_bytes() == raw
+    calls.clear()
+    assert deploy.start_current(host, **verifiers) == restored
+    assert [call[2]["repository"] for call in calls if call[0] == "subject"] == [second_owner, first_owner]
+    assert host.snapshot()[0] == before
+
+
+@pytest.mark.parametrize("image,revision", [
+    (web.PUBLIC_IMAGE, "a" * 40), (web.COMMERCE_IMAGE, "a" * 40 + "-" + "b" * 40),
+    (policy.STANDALONE_IMAGE, "a" * 40),
+])
+def test_retained_slot_accepts_unchanged_legacy_audiences_and_standalone_public_website(image, revision):
+    slot = {"revision": revision, "source_sha": "a" * 40,
+            "image": {"uri": image, "digest": "sha256:" + "c" * 64, "platform": "linux/amd64"},
+            "release_sha256": "sha256:" + "d" * 64, "composition_id": "sha256:" + "e" * 64}
+    deploy.validate_slot(slot)
+    slot["image"]["uri"] = ui.PUBLIC_IMAGE
+    with pytest.raises(ValueError):
+        deploy.validate_slot(slot)
 
 
 def test_three_slots_retain_active_previous_assets_and_never_change_product(host_candidate):

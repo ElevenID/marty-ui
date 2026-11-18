@@ -5,27 +5,33 @@ import copy
 import io
 import json
 from pathlib import Path
+import shlex
 import stat
 import zipfile
 
 import pytest
+import yaml
 
-from tests.test_package_web_composition import candidate
+from tests.test_package_web_composition import candidate, standalone_website, write_json
 import package_web_composition as composition
 import ui_release as ui
 import web_release_intake as intake
 import website_release as web
+import website_producer_policy as policy
 
 
-@pytest.fixture
-def producer_artifact(candidate, tmp_path):
+@pytest.fixture(params=["legacy", "standalone"])
+def producer_artifact(candidate, tmp_path, request):
     kwargs, calls, _, _ = candidate
     release = web.read(kwargs["website_assets"] / "website-release.json")
+    if request.param == "standalone":
+        release = standalone_website(release["source_sha"], web.read(kwargs["website_assets"] / "web-surface-routes.json"))
+        write_json(kwargs["website_assets"] / "website-release.json", release)
     producer = release["producer"]
     run = {"id": int(producer["run_id"]), "run_attempt": int(producer["run_attempt"]), "status": "completed",
            "conclusion": "success", "event": "workflow_dispatch", "head_branch": "main", "head_sha": producer["source_sha"],
            "path": producer["workflow"] + "@main", "repository": {"full_name": producer["repository"],
-           "id": int(web.REPOSITORIES[producer["repository"]])}}
+           "id": int(policy.repositories_for("website")[producer["repository"]])}}
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         for name in composition.WEBSITE_FILES:
@@ -161,3 +167,46 @@ def test_backend_cli_never_selects_actions_credentials_by_default(tmp_path, monk
     monkeypatch.setattr(intake.auth, "GitHubReader", lambda **kwargs: pytest.fail("backend selected API credentials"))
     intake.main()
     assert calls == ["download", "verify"]
+
+
+def test_standalone_application_intake_fails_before_any_network_or_credentials(tmp_path, monkeypatch):
+    class Reader:
+        def attempt(self):
+            pytest.fail("unauthorized application read reached network")
+    monkeypatch.setattr(intake.auth, "GitHubReader", lambda **_kwargs: pytest.fail("unauthorized role selected credentials"))
+    for reader in (None, Reader()):
+        with pytest.raises(ValueError, match="producer role"):
+            intake.fetch("application", repository=policy.STANDALONE_REPOSITORY, run_id="124", attempt="2",
+                         destination=tmp_path / "must-not-create", gh=tmp_path / "gh", cosign=tmp_path / "cosign",
+                         reader=reader)
+    assert not (tmp_path / "must-not-create").exists()
+
+
+def test_api_repository_numeric_id_cannot_be_substituted_by_another_authorized_owner(producer_artifact, tmp_path):
+    _, producer, run, _, _, calls = producer_artifact
+    run["repository"]["id"] = int(web.REPOSITORIES[ui.REPOSITORY]
+                                    if producer["repository"] == policy.STANDALONE_REPOSITORY
+                                    else policy.STANDALONE_REPOSITORY_ID)
+    with pytest.raises(ValueError, match="repository differs"):
+        fetch(producer_artifact, tmp_path)
+    assert calls == [] and not (tmp_path / "intake").exists()
+
+
+def test_composer_workflow_keeps_legacy_default_and_routes_repository_selection_only_to_website():
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/production-web-release.yml").read_text())
+    dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]
+    selection = dispatch["inputs"]["website_repository"]
+    assert selection["type"] == "choice"
+    assert selection["default"] == ui.REPOSITORY
+    assert selection["options"] == [ui.REPOSITORY, policy.STANDALONE_REPOSITORY]
+    compose = workflow["jobs"]["compose"]
+    assert "github.repository == 'ElevenID/marty-ui'" in compose["if"]
+    step = next(item for item in compose["steps"] if item.get("name") == "Authenticate exact original producers and compose their unchanged artifacts")
+    assert step["env"]["WEBSITE_REPOSITORY"] == "${{ inputs.website_repository || 'ElevenID/marty-ui' }}"
+    commands = [shlex.split(line) for line in step["run"].replace("\\\n", " ").splitlines()
+                if line.strip().startswith("python scripts/web_release_intake.py ")]
+    selected = {command[2]: command for command in commands}
+    assert selected["website"][selected["website"].index("--repository") + 1] == "$WEBSITE_REPOSITORY"
+    assert selected["application"][selected["application"].index("--repository") + 1] == ui.REPOSITORY
+    assert "--repository" not in selected["backend"]
+    assert sum("$WEBSITE_REPOSITORY" in command for command in commands) == 1

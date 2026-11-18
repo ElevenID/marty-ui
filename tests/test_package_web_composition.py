@@ -20,6 +20,7 @@ import stable_installer_assets as stable
 import ui_release as ui
 import website_provenance as proof
 import website_release as web
+import website_producer_policy as policy
 
 SOURCE, WEBSITE_SOURCE = "a" * 40, "b" * 40
 PRIVATE = "c" * 40
@@ -30,6 +31,15 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     path.write_bytes(ui.canonical(value))
+
+
+def standalone_website(source_sha, routes, *, run_id="124", run_attempt="2"):
+    # Shared Node/Python contract fixture is deliberately not signed release evidence.
+    template = web.read(ROOT / "tests/fixtures/standalone-website-release-v2.json")["release"]["build_plan"]
+    plan = web.standalone_plan(source_sha, input_sha256=template["input_sha256"],
+                               output=template["output"], route_contract=web.route_identity(routes))
+    return web.standalone_record(plan, metadata=web.image_metadata(plan), digest="sha256:" + source_sha[0] * 64,
+                                 run_id=run_id, run_attempt=run_attempt)
 
 
 def fake_crypto(monkeypatch):
@@ -53,7 +63,7 @@ def fake_crypto(monkeypatch):
 
 
 @pytest.fixture
-def candidate(tmp_path, monkeypatch):
+def candidate(tmp_path, monkeypatch, request):
     calls = fake_crypto(monkeypatch)
     source = tmp_path / "source"
     for name in ("release/stack-lock.json", "docker/ui.Dockerfile", web.ROUTE_PATH):
@@ -76,6 +86,8 @@ def candidate(tmp_path, monkeypatch):
     webplan = web.plan(source, WEBSITE_SOURCE)
     website = web.record(source, webplan, source_sha=WEBSITE_SOURCE, metadata=web.image_metadata(webplan),
                          digest="sha256:" + "e" * 64, run_id="124", run_attempt="2")
+    if getattr(request, "param", "legacy") == "standalone":
+        website = standalone_website(WEBSITE_SOURCE, web.read(source / web.ROUTE_PATH))
     write_json(webdir / "website-release.json", website)
     (webdir / "web-surface-routes.json").write_bytes((source / web.ROUTE_PATH).read_bytes())
     for directory, files in ((appdir, composition.APPLICATION_FILES), (webdir, composition.WEBSITE_FILES)):
@@ -232,5 +244,58 @@ def test_composition_record_is_closed_and_does_not_invent_runtime_qualification(
         manifest["qualification"]["runtime_tested"] = True
     else:
         manifest["website"]["revision"] = "changed"
+    with pytest.raises(ValueError):
+        composition.validate_record(manifest)
+
+
+@pytest.mark.parametrize("candidate", ["standalone"], indirect=True)
+def test_standalone_website_composes_with_legacy_product_and_preserves_each_original_owner(candidate):
+    kwargs, calls, lock, _ = candidate
+    manifest = composition.package(**kwargs)
+    assert manifest["producer"]["repository"] == ui.REPOSITORY
+    assert manifest["website"]["producer"] == web.standalone_producer(WEBSITE_SOURCE, "124", "2")
+    assert manifest["application"]["producer"] == web.producer(SOURCE, None, "123", "1")
+    assert manifest["backend"]["repository"] == ui.REPOSITORY
+    assert manifest["website"]["image"]["uri"] == policy.STANDALONE_IMAGE
+    assert manifest["images"]["gateway"] == lock["services"]["gateway"]
+    with zipfile.ZipFile(kwargs["output"] / "web-composition.zip") as archive:
+        for prefix, directory, filenames in (("website", kwargs["website_assets"], composition.WEBSITE_FILES),
+                                             ("application", kwargs["application_assets"], composition.APPLICATION_FILES),
+                                             ("backend", kwargs["backend_assets"], composition.BACKEND_FILES)):
+            for name in filenames:
+                assert archive.read("web-composition/" + prefix + "/" + name) == (directory / name).read_bytes()
+    assert calls[0][2]["repository"] == policy.STANDALONE_REPOSITORY
+    assert calls[2][2]["repository"] == ui.REPOSITORY
+    for name in ("web-composition.json", "web-composition.zip"):
+        for suffix in (".sigstore.json", ".provenance.jsonl"):
+            (kwargs["output"] / (name + suffix)).write_bytes(b"outer proof fixture")
+    calls.clear()
+    with composition.verified_package(kwargs["output"], gh=kwargs["gh"], cosign=kwargs["cosign"]) as (record, _payload):
+        assert record == manifest
+        assert calls[0][2]["repository"] == ui.REPOSITORY
+        assert calls[2][2]["repository"] == policy.STANDALONE_REPOSITORY
+
+
+def test_standalone_cannot_sign_compositions_even_with_valid_original_inputs(candidate):
+    kwargs, calls, _, _ = candidate
+    kwargs["producer"] = web.standalone_producer("2" * 40, "126", "1")
+    with pytest.raises(ValueError, match="producer role"):
+        composition.package(**kwargs)
+    assert calls == [] and not kwargs["output"].exists()
+
+
+@pytest.mark.parametrize("role", ["producer", "application", "backend"])
+def test_composition_record_rejects_website_identity_in_another_role_after_rehashing(candidate, role):
+    kwargs, _, _, _ = candidate
+    manifest = composition.package(**kwargs)
+    producer = web.standalone_producer(SOURCE, "123", "1")
+    if role == "producer":
+        manifest["producer"] = producer
+    elif role == "application":
+        manifest["application"]["producer"] = producer
+    else:
+        manifest["backend"]["repository"] = policy.STANDALONE_REPOSITORY
+        manifest["backend"]["workflow"] = policy.STANDALONE_WORKFLOW
+    manifest["composition_id"] = ui.digest(ui.canonical({key: value for key, value in manifest.items() if key != "composition_id"}))
     with pytest.raises(ValueError):
         composition.validate_record(manifest)

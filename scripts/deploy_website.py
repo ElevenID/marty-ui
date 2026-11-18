@@ -27,6 +27,7 @@ import package_web_composition as composition
 import ui_release as ui
 import website_provenance as proof
 import website_release as web
+import website_producer_policy as policy
 
 SCHEMA = "marty.website-host/v1"
 SLOTS = ("website-a", "website-b", "website-c")
@@ -58,8 +59,8 @@ def validate_slot(value: dict) -> None:
     web.full_sha(value["source_sha"])
     ui.require(value["revision"].split("-")[0] == value["source_sha"], "website revision source differs")
     web.object_keys(value["image"], {"uri", "digest", "platform"}, "website slot image")
-    ui.require(value["image"]["uri"] in {web.PUBLIC_IMAGE, web.COMMERCE_IMAGE}
-               and value["image"]["platform"] == "linux/amd64", "unsupported website slot image")
+    policy.image_policy(value["image"]["uri"], role="website")
+    ui.require(value["image"]["platform"] == "linux/amd64", "unsupported website slot image")
     ui.require(("-" in value["revision"]) == (value["image"]["uri"] == web.COMMERCE_IMAGE),
                "website revision audience differs")
     for digest in (value["image"]["digest"], value["release_sha256"], value["composition_id"]):
