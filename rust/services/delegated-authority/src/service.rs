@@ -71,9 +71,8 @@ impl DelegationAuthorityService {
     pub async fn resolve(&self, organization_id: Uuid, grant_id: Uuid, now: DateTime<Utc>)
         -> Result<DelegationGrant, ServiceError> {
         let grant = self.repository.get(organization_id, grant_id).await?.ok_or(ServiceError::NotFound)?;
-        if grant.current_status(now) != grant.status {
-            return Err(ServiceError::Expired);
-        }
+        if grant.current_status(now) == GrantStatus::Expired { return Err(ServiceError::Expired); }
+        if grant.terms.valid_from > now { return Err(ServiceError::NotYetValid); }
         Ok(grant)
     }
     async fn load_current(&self, organization_id: Uuid, grant_id: Uuid, expected_revision: u64,
