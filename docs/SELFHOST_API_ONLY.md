@@ -1,9 +1,11 @@
 # Console-free self-host composition
 
 The opt-in source overlay `docker-compose.selfhost.api-only.yml` removes the UI
-service and the edge's UI dependency. The backend and existing Canvas worker keep
-their current composition. No-Canvas and minimal verifier distributions require
-their separate migration and qualification work.
+service and the edge's UI dependency. Retained platform backends keep their
+current composition. Canvas is an external connector, excluded from both the
+full-stack and API-only source profiles; it integrates only through the public
+Common Gateway. See the [connector boundary](architecture/external-connector-boundary.md).
+Minimal verifier distributions require separate qualification work.
 
 Review the selected source model using the installation's explicit environment:
 
@@ -20,8 +22,8 @@ existing full-stack composition; its default console routing stays enabled.
 
 In API-only mode, `/v1/`, `/openapi.json`, `/docs`, `/redoc`, wallet discovery,
 credential metadata and readiness routes continue to reach their backend.
-Console pages, the Canvas UI experience, the UI-owned AI plugin document and the
-SPA fallback return 404. Backend readiness failures remain failures. The renderer
+Console pages, the UI-owned AI plugin document and the SPA fallback return 404.
+Retired provider routes remain unavailable in every platform profile. Backend readiness failures remain failures. The renderer
 accepts only `true` or `false` for `SELFHOST_CONSOLE_ENABLED` and rejects other
 values before starting Nginx. The overlay selects `false`.
 

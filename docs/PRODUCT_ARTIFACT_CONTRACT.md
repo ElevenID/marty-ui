@@ -67,7 +67,7 @@ preflight observation, not architecture attestation or installed-runtime proof.
 
 | Candidate | Current source observation | Next artifact/qualification boundary |
 | --- | --- | --- |
-| Linux/amd64 self-host stack | Existing shared services image and self-host Compose include multiple roles; the Canvas worker is in the default Compose and release binary list. | PKG02 repairs and qualifies the exact-digest no-integration bundle. Do not relabel the full stack as an independent product until its installation and journey evidence passes. |
+| Linux/amd64 self-host stack | The shared services image and self-host Compose include multiple platform roles. The source model excludes the external Canvas connector; this does not qualify a published artifact or installed journey. | PKG02 repairs and qualifies the exact-digest no-integration bundle. Do not relabel the full stack as an independent product until its installation and journey evidence passes. |
 | Offline verification library | Existing verification crate/bindings are a source basis, not an independently qualified public package. | PKG03 establishes dependency closure, a clean-project install from the public channel, and valid/tampered/wrong-trust/expiry cases without platform services. |
 | Headless verifier | The current server verification binary and shared services image are not an independent offline edge runtime. | PKG04 establishes a bounded-state offline runtime, trust/policy rules, restart and blocked-egress tests, then an exact artifact. |
 | Kiosk and separate issuance | Source/runtime components exist, but hardware and issuance dependency contracts remain open. | Keep these as preview *targets* until PKG05/PKG07 qualification; do not issue a `supported` manifest based on code presence. |
