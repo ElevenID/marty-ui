@@ -37,11 +37,12 @@ impl DelegationAuthorityService {
         now: DateTime<Utc>) -> Result<DelegationGrant, ServiceError> {
         let mut grant = self.load_current(organization_id, grant_id, expected_revision, now).await?;
         if grant.status != GrantStatus::Pending { return Err(ServiceError::InvalidTransition); }
+        if authenticated_approver.id != grant.terms.grantor.id { return Err(ServiceError::ApproverNotGrantor); }
         self.consent_verifier.verify_approval(organization_id, grant_id, &authenticated_approver.id,
             evidence_ref, authority_evidence_ref, &grant.terms_digest).await
             .map_err(|_| ServiceError::ConsentNotVerified)?;
         grant.approval = Some(GrantApproval { profile: "urn:marty:delegation-approval:v1".into(),
-            grant_id, approver: authenticated_approver.clone(), evidence_ref: evidence_ref.into(),
+            grant_id, approver: grant.terms.grantor.clone(), evidence_ref: evidence_ref.into(),
             authority_evidence_ref: authority_evidence_ref.into(), terms_digest: grant.terms_digest.clone(),
             approved_at: now });
         grant.status = GrantStatus::Active;
@@ -68,6 +69,20 @@ impl DelegationAuthorityService {
         }
         grant.status = GrantStatus::Revoked; self.save_next(grant, expected_revision, now).await
     }
+    pub async fn expire(&self, organization_id: Uuid, grant_id: Uuid, expected_revision: u64,
+        now: DateTime<Utc>) -> Result<DelegationGrant, ServiceError> {
+        let mut grant = self.repository.get(organization_id, grant_id).await?.ok_or(ServiceError::NotFound)?;
+        if grant.revision != expected_revision {
+            return Err(ServiceError::Repository(RepositoryError::RevisionConflict));
+        }
+        if !matches!(grant.status, GrantStatus::Pending | GrantStatus::Active | GrantStatus::Suspended)
+            || grant.terms.valid_until > now {
+            return Err(ServiceError::InvalidTransition);
+        }
+        grant.status = GrantStatus::Expired;
+        self.save_next(grant, expected_revision, now).await
+    }
+
     pub async fn resolve(&self, organization_id: Uuid, grant_id: Uuid, now: DateTime<Utc>)
         -> Result<DelegationGrant, ServiceError> {
         let grant = self.repository.get(organization_id, grant_id).await?.ok_or(ServiceError::NotFound)?;
@@ -84,6 +99,7 @@ impl DelegationAuthorityService {
     }
     async fn save_next(&self, mut grant: DelegationGrant, expected_revision: u64, now: DateTime<Utc>)
         -> Result<DelegationGrant, ServiceError> {
+        if now <= grant.updated_at { return Err(ServiceError::TransitionTimeMustAdvance); }
         grant.revision = expected_revision.checked_add(1).ok_or(ServiceError::RevisionOverflow)?;
         grant.updated_at = now;
         grant.validate(now)?;
@@ -96,7 +112,7 @@ pub enum ServiceError {
     #[error("delegation grant transition is not allowed")] InvalidTransition,
     #[error("consent evidence was not verified")] ConsentNotVerified,
     #[error("delegation grant has expired")] Expired,
-    #[error("delegation grant is not yet valid")] NotYetValid,
+    #[error("delegation grant is not yet valid")] NotYetValid,\n    #[error("lifecycle transition timestamp must advance")] TransitionTimeMustAdvance,\n    #[error("only the grantor may approve this proposal")] ApproverNotGrantor,
     #[error("delegation revision overflow")] RevisionOverflow,
     #[error(transparent)] Validation(#[from] GrantValidationError),
     #[error(transparent)] Repository(#[from] RepositoryError),
@@ -130,12 +146,12 @@ mod tests {
         let active = service.approve(org, id, 1, &approver, "https://identity.example/evidence/consent-1",
             "https://identity.example/evidence/authority-1", now).await.unwrap();
         assert_eq!(active.status, GrantStatus::Active); assert_eq!(active.revision, 2);
-        assert_ne!(active.approval.unwrap().approver.id, grantor);
-        let suspended = service.suspend(org, id, 2, now).await.unwrap();
+        assert_eq!(active.approval.unwrap().approver.id, grantor);
+        let suspended = service.suspend(org, id, 2, now + chrono::Duration::seconds(2)).await.unwrap();
         assert_eq!(suspended.status, GrantStatus::Suspended);
-        let active = service.reinstate(org, id, 3, now).await.unwrap();
+        let active = service.reinstate(org, id, 3, now + chrono::Duration::seconds(3)).await.unwrap();
         assert_eq!(active.status, GrantStatus::Active);
-        let revoked = service.revoke(org, id, 4, now).await.unwrap();
+        let revoked = service.revoke(org, id, 4, now + chrono::Duration::seconds(4)).await.unwrap();
         assert_eq!(revoked.status, GrantStatus::Revoked); assert_eq!(revoked.revision, 5);
     }
     #[tokio::test]
