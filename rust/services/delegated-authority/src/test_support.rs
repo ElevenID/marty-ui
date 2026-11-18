@@ -39,7 +39,7 @@ mod tests {
         assert_eq!(grant.status, GrantStatus::Pending);
         assert_eq!(grant.revision, 1);
         assert!(grant.terms_digest.starts_with("sha256:"));
-        grant.validate(Utc::now()).unwrap();
+        grant.validate().unwrap();
     }
     #[test]
     fn rejects_subdelegation() {
