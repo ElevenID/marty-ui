@@ -291,10 +291,11 @@ reservation at its own commit boundary. Do not cache or reuse this result to
 authorize another operation.
 
 The MMF Cedar execution adapter is implemented; its active-policy/entity-source
-port still requires a production implementation against the presentation-policy
-owner. This is not a claim that the production proof verifier, external
-constraint source, active Cedar policy source, signed receipt writer or final-use
-reservation are deployed. The next work is
+port must be implemented by the consuming domain integration (for example, the
+separate Commerce Gateway) or its organization-owned policy provider. ElevenID
+does not own commerce action/resource policy or domain execution. This is not a
+claim that the production proof verifier, external constraint source, active
+Cedar policy source, signed receipt writer or final-use reservation are deployed. The next work is
 to implement those adapters against the established Marty identity, policy and
 transaction services, then qualify them end to end. Commerce execution remains
 in the separate consuming project.
