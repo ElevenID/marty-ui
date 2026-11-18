@@ -45,7 +45,7 @@ mod tests {
     fn rejects_subdelegation() {
         let mut grant = pending_grant();
         grant.terms.subdelegation_allowed = true;
-        assert_eq!(grant.terms.validate(Utc::now()), Err(GrantValidationError::SubdelegationUnsupported));
+        assert_eq!(grant.terms.validate(), Err(GrantValidationError::SubdelegationUnsupported));
     }
     #[test]
     fn detects_term_tampering() {
