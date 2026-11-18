@@ -26,7 +26,7 @@ impl DelegationAuthorityService {
         Self { repository, consent_verifier }
     }
     pub async fn propose(&self, grant: DelegationGrant, now: DateTime<Utc>) -> Result<DelegationGrant, ServiceError> {
-        grant.validate(now)?;
+        grant.validate()?;
         if grant.status != GrantStatus::Pending || grant.approval.is_some() || grant.revision != 1 {
             return Err(ServiceError::InvalidTransition);
         }
@@ -102,7 +102,7 @@ impl DelegationAuthorityService {
         if now <= grant.updated_at { return Err(ServiceError::TransitionTimeMustAdvance); }
         grant.revision = expected_revision.checked_add(1).ok_or(ServiceError::RevisionOverflow)?;
         grant.updated_at = now;
-        grant.validate(now)?;
+        grant.validate()?;
         Ok(self.repository.compare_and_swap(grant.organization_id, grant.id, expected_revision, grant).await?)
     }
 }
@@ -142,9 +142,9 @@ mod tests {
         let service = service(); let now = Utc::now(); let grant = pending_grant();
         let org = grant.organization_id; let id = grant.id; let grantor = grant.terms.grantor.id.clone();
         service.propose(grant, now).await.unwrap();
-        let approver = Principal { principal_type: PrincipalType::User, id: "https://identity.example/users/admin-1".into() };
+        let approver = Principal { principal_type: PrincipalType::User, id: grantor.clone() };
         let active = service.approve(org, id, 1, &approver, "https://identity.example/evidence/consent-1",
-            "https://identity.example/evidence/authority-1", now).await.unwrap();
+            "https://identity.example/evidence/authority-1", now + chrono::Duration::seconds(1)).await.unwrap();
         assert_eq!(active.status, GrantStatus::Active); assert_eq!(active.revision, 2);
         assert_eq!(active.approval.unwrap().approver.id, grantor);
         let suspended = service.suspend(org, id, 2, now + chrono::Duration::seconds(2)).await.unwrap();
@@ -160,7 +160,7 @@ mod tests {
         let service = DelegationAuthorityService::new(repository, Arc::new(AcceptEvidence));
         let now = Utc::now(); let grant = pending_grant(); let org = grant.organization_id; let id = grant.id;
         service.propose(grant, now).await.unwrap();
-        let approver = Principal { principal_type: PrincipalType::User, id: "https://identity.example/users/admin-1".into() };
+        let approver = Principal { principal_type: PrincipalType::User, id: "https://identity.example/users/customer-1".into() };
         assert!(matches!(service.approve(org, id, 1, &approver, "not-a-uri",
             "https://identity.example/evidence/authority-1", now).await, Err(ServiceError::ConsentNotVerified)));
         assert_eq!(service.resolve(org, id, now).await.unwrap().status, GrantStatus::Pending);
@@ -171,7 +171,7 @@ mod tests {
         let org = grant.organization_id; let id = grant.id; service.propose(grant, now).await.unwrap();
         let approver = Principal { principal_type: PrincipalType::User, id: "https://identity.example/users/admin-1".into() };
         service.approve(org, id, 1, &approver, "https://identity.example/evidence/c",
-            "https://identity.example/evidence/a", now).await.unwrap();
+            "https://identity.example/evidence/a", now + chrono::Duration::seconds(1)).await.unwrap();
         assert!(matches!(service.suspend(org, id, 1, now).await,
             Err(ServiceError::Repository(RepositoryError::RevisionConflict))));
     }
