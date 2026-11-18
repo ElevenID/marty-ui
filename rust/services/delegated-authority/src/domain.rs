@@ -99,7 +99,7 @@ impl GrantTerms {
         for set in [&self.actions, &self.audiences, &self.resources] {
             if set.is_empty() || set.len() > 64 { return Err(GrantValidationError::InvalidScopeSet); }
             let mut unique = std::collections::BTreeSet::new();
-            if set.iter().any(|v| v.trim().is_empty() || v.contains('*') || !unique.insert(v)) {
+            if set.iter().any(|v| !valid_uri(Some(v)) || v.contains('*') || !unique.insert(v)) {
                 return Err(GrantValidationError::InvalidScopeSet);
             }
         }
