@@ -239,7 +239,7 @@ impl DelegationGrant {
         grant.terms_digest = grant.calculate_terms_digest()?;
         Ok(grant)
     }
-    pub fn validate(&self, now: DateTime<Utc>) -> Result<(), GrantValidationError> {
+    pub fn validate(&self) -> Result<(), GrantValidationError> {
         if self.profile != GRANT_PROFILE || self.revision == 0 {
             return Err(GrantValidationError::InvalidEnvelope);
         }
@@ -286,7 +286,7 @@ impl DelegationGrant {
     }
     pub fn current_status(&self, now: DateTime<Utc>) -> GrantStatus {
         if matches!(self.status, GrantStatus::Pending | GrantStatus::Active | GrantStatus::Suspended)
-            && self.terms.valid_until <= now { GrantStatus::Expired } else { self.status }
+            && (self.terms.valid_until <= now || self.authority.source_expires_at.is_some_and(|expiry| expiry <= now)) { GrantStatus::Expired } else { self.status }
     }
 }
 fn validate_authority(a: &Authority) -> Result<(), GrantValidationError> {
