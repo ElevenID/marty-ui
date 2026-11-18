@@ -96,8 +96,9 @@ configuration migration or credential-rotation command.
 
 ## What was suppressed, and who owns it now
 
-The former renderer forced the following fifteen values to `false` and fifteen
-to an empty string. Their treatment is now explicit rather than accidental.
+The former renderer forced several values to `false` or an empty string. The
+retained platform settings have explicit treatment below; retired provider
+settings are excluded from the supported registry.
 
 | Former forced value | Current ownership and behavior |
 | --- | --- |
@@ -108,23 +109,28 @@ to an empty string. Their treatment is now explicit rather than accidental.
 | `KEYCLOAK_PASSKEYS_ENABLED`, `KEYCLOAK_PASSKEY_RP_ID` | Optional boolean and lowercase RP hostname. Omission preserves policy; enabling requires the explicit RP ID and qualified Keycloak 26.8.x. Password, Google and Open Badge remain available. See [passkey setup](keycloak-passkeys.md). |
 | `KEYCLOAK_SMTP_SSL=false`, `KEYCLOAK_SMTP_STARTTLS=false` | Explicit SMTP transport booleans; defaults are SSL `false`, STARTTLS `true`. Configured mail requires exactly one secure transport. |
 | `ORGANIZATION_CREATION_ENABLED=false` | Typed boolean, default `false`, shared by backend and UI. |
-| `CANVAS_PORTABLE_INTEGRATION_ENABLED=false` | Opt-in with explicit pilot organizations, tool-signing identity, public RS256 JWKS, credential issuer-profile inventory, real API provider and reviewed worker timeout. |
-| `CANVAS_MIRROR_WORKER_ENABLED=false` | Opt-in with organization, API token, real provider, API URL and issuer/badge identity. |
-| `CANVAS_ALLOW_PRIVATE_BASE_URLS=false` | Opt-in only with an explicit exact HTTPS origin allowlist. |
-| `CANVAS_LEGACY_EVENT_INGEST_ENABLED=false` | Remains false: the portable production path forbids legacy event ingestion. |
-| `CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS=false` | Remains false: HTTP localhost providers are a development exception. |
 | `DID_PUBLIC_FALLBACK_ENABLED=false` | Opt-in with an explicit `DID_WEB_ALLOWED_HOSTS` array. |
 | `DIDCOMM_ALLOW_PRIVATE_ENDPOINTS=false` | Historical unused name; accepted only as `false`. Actual `DIDCOMM_ALLOW_PRIVATE_IPS` remains a fixed false production policy. |
 | `UI_ADDITIONAL_BASE_URLS=` | Typed exact HTTPS-origin array. Extends browser origin policy without changing the canonical issuer identity. The operator must separately own DNS, routing and certificates for additional frontends. |
 | `KEYCLOAK_SMTP_HOST=`, `KEYCLOAK_SMTP_USERNAME=` | Typed mail configuration; host, sender, secure transport and matching authentication inputs are validated together. |
 | `SMTP_HOST=`, `SMTP_USERNAME=` | Unimplemented application-email transport; not offered as a working capability. |
-| `CANVAS_CREDENTIALS_API_BASE_URL=` | Typed HTTPS URL. Its effective existing default is `https://api.badgr.io`; the previous empty value was also replaced by Compose's `:-` default. |
-| `CANVAS_CREDENTIALS_PUBLISH_URL=`, `CANVAS_CREDENTIALS_STATUS_SYNC_URL=` | Optional explicit HTTPS provider endpoints. |
-| `CANVAS_CREDENTIALS_ISSUER_ID=`, `CANVAS_CREDENTIALS_BADGECLASS_ID=` | Typed provider identifiers. |
-| `CANVAS_PILOT_ORGANIZATION_IDS=` | Typed unique identifier array; required for the portable integration. |
-| `CANVAS_PRIVATE_ORIGIN_ALLOWLIST=`, `CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST=` | Typed unique exact HTTPS-origin arrays. |
 | `UNIVERSAL_RESOLVER_URL=` | Optional explicit HTTPS resolver URL; no network fallback is enabled by default. |
 | `DID_WEB_ALLOWED_HOSTS=` | Typed unique normalized hostname array; required for public DID fallback. |
+
+## Retired provider configuration
+
+Canvas flags, provider URLs, OAuth/LTI identities, private-origin allowlists and
+worker settings are no longer platform installer inputs. Do not pass `CANVAS_*`,
+`KEYCLOAK_SEED_CANVAS_*` or retired issuance Canvas/readiness settings, even with
+false or empty values. They are not supported opt-ins. Helm also rejects the
+retired `canvasWorker` object. Configure any supported provider capability in the
+[independent connector](https://github.com/ElevenID/canvas-integration), through
+the public Common Gateway only; see the
+[ownership boundary](architecture/external-connector-boundary.md).
+
+Source retirement neither migrates tenant data nor qualifies deployment. Missing
+provider adapters remain owned TODOs with unsupported flows disabled. Generic
+identity, ownership, evidence, approval and signing remain platform-owned.
 
 ## Complete supported value registry
 
@@ -159,27 +165,12 @@ configuration acceptance is not proof of credentials or remote availability.
 | `CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE` | Wallet link template strings up to 4,096 bytes; `{oid4vp_uri}`, HTTPS or the supported wallet/intent schemes. |
 | `CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE`, `CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE` | Same wallet-template rules. |
 | `CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE`, `CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE` | Dotted Android package names up to 256 bytes. |
-| `CANVAS_PORTABLE_INTEGRATION_ENABLED`, `CANVAS_MIRROR_WORKER_ENABLED`, `CANVAS_ALLOW_PRIVATE_BASE_URLS`, `CANVAS_CREDENTIALS_RECIPIENT_HASHED`, `CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS`, `CANVAS_MIRROR_WORKER_RETRY_FAILED`, `CANVAS_MIRROR_WORKER_RUN_ON_STARTUP` | Booleans with the dependency requirements above. |
-| `CANVAS_CREDENTIALS_PROVIDER` | `bridge`, `badgr_api` or `canvas_credentials_api`. Enabled production portable/mirror modes require a real API provider. |
-| `CANVAS_CREDENTIALS_ASSERTION_SCOPE` | `badgeclasses` or `issuers`. |
-| `CANVAS_CREDENTIALS_ISSUER_ID`, `CANVAS_CREDENTIALS_BADGECLASS_ID`, `CANVAS_MIRROR_WORKER_ORGANIZATION_ID`, `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID` | Existing identifiers. |
-| `CANVAS_PILOT_ORGANIZATION_IDS`, `CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS` | Arrays of existing identifiers. |
-| `CANVAS_CREDENTIALS_API_BASE_URL`, `CANVAS_CREDENTIALS_PUBLISH_URL`, `CANVAS_CREDENTIALS_STATUS_SYNC_URL`, `CANVAS_CREDENTIALS_PROVENANCE_BASE_URL`, `CANVAS_LTI_EXPERIENCE_BASE_URL`, `CANVAS_OAUTH_COMPLETION_REDIRECT_URL`, `CANVAS_MIRROR_ALERT_WEBHOOK_URL` | Explicit HTTPS URLs. Unspecified LTI experience and OAuth completion URLs follow the generated canonical frontend instead of an example hostname. |
-| `CANVAS_PRIVATE_ORIGIN_ALLOWLIST`, `CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST`, `CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST` | Arrays of exact HTTPS origins. |
-| `CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE`, `MIP_CREDENTIAL_STATUS_URL_TEMPLATE` | HTTPS URL templates for the existing runtime substitution contract. |
-| `CANVAS_CREDENTIALS_ASSERTION_NARRATIVE` | String up to 2,048 bytes. |
-| `CANVAS_LTI_TOOL_ISSUER_DID`, `CANVAS_LTI_TOOL_ACTIVE_KID` | DID/verification-method strings up to 2,048 bytes. The active key must belong to the supplied tool DID. |
-| `CANVAS_LTI_TOOL_PUBLIC_JWKS` | Public JSON object with 1–16 RSA/RS256 keys, unique `kid`, public `n`/`e`, optional `use: "sig"`, and no private parameters. Moduli are 2,048–8,192 bits; exponent is 3 or 65,537. The active key must appear in this set. |
-| `CANVAS_BINDING_READINESS_MAX_AGE_SECONDS`, `CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS`, `CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS`, `CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS`, `CANVAS_SYNC_WORKER_LEASE_SECONDS`, `CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS`, `CANVAS_SYNC_WORKER_POLL_SECONDS` | Integers 1–86,400. Portable production Canvas requires a job timeout of exactly 600 seconds. |
-| `CANVAS_MIRROR_WORKER_BATCH_LIMIT`, `CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS`, `CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS`, `CANVAS_BACKGROUND_ROSTER_BATCH_SIZE`, `CANVAS_BACKGROUND_ROSTER_MAX_SIZE`, `CANVAS_SYNC_WORKER_BATCH_SIZE`, `CANVAS_SYNC_SCHEDULE_LIMIT`, `CANVAS_OAUTH_REVOCATION_BATCH_SIZE` | Integers 1–1,000,000. |
-| `CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS` | Integer 1–20. |
 | `DID_PUBLIC_FALLBACK_ENABLED`, `DID_WEB_ALLOWED_HOSTS`, `UNIVERSAL_RESOLVER_URL` | Boolean, hostname array and optional HTTPS URL respectively. No public fallback without an explicit hostname allowlist. |
 | `PASSPORT_NATIVE_HTTP_ENABLED`, `PASSPORT_NATIVE_GATEWAY_ENABLED`, `PASSPORT_NATIVE_FLOW_ENABLED`, `PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED`, `PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED`, `PASSPORT_KMS_ARTIFACTS_ENABLED`, `PASSPORT_KMS_CALLBACKS_ENABLED` | Booleans. Gateway/Flow/signing/KMS choices require native Passport HTTP. Passport requires either the imported tenant keyring or internal service authentication; those modes are mutually exclusive. The installer-generated internal service token remains with its existing owner. |
 | `PERSONALIZATION_BUREAU_URL`, `PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID` | HTTPS provider URL and existing identifier. Configured bureau submission requires native Passport, the imported bureau API key and a callback profile when KMS callbacks are enabled. |
 | `APPLICATION_TEMPLATE_MIGRATION_MAP` | JSON object of existing source template identifiers to destination identifiers, at most 128 entries. This does not change the installation's migration profile or authorize an in-place installation upgrade. |
 | `LOG_LEVEL` | `TRACE`, `DEBUG`, `INFO`, `WARN` or `ERROR`. |
 | `COMPLIANCE_PROFILE_RUST_LOG`, `DEPLOYMENT_PROFILE_RUST_LOG`, `REVOCATION_PROFILE_RUST_LOG` | Existing Rust log-filter strings up to 1,024 bytes. |
-| `CANVAS_LEGACY_EVENT_INGEST_ENABLED`, `CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS`, `DIDCOMM_ALLOW_PRIVATE_ENDPOINTS`, `DIDCOMM_ALLOW_PRIVATE_IPS`, `PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED` | Accepted only as `false`; see the explicit unsupported combinations below. |
 
 For a fresh installation, `MARTY_ORG_NAME` reaches the managed identity
 configurator, Organization bootstrap and Auth through the same canonical Compose
