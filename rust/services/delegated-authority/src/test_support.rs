@@ -101,3 +101,16 @@ fn matches_marty_protocol_rfc8785_terms_digest_vector() {
         "sha256:246febf8b6c26aa095bc1e83fcfcb131c8dff65c067d95f446a704aff92ac4b9");
     grant.validate().unwrap();
 }
+
+#[test]
+fn protocol_transition_rejects_terms_substitution_even_with_recomputed_digest() {
+    let previous = pending_grant();
+    let mut current = previous.clone();
+    current.status = GrantStatus::Revoked;
+    current.revision = previous.revision + 1;
+    current.updated_at = previous.updated_at + Duration::seconds(1);
+    current.terms.resources[0] = "urn:commerce:product:substituted".into();
+    current.terms_digest = current.calculate_terms_digest().unwrap();
+    assert_eq!(validate_transition(&previous, &current),
+        Err(GrantValidationError::ImmutableGrantDataChanged));
+}
