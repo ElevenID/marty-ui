@@ -2917,7 +2917,7 @@ jobs:
           python_bin="$(command -v python)"
           report="$RUNNER_TEMP/selfhost-root-optional-secrets-contracts.xml"
           sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
-            tests/test_stage_selfhost_disabled_optional_secrets.py::test_creates_exact_nine_empty_private_files \
+            tests/test_stage_selfhost_disabled_optional_secrets.py::test_creates_exact_seven_empty_private_files \
             tests/test_stage_selfhost_disabled_optional_secrets.py::test_enabled_integration_cannot_receive_empty_secret \
             tests/test_stage_selfhost_disabled_optional_secrets.py::test_late_mode_failure_rolls_back_owned_outputs \
             -p no:cacheprovider --junitxml="$report"
@@ -2932,7 +2932,7 @@ jobs:
               raise SystemExit("root-owned optional secret test report is missing")
           cases = list(suite.iter("testcase"))
           expected_names = {
-              "test_creates_exact_nine_empty_private_files",
+              "test_creates_exact_seven_empty_private_files",
               "test_enabled_integration_cannot_receive_empty_secret",
               "test_late_mode_failure_rolls_back_owned_outputs",
           }

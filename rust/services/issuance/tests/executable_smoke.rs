@@ -554,9 +554,10 @@ async fn executable_retired_provider_operations_return_not_found() {
 }
 
 /// Exercise main -> IssuanceServices.with_internal_applications ->
-/// router_with_all_services for every frozen route. Authentication must finish
-/// before repository operations; lifecycle and persistence are covered
-/// separately. Startup itself uses the real migration database.
+/// router_with_all_services for the retained projection of the frozen routes.
+/// Authentication must finish before retained repository operations. The two
+/// retired provider reconcilers must stay absent, even with the configured key.
+/// Startup itself uses the real migration database.
 #[tokio::test]
 async fn executable_mounts_complete_internal_application_contract() {
     let Some(database_url) = smoke_database_url() else {
@@ -568,6 +569,10 @@ async fn executable_mounts_complete_internal_application_contract() {
     .unwrap();
     let probes = contract["security"]["route_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 14);
+    let retired_operations = std::collections::BTreeSet::from([
+        "reconcile_application_evidence",
+        "get_application_evidence_reconciliation_report",
+    ]);
 
     let (http_reservation, port) = reserve_port();
     let (_grpc_reservation, grpc_port) = reserve_port();
@@ -594,13 +599,30 @@ async fn executable_mounts_complete_internal_application_contract() {
 
     let base = format!("http://127.0.0.1:{port}");
     let mut covered = std::collections::BTreeSet::new();
+    let mut retained = std::collections::BTreeSet::new();
+    let mut retired = std::collections::BTreeSet::new();
     for (index, probe) in probes.iter().enumerate() {
         let operation = probe["operation"].as_str().unwrap();
         let method = probe["method"].as_str().unwrap();
         let path = probe["path"].as_str().unwrap();
         assert!(covered.insert(operation));
-        for wrong_key in [false, true] {
-            let request_id = format!("internal-application-auth-{index}-{wrong_key}");
+        let is_retired = retired_operations.contains(operation);
+        assert!(if is_retired {
+            retired.insert(operation)
+        } else {
+            retained.insert(operation)
+        });
+        let key_cases = [
+            None,
+            Some("synthetic-wrong-key"),
+            Some("synthetic-internal-application-key"),
+        ];
+        for (key_index, supplied_key) in key_cases
+            .iter()
+            .take(if is_retired { 3 } else { 2 })
+            .enumerate()
+        {
+            let request_id = format!("internal-application-auth-{index}-{key_index}");
             let mut request = client
                 .request(method.parse().unwrap(), format!("{base}{path}"))
                 .header("origin", "https://wallet.example")
@@ -609,11 +631,15 @@ async fn executable_mounts_complete_internal_application_contract() {
             if let Some(body) = probe.get("json") {
                 request = request.json(body);
             }
-            if wrong_key {
-                request = request.header("x-api-key", "synthetic-wrong-key");
+            if let Some(key) = supplied_key {
+                request = request.header("x-api-key", *key);
             }
             let response = request.send().await.expect("owned process auth response");
-            assert_eq!(response.status(), 401, "route {operation}");
+            assert_eq!(
+                response.status(),
+                if is_retired { 404 } else { 401 },
+                "route {operation} key case {key_index}"
+            );
             assert_eq!(response.headers()["x-request-id"], request_id.as_str());
             assert_eq!(
                 response.headers()["access-control-allow-origin"],
@@ -624,13 +650,17 @@ async fn executable_mounts_complete_internal_application_contract() {
                 "true"
             );
             assert_eq!(response.headers()["vary"], "Origin");
-            assert_eq!(
-                response.json::<Value>().await.unwrap(),
-                json!({"detail": if wrong_key { "Invalid API Key" } else { "X-API-Key header is missing" }})
-            );
+            if !is_retired {
+                assert_eq!(
+                    response.json::<Value>().await.unwrap(),
+                    json!({"detail": if supplied_key.is_some() { "Invalid API Key" } else { "X-API-Key header is missing" }})
+                );
+            }
         }
     }
     assert_eq!(covered.len(), 14);
+    assert_eq!(retained.len(), 12);
+    assert_eq!(retired, retired_operations);
 
     let missing = client
         .get(format!(

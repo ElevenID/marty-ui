@@ -27,7 +27,7 @@ RELEASE_TEST_COMMAND = (
     "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
 )
 ROOT_OPTIONAL_SECRET_CASES = (
-    "test_creates_exact_nine_empty_private_files",
+    "test_creates_exact_seven_empty_private_files",
     "test_enabled_integration_cannot_receive_empty_secret",
     "test_late_mode_failure_rolls_back_owned_outputs",
 )
@@ -108,6 +108,22 @@ def test_optional_secret_staging_has_required_root_release_owner() -> None:
         f"tests/test_stage_selfhost_disabled_optional_secrets.py::{name}"
         for name in ROOT_OPTIONAL_SECRET_CASES
     ]
+    # Resolve the actual selected tests, rather than comparing two copies of
+    # a selector that could both retain a deleted test name.
+    selectors = [
+        f"tests/test_stage_selfhost_disabled_optional_secrets.py::{name}"
+        for name in ROOT_OPTIONAL_SECRET_CASES
+    ]
+    collected = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", *selectors],
+        cwd=ROOT,
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    assert [line for line in collected.stdout.splitlines()
+            if line.startswith("tests/")] == selectors
     assert "-p no:cacheprovider --junitxml=" in command
     for required in ('len(cases) != 3', '("tests", 3)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
