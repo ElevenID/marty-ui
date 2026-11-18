@@ -33,16 +33,15 @@ impl DelegationAuthorityService {
         self.repository.insert(grant.clone()).await?; Ok(grant)
     }
     pub async fn approve(&self, organization_id: Uuid, grant_id: Uuid, expected_revision: u64,
-        authenticated_approver: &str, evidence_ref: &str, authority_evidence_ref: &str,
+        authenticated_approver: &crate::Principal, evidence_ref: &str, authority_evidence_ref: &str,
         now: DateTime<Utc>) -> Result<DelegationGrant, ServiceError> {
         let mut grant = self.load_current(organization_id, grant_id, expected_revision, now).await?;
         if grant.status != GrantStatus::Pending { return Err(ServiceError::InvalidTransition); }
-        if authenticated_approver != grant.terms.grantor.id { return Err(ServiceError::ApproverNotGrantor); }
-        self.consent_verifier.verify_approval(organization_id, grant_id, authenticated_approver,
+        self.consent_verifier.verify_approval(organization_id, grant_id, &authenticated_approver.id,
             evidence_ref, authority_evidence_ref, &grant.terms_digest).await
             .map_err(|_| ServiceError::ConsentNotVerified)?;
         grant.approval = Some(GrantApproval { profile: "urn:marty:delegation-approval:v1".into(),
-            grant_id, approver: grant.terms.grantor.clone(), evidence_ref: evidence_ref.into(),
+            grant_id, approver: authenticated_approver.clone(), evidence_ref: evidence_ref.into(),
             authority_evidence_ref: authority_evidence_ref.into(), terms_digest: grant.terms_digest.clone(),
             approved_at: now });
         grant.status = GrantStatus::Active;
@@ -96,7 +95,6 @@ impl DelegationAuthorityService {
 pub enum ServiceError {
     #[error("delegation grant not found")] NotFound,
     #[error("delegation grant transition is not allowed")] InvalidTransition,
-    #[error("only the authenticated grantor may approve this proposal")] ApproverNotGrantor,
     #[error("consent evidence was not verified")] ConsentNotVerified,
     #[error("delegation grant has expired")] Expired,
     #[error("delegation revision overflow")] RevisionOverflow,
