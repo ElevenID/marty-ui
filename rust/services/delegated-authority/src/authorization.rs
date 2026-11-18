@@ -17,6 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
+use mmf_security::cedar::{
+    CedarAuthorizationRequest, CedarEntityTypes, CedarPolicyEngine,
+};
 
 use crate::{
     domain::valid_uri, DelegationAuthorityService, DelegationClock, DelegationGrant, GrantStatus,
@@ -104,6 +107,114 @@ pub struct VerifiedConstraintEvidence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("external constraint evidence verification failed")]
 pub struct ConstraintVerificationError;
+
+
+/// A validated organization-owned active policy snapshot returned by the
+/// platform policy repository. The provider must load the active policy and
+/// schema together and bind `policy_digest` to both immutable documents.
+#[derive(Clone)]
+pub struct ResolvedCedarPolicy {
+    pub organization_id: Uuid,
+    pub policy_id: String,
+    pub revision: u64,
+    pub policy_digest: String,
+    pub valid_until: DateTime<Utc>,
+    pub entity_types: CedarEntityTypes,
+    /// Trusted, organization-scoped entity graph: membership/roles, actor
+    /// attributes and resource ownership. The provider must bind it to the
+    /// request actor, organization and resource; the engine validates it against
+    /// the active Cedar schema before evaluation.
+    pub entities: serde_json::Value,
+    pub engine: Arc<CedarPolicyEngine>,
+}
+
+/// Platform-owned source of the current active Cedar policy. A draft, archived,
+/// foreign-tenant, stale or missing policy must return an error.
+#[async_trait]
+pub trait CedarPolicySource: Send + Sync {
+    async fn resolve_active(
+        &self,
+        request: &CedarEvaluationRequest,
+        now: DateTime<Utc>,
+    ) -> Result<ResolvedCedarPolicy, CedarPolicySourceError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("active Cedar policy could not be resolved")]
+pub struct CedarPolicySourceError;
+
+/// Concrete adapter to MMF's canonical Cedar parser, schema validator and
+/// fail-closed authorizer. Policy selection/storage remains with the Marty
+/// presentation-policy owner; this adapter never accepts policy source from
+/// an operation request.
+#[derive(Clone)]
+pub struct MmfCedarEvaluator {
+    source: Arc<dyn CedarPolicySource>,
+}
+
+impl MmfCedarEvaluator {
+    pub fn new(source: Arc<dyn CedarPolicySource>) -> Self {
+        Self { source }
+    }
+}
+
+#[async_trait]
+impl DelegationCedarEvaluator for MmfCedarEvaluator {
+    async fn evaluate(
+        &self,
+        request: CedarEvaluationRequest,
+        now: DateTime<Utc>,
+    ) -> Result<CedarEvaluation, CedarEvaluationError> {
+        let policy = self.source.resolve_active(&request, now)
+            .await.map_err(|_| CedarEvaluationError)?;
+        if policy.organization_id != request.organization_id
+            || !valid_uri(Some(&policy.policy_id))
+            || policy.revision == 0
+            || !valid_digest(&policy.policy_digest)
+            || policy.valid_until <= now
+            || policy.valid_until > now + Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS)
+        {
+            return Err(CedarEvaluationError);
+        }
+
+        let context = serde_json::json!({
+            "organization_id": request.organization_id.to_string(),
+            "grant_id": request.grant_id.to_string(),
+            "grant_revision": request.grant_revision,
+            "grantor": request.grantor.id,
+            "subject": request.subject.id,
+            "delegate": request.delegate.id,
+            "audience": request.audience,
+            "operation_profile": request.operation_profile,
+            "operation_digest": request.operation_digest,
+            "constraint_context": request.constraint_context,
+            "constraint_evidence_digest": request.constraint_evidence_digest,
+            "delegate_proof_verified": true,
+            "consent_and_authority_verified": true,
+        });
+        let decision = policy.engine.authorize_request(CedarAuthorizationRequest {
+            principal_type: policy.entity_types.principal.clone(),
+            principal_id: request.actor.id,
+            action_type: policy.entity_types.action.clone(),
+            action_id: request.action,
+            resource_type: policy.entity_types.resource.clone(),
+            resource_id: request.resource,
+            context,
+            entities: policy.entities,
+        }).map_err(|_| CedarEvaluationError)?;
+        if !decision.errors.is_empty() {
+            return Err(CedarEvaluationError);
+        }
+        Ok(CedarEvaluation {
+            decision: if decision.allowed { CedarDecision::Permit } else { CedarDecision::Forbid },
+            policy_id: policy.policy_id,
+            policy_revision: policy.revision,
+            policy_digest: policy.policy_digest,
+            evaluated_at: now,
+            valid_until: policy.valid_until,
+        })
+    }
+}
 
 /// The Cedar adapter must load an active organization-owned policy set and
 /// evaluate this exact principal/action/resource/context. Policy identity,
@@ -603,5 +714,161 @@ mod tests {
             h.clock.clone()
         );
         assert_eq!(authorizer.evaluate(&h.request).await, Err(DelegationUseError::ConstraintNotVerified));
+    }
+}
+
+#[cfg(test)]
+mod mmf_cedar_tests {
+    use super::*;
+    use mmf_security::cedar::CedarConfig;
+
+    const SCHEMA: &str = r#"
+namespace Delegation {
+  entity Organization {};
+  entity Role in [Organization] {};
+  entity User in [Organization, Role] { status: String };
+  entity Resource in [Organization] {};
+  action "urn:commerce:action:purchase.complete" appliesTo {
+    principal: [User],
+    resource: [Resource],
+    context: {
+      organization_id: String,
+      grant_id: String,
+      grant_revision: Long,
+      grantor: String,
+      subject: String,
+      delegate: String,
+      audience: String,
+      operation_profile: String,
+      operation_digest: String,
+      constraint_context: { authorized: Bool },
+      constraint_evidence_digest: String,
+      delegate_proof_verified: Bool,
+      consent_and_authority_verified: Bool,
+    }
+  };
+}
+"#;
+
+    const POLICY: &str = r#"
+@id("delegated-commerce-member-permit")
+permit (
+  principal is Delegation::User,
+  action == Delegation::Action::"urn:commerce:action:purchase.complete",
+  resource is Delegation::Resource
+)
+when {
+  principal in Delegation::Role::"delegate"
+  && principal.status == "ACTIVE"
+  && resource in Delegation::Organization::"org-1"
+  && context.constraint_context.authorized
+  && context.delegate_proof_verified
+  && context.consent_and_authority_verified
+};
+"#;
+
+    struct Source(ResolvedCedarPolicy);
+    #[async_trait]
+    impl CedarPolicySource for Source {
+        async fn resolve_active(
+            &self,
+            request: &CedarEvaluationRequest,
+            _now: DateTime<Utc>,
+        ) -> Result<ResolvedCedarPolicy, CedarPolicySourceError> {
+            if request.organization_id != self.0.organization_id
+                || request.actor.id != request.delegate.id
+            {
+                return Err(CedarPolicySourceError);
+            }
+            Ok(self.0.clone())
+        }
+    }
+
+    fn policy(organization_id: Uuid, now: DateTime<Utc>) -> ResolvedCedarPolicy {
+        let config = CedarConfig {
+            entity_types: CedarEntityTypes {
+                principal: "Delegation::User".into(),
+                action: "Delegation::Action".into(),
+                resource: "Delegation::Resource".into(),
+            },
+            ..CedarConfig::default()
+        };
+        let engine = CedarPolicyEngine::from_human_schema(POLICY, SCHEMA, config).unwrap();
+        ResolvedCedarPolicy {
+            organization_id,
+            policy_id: "urn:example:policies:delegated-commerce".into(),
+            revision: 7,
+            policy_digest: format!("sha256:{}", "e".repeat(64)),
+            valid_until: now + Duration::seconds(20),
+            entity_types: CedarEntityTypes {
+                principal: "Delegation::User".into(),
+                action: "Delegation::Action".into(),
+                resource: "Delegation::Resource".into(),
+            },
+            entities: serde_json::json!([
+                {"uid":{"type":"Delegation::Organization","id":"org-1"},"attrs":{},"parents":[]},
+                {"uid":{"type":"Delegation::Role","id":"delegate"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":"org-1"}]},
+                {"uid":{"type":"Delegation::User","id":"https://agents.example/agents/shopper-1"},"attrs":{"status":"ACTIVE"},"parents":[
+                    {"type":"Delegation::Organization","id":"org-1"},
+                    {"type":"Delegation::Role","id":"delegate"}
+                ]},
+                {"uid":{"type":"Delegation::Resource","id":"urn:commerce:product:lamp-001"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":"org-1"}]}
+            ]),
+            engine: Arc::new(engine),
+        }
+    }
+
+    fn request(organization_id: Uuid) -> CedarEvaluationRequest {
+        let delegate = Principal {
+            principal_type: crate::PrincipalType::External,
+            id: "https://agents.example/agents/shopper-1".into(),
+        };
+        CedarEvaluationRequest {
+            organization_id,
+            grant_id: Uuid::new_v4(),
+            grant_revision: 3,
+            actor: delegate.clone(),
+            grantor: Principal {
+                principal_type: crate::PrincipalType::User,
+                id: "https://identity.example/users/customer-1".into(),
+            },
+            subject: Principal {
+                principal_type: crate::PrincipalType::User,
+                id: "https://identity.example/users/customer-1".into(),
+            },
+            delegate,
+            action: "urn:commerce:action:purchase.complete".into(),
+            audience: "https://merchant.example".into(),
+            resource: "urn:commerce:product:lamp-001".into(),
+            operation_profile: "https://commerce.example/profiles/desk-lamp-purchase/v1".into(),
+            operation_digest: format!("sha256:{}", "c".repeat(64)),
+            constraint_context: serde_json::json!({"authorized":true}),
+            constraint_evidence_digest: format!("sha256:{}", "d".repeat(64)),
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_mmf_cedar_engine_enforces_membership_and_verified_context() {
+        let organization_id = Uuid::new_v4();
+        let now = Utc::now();
+        let evaluator = MmfCedarEvaluator::new(Arc::new(Source(policy(organization_id, now))));
+        let allowed = evaluator.evaluate(request(organization_id), now).await.unwrap();
+        assert_eq!(allowed.decision, CedarDecision::Permit);
+        assert_eq!(allowed.policy_id, "urn:example:policies:delegated-commerce");
+        assert_eq!(allowed.policy_revision, 7);
+
+        let mut denied_request = request(organization_id);
+        denied_request.constraint_context = serde_json::json!({"authorized":false});
+        let denied = evaluator.evaluate(denied_request, now).await.unwrap();
+        assert_eq!(denied.decision, CedarDecision::Forbid);
+    }
+
+    #[tokio::test]
+    async fn cedar_policy_source_is_organization_scoped() {
+        let configured_organization = Uuid::new_v4();
+        let other_organization = Uuid::new_v4();
+        let now = Utc::now();
+        let evaluator = MmfCedarEvaluator::new(Arc::new(Source(policy(configured_organization, now))));
+        assert!(evaluator.evaluate(request(other_organization), now).await.is_err());
     }
 }

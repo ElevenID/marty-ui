@@ -290,9 +290,11 @@ consuming operation must still atomically enforce final-use revision and replay
 reservation at its own commit boundary. Do not cache or reuse this result to
 authorize another operation.
 
-This is an adapter contract and orchestration milestone, not a claim that the
-production proof verifier, external constraint source, Cedar policy adapter,
-signed receipt writer or final-use reservation are deployed. The next work is
+The MMF Cedar execution adapter is implemented; its active-policy/entity-source
+port still requires a production implementation against the presentation-policy
+owner. This is not a claim that the production proof verifier, external
+constraint source, active Cedar policy source, signed receipt writer or final-use
+reservation are deployed. The next work is
 to implement those adapters against the established Marty identity, policy and
 transaction services, then qualify them end to end. Commerce execution remains
 in the separate consuming project.
