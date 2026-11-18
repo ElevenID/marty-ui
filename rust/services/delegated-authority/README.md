@@ -254,3 +254,45 @@ expiry rollback and rejection when an application clock is frozen.
 No allow-all consent verifier is provided for production. Test doubles exist only
 under `cfg(test)`. There is no public Gateway route, discovery advertisement or
 production deployment in this milestone.
+
+
+## Delegated operation evaluation boundary
+
+The crate now exposes `DelegationUseAuthorizer` as a fail-closed orchestration
+boundary for one exact delegated operation. It composes three required adapters:
+
+1. `DelegateProofVerifier` authenticates the delegate's original cryptographic
+   proof and exact key/session binding. Key grants must verify the configured
+   key thumbprint; session grants must verify the established session and its
+   establishment evidence. The proof must bind the organization, grant,
+   challenge/nonce, audience and operation digest, and enforce proof freshness
+   and replay status. A login, caller boolean or actor ID is not proof.
+2. `ExternalConstraintVerifier` verifies external-profile constraints against
+   the exact grant, document reference/digest, evaluator identity and operation.
+   It must use a configured trusted source, never fetch a caller-selected URI.
+   Exact-operation constraints are checked directly against the frozen profile
+   and digest in the grant.
+3. `DelegationCedarEvaluator` evaluates the exact principal, action, resource
+   and operation context against the organization's active Cedar policy. There
+   is no default or allow-all evaluator. Only an explicit Permit with a valid
+   policy identity, revision, digest, observation time and deadline is accepted;
+   Forbid, Abstain, malformed metadata, timeout and provider errors all fail
+   closed.
+
+The authorizer first resolves the active grant and its trusted consent deadline,
+checks the expected revision and exact delegate/action/audience/resource scope,
+then verifies proof, constraints and Cedar. It resolves the grant again after
+those asynchronous operations and rejects a concurrent suspension, revocation,
+revision change or expired evidence. The returned `DelegationUseEvaluation`
+is deliberately not serializable and is not a bearer permit. It records the
+grant and policy revision/digest plus the shortest verified deadline. The
+consuming operation must still atomically enforce final-use revision and replay
+reservation at its own commit boundary. Do not cache or reuse this result to
+authorize another operation.
+
+This is an adapter contract and orchestration milestone, not a claim that the
+production proof verifier, external constraint source, Cedar policy adapter,
+signed receipt writer or final-use reservation are deployed. The next work is
+to implement those adapters against the established Marty identity, policy and
+transaction services, then qualify them end to end. Commerce execution remains
+in the separate consuming project.

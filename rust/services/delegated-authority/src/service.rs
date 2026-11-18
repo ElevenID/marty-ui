@@ -75,6 +75,14 @@ pub trait ConsentEvidenceVerifier: Send + Sync {
 #[error("consent evidence verification failed")]
 pub struct ConsentVerificationError;
 
+/// Active grant snapshot paired with the freshness deadline returned by the
+/// trusted consent and representation-authority verifier.
+#[derive(Clone, Debug)]
+pub struct ResolvedDelegationGrant {
+    pub grant: DelegationGrant,
+    pub consent_valid_until: DateTime<Utc>,
+}
+
 /// Managed lifecycle application service. Callers must authenticate the tenant,
 /// authorize the requested lifecycle action before invoking this port. It does not itself expose an HTTP authorization boundary.
 #[derive(Clone)]
@@ -252,6 +260,18 @@ impl DelegationAuthorityService {
         organization_id: Uuid,
         grant_id: Uuid,
     ) -> Result<DelegationGrant, ServiceError> {
+        Ok(self.resolve_verified(organization_id, grant_id).await?.grant)
+    }
+
+    /// Resolve an active candidate and retain the trusted consent deadline for
+    /// a downstream operation evaluator. This is still not a permit or bearer
+    /// authorization; callers must perform operation proof, policy and final-use
+    /// revision/replay enforcement.
+    pub async fn resolve_verified(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+    ) -> Result<ResolvedDelegationGrant, ServiceError> {
         let now = self.clock.now();
         let grant = self.load_scoped(organization_id, grant_id, now).await?;
         ensure_current_validity(&grant, now)?;
@@ -271,7 +291,10 @@ impl DelegationAuthorityService {
         if latest != grant {
             return Err(RepositoryError::RevisionConflict.into());
         }
-        Ok(latest)
+        Ok(ResolvedDelegationGrant {
+            grant: latest,
+            consent_valid_until: verified.valid_until,
+        })
     }
 
     async fn load_scoped(
