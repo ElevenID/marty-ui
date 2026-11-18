@@ -19,7 +19,7 @@ use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 
 use crate::{
-    valid_uri, DelegationAuthorityService, DelegationClock, DelegationGrant, GrantStatus,
+    domain::valid_uri, DelegationAuthorityService, DelegationClock, DelegationGrant, GrantStatus,
     Principal, ResolvedDelegationGrant, SystemDelegationClock,
 };
 
@@ -91,9 +91,13 @@ pub trait ExternalConstraintVerifier: Send + Sync {
     ) -> Result<VerifiedConstraintEvidence, ConstraintVerificationError>;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct VerifiedConstraintEvidence {
     pub valid_until: DateTime<Utc>,
+    /// Sanitized, authenticated context produced by the constraint adapter.
+    /// It must contain no bearer credentials or raw private source documents.
+    pub context: serde_json::Value,
+    pub evidence_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -117,6 +121,10 @@ pub struct CedarEvaluationRequest {
     pub resource: String,
     pub operation_profile: String,
     pub operation_digest: String,
+    /// Exact-operation constraints are represented by a service-built context;
+    /// external-profile context is returned only by the trusted verifier port.
+    pub constraint_context: serde_json::Value,
+    pub constraint_evidence_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,7 +262,7 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
-        let constraint_deadline = match grant.terms.constraints.mode {
+        let (constraint_deadline, constraint_context, constraint_evidence_digest) = match grant.terms.constraints.mode {
             crate::ConstraintMode::ExactOperation => {
                 if grant.terms.constraints.request_profile.as_deref()
                     != Some(request.operation_profile.as_str())
@@ -263,12 +271,23 @@ impl DelegationUseAuthorizer {
                 {
                     return Err(DelegationUseError::ConstraintNotVerified);
                 }
-                grant.terms.valid_until
+                (
+                    grant.terms.valid_until,
+                    serde_json::json!({
+                        "mode": "EXACT_OPERATION",
+                        "request_profile": request.operation_profile,
+                        "request_digest": request.operation_digest,
+                    }),
+                    request.operation_digest.clone(),
+                )
             }
             crate::ConstraintMode::ExternalProfile => {
                 let verified = self.constraints.verify(grant, request, after_proof)
                     .await.map_err(|_| DelegationUseError::ConstraintNotVerified)?;
-                verified.valid_until
+                if !valid_digest(&verified.evidence_digest) || !verified.context.is_object() {
+                    return Err(DelegationUseError::ConstraintNotVerified);
+                }
+                (verified.valid_until, verified.context, verified.evidence_digest)
             }
         };
         let after_constraints = self.now_after(started_at)?;
@@ -289,6 +308,8 @@ impl DelegationUseAuthorizer {
             resource: request.resource.clone(),
             operation_profile: request.operation_profile.clone(),
             operation_digest: request.operation_digest.clone(),
+            constraint_context,
+            constraint_evidence_digest,
         }, after_constraints).await.map_err(|_| DelegationUseError::Unavailable)?;
         let after_policy = self.now_after(started_at)?;
         validate_cedar_result(&cedar_result, after_policy)?;
@@ -388,6 +409,7 @@ fn validate_cedar_result(
         || result.evaluated_at > now
         || result.valid_until <= now
         || result.valid_until <= result.evaluated_at
+        || result.valid_until > result.evaluated_at + Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS)
         || now.signed_duration_since(result.evaluated_at)
             > Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS)
     {
@@ -444,7 +466,11 @@ mod tests {
         async fn verify(&self, grant: &DelegationGrant, _request: &DelegationUseRequest,
             _now: DateTime<Utc>) -> Result<VerifiedConstraintEvidence, ConstraintVerificationError> {
             if self.reject { return Err(ConstraintVerificationError); }
-            Ok(VerifiedConstraintEvidence { valid_until: grant.terms.valid_until })
+            Ok(VerifiedConstraintEvidence {
+                valid_until: grant.terms.valid_until,
+                context: serde_json::json!({"authorized": true, "source": "test-only"}),
+                evidence_digest: format!("sha256:{}", "d".repeat(64)),
+            })
         }
     }
     struct Cedar { decision: CedarDecision, mutate: bool, lifecycle: Option<Arc<DelegationAuthorityService>>, clock: Option<Arc<FixedClock>> }
