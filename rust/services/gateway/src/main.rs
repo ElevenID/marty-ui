@@ -1,0 +1,269 @@
+use std::{cell::Cell, error::Error, ffi::OsStr, fs, io::Write, sync::Arc, time::Duration};
+
+use marty_gateway::{
+    authorization::OrganizationMembershipProvider,
+    config::GatewayConfig,
+    contract::GatewayContract,
+    discovery::release_version_label,
+    middleware::{GatewayIdentityProvider, GatewayRateLimiter},
+    providers::{
+        DistributedProviderConfig, GatewayDistributedProviders, GrpcEventStreamProvider,
+        GrpcIdentityProvider, HttpGatewayProvider,
+    },
+    registry::StaticServiceRegistry,
+    runtime::{
+        gateway_router, run_hosted_pilot_auto_purge_sweep, GatewayRuntimeState, ReadinessProvider,
+        ResourceOwnerProvider,
+    },
+    transport::ReqwestUpstream,
+};
+use marty_signing_grant::{configuration::GrantAuthority, SigningOrigin};
+use mmf_platform::{GatewayProxy, KeylessGrpcTransportOptions, PlatformError, ProxyConfig};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
+    if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("--export-openapi")) {
+        if std::env::args_os().len() != 2 {
+            return Err("--export-openapi accepts no additional arguments".into());
+        }
+        let raw_version = std::env::var("MARTY_RELEASE_VERSION").ok();
+        let document = GatewayContract::load()?
+            .openapi_document(&release_version_label(raw_version.as_deref()));
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        serde_json::to_writer_pretty(&mut output, &document)?;
+        writeln!(output)?;
+        return Ok(());
+    }
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .json()
+        .init();
+
+    let config = GatewayConfig::from_env()?;
+    let grant_authority = GrantAuthority::from_environment()?;
+    if grant_authority.is_openbao()
+        && config.sign_grant_mint_token_file == config.issuer_csr_grant_mint_token_file
+    {
+        return Err(
+            "Gateway service and issuer CSR grants require distinct scoped token files".into(),
+        );
+    }
+    let service_sign_grant_minter = grant_authority.minter(
+        SigningOrigin::GatewayService,
+        config.sign_grant_bao_addr.as_deref(),
+        config.sign_grant_mint_token_file.clone(),
+    )?;
+    let issuer_csr_grant_minter = grant_authority.minter(
+        SigningOrigin::GatewayIssuerDid,
+        config.sign_grant_bao_addr.as_deref(),
+        config.issuer_csr_grant_mint_token_file.clone(),
+    )?;
+    let contract = GatewayContract::load()?;
+    let routes = contract.runtime_route_table_with_passport_selectors(
+        config.passport_native_gateway_enabled,
+        config.passport_provider_ingress_gateway_enabled,
+    )?;
+    let proxy_routes = contract.proxy_route_table_with_passport_selectors(
+        config.passport_native_gateway_enabled,
+        config.passport_provider_ingress_gateway_enabled,
+    )?;
+    let registry = StaticServiceRegistry::from_urls(&config.service_urls)?;
+    let upstream = ReqwestUpstream::new(config.maximum_response_bytes)?;
+    let proxy_config = ProxyConfig {
+        maximum_response_bytes: config.maximum_response_bytes,
+        ..ProxyConfig::default()
+    };
+    let proxy = GatewayProxy::new(
+        proxy_routes,
+        Arc::new(registry),
+        Arc::new(upstream),
+        proxy_config,
+    )?;
+
+    let distributed = GatewayDistributedProviders::compose(&DistributedProviderConfig {
+        production: config.production,
+        redis_url: config.redis_url.clone(),
+        ..DistributedProviderConfig::default()
+    })
+    .await?;
+    let auth_channel = if let Some(tls) = &config.auth_grpc_client_tls {
+        // Keep eager peer verification, but allow Auth/OpenBao to recover within
+        // the existing Kubernetes startup-probe budget instead of crash-looping.
+        let started = tokio::time::Instant::now();
+        let attempts = Cell::new(0_u32);
+        let channel = marty_service_runtime::startup::retry_startup_dependency(
+            Duration::from_secs(300),
+            Duration::from_secs(2),
+            || {
+                attempts.set(attempts.get() + 1);
+                tls.identity.grpc_channel_connected(
+                    &config.auth_grpc_target,
+                    &tls.ca_certificate,
+                    KeylessGrpcTransportOptions::default(),
+                )
+            },
+            |error| {
+                let retryable = matches!(error, PlatformError::ProviderUnavailable(_));
+                if retryable {
+                    // Dependency URLs, credentials and provider error details
+                    // must not enter startup diagnostics.
+                    warn!(
+                        dependency = "auth-mtls",
+                        attempt = attempts.get(),
+                        elapsed_seconds = started.elapsed().as_secs(),
+                        "Gateway startup dependency unavailable; retrying within deadline"
+                    );
+                }
+                retryable
+            },
+        )
+        .await?;
+        info!(
+            dependency = "auth-mtls",
+            attempts = attempts.get(),
+            elapsed_seconds = started.elapsed().as_secs(),
+            "Gateway startup dependency verified"
+        );
+        channel
+    } else {
+        grpc_channel(&config, &config.auth_grpc_target, None)?
+    };
+    let identity_provider = Arc::new(GrpcIdentityProvider::new(
+        auth_channel,
+        grpc_channel(
+            &config,
+            &config.organization_grpc_target,
+            config.organization_grpc_ca_certificate.as_ref(),
+        )?,
+        Duration::from_secs(5),
+        config.grpc_service_token.clone(),
+    ));
+    let identities: Arc<dyn GatewayIdentityProvider> = identity_provider.clone();
+    let memberships: Arc<dyn OrganizationMembershipProvider> = identity_provider;
+
+    let http_provider = Arc::new(HttpGatewayProvider::new(
+        config.service_urls.clone(),
+        config.signing_internal_api_key.clone(),
+        Some(config.issuance_api_key.clone()),
+        config.grpc_service_token.clone(),
+        None,
+    )?);
+    let owners: Arc<dyn ResourceOwnerProvider> = http_provider.clone();
+    let readiness: Arc<dyn ReadinessProvider> = http_provider;
+    let event_streams = Arc::new(GrpcEventStreamProvider::new(
+        grpc_channel(
+            &config,
+            &config.event_stream_grpc_target,
+            config.event_stream_grpc_ca_certificate.as_ref(),
+        )?,
+        config.grpc_service_token.clone(),
+    ));
+    let state = Arc::new(
+        GatewayRuntimeState::new(
+            routes,
+            proxy,
+            identities,
+            memberships,
+            owners,
+            readiness,
+            event_streams,
+            config.required_ready_services.clone(),
+            GatewayRateLimiter::new(distributed.rate_limiter, config.rate_limit_rpm)?,
+            distributed.idempotency,
+            config.cors_origins.clone(),
+            config.issuer_base_url.clone(),
+            config.public_api_url.clone(),
+            config.public_domain.clone(),
+            config.default_organization_id.clone(),
+            config.signing_internal_api_key.clone(),
+            config.issuance_api_key.clone(),
+            config.release_identity.clone(),
+        )?
+        .with_client_ip_observation(config.observe_client_ip)
+        .with_service_token(config.grpc_service_token.clone())?
+        .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
+        .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
+        .with_service_sign_grant_minter(service_sign_grant_minter)
+        .with_issuer_csr_grant_minter(issuer_csr_grant_minter)
+        .with_issuer_sign_key(config.issuer_sign_key.clone())?
+        .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
+        .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?
+        .with_mdoc_certificate_keys(
+            config.mdoc_iaca_issue_gateway_key.clone(),
+            config.mdoc_dsc_issue_gateway_key.clone(),
+        )?
+        .with_passport_native_gateway(
+            config.passport_native_gateway_enabled,
+            config.passport_tenant_keys.clone(),
+        )?,
+    );
+
+    let purge_task = if config.hosted_pilot_auto_purge_enabled {
+        let state = Arc::clone(&state);
+        let interval = Duration::from_secs(config.hosted_pilot_auto_purge_interval_seconds);
+        let batch_size = config.hosted_pilot_auto_purge_batch_size;
+        Some(tokio::spawn(async move {
+            loop {
+                let stats = run_hosted_pilot_auto_purge_sweep(&state, batch_size).await;
+                info!(
+                    organizations_scanned = stats.organizations_scanned,
+                    hosted_pilot_orgs = stats.hosted_pilot_orgs,
+                    purge_requests = stats.purge_requests,
+                    purged_records = stats.purged_records,
+                    "Hosted Pilot auto-purge sweep complete"
+                );
+                tokio::time::sleep(interval).await;
+            }
+        }))
+    } else {
+        None
+    };
+
+    let listener = tokio::net::TcpListener::bind(config.address).await?;
+    info!(address = %config.address, redis_backed = distributed.redis_backed, "Rust gateway listening");
+    let server_result = axum::serve(
+        listener,
+        gateway_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
+    if let Some(task) = purge_task {
+        task.abort();
+        let _ = task.await;
+    }
+    server_result?;
+    Ok(())
+}
+
+fn grpc_channel(
+    config: &GatewayConfig,
+    target: &str,
+    ca_override: Option<&std::path::PathBuf>,
+) -> Result<Channel, Box<dyn Error>> {
+    let mut endpoint = if let Some(ca_path) = ca_override.or(config.grpc_ca_certificate.as_ref()) {
+        let parsed = url::Url::parse(target)?;
+        let host = parsed.host_str().ok_or("gRPC endpoint requires a host")?;
+        Endpoint::from_shared(target.to_owned())?.tls_config(
+            ClientTlsConfig::new()
+                .ca_certificate(Certificate::from_pem(fs::read(ca_path)?))
+                .domain_name(host),
+        )?
+    } else {
+        Endpoint::from_shared(target.to_owned())?
+    };
+    endpoint = endpoint
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(5));
+    Ok(endpoint.connect_lazy())
+}
+
+async fn shutdown_signal() {
+    mmf_runtime::shutdown_signal_with_termination_context("failed to install termination handler")
+        .await;
+}

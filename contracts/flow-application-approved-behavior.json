@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "event_type": "application.approved",
+  "aggregate_type": "application",
+  "authentication_owner": "mmf-security.application_event",
+  "authentication_order": ["verify_signature", "reserve_durable_plan", "consume_shared_replay", "initiate_issuance"],
+  "eligible_definition": "active_oid4vci_pre_authorized_with_application_approved_webhook_trigger",
+  "definition_order": "flow_id_ascending",
+  "template_filter": "exact_when_present",
+  "claims": "object_only",
+  "manual_issue_requires_attempt_id": true,
+  "attempt_id": "canonical_lowercase_uuid",
+  "logical_key_v1": {
+    "fields": ["organization_id", "application_id", "flow_definition_id"],
+    "expected": "ab771ddf180185687b4e03b891a3ffdf98ad99fe0180f8293833e0b1ebc93f94"
+  },
+  "logical_key_v2": {
+    "fields": ["organization_id", "application_id", "issuance_attempt_id", "flow_definition_id"],
+    "issuance_attempt_id": "11111111-1111-4111-8111-111111111111",
+    "expected": "1c9835bf494d0c9070129460f3a54331ef30bbbeae5454e68b0889ce85f49eb5"
+  },
+  "semantics": "canonical_complete_definition_applicant_and_claims_snapshot",
+  "reserved_instance": {
+    "status": "in_progress",
+    "subject_type": "applicant",
+    "external_reference_prefix": "application-flow:",
+    "raw_event_id_retained": false
+  },
+  "same_event_same_payload": "recover_reserved_plan",
+  "same_event_different_payload": "conflict",
+  "same_logical_flow_different_semantics": "conflict",
+  "python_fallback": "forbidden"
+}

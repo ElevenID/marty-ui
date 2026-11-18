@@ -1,0 +1,71 @@
+   Compiling serde_json v1.0.151
+   Compiling futures-util v0.3.34
+   Compiling rustls v0.23.46
+   Compiling parking_lot_core v0.9.12
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling hyper-util v0.1.20
+   Compiling parking_lot v0.12.5
+   Compiling string_cache v0.8.9
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.4
+   Compiling lalrpop v0.22.2
+   Compiling event-listener v5.4.2
+   Compiling mmf-core v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling unicode-normalization v0.1.25
+   Compiling unicode-security v0.1.2
+   Compiling chrono v0.4.45
+   Compiling axum v0.8.9
+   Compiling serde_with v3.22.0
+   Compiling cedar-policy-core v4.12.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling hyper-timeout v0.5.2
+   Compiling tokio-stream v0.1.19
+   Compiling tonic v0.14.6
+   Compiling async-lock v3.4.2
+   Compiling redis v1.5.0
+   Compiling tower-http v0.6.11
+   Compiling mmf-observability v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling mmf-security-contracts v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling tonic-prost v0.14.6
+   Compiling reqwest v0.13.4
+   Compiling cedar-policy-formatter v4.12.0
+   Compiling cedar-policy v4.12.0
+   Compiling marty-event-stream v0.1.0 (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/rust/services/event-stream)
+   Compiling mmf-resilience v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling tracing-subscriber v0.3.23
+   Compiling mmf-platform v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling mmf-security v0.1.1 (https://github.com/ElevenID/marty-microservices-framework?rev=c7181c86949fdb0fb415e52cee364c19615bcfc6#c7181c86)
+   Compiling tonic-health v0.14.6
+   Compiling marty-applicant v0.1.0 (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/rust/services/applicant)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 12s
+     Running tests/application_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/application_behavior-6808ddfa64016bca)
+
+running 4 tests
+
+thread 'withdrawal_refuses_retained_issuance_markers_even_on_early_or_terminal_states' (1524) panicked at services/applicant/tests/application_behavior.rs:369:17:
+organization=false, status=Draft, marker={"active_issuance_attempt":{"id":"uncertain-attempt"}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test withdrawal_refuses_retained_issuance_markers_even_on_early_or_terminal_states ... FAILED
+
+thread 'withdrawal_cannot_hide_a_reserved_in_flight_offer' (1521) panicked at services/applicant/tests/application_behavior.rs:447:5:
+Withdrawal must not abandon an in-flight issuance
+test withdrawal_cannot_hide_a_reserved_in_flight_offer ... FAILED
+
+thread 'withdrawal_refuses_issuance_states_without_changing_records_or_persistence' (1523) panicked at services/applicant/tests/application_behavior.rs:333:13:
+organization=true, status=Approved
+test withdrawal_refuses_issuance_states_without_changing_records_or_persistence ... FAILED
+test withdrawal_preserves_safe_self_and_organization_decisions ... ok
+
+failures:
+
+failures:
+    withdrawal_cannot_hide_a_reserved_in_flight_offer
+    withdrawal_refuses_issuance_states_without_changing_records_or_persistence
+    withdrawal_refuses_retained_issuance_markers_even_on_early_or_terminal_states
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p marty-applicant --test application_behavior`

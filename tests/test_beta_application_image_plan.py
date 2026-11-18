@@ -1,0 +1,589 @@
+"""Pure image-plan and full-model guards; no deployment or image operations."""
+
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import tempfile
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+GATE = ROOT / "scripts/test_beta_application_image_compose.py"
+
+
+@pytest.fixture
+def gate():
+    return runpy.run_path(str(GATE))
+
+
+def synthetic_base():
+    common = {
+        "image": "synthetic.invalid/before@sha256:" + "e" * 64,
+        "entrypoint": None,
+        "command": [],
+        "environment": {
+            "OTHER": "synthetic-private-value",
+            "DATABASE_URL_TEMPLATE": "synthetic-db-template",
+            "TOKEN_HMAC_KEY_FILE": "/run/secrets/synthetic-key",
+        },
+        "secrets": ["synthetic-key"],
+        "depends_on": {
+            "issuance-migrations": {"condition": "service_completed_successfully"}
+        },
+        "healthcheck": {"disable": True},
+        "restart": "unless-stopped",
+        "future_field": {"preserved": True},
+        "build": {"context": ".", "args": {"SERVICE_NAME": "unchanged"}},
+    }
+
+
+    services = {
+        name: deepcopy(common)
+        for name in (
+            "issuance",
+            "notification",
+            "verification",
+            "signing-keys",
+            "issuance-migrations",
+        )
+    }
+    services["notification"]["command"] = [
+        "/usr/local/bin/marty-notification",
+    ]
+    services["issuance"]["build"] = {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "issuance-native"},
+    }
+    return {
+        "services": services,
+        "secrets": {"synthetic-key": {"file": "synthetic-file"}},
+    }
+
+
+@pytest.mark.parametrize("mode", ["local", "official"])
+def test_beta_issuance_stays_rust_owned_even_with_retired_selector(gate, mode):
+    case = gate["inputs"](mode)
+    case["rust_issuance"] = False
+    with tempfile.TemporaryDirectory() as directory:
+        report = gate["exercise"](Path(directory), [case])[0]
+    assert not report["caught"]
+    alias = next(row for row in report["plan"] if row["service"] == "issuance")
+    assert alias["artifact_role"] == ("services" if mode == "official" else "local")
+    assert alias["image_expression"] == (
+        "${MARTY_SERVICES_IMAGE}" if mode == "official"
+        else f"elevenid-local/issuance:{gate['RELEASE']}"
+    )
+    assert alias["build_eligible"] is (mode == "local")
+    assert any("issuance-migrations:" in line for line in report["lines"])
+    assert any("marty-issuance-service" in line for line in report["lines"])
+
+
+@pytest.mark.parametrize("mode", ["local", "official"])
+def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
+    base = synthetic_base()
+    names = [name for name in base["services"] if name != "issuance-migrations"]
+    actual = gate["expected_model"](base, names, mode)
+    assert base == synthetic_base()
+    migrator = deepcopy(base["services"]["issuance-migrations"])
+    migrator["image"] = actual["services"]["issuance"]["image"]
+    migrator.pop("build")
+    migrator["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
+    migrator["command"] = ["migrate"]
+    migrator["environment"].update(
+        SERVICE_NAME="issuance_native",
+        DATABASE_URL="postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
+    )
+    migrator["depends_on"].update({
+        "organization": {"condition": "service_healthy", "required": True},
+        "credential-template": {"condition": "service_healthy", "required": True},
+    })
+    assert actual["services"]["issuance-migrations"] == migrator
+    for name in names:
+        original = deepcopy(base["services"][name])
+        projected = deepcopy(actual["services"][name])
+        del original["image"], projected["image"]
+        if name == "issuance":
+            if mode == "official":
+                assert "build" not in projected
+                original.pop("build")
+            else:
+                assert projected["build"] == {
+                    "context": ".",
+                    "dockerfile": "services/Dockerfile",
+                    "args": ["SERVICE_NAME=issuance-native"],
+                }
+                projected["build"] = original["build"]
+            projected["entrypoint"] = original["entrypoint"]
+            projected["command"] = original["command"]
+            assert projected["environment"].pop("SERVICE_NAME") == "issuance_native"
+            assert projected["environment"].pop("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            assert "CANVAS_MIRROR_WORKER_ENABLED" not in projected["environment"]
+        if mode == "official" and name not in gate["EXTERNAL"]:
+            if name != "issuance":
+                assert projected["environment"].pop("SERVICE_NAME") == name.replace("-", "_")
+        assert projected == original
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "command",
+        "entrypoint",
+        "environment",
+        "secrets",
+        "depends_on",
+        "healthcheck",
+        "restart",
+        "future_field",
+        "build",
+        "image",
+    ],
+)
+def test_complete_model_comparison_rejects_worker_field_loss_without_private_output(
+    gate, field
+):
+    expected = synthetic_base()
+    actual = deepcopy(expected)
+    del actual["services"]["notification"][field]
+    with pytest.raises(AssertionError) as error:
+        gate["assert_model"](actual, expected)
+    assert str(error.value).startswith(
+        "Generated beta overlay changed the complete runtime model"
+    )
+    assert "notification" in str(error.value)
+    assert "synthetic-private-value" not in str(error.value)
+
+
+def test_comparison_rejects_swapped_selector_and_pinned_overlay_order(gate):
+    base = synthetic_base()
+    names = [name for name in base["services"] if name != "issuance-migrations"]
+    official = gate["expected_model"](base, names, "official")
+    wrong = deepcopy(official)
+    wrong["services"]["signing-keys"]["environment"]["SERVICE_NAME"] = "verification"
+    with pytest.raises(AssertionError):
+        gate["assert_model"](wrong, official)
+    pinned = gate["expected_model"](base, names, "local", pinned=True)
+    unpinned = gate["expected_model"](base, names, "local")
+    with pytest.raises(AssertionError):
+        gate["assert_model"](unpinned, pinned)
+
+
+def test_environment_list_mapping_equivalence_preserves_absent_null_and_duplicates(
+    gate,
+):
+    expected = synthetic_base()
+    expected["services"]["notification"]["environment"] = {
+        "SELECTOR": None,
+        "OTHER": "",
+    }
+    actual = deepcopy(expected)
+    actual["services"]["notification"]["environment"] = ["SELECTOR", "OTHER="]
+    gate["assert_model"](actual, expected)
+    actual["services"]["notification"]["environment"] = ["OTHER="]
+    with pytest.raises(AssertionError):
+        gate["assert_model"](actual, expected)
+    actual["services"]["notification"]["environment"] = [
+        "SELECTOR",
+        "SELECTOR=",
+        "OTHER=",
+    ]
+    with pytest.raises(AssertionError):
+        gate["assert_model"](actual, expected)
+
+
+def test_ci_requires_executable_powershell():
+    assert not os.environ.get("CI") or (
+        os.environ.get("POWERSHELL_TEST_EXE")
+        or shutil.which("pwsh")
+        or shutil.which("powershell")
+    ), "CI must run executable PowerShell image-plan controls"
+
+
+def test_prepared_local_images_are_pinned_complete_and_never_official(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is required for image-plan controls")
+    helper = str(ROOT / "scripts/beta-application-image-plan.ps1").replace("'", "''")
+    harness = tmp_path / "prepared.ps1"
+    harness.write_text(f". '{helper}'\n" + r'''
+$ErrorActionPreference='Stop'
+function docker { throw 'Docker is forbidden in a pure projection' }
+$id='sha256:'+('a'*64)
+$common=@{Services=@('issuance','notification'); ReleaseVersion='developer'; OfficialStackRelease=$false}
+$valid=@{'issuance'=$id; 'notification'=$id}
+$plan=@(New-BetaApplicationImagePlan @common -PreparedImages $valid)
+if ($plan.Count -ne 2) { throw 'missing service' }
+foreach ($entry in $plan) {
+    if ($entry.image_expression -ne $id -or $entry.known_digest -ne $id -or
+        $entry.build_eligible -or -not $entry.selector_present -or $entry.artifact_role -ne 'local') {
+        throw 'prepared images were not pinned as local non-build inputs'
+    }
+}
+$lines=@(ConvertTo-BetaApplicationImageLines -Plan $plan)
+if ('      SERVICE_NAME: notification' -notin $lines -or
+    '      SERVICE_NAME: issuance_native' -notin $lines) { throw 'shared selectors lost' }
+$rejected=0
+foreach ($bad in @(@{'issuance'=$id}, @{'issuance'=$id; 'notification'='mutable:tag'})) {
+    try { $null=New-BetaApplicationImagePlan @common -PreparedImages $bad }
+    catch { $rejected++ }
+}
+$common.OfficialStackRelease=$true
+try { $null=New-BetaApplicationImagePlan @common -PreparedImages $valid }
+catch { $rejected++ }
+if ($rejected -ne 3) { throw 'invalid or official inputs were admitted' }
+Write-Output 'PREPARED_LOCAL_PLAN_OK'
+''', encoding="utf8")
+    result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PREPARED_LOCAL_PLAN_OK" in result.stdout
+
+
+@pytest.fixture
+def exercise(gate, tmp_path):
+    if not (
+        os.environ.get("POWERSHELL_TEST_EXE")
+        or shutil.which("pwsh")
+        or shutil.which("powershell")
+    ):
+        pytest.skip("PowerShell is required for executable image-plan contracts")
+    return lambda cases: gate["exercise"](tmp_path, cases)
+
+
+@pytest.mark.parametrize("mode", ["local", "official"])
+def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
+    gate, exercise, mode
+):
+    [report] = exercise([gate["inputs"](mode)])
+    assert report["caught"] is False, report
+    gate["assert_report"](report, mode)
+    names = report["services"]
+    assert len(names) == len(set(names)) == 18
+    assert {item["service"] for item in report["plan"]} == set(names)
+    native = set(names) - gate["EXTERNAL"]
+    assert len(native) == 18
+    assert gate["EXTERNAL"] == set()
+    assert "notification" in native
+    assert set(report["build_services"]) == (native if mode == "local" else set())
+    for item in report["plan"]:
+        if mode == "official":
+            assert item["image_expression"] == "${MARTY_SERVICES_IMAGE}"
+            assert item["effective_reference"] == gate["SERVICES_IMAGE"]
+            assert item["artifact_role"] == "services"
+        else:
+            assert (
+                item["effective_reference"]
+                == f"elevenid-local/{item['service']}:{gate['RELEASE']}"
+            )
+            assert item["image_expression"] == item["effective_reference"]
+            assert item["artifact_role"] == "local"
+        has_selector = mode == "official"
+        assert item["selector_present"] is has_selector
+        assert item["selector"] == (
+            ("issuance_native" if item["service"] == "issuance"
+             else item["service"].replace("-", "_")) if has_selector else None
+        )
+        assert item["build_eligible"] is (mode == "local")
+        assert item["known_digest"] == (
+            gate["SERVICES_DIGEST"] if mode == "official"
+            else None
+        )
+    assert set(report["digests"]) == set(names)
+    if mode == "official":
+        assert report["inspected"] == []
+        assert report["pin_lines"] == []
+    else:
+        assert report["digests"]["verification"] == gate["VERIFICATION_DIGEST"]
+        assert gate["RETAGGED_VERIFICATION_DIGEST"] not in report["digests"].values()
+        assert (
+            f"elevenid-local/verification:{gate['RELEASE']}" not in report["inspected"]
+        )
+        assert len(report["inspected"]) == 17
+        originals = {item["service"]: item for item in report["plan"]}
+        finals = {item["service"]: item for item in report["final_plan"]}
+        for name in names:
+            if name != "verification":
+                assert originals[name] == finals[name]
+        assert originals["verification"]["known_digest"] is None
+        assert finals["verification"]["known_digest"] == gate["VERIFICATION_DIGEST"]
+        assert (
+            finals["verification"]["effective_reference"] == gate["VERIFICATION_DIGEST"]
+        )
+
+
+def test_opt_in_passport_bureau_uses_the_same_immutable_services_image(gate, exercise):
+    [base] = exercise([gate["inputs"]("official")])
+    case = gate["inputs"]("official")
+    case["services"] = [*base["services"], "passport-beta-bureau"]
+    [report] = exercise([case])
+    assert report["caught"] is False, report
+    assert len(report["plan"]) == len(base["services"]) + 1
+    [bureau] = [
+        item for item in report["plan"] if item["service"] == "passport-beta-bureau"
+    ]
+    assert bureau["image_expression"] == "${MARTY_SERVICES_IMAGE}"
+    assert bureau["effective_reference"] == gate["SERVICES_IMAGE"]
+    assert bureau["known_digest"] == gate["SERVICES_DIGEST"]
+    assert bureau["selector"] == "passport_beta_bureau"
+    assert bureau["build_eligible"] is False
+    assert report["digests"]["passport-beta-bureau"] == gate["SERVICES_DIGEST"]
+
+
+def test_independent_projection_rejects_retagged_evidence_and_missing_build(
+    gate, exercise
+):
+    [report] = exercise([gate["inputs"]("local")])
+    gate["assert_report"](report, "local")
+    retagged = deepcopy(report)
+    retagged["digests"]["verification"] = gate["RETAGGED_VERIFICATION_DIGEST"]
+    with pytest.raises(AssertionError):
+        gate["assert_report"](retagged, "local")
+    missing = deepcopy(report)
+    missing["build_services"].remove("signing-keys")
+    with pytest.raises(AssertionError):
+        gate["assert_report"](missing, "local")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("release", "release\nsynthetic-private-value"),
+        ("release", "release:synthetic-private-value"),
+        ("services_reference", "synthetic.invalid/services:latest"),
+        ("services_digest", "sha256:" + "f" * 64),
+        (
+            "services",
+            ["issuance", "notification", "verification", "verification"],
+        ),
+        (
+            "services",
+            ["issuance", "notification", "synthetic-private-value\nservice"],
+        ),
+        ("services", []),
+    ],
+)
+def test_independent_gate_rejects_incorrect_selection_projection(
+    gate, exercise, field, value
+):
+    mode = "local" if field == "release" else "official"
+    case = gate["inputs"](mode)
+    case[field] = value
+    [report] = exercise([case])
+    # The extracted helper deliberately projects already-validated runner
+    # inputs. This gate, not a new production input-domain restriction, rejects
+    # a projection that disagrees with our independent declared test inputs.
+    with pytest.raises(AssertionError) as error:
+        gate["assert_report"](report, mode)
+    assert "synthetic-private-value" not in str(error.value)
+
+
+def test_verification_pin_rejects_mutable_or_malformed_image(gate, exercise):
+    cases = []
+    for value in (
+        "synthetic.invalid/verification:latest",
+        "sha256:bad",
+        "sha256:" + "c" * 64 + "\nsynthetic-private-value",
+    ):
+        case = gate["inputs"]("local")
+        case["verification_digest"] = value
+        cases.append(case)
+    for report in exercise(cases):
+        assert report["caught"] is True
+        assert "synthetic-private-value" not in report["message"]
+
+
+def test_runner_ast_consumes_real_plan_for_overlay_build_pin_and_evidence(tmp_path):
+    powershell = (
+        os.environ.get("POWERSHELL_TEST_EXE")
+        or shutil.which("pwsh")
+        or shutil.which("powershell")
+    )
+    if not powershell:
+        pytest.skip("PowerShell is required for actual runner AST checks")
+    harness = tmp_path / "inspect-image-plan.ps1"
+    harness.write_text(
+        r"""
+param([string]$Runner)
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($Runner,[ref]$tokens,[ref]$errors)
+if ($errors.Count -ne 0) { throw 'Runner syntax error' }
+function Outside-Function($Node) {
+    for ($parent=$Node.Parent; $null -ne $parent; $parent=$parent.Parent) {
+        if ($parent -is [Management.Automation.Language.FunctionDefinitionAst]) { return $false }
+    }
+    return $true
+}
+$commands=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst]},$true) | Where-Object { Outside-Function $_ } | ForEach-Object {
+    $assignment=$null
+    for ($parent=$_.Parent; $null -ne $parent; $parent=$parent.Parent) {
+        if ($parent -is [Management.Automation.Language.AssignmentStatementAst]) {
+            $assignment=$parent.Left.Extent.Text; break
+        }
+    }
+    @{name=$_.GetCommandName(); text=$_.Extent.Text; offset=$_.Extent.StartOffset; assignment=$assignment}
+})
+$assignments=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst]},$true) | Where-Object { Outside-Function $_ } | ForEach-Object {
+    @{left=$_.Left.Extent.Text; right=$_.Right.Extent.Text; operator=[string]$_.Operator; offset=$_.Extent.StartOffset}
+})
+$pipelines=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.PipelineAst]},$true) | Where-Object { Outside-Function $_ } | ForEach-Object {$_.Extent.Text})
+$loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachStatementAst]},$true) | Where-Object { Outside-Function $_ } | ForEach-Object {
+    @{condition=$_.Condition.Extent.Text; body=$_.Body.Extent.Text; offset=$_.Extent.StartOffset}
+})
+@{commands=$commands; assignments=$assignments; pipelines=$pipelines; loops=$loops} | ConvertTo-Json -Depth 12 -Compress
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-File",
+            str(harness),
+            "-Runner",
+            str(ROOT / "scripts/deploy-local-beta-release.ps1"),
+        ],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    report = json.loads(result.stdout)
+    commands = report["commands"]
+
+    def one(name):
+        matches = [item for item in commands if item["name"] == name]
+        assert len(matches) == 1, name
+        return matches[0]
+
+    new = one("New-BetaApplicationImagePlan")
+    pin = one("Set-BetaApplicationVerificationImage")
+    evidence = one("Get-BetaApplicationImageEvidence")
+    assert new["assignment"] == pin["assignment"] == "$applicationImagePlan"
+    assert new["text"] == "New-BetaApplicationImagePlan @applicationImageArguments"
+    assert (
+        pin["text"]
+        == "Set-BetaApplicationVerificationImage -Plan $applicationImagePlan -ImageId $verificationMigrationImage"
+    )
+    assert (
+        evidence["text"]
+        == "Get-BetaApplicationImageEvidence -Plan $applicationImagePlan"
+    )
+    renders = [
+        item
+        for item in commands
+        if item["name"] == "ConvertTo-BetaApplicationImageLines"
+    ]
+    assert len(renders) == 2
+    render = next(item for item in renders if item["assignment"] == "$releaseCompose")
+    pin_render = next(
+        item for item in renders if item["assignment"] == "$verificationImageLines"
+    )
+    assert (
+        render["text"]
+        == "ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan"
+    )
+    assert (
+        '$applicationImagePlan | Where-Object { $_.service -eq "verification" }'
+        in pin_render["text"]
+    )
+    assert (
+        '$releaseCompose -join "`n" | Set-Content -LiteralPath $releaseComposeFile -Encoding utf8'
+        in report["pipelines"]
+    )
+    pin_write = next(
+        item
+        for item in commands
+        if item["name"] == "Write-Utf8Text"
+        and "-Path $verificationImageOverride " in item["text"]
+    )
+    assert '-Content (($verificationImageLines -join "`n") + "`n")' in pin_write["text"]
+    attached = {
+        item["right"]: item
+        for item in report["assignments"]
+        if item["left"] == "$script:ComposeFiles" and item["operator"] == "PlusEquals"
+    }
+    profile_append = "(Join-Path $script:RepoRoot $profile)"
+    assert set(attached) == {
+        "$stateVolumeOverride",
+        "$migrationOverride",
+        "$betaTunnelOverride",
+        "$releaseComposeFile",
+        "$verificationImageOverride",
+        profile_append,
+    }
+    tunnel_calls = [item for item in commands if item["name"] == "Get-BetaTunnelInputBinding"]
+    binding = next(item for item in tunnel_calls if item["assignment"] == "$betaTunnelBinding")
+    private_render = next(item for item in tunnel_calls if "-OverrideOutput $betaTunnelOverride" in item["text"])
+    final_check = max((item for item in tunnel_calls if "-Expected $betaTunnelBinding" in item["text"]),
+                      key=lambda item: item["offset"])
+    assert binding["offset"] < private_render["offset"] < attached["$betaTunnelOverride"]["offset"]
+    assert attached["$betaTunnelOverride"]["offset"] < min(item["offset"] for item in commands if item["name"] == "Get-ServiceRecords")
+    assert final_check["offset"] < one("Start-BetaMutation")["offset"]
+    assert "-OverrideOutput" not in final_check["text"]
+    profile_loops = [
+        item for item in report["loops"] if item["condition"] == "$didcommProfiles"
+    ]
+    assert len(profile_loops) == 1
+    assert "$script:ComposeFiles += " + profile_append in profile_loops[0]["body"]
+    assert attached[profile_append]["offset"] < new["offset"]
+    rehearsal = next(
+        item
+        for item in commands
+        if item["name"] == "Write-Step"
+        and item["text"]
+        == 'Write-Step "Rehearse one-way migration on isolated beta copy"'
+    )
+    maintenance = next(
+        item
+        for item in commands
+        if item["name"] == "Write-Step"
+        and item["text"]
+        == 'Write-Step "Enter maintenance window and apply live migration"'
+    )
+    assert (
+        new["offset"]
+        < render["offset"]
+        < attached["$releaseComposeFile"]["offset"]
+        < pin["offset"]
+        < pin_render["offset"]
+        < pin_write["offset"]
+        < attached["$verificationImageOverride"]["offset"]
+        < rehearsal["offset"]
+        < evidence["offset"]
+        < maintenance["offset"]
+    )
+    builds = [
+        loop for loop in report["loops"] if "$_.build_eligible" in loop["condition"]
+    ]
+    assert len(builds) == 1
+    assert (
+        builds[0]["condition"]
+        == "@($applicationImagePlan | Where-Object { $_.build_eligible })"
+    )
+    assert "$service = [string]$entry.service" in builds[0]["body"]
+    assert (
+        "Invoke-Compose -Arguments ($applicationBuildArguments + @($service))"
+        in builds[0]["body"]
+    )
+    assert builds[0]["offset"] < pin["offset"]
+    evidence_loops = [
+        loop
+        for loop in report["loops"]
+        if "Get-BetaApplicationImageEvidence" in loop["condition"]
+    ]
+    assert len(evidence_loops) == 1
+    assert (
+        "$runtimeImageDigests[$service] = [string]$imageEvidence.digest"
+        in evidence_loops[0]["body"]
+    )
+    assert (
+        "$imageRef = [string]$imageEvidence.inspect_reference"
+        in evidence_loops[0]["body"]
+    )
+    assert "if ($null -ne $imageEvidence.digest)" in evidence_loops[0]["body"]

@@ -1,0 +1,30 @@
+{
+  "schema": "marty.demo-vendor-seed-behavior/v1",
+  "source": "29aee915995215696884e665ce7b751b4f231c72:scripts/seed_demo_vendor_fixtures.py",
+  "fixture": "contracts/demo-seed-reference-v1.json",
+  "profile_cases": [
+    {"input": "", "normalized": "dev", "persistent": false},
+    {"input": "local", "normalized": "dev", "persistent": false},
+    {"input": "beta_experiments", "normalized": "experiments", "persistent": false},
+    {"input": "prod", "normalized": "production", "persistent": true},
+    {"input": "selfhost_prod", "normalized": "selfhost-production", "persistent": true},
+    {"input": "custom", "normalized": "custom", "persistent": false}
+  ],
+  "payload_format_cases": [
+    {"explicit": "mso_mdoc", "supported": ["sd_jwt_vc"], "result": "mso_mdoc"},
+    {"explicit": null, "supported": ["mso_mdoc", "sd_jwt_vc"], "result": "mso_mdoc"},
+    {"explicit": null, "supported": ["sd_jwt_vc"], "result": "w3c_vcdm_v2_sd_jwt"},
+    {"explicit": null, "supported": ["jwt_vc_json"], "result": "jwt_vc_json"},
+    {"explicit": null, "supported": [], "result": "w3c_vcdm_v2_sd_jwt"}
+  ],
+  "database_behavior": {
+    "required_table": "organization_service.organizations",
+    "optional_tables": ["credential_service.credential_types", "credential_template_service.credential_templates"],
+    "optional_columns": ["wallet_configs", "credential_payload_format"],
+    "organization_match": ["id", "slug", "case_insensitive_name"],
+    "credential_type_match": ["organization_id", "name"],
+    "credential_template_match": ["organization_id", "credential_type"],
+    "transaction": "all_or_nothing",
+    "second_run": "update_existing_without_new_rows"
+  }
+}

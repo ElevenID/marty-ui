@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-10-19",
+  "scope": "Focused local engineering regression verification; full authenticated demo qualification not run",
+  "environment": {
+    "os": "Linux",
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "rustc": "1.95.0",
+    "cargo": "1.95.0",
+    "ui_browser_playwright": "1.62.1",
+    "chrome_for_testing": "155.0.8059.84",
+    "recorder_package_playwright": "1.63.0",
+    "notes": [
+      "Pinned UI Playwright browser archive download was invalid; explicit official Chrome155 used.",
+      "Google Fonts CSS requests failed certificate validation; browser layout used fallback fonts.",
+      "No Docker/full backend stack, live beta execution, external KMS, Android, Canvas OSS or Windows/native qualification."
+    ]
+  },
+  "checks": [
+    {
+      "id": "rust-wallet",
+      "result": "PASS",
+      "tests": 5,
+      "command": "cargo test --locked --manifest-path rust/Cargo.toml -p marty-canvas-demo-seed --test frozen_wallet -j2",
+      "cwd": "marty-ui",
+      "boundary": "Stubbed transport/current contract fixtures and local HTTP signing-service test server; no real KMS."
+    },
+    {
+      "id": "lifecycle",
+      "result": "PASS",
+      "tests": 20,
+      "command": "node tests/scripts/audit-beta-credential-lifecycle.test.js",
+      "cwd": "marty-ui",
+      "boundary": "Actual browser callbacks against scripted fetch; no live service mutations."
+    },
+    {
+      "id": "provider-switch-consumer",
+      "result": "PASS",
+      "tests": 6,
+      "command": "node tests/scripts/audit-beta-issuer-provider-switch.test.js",
+      "cwd": "marty-ui",
+      "boundary": "Local consumer regression, not external provider execution."
+    },
+    {
+      "id": "ui-unit",
+      "result": "PASS",
+      "tests": 32,
+      "suites": 3,
+      "command": "npm test -- src/services/demoManifestService.test.ts src/components/demos/DemoVideoPlayer.test.tsx src/components/pages/DemoPages.test.tsx",
+      "cwd": "marty-ui/ui",
+      "boundary": "Focused Vitest regressions."
+    },
+    {
+      "id": "typescript",
+      "result": "PASS",
+      "command": "node_modules/.bin/tsc -p tsconfig.build.json --noEmit",
+      "cwd": "marty-ui/ui"
+    },
+    {
+      "id": "production-build",
+      "result": "PASS",
+      "command": "PUPPETEER_EXECUTABLE_PATH=<installed-chrome> npm run build",
+      "cwd": "marty-ui/ui",
+      "prerender_enabled": true,
+      "vite_build_duration_seconds": 168.9,
+      "notes": [
+        "Production build completed; bundle-size warning remains."
+      ]
+    },
+    {
+      "id": "production-catalog-browser",
+      "result": "PASS",
+      "tests": 29,
+      "command": "DEMO_AUDIT_UI_MODE=production DEMO_AUDIT_BROWSER_EXECUTABLE=<installed-chrome> node tests/scripts/audit-local-demo-catalog.js",
+      "cwd": "marty-ui",
+      "evidence": "browser-report.json",
+      "boundary": "Local public UI, real browser and served manifests; unauthenticated session fixture; no backend qualification",
+      "fixtures": [
+        "GET /v1/auth/me -> unauthenticated",
+        "YouTube frame content only for consent test",
+        "Controlled manifest failure/review-state responses"
+      ]
+    },
+    {
+      "id": "recorder-selected",
+      "result": "PASS",
+      "tests": 49,
+      "skipped": 0,
+      "command": "node --test --test-reporter=spec test/config.test.js test/externalQualification.test.js test/externalProcessTimeout.test.js test/functionalRerun.test.js test/functionalScenarioContracts.test.js test/qrAssertions.test.js",
+      "cwd": "marty-demo-recorder",
+      "boundary": "Focused129-file exact-source snapshot; selected Node suite, not full Node/Python suite or live qualification."
+    },
+    {
+      "id": "recorder-rendered-qr",
+      "result": "PASS",
+      "tests": 6,
+      "method": "Local Chrome155: actual rendered valid IMG/SVG/CANVAS accepted; corresponding invalid image/drawing/pattern rejected.",
+      "boundary": "Framework QR assertion smoke; no beta handoff and no maintained top-level demo claims."
+    },
+    {
+      "id": "syntax-and-whitespace",
+      "result": "PASS",
+      "command": "node --check tests/scripts/audit-beta-credential-lifecycle.js; node --check tests/scripts/audit-local-demo-catalog.js; git diff --check",
+      "cwd": "marty-ui",
+      "note": "Recorder full fix range also passes git diff --check."
+    }
+  ],
+  "patch_application_verification": "Packaged separately after final commits in each repository application-verification.json; those records include exact final tree hashes.",
+  "full_stack_execution": "NOT_RUN"
+}

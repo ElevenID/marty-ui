@@ -1,0 +1,1134 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-claim-contract-baseline/ui
+
+stderr | src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > acquires one server-governed offer and loads organization-scoped wallet links
+React does not recognize the `alignItems` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `alignitems` instead. If you accidentally passed it from a parent component, remove it from the DOM element.
+React does not recognize the `flexWrap` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `flexwrap` instead. If you accidentally passed it from a parent component, remove it from the DOM element.
+React does not recognize the `textAlign` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `textalign` instead. If you accidentally passed it from a parent component, remove it from the DOM element.
+
+stderr | src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > acquires one server-governed offer and loads organization-scoped wallet links
+React does not recognize the `justifyContent` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `justifycontent` instead. If you accidentally passed it from a parent component, remove it from the DOM element.
+
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx (13 tests | 11 failed) 4112ms
+   ❯ ClaimCredentialDialog (13)
+     × acquires one server-governed offer and loads organization-scoped wallet links 445ms
+     × does not offer Canvas consent or destination selection that the Rust claim path cannot execute 197ms
+     × changes browser wallet transport without starting another issuance 146ms
+     × waits for a delayed wallet catalogue and applies the preference without duplicate claims 68ms
+     × ignores the previous application response after switching applications 1030ms
+     × does not let a late organization registry replace the current wallet catalogue 136ms
+     × shares a pending claim across close and reopen and restores focus to the opener 131ms
+     × hides the previous invite while a refresh is pending and never restores it after failure 183ms
+     × does not navigate when a delayed wallet link resolves after the dialog closes 155ms
+     × uses the Rust expired claim state and offers a server retry 1023ms
+     × describes mailto as an email draft without claiming the message was sent 315ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 11 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > acquires one server-governed offer and loads organization-scoped wallet links
+AssertionError: expected "vi.fn()" to be called once with arguments: [ 'app-1' ]
+
+Received:
+
+  1st vi.fn() call:
+
+  [
+    "app-1",
++   {
++     "canvas_credentials_consent": false,
++     "delivery_destination_ids": [
++       "dd-oid4vci-compatible-wallet",
++     ],
++   },
+  ]
+
+  2nd vi.fn() call:
+
+  [
+    "app-1",
++   {
++     "canvas_credentials_consent": true,
++     "delivery_destination_ids": [
++       "dd-oid4vci-compatible-wallet",
++       "dd-canvas-credentials-institutional",
++     ],
++   },
+  ]
+
+
+Number of calls: 2
+
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:121:39
+    119|     expect(await screen.findByTestId('claim-invite-display')).toBeInTh…
+    120|     expect(mockListWallets).toHaveBeenCalledWith(true, 'org-1');
+    121|     expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith(…
+       |                                       ^
+    122|     expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i }))…
+    123|     expect(screen.getByTestId('claim-invite-allowed-wallets')).toHaveT…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > does not offer Canvas consent or destination selection that the Rust claim path cannot execute
+Error: expect(element).not.toBeInTheDocument()
+
+expected document not to contain element, found <input
+  checked=""
+  class="PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"
+  data-indeterminate="false"
+  type="checkbox"
+/> instead
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:130:81
+    128|     render(<ClaimCredentialDialog {...props} />);
+    129|     await screen.findByTestId('claim-invite-display');
+    130|     expect(screen.queryByRole('checkbox', { name: /Canvas Credentials/…
+       |                                                                                 ^
+    131|     expect(screen.queryByText('Also show this badge in Canvas Credenti…
+    132|     expect(mockListDeliveryDestinations).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > changes browser wallet transport without starting another issuance
+AssertionError: expected "vi.fn()" to be called 1 times, but got 2 times
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:152:39
+    150|     expect(screen.getByTestId('claim-invite-default-tab')).toHaveTextC…
+    151|     expect(screen.getByTestId('claim-invite-walt-uri')).toHaveTextCont…
+    152|     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+       |                                       ^
+    153|   });
+    154|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > waits for a delayed wallet catalogue and applies the preference without duplicate claims
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 2 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      "app-1",
+      Object {
+        "canvas_credentials_consent": false,
+        "delivery_destination_ids": Array [
+          "dd-oid4vci-compatible-wallet",
+        ],
+      },
+    ]
+
+  2nd vi.fn() call:
+
+    Array [
+      "app-1",
+      Object {
+        "canvas_credentials_consent": true,
+        "delivery_destination_ids": Array [
+          "dd-oid4vci-compatible-wallet",
+          "dd-canvas-credentials-institutional",
+        ],
+      },
+    ]
+
+
+Number of calls: 2
+
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:161:43
+    159|     render(<ClaimCredentialDialog {...props} />);
+    160|     await waitFor(() => expect(mockListWallets).toHaveBeenCalledWith(t…
+    161|     expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+       |                                           ^
+    162|     await act(async () => catalogue.resolve(wallets));
+    163|     expect(await screen.findByTestId('claim-invite-allowed-wallets')).…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > ignores the previous application response after switching applications
+AssertionError: expected "vi.fn()" to be called with arguments: [ 'app-1' ]
+
+Received:
+
+  1st vi.fn() call:
+
+  [
+    "app-1",
++   {
++     "canvas_credentials_consent": false,
++     "delivery_destination_ids": [
++       "dd-oid4vci-compatible-wallet",
++     ],
++   },
+  ]
+
+  2nd vi.fn() call:
+
+  [
+    "app-1",
++   {
++     "canvas_credentials_consent": true,
++     "delivery_destination_ids": [
++       "dd-oid4vci-compatible-wallet",
++       "dd-canvas-credentials-institutional",
++     ],
++   },
+  ]
+
+
+Number of calls: 2
+
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head>[39m
+    [36m<meta[39m
+      [33mcontent[39m=[32m""[39m
+      [33mname[39m=[32m"emotion-insertion-point"[39m
+    [36m/>[39m
+  [36m</head>[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m"padding-right: 1024px; overflow: hidden;"[39m
+  [36m>[39m
+    [36m<button[39m
+      [33maria-hidden[39m=[32m"true"[39m
+    [36m>[39m
+      [0mClaim credential[0m
+    [36m</button>[39m
+    [36m<div[39m
+      [33maria-hidden[39m=[32m"true"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-3oqe55"[39m
+      [36m/>[39m
+    [36m</div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+      [33mdata-application-id[39m=[32m"app-1"[39m
+      [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+      [33mrole[39m=[32m"presentation"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"MuiBackdrop-root MuiModal-backdrop MuiDialog-backdrop css-1cennmq-MuiBackdrop-root-MuiDialog-backdrop"[39m
+        [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+      [36m/>[39m
+      [36m<div[39m
+        [33mdata-testid[39m=[32m"sentinelStart"[39m
+        [33mtabindex[39m=[32m"0"[39m
+      [36m/>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+        [33mrole[39m=[32m"presentation"[39m
+        [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+        [33mtabindex[39m=[32m"-1"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33maria-labelledby[39m=[32m"_r_q_"[39m
+          [33maria-modal[39m=[32m"true"[39m
+          [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+          [33mdata-mui-focusable[39m=[32m""[39m
+          [33mrole[39m=[32m"dialog"[39m
+          [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+          [33mtabindex[39m=[32m"-1"[39m
+        [36m>[39m
+          [36m<h2[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+            [33mid[39m=[32m"_r_q_"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeMedium css-1wtp6o0-MuiSvgIcon-root"[39m
+              [33mdata-testid[39m=[32m"AccountBalanceWalletIcon"[39m
+              [33mfocusable[39m=[32m"false"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2zm-9-2h10V8H12zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [0mReceive Credential[0m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-uyx85k-MuiChip-root"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+              [36m>[39m
+                [0mAny OID4VCI Wallet[0m
+              [36m</span>[39m
+            [36m</div>[39m
+          [36m</h2>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiDialogContent-root MuiDialogContent-dividers css-10bxh4q-MuiDialogContent-root"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Choose wallet"[39m
+              [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+              [33mdata-testid[39m=[32m"wallet-selector"[39m
+              [33mrole[39m=[32m"radiogroup"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33maria-checked[39m=[32m"true"[39m
+                [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+                [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+                [33mrole[39m=[32m"radio"[39m
+                [33mtabindex[39m=[32m"0"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiCardContent-root css-ct4has-MuiCardContent-root"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33malignitems[39m=[32m"flex-start"[39m
+                    [33mclass[39m=[32m"MuiStack-root css-5u9cht-MuiStack-root"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"MuiButtonBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall PrivateSwitchBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall Mui-checked MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall css-sk04ry-MuiButtonBase-root-MuiSwitchBase-root-MuiRadio-root"[39m
+                    [36m>[39m
+                      [36m<input[39m
+                        [33mchecked[39m=[32m""[39m
+                        [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+                        [33mtype[39m=[32m"radio"[39m
+                      [36m/>[39m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"css-9oxshb-MuiRadioButtonIcon-root"[39m
+                      [36m>[39m
+                        [36m<svg[39m
+                          [33maria-hidden[39m=[32m"true"[39m
+                          [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-10fh2vq-MuiSvgIcon-root-MuiRadioButtonIcon-root"[39m
+                          [33mdata-testid[39m=[32m"RadioButtonUncheckedIcon"[39m
+                          [33mfocusable[39m=[32m"false"[39m
+                          [33mviewBox[39m=[32m"0 0 24 24"[39m
+                        [36m>[39m
+                          [36m<path[39m
+                            [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"[39m
+                          [36m/>[39m
+                        [36m</svg>[39m
+                        [36m<svg[39m
+                          [33maria-hidden[39m=[32m"true"[39m
+                          [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-...
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:172:59
+    170|       ? previous.promise : Promise.resolve({ ...offer, offer_url: 'htt…
+    171|     const view = render(<ClaimCredentialDialog {...props} />);
+    172|     await waitFor(() => expect(mockGenerateIssuanceOffer).toHaveBeenCa…
+       |                                                           ^
+    173|     view.rerender(<ClaimCredentialDialog {...props} applicationId="app…
+    174|     expect(await screen.findByTestId('claim-invite-url')).toHaveTextCo…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../marty-ui/ui/node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > does not let a late organization registry replace the current wallet catalogue
+TestingLibraryElementError: Unable to find an element by: [data-testid="wallet-option-wr-org-2"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"padding-right: 1024px; overflow: hidden;"[39m
+[36m>[39m
+  [36m<button[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [0mClaim credential[0m
+  [36m</button>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiBox-root css-3oqe55"[39m
+    [36m/>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+    [33mdata-application-id[39m=[32m"app-2"[39m
+    [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+    [33mrole[39m=[32m"presentation"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"MuiBackdrop-root MuiModal-backdrop MuiDialog-backdrop css-1cennmq-MuiBackdrop-root-MuiDialog-backdrop"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mdata-testid[39m=[32m"sentinelStart"[39m
+      [33mtabindex[39m=[32m"0"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+      [33mrole[39m=[32m"presentation"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+      [33mtabindex[39m=[32m"-1"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-labelledby[39m=[32m"_r_t_"[39m
+        [33maria-modal[39m=[32m"true"[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+        [33mdata-mui-focusable[39m=[32m""[39m
+        [33mrole[39m=[32m"dialog"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+        [33mtabindex[39m=[32m"-1"[39m
+      [36m>[39m
+        [36m<h2[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+          [33mid[39m=[32m"_r_t_"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeMedium css-1wtp6o0-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"AccountBalanceWalletIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2zm-9-2h10V8H12zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [0mReceive Credential[0m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-uyx85k-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+            [36m>[39m
+              [0mAny OID4VCI Wallet[0m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-filled MuiChip-sizeSmall MuiChip-colorSuccess css-106f2r9-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-eccknh-MuiChip-label"[39m
+            [36m>[39m
+              [0mReady[0m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</h2>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiDialogContent-root MuiDialogContent-dividers css-10bxh4q-MuiDialogContent-root"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33maria-label[39m=[32m"Choose wallet"[39m
+            [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+            [33mdata-testid[39m=[32m"wallet-selector"[39m
+            [33mrole[39m=[32m"radiogroup"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-checked[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+              [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+              [33mrole[39m=[32m"radio"[39m
+              [33mtabindex[39m=[32m"0"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiCardContent-root css-ct4has-MuiCardContent-root"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33malignitems[39m=[32m"flex-start"[39m
+                  [33mclass[39m=[32m"MuiStack-root css-5u9cht-MuiStack-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall PrivateSwitchBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall Mui-checked MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall css-sk04ry-MuiButtonBase-root-MuiSwitchBase-root-MuiRadio-root"[39m
+                  [36m>[39m
+                    [36m<input[39m
+                      [33mchecked[39m=[32m""[39m
+                      [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+                      [33mtype[39m=[32m"radio"[39m
+                    [36m/>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"css-9oxshb-MuiRadioButtonIcon-root"[39m
+                    [36m>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-10fh2vq-MuiSvgIcon-root-MuiRadioButtonIcon-root"[39m
+                        [33mdata-testid[39m=[32m"RadioButtonUncheckedIcon"[39m
+                        [33mfocusable[39m=[32m"false"[39m
+                        [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [36m>[39m
+                        [36m<path[39m
+                          [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"[39m
+                        [36m/>[39m
+                      [36m</svg>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-oen5zo-Mui...
+ ❯ Object.getElementError ../../marty-ui/ui/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:189:19
+    187|     await screen.findByTestId('wallet-option-wr-org-2');
+    188|     await act(async () => previous.resolve(wallets));
+    189|     expect(screen.getByTestId('wallet-option-wr-org-2')).toBeInTheDocu…
+       |                   ^
+    190|     expect(screen.queryByTestId('wallet-option-wr-spruce-001')).not.to…
+    191|     expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith(…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > shares a pending claim across close and reopen and restores focus to the opener
+AssertionError: expected "vi.fn()" to be called 1 times, but got 3 times
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:205:39
+    203|     await act(async () => pending.resolve(offer));
+    204|     expect(await screen.findByTestId('claim-invite-url')).toHaveTextCo…
+    205|     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+       |                                       ^
+    206|   });
+    207|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > hides the previous invite while a refresh is pending and never restores it after failure
+Error: expect(element).not.toBeInTheDocument()
+
+expected document not to contain element, found <div
+  data-testid="claim-invite-display"
+>
+  <div
+    data-testid="claim-invite-url"
+  >
+    https://issuer.example/offers/current
+  </div>
+  <div
+    data-testid="claim-invite-allowed-wallets"
+  >
+    all
+  </div>
+  <div
+    data-testid="claim-invite-default-tab"
+  >
+    true
+  </div>
+  <div
+    data-testid="claim-invite-walt-uri"
+  />
+  <button>
+    Refresh invite
+  </button>
+</div> instead
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:214:62
+    212|     mockGenerateIssuanceOffer.mockReturnValue(pending.promise);
+    213|     await view.user.click(screen.getByRole('button', { name: 'Refresh …
+    214|     expect(screen.queryByTestId('claim-invite-display')).not.toBeInThe…
+       |                                                              ^
+    215|     expect(screen.queryByText('Ready', { exact: true })).not.toBeInThe…
+    216|     await act(async () => pending.reject(new Error('Request failed')));
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > does not navigate when a delayed wallet link resolves after the dialog closes
+Error: expect(element).toBeDisabled()
+
+Received element is not disabled:
+  <button
+  class="MuiButtonBase-root MuiButton-root MuiButton-contained MuiButton-sizeLarge MuiButton-colorPrimary MuiButton-fullWidth css-826g3d-MuiButtonBase-root-MuiButton-root"
+  data-testid="wallet-open-link"
+  tabindex="0"
+  type="button"
+/>
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:243:68
+    241|     const view = render(<ClaimCredentialDialog {...props} />);
+    242|     await view.user.click(await screen.findByRole('button', { name: 'O…
+    243|     expect(screen.getByRole('button', { name: 'Open SpruceKit' })).toB…
+       |                                                                    ^
+    244|     view.rerender(<ClaimCredentialDialog {...props} open={false} />);
+    245|     await act(async () => openLink.resolve({ open_uri: 'sprucekit://st…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > uses the Rust expired claim state and offers a server retry
+TestingLibraryElementError: Unable to find an element with the text: This wallet invite has expired.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"padding-right: 1024px; overflow: hidden;"[39m
+[36m>[39m
+  [36m<button[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [0mClaim credential[0m
+  [36m</button>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiBox-root css-3oqe55"[39m
+    [36m/>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+    [33mdata-application-id[39m=[32m"app-1"[39m
+    [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+    [33mrole[39m=[32m"presentation"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"MuiBackdrop-root MuiModal-backdrop MuiDialog-backdrop css-1cennmq-MuiBackdrop-root-MuiDialog-backdrop"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mdata-testid[39m=[32m"sentinelStart"[39m
+      [33mtabindex[39m=[32m"0"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+      [33mrole[39m=[32m"presentation"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+      [33mtabindex[39m=[32m"-1"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-labelledby[39m=[32m"_r_1q_"[39m
+        [33maria-modal[39m=[32m"true"[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+        [33mdata-mui-focusable[39m=[32m""[39m
+        [33mrole[39m=[32m"dialog"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+        [33mtabindex[39m=[32m"-1"[39m
+      [36m>[39m
+        [36m<h2[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+          [33mid[39m=[32m"_r_1q_"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeMedium css-1wtp6o0-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"AccountBalanceWalletIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2zm-9-2h10V8H12zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [0mReceive Credential[0m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-uyx85k-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+            [36m>[39m
+              [0mAny OID4VCI Wallet[0m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-filled MuiChip-sizeSmall MuiChip-colorSuccess css-106f2r9-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-eccknh-MuiChip-label"[39m
+            [36m>[39m
+              [0mReady[0m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</h2>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiDialogContent-root MuiDialogContent-dividers css-10bxh4q-MuiDialogContent-root"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33maria-label[39m=[32m"Choose wallet"[39m
+            [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+            [33mdata-testid[39m=[32m"wallet-selector"[39m
+            [33mrole[39m=[32m"radiogroup"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-checked[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+              [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+              [33mrole[39m=[32m"radio"[39m
+              [33mtabindex[39m=[32m"0"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiCardContent-root css-ct4has-MuiCardContent-root"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33malignitems[39m=[32m"flex-start"[39m
+                  [33mclass[39m=[32m"MuiStack-root css-5u9cht-MuiStack-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall PrivateSwitchBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall Mui-checked MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall css-sk04ry-MuiButtonBase-root-MuiSwitchBase-root-MuiRadio-root"[39m
+                  [36m>[39m
+                    [36m<input[39m
+                      [33mchecked[39m=[32m""[39m
+                      [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+                      [33mtype[39m=[32m"radio"[39m
+                    [36m/>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"css-9oxshb-MuiRadioButtonIcon-root"[39m
+                    [36m>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-10fh2vq-MuiSvgIcon-root-MuiRadioButtonIcon-root"[39m
+                        [33mdata-testid[39m=[32m"RadioButtonUncheckedIcon"[39m
+                        [33mfocusable[39m=[32m"false"[39m
+                        [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [36m>[39m
+                        [36m<path[39m
+                          [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"[39m
+                        [36m/>[39m
+                      [36m</svg>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-oen5zo-M...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"padding-right: 1024px; overflow: hidden;"[39m
+[36m>[39m
+  [36m<button[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [0mClaim credential[0m
+  [36m</button>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiBox-root css-3oqe55"[39m
+    [36m/>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+    [33mdata-application-id[39m=[32m"app-1"[39m
+    [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+    [33mrole[39m=[32m"presentation"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"MuiBackdrop-root MuiModal-backdrop MuiDialog-backdrop css-1cennmq-MuiBackdrop-root-MuiDialog-backdrop"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mdata-testid[39m=[32m"sentinelStart"[39m
+      [33mtabindex[39m=[32m"0"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+      [33mrole[39m=[32m"presentation"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+      [33mtabindex[39m=[32m"-1"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-labelledby[39m=[32m"_r_1q_"[39m
+        [33maria-modal[39m=[32m"true"[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+        [33mdata-mui-focusable[39m=[32m""[39m
+        [33mrole[39m=[32m"dialog"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+        [33mtabindex[39m=[32m"-1"[39m
+      [36m>[39m
+        [36m<h2[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+          [33mid[39m=[32m"_r_1q_"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeMedium css-1wtp6o0-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"AccountBalanceWalletIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2zm-9-2h10V8H12zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [0mReceive Credential[0m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-uyx85k-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+            [36m>[39m
+              [0mAny OID4VCI Wallet[0m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-filled MuiChip-sizeSmall MuiChip-colorSuccess css-106f2r9-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-eccknh-MuiChip-label"[39m
+            [36m>[39m
+              [0mReady[0m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</h2>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiDialogContent-root MuiDialogContent-dividers css-10bxh4q-MuiDialogContent-root"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33maria-label[39m=[32m"Choose wallet"[39m
+            [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+            [33mdata-testid[39m=[32m"wallet-selector"[39m
+            [33mrole[39m=[32m"radiogroup"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-checked[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+              [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+              [33mrole[39m=[32m"radio"[39m
+              [33mtabindex[39m=[32m"0"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiCardContent-root css-ct4has-MuiCardContent-root"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33malignitems[39m=[32m"flex-start"[39m
+                  [33mclass[39m=[32m"MuiStack-root css-5u9cht-MuiStack-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall PrivateSwitchBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall Mui-checked MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall css-sk04ry-MuiButtonBase-root-MuiSwitchBase-root-MuiRadio-root"[39m
+                  [36m>[39m
+                    [36m<input[39m
+                      [33mchecked[39m=[32m""[39m
+                      [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+                      [33mtype[39m=[32m"radio"[39m
+                    [36m/>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"css-9oxshb-MuiRadioButtonIcon-root"[39m
+                    [36m>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-10fh2vq-MuiSvgIcon-root-MuiRadioButtonIcon-root"[39m
+                        [33mdata-testid[39m=[32m"RadioButtonUncheckedIcon"[39m
+                        [33mfocusable[39m=[32m"false"[39m
+                        [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [36m>[39m
+                        [36m<path[39m
+                          [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"[39m
+                        [36m/>[39m
+                      [36m</svg>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-oen5zo-M...
+ ❯ waitForWrapper ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:252:25
+    250|     mockGenerateIssuanceOffer.mockResolvedValue({ ...offer, claim_stat…
+    251|     render(<ClaimCredentialDialog {...props} />);
+    252|     expect(await screen.findByText('This wallet invite has expired.'))…
+       |                         ^
+    253|     expect(screen.queryByTestId('claim-invite-display')).not.toBeInThe…
+    254|     expect(screen.getByRole('button', { name: 'Get new offer' })).toBe…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/11]⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > describes mailto as an email draft without claiming the message was sent
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "Open email draft"
+
+Here are the accessible roles:
+
+  presentation:
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+    [33mdata-application-id[39m=[32m"app-1"[39m
+    [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+    [33mrole[39m=[32m"presentation"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+    [33mrole[39m=[32m"presentation"[39m
+    [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  dialog:
+
+  Name "Receive Credential Any OID4VCI Wallet Ready":
+  [36m<div[39m
+    [33maria-labelledby[39m=[32m"_r_1v_"[39m
+    [33maria-modal[39m=[32m"true"[39m
+    [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+    [33mdata-mui-focusable[39m=[32m""[39m
+    [33mrole[39m=[32m"dialog"[39m
+    [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  heading:
+
+  Name "Receive Credential Any OID4VCI Wallet Ready":
+  [36m<h2[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+    [33mid[39m=[32m"_r_1v_"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  radiogroup:
+
+  Name "Choose wallet":
+  [36m<div[39m
+    [33maria-label[39m=[32m"Choose wallet"[39m
+    [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+    [33mdata-testid[39m=[32m"wallet-selector"[39m
+    [33mrole[39m=[32m"radiogroup"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  radio:
+
+  Name "Any OID4VCI Wallet Browser OID4VCI web ios android Receive this credential with this wallet.":
+  [36m<div[39m
+    [33maria-checked[39m=[32m"true"[39m
+    [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+    [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+    [33mrole[39m=[32m"radio"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+    [33mtype[39m=[32m"radio"[39m
+  [36m/>[39m
+
+  Name "walt.id Wallet Browser web ios android Receive this credential with this wallet.":
+  [36m<div[39m
+    [33maria-checked[39m=[32m"false"[39m
+    [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-97p8hx-MuiPaper-root-MuiCard-root"[39m
+    [33mdata-testid[39m=[32m"wallet-option-wr-waltid-001"[39m
+    [33mrole[39m=[32m"radio"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<input[39m
+    [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+    [33mtype[39m=[32m"radio"[39m
+  [36m/>[39m
+
+  Name "SpruceKit Mobile ios android Receive this credential with this wallet.":
+  [36m<div[39m
+    [33maria-checked[39m=[32m"false"[39m
+    [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-97p8hx-MuiPaper-root-MuiCard-root"[39m
+    [33mdata-testid[39m=[32m"wallet-option-wr-spruce-001"[39m
+    [33mrole[39m=[32m"radio"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<input[39m
+    [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+    [33mtype[39m=[32m"radio"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  paragraph:
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-7ctihp-MuiTypography-root"[39m
+    [33mfont-weight[39m=[32m"700"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-7ctihp-MuiTypography-root"[39m
+    [33mfont-weight[39m=[32m"700"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-7ctihp-MuiTypography-root"[39m
+    [33mfont-weight[39m=[32m"700"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-7ctihp-MuiTypography-root"[39m
+  [36m/>[39m
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-164z2x8-MuiTypography-root"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  checkbox:
+
+  Name "Also show this badge in Canvas Credentials Your organization manages this destination; only the public badge verification view is published.":
+  [36m<input[39m
+    [33mchecked[39m=[32m""[39m
+    [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+    [33mdata-indeterminate[39m=[32m"false"[39m
+    [33mtype[39m=[32m"checkbox"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  button:
+
+  Name "Refresh invite":
+  [36m<button />[39m
+
+  Name "Email link":
+  [36m<button[39m
+    [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-text MuiButton-sizeSmall MuiButton-colorInherit css-9qle2p-MuiButtonBase-root-MuiButton-root"[39m
+    [33mtabindex[39m=[32m"0"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Send":
+  [36m<button[39m
+    [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-contained MuiButton-sizeSmall MuiButton-colorPrimary css-tw6tsg-MuiButtonBase-root-MuiButton-root"[39m
+    [33mtabindex[39m=[32m"0"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  Name "Close":
+  [36m<button[39m
+    [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-1gw9nru-MuiButtonBase-root-MuiButton-root"[39m
+    [33mtabindex[39m=[32m"0"[39m
+    [33mtype[39m=[32m"button"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"padding-right: 1024px; overflow: hidden;"[39m
+[36m>[39m
+  [36m<button[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [0mClaim credential[0m
+  [36m</button>[39m
+  [36m<div[39m
+    [33maria-hidden[39m=[32m"true"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiBox-root css-3oqe55"[39m
+    [36m/>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"MuiDialog-root MuiModal-root css-1424xw8-MuiModal-root-MuiDialog-root"[39m
+    [33mdata-application-id[39m=[32m"app-1"[39m
+    [33mdata-testid[39m=[32m"credential-claim-dialog"[39m
+    [33mrole[39m=[32m"presentation"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33maria-hidden[39m=[32m"true"[39m
+      [33mclass[39m=[32m"MuiBackdrop-root MuiModal-backdrop MuiDialog-backdrop css-1cennmq-MuiBackdrop-root-MuiDialog-backdrop"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mdata-testid[39m=[32m"sentinelStart"[39m
+      [33mtabindex[39m=[32m"0"[39m
+    [36m/>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiDialog-container MuiDialog-scrollPaper css-19do60a-MuiDialog-container"[39m
+      [33mrole[39m=[32m"presentation"[39m
+      [33mstyle[39m=[32m"opacity: 1; transition: opacity 225ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;"[39m
+      [33mtabindex[39m=[32m"-1"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-labelledby[39m=[32m"_r_1v_"[39m
+        [33maria-modal[39m=[32m"true"[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation24 MuiDialog-paper MuiDialog-paperWidthXs MuiDialog-paperFullWidth css-2l9khe-MuiPaper-root-MuiDialog-paper"[39m
+        [33mdata-mui-focusable[39m=[32m""[39m
+        [33mrole[39m=[32m"dialog"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 11px 15px -7px rgba(0,0,0,0.2),0px 24px 38px 3px rgba(0,0,0,0.14),0px 9px 46px 8px rgba(0,0,0,0.12);"[39m
+        [33mtabindex[39m=[32m"-1"[39m
+      [36m>[39m
+        [36m<h2[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiDialogTitle-root css-9v3x22-MuiTypography-root-MuiDialogTitle-root"[39m
+          [33mid[39m=[32m"_r_1v_"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeMedium css-1wtp6o0-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"AccountBalanceWalletIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2zm-9-2h10V8H12zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [0mReceive Credential[0m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-uyx85k-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+            [36m>[39m
+              [0mAny OID4VCI Wallet[0m
+            [36m</span>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiChip-root MuiChip-filled MuiChip-sizeSmall MuiChip-colorSuccess css-106f2r9-MuiChip-root"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"MuiChip-label css-eccknh-MuiChip-label"[39m
+            [36m>[39m
+              [0mReady[0m
+            [36m</span>[39m
+          [36m</div>[39m
+        [36m</h2>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiDialogContent-root MuiDialogContent-dividers css-10bxh4q-MuiDialogContent-root"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33maria-label[39m=[32m"Choose wallet"[39m
+            [33mclass[39m=[32m"MuiStack-root css-1p04ihw-MuiStack-root"[39m
+            [33mdata-testid[39m=[32m"wallet-selector"[39m
+            [33mrole[39m=[32m"radiogroup"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-checked[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiPaper-root MuiPaper-outlined MuiPaper-rounded MuiCard-root css-24mth1-MuiPaper-root-MuiCard-root"[39m
+              [33mdata-testid[39m=[32m"wallet-option-wr-default"[39m
+              [33mrole[39m=[32m"radio"[39m
+              [33mtabindex[39m=[32m"0"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiCardContent-root css-ct4has-MuiCardContent-root"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33malignitems[39m=[32m"flex-start"[39m
+                  [33mclass[39m=[32m"MuiStack-root css-5u9cht-MuiStack-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall PrivateSwitchBase-root MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall Mui-checked MuiRadio-root MuiRadio-colorPrimary MuiRadio-sizeSmall css-sk04ry-MuiButtonBase-root-MuiSwitchBase-root-MuiRadio-root"[39m
+                  [36m>[39m
+                    [36m<input[39m
+                      [33mchecked[39m=[32m""[39m
+                      [33mclass[39m=[32m"PrivateSwitchBase-input css-12xagqm-MuiSwitchBase-root"[39m
+                      [33mtype[39m=[32m"radio"[39m
+                    [36m/>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"css-9oxshb-MuiRadioButtonIcon-root"[39m
+                    [36m>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-10fh2vq-MuiSvgIcon-root-MuiRadioButtonIcon-root"[39m
+                        [33mdata-testid[39m=[32m"RadioButtonUncheckedIcon"[39m
+                        [33mfocusable[39m=[32m"false"[39m
+                        [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [36m>[39m
+                        [36m<path[39m
+                          [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"[39m
+                        [36m/>[39m
+                      [36m</svg>[39m
+                      [36m<svg[39m
+                        [33maria-hidden[39m=[32m"true"[39m
+                        [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeSmall css-oen5zo-M...
+ ❯ Object.getElementError ../../marty-ui/ui/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx:263:31
+    261|       await screen.findByTestId('claim-invite-display');
+    262|       await user.click(screen.getByRole('button', { name: 'Email link'…
+    263|       await user.click(screen.getByRole('button', { name: 'Open email …
+       |                               ^
+    264|       expect(windowOpen).toHaveBeenCalledWith(expect.stringMatching(/^…
+    265|       expect(await screen.findByText(/Complete and send the message in…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/11]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  11 failed | 2 passed (13)
+   Start at  03:29:34
+   Duration  6.45s (tests 65%, import 15%, environment 11%, transform 5%, setup 3%)
+

@@ -1,0 +1,88 @@
+name: Passport Supported Rust Producer Receipt Attestor
+
+# Sign the blocked, source-bound partial receipt on a hosted runner.
+on:
+  workflow_run:
+    workflows: [Passport Supported Disposable Provisioning Producer]
+    types: [completed]
+
+jobs:
+  attest-receipt:
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == 'ElevenID/marty-ui' &&
+      github.event.workflow_run.head_sha == github.sha
+    runs-on: ubuntu-latest
+    environment: beta-lifecycle
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCER_RUN_ID: ${{ github.event.workflow_run.id }}
+      PRODUCER_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      PRODUCER_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify protected producer and plan artifact lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          producer="$(gh api "repos/ElevenID/marty-ui/actions/runs/$PRODUCER_RUN_ID")"
+          jq -e --arg sha "$GITHUB_SHA" --argjson attempt "$PRODUCER_RUN_ATTEMPT" \
+            '.status == "completed" and .conclusion == "success"
+             and .event == "workflow_dispatch" and .head_branch == "main"
+             and .head_sha == $sha and .run_attempt == $attempt
+             and .repository.full_name == "ElevenID/marty-ui"' \
+            <<< "$producer"
+          workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$PRODUCER_WORKFLOW_ID")"
+          jq -e '.path == ".github/workflows/passport-supported-provisioning-producer.yml"
+                 and .state == "active"' <<< "$workflow"
+          record_dir="$RUNNER_TEMP/passport-supported-receipt-$PRODUCER_RUN_ID"
+          mkdir -m 700 "$record_dir"
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "passport-supported-rust-producer-$PRODUCER_RUN_ID-$PRODUCER_RUN_ATTEMPT" \
+            --dir "$record_dir"
+          receipt="$record_dir/passport-supported-rust-producer-$PRODUCER_RUN_ID.json"
+          test -f "$receipt"
+          plan_run_id="$(jq -er '.plan_run_id' "$receipt")"
+          [[ "$plan_run_id" =~ ^[1-9][0-9]{0,19}$ ]]
+          plan_run="$(gh api "repos/ElevenID/marty-ui/actions/runs/$plan_run_id")"
+          jq -e --arg sha "$GITHUB_SHA" \
+            '.status == "completed" and .conclusion == "success"
+             and .event == "workflow_dispatch" and .head_branch == "main"
+             and .head_sha == $sha and .repository.full_name == "ElevenID/marty-ui"' \
+            <<< "$plan_run"
+          plan_workflow_id="$(jq -er '.workflow_id' <<< "$plan_run")"
+          plan_workflow="$(gh api "repos/ElevenID/marty-ui/actions/workflows/$plan_workflow_id")"
+          jq -e '.path == ".github/workflows/passport-supported-provisioning-plan.yml"
+                 and .state == "active"' <<< "$plan_workflow"
+          gh run download "$plan_run_id" --repo "$GITHUB_REPOSITORY" \
+            --name "passport-supported-provisioning-plan-$plan_run_id" \
+            --dir "$record_dir"
+          plan="$record_dir/passport-supported-provisioning-plan-$plan_run_id.json"
+          test -f "$plan"
+          python3 scripts/check_passport_supported_producer_handoff.py \
+            --plan "$plan" --receipt "$receipt" \
+            --source-commit "$GITHUB_SHA" --producer-run-id "$PRODUCER_RUN_ID" \
+            > "$record_dir/handoff.json"
+          jq -e '.schema == "marty.passport-supported-rust-producer-handoff/v1"
+                 and .status == "blocked" and .source_commit == env.GITHUB_SHA' \
+            "$record_dir/handoff.json"
+          cp "$receipt" "passport-supported-rust-producer-$PRODUCER_RUN_ID.json"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-supported-rust-producer-${{ github.event.workflow_run.id }}.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: passport-supported-rust-producer-attested-${{ github.event.workflow_run.id }}
+          path: passport-supported-rust-producer-${{ github.event.workflow_run.id }}.json
+          if-no-files-found: error
+          retention-days: 30

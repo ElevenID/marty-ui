@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "valid_request": {
+    "presentation_policy_id":"policy-1",
+    "organization_id":"org-1",
+    "issuer_did":"did:web:verifier.example",
+    "request_transport":"request_uri",
+    "request_uri_method":"post"
+  },
+  "expected_request": {
+    "presentation_policy_id":"policy-1",
+    "organization_id":"org-1",
+    "issuer_did":"did:web:verifier.example",
+    "response_type":"vp_token",
+    "trust_profile_id":null,
+    "deployment_profile_id":null,
+    "external_reference":null,
+    "callback_url":null,
+    "expiry_minutes":15,
+    "oid4vp_profile":"standard",
+    "request_transport":"request_uri",
+    "request_uri_method":"post"
+  },
+  "invalid_requests": [
+    {"organization_id":"org-1","issuer_did":"did:web:verifier.example"},
+    {"presentation_policy_id":"policy-1","organization_id":"org-1","issuer_did":"did:web:verifier.example","request_transport":"url_query","request_uri_method":"post"},
+    {"presentation_policy_id":"policy-1","organization_id":"org-1","issuer_did":"did:web:verifier.example","request_transport":"url_query","oid4vp_profile":"haip"},
+    {"presentation_policy_id":"policy-1","organization_id":"org-1","issuer_did":"did:web:verifier.example","expiry_minutes":1441},
+    {"presentation_policy_id":"policy-1","organization_id":"org-1","issuer_did":"did:web:verifier.example","signing_key_reference":"private"}
+  ],
+  "internal_response": {
+    "instance_id":"instance-1",
+    "flow_definition_id":"internal-definition",
+    "request_uri":"openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+    "qr_code_data":"openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+    "presentation_policy_id":"policy-1",
+    "nonce":"a-high-entropy-nonce-value",
+    "expires_at":"2026-07-30T20:00:00Z",
+    "status":"AWAITING_WALLET",
+    "issuer_profile_id":"must-not-leak"
+  },
+  "expected_response": {
+    "instance_id":"instance-1",
+    "request_uri":"openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+    "qr_code_data":"openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+    "presentation_policy_id":"policy-1",
+    "nonce":"a-high-entropy-nonce-value",
+    "expires_at":"2026-07-30T20:00:00Z",
+    "status":"AWAITING_WALLET"
+  }
+}

@@ -1,0 +1,667 @@
+/**
+ * Webhook Manager Component
+ * 
+ * Allows vendors to configure webhook endpoints for receiving event notifications:
+ * - Credential issuance events
+ * - Verification events
+ * - Application status changes
+ * - Trust framework updates
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Box,
+  Paper,
+  Typography,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  IconButton,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  FormControl,
+  FormLabel,
+  FormGroup,
+  FormControlLabel,
+  Checkbox,
+  Alert,
+  CircularProgress,
+  Tooltip,
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import WebhookIcon from '@mui/icons-material/Webhook';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { useAuth } from '../../hooks/useAuth';
+import { useNotifications } from '../../hooks/useNotifications';
+import {
+  listWebhooks,
+  createWebhookConfiguration as createWebhook,
+  updateWebhookConfiguration as updateWebhook,
+  deleteWebhookConfiguration as deleteWebhook,
+  testWebhook,
+  getAvailableEventTypes,
+  getErrorMessage,
+} from '../../services/webhooksApi';
+import { flattenWebhookEventCatalog } from '../../services/webhookEvents';
+
+/**
+ * Available webhook event types
+ * @param {Function} t - Translation function
+ * @returns {Array} Event types with translated labels and descriptions
+ */
+const getEventTypes = (t) => [
+  { 
+    id: '*', 
+    label: t('webhookManager.eventTypes.all.label'), 
+    description: t('webhookManager.eventTypes.all.description'),
+    category: 'all'
+  },
+  // Credential Events
+  { 
+    id: 'credential.issued', 
+    label: t('webhookManager.eventTypes.credentialIssued.label'), 
+    description: t('webhookManager.eventTypes.credentialIssued.description'),
+    category: 'credential'
+  },
+  { 
+    id: 'credential.revoked', 
+    label: t('webhookManager.eventTypes.credentialRevoked.label'), 
+    description: t('webhookManager.eventTypes.credentialRevoked.description'),
+    category: 'credential'
+  },
+  { 
+    id: 'credential.suspended', 
+    label: t('webhookManager.eventTypes.credentialSuspended.label'), 
+    description: t('webhookManager.eventTypes.credentialSuspended.description'),
+    category: 'credential'
+  },
+  { 
+    id: 'credential.reactivated', 
+    label: t('webhookManager.eventTypes.credentialReactivated.label'), 
+    description: t('webhookManager.eventTypes.credentialReactivated.description'),
+    category: 'credential'
+  },
+  // Verification Events
+  { 
+    id: 'verification.completed', 
+    label: t('webhookManager.eventTypes.verificationCompleted.label'), 
+    description: t('webhookManager.eventTypes.verificationCompleted.description'),
+    category: 'verification'
+  },
+  { 
+    id: 'verification.failed', 
+    label: t('webhookManager.eventTypes.verificationFailed.label'), 
+    description: t('webhookManager.eventTypes.verificationFailed.description'),
+    category: 'verification'
+  },
+  { 
+    id: 'verification.initiated', 
+    label: t('webhookManager.eventTypes.verificationInitiated.label'), 
+    description: t('webhookManager.eventTypes.verificationInitiated.description'),
+    category: 'verification'
+  },
+  // Application Events
+  { 
+    id: 'application.created', 
+    label: t('webhookManager.eventTypes.applicationCreated.label'), 
+    description: t('webhookManager.eventTypes.applicationCreated.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.submitted', 
+    label: t('webhookManager.eventTypes.applicationSubmitted.label'), 
+    description: t('webhookManager.eventTypes.applicationSubmitted.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.updated', 
+    label: t('webhookManager.eventTypes.applicationUpdated.label'), 
+    description: t('webhookManager.eventTypes.applicationUpdated.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.approved', 
+    label: t('webhookManager.eventTypes.applicationApproved.label'), 
+    description: t('webhookManager.eventTypes.applicationApproved.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.rejected', 
+    label: t('webhookManager.eventTypes.applicationRejected.label'), 
+    description: t('webhookManager.eventTypes.applicationRejected.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.under_review', 
+    label: t('webhookManager.eventTypes.applicationUnderReview.label'), 
+    description: t('webhookManager.eventTypes.applicationUnderReview.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.additional_info_requested', 
+    label: t('webhookManager.eventTypes.applicationAdditionalInfo.label'), 
+    description: t('webhookManager.eventTypes.applicationAdditionalInfo.description'),
+    category: 'application'
+  },
+  { 
+    id: 'application.withdrawn', 
+    label: t('webhookManager.eventTypes.applicationWithdrawn.label'), 
+    description: t('webhookManager.eventTypes.applicationWithdrawn.description'),
+    category: 'application'
+  },
+  // Audit Events
+  { 
+    id: 'audit.access_logged', 
+    label: t('webhookManager.eventTypes.auditAccessLogged.label'), 
+    description: t('webhookManager.eventTypes.auditAccessLogged.description'),
+    category: 'audit'
+  },
+  { 
+    id: 'audit.configuration_changed', 
+    label: t('webhookManager.eventTypes.auditConfigChanged.label'), 
+    description: t('webhookManager.eventTypes.auditConfigChanged.description'),
+    category: 'audit'
+  },
+  { 
+    id: 'audit.credential_accessed', 
+    label: t('webhookManager.eventTypes.auditCredentialAccessed.label'), 
+    description: t('webhookManager.eventTypes.auditCredentialAccessed.description'),
+    category: 'audit'
+  },
+  { 
+    id: 'audit.export_performed', 
+    label: t('webhookManager.eventTypes.auditExport.label'), 
+    description: t('webhookManager.eventTypes.auditExport.description'),
+    category: 'audit'
+  },
+  { 
+    id: 'audit.security_event', 
+    label: t('webhookManager.eventTypes.auditSecurityEvent.label'), 
+    description: t('webhookManager.eventTypes.auditSecurityEvent.description'),
+    category: 'audit'
+  },
+  { 
+    id: 'audit.compliance_check', 
+    label: t('webhookManager.eventTypes.auditComplianceCheck.label'), 
+    description: t('webhookManager.eventTypes.auditComplianceCheck.description'),
+    category: 'audit'
+  },
+  // Trust Events
+  { 
+    id: 'trust.updated', 
+    label: t('webhookManager.eventTypes.trustUpdated.label'), 
+    description: t('webhookManager.eventTypes.trustUpdated.description'),
+    category: 'trust'
+  },
+  { 
+    id: 'trust.certificate_expiring', 
+    label: t('webhookManager.eventTypes.trustCertExpiring.label'), 
+    description: t('webhookManager.eventTypes.trustCertExpiring.description'),
+    category: 'trust'
+  },
+  { 
+    id: 'trust.chain_validation_failed', 
+    label: t('webhookManager.eventTypes.trustChainFailed.label'), 
+    description: t('webhookManager.eventTypes.trustChainFailed.description'),
+    category: 'trust'
+  },
+];
+
+/**
+ * Webhook Manager Component
+ */
+export default function WebhookManager() {
+  const { t } = useTranslation(['vendor', 'common']);
+  const { organizationId } = useAuth();
+  const { showSuccess } = useNotifications();
+  const [eventTypes, setEventTypes] = useState([]);
+  const [webhooks, setWebhooks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingWebhook, setEditingWebhook] = useState(null);
+  const [newWebhookSecret, setNewWebhookSecret] = useState('');
+  
+  // Form state
+  const [url, setUrl] = useState('');
+  const [description, setDescription] = useState('');
+  const [selectedEvents, setSelectedEvents] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const eventCategories = Array.from(new Set(eventTypes.map((event) => event.category)));
+
+  const loadWebhooks = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const [webhookList, eventCatalog] = await Promise.all([
+        listWebhooks(organizationId),
+        getAvailableEventTypes(organizationId),
+      ]);
+      const localizedMetadata = new Map(getEventTypes(t).map((event) => [event.id, event]));
+      setEventTypes(flattenWebhookEventCatalog(eventCatalog?.categories).map((event) => ({
+        ...event,
+        label: localizedMetadata.get(event.id)?.label || event.label,
+        description: localizedMetadata.get(event.id)?.description || event.label,
+        category: event.category.toLowerCase(),
+      })));
+      setWebhooks(webhookList);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId, t]);
+
+  // Load webhooks and the Rust-owned event catalog on mount.
+  useEffect(() => {
+    if (organizationId) {
+      loadWebhooks();
+    }
+  }, [organizationId, loadWebhooks]);
+
+  const handleOpenDialog = (webhook = null) => {
+    if (webhook) {
+      setEditingWebhook(webhook);
+      setUrl(webhook.url);
+      setDescription(webhook.description || '');
+      const supportedEventTypes = new Set(eventTypes.map((event) => event.id));
+      setSelectedEvents((webhook.event_types || []).filter(
+        (event) => event === '*' || supportedEventTypes.has(event),
+      ));
+    } else {
+      setEditingWebhook(null);
+      setUrl('');
+      setDescription('');
+      setSelectedEvents([]);
+    }
+    setNewWebhookSecret('');
+    setDialogOpen(true);
+  };
+
+  const handleCloseDialog = () => {
+    setDialogOpen(false);
+    setEditingWebhook(null);
+  };
+
+  const handleEventToggle = (eventId) => {
+    setSelectedEvents((prev) => {
+      if (eventId === '*') return prev.includes('*') ? [] : ['*'];
+      if (prev.includes('*')) return [eventId];
+      return prev.includes(eventId)
+        ? prev.filter((id) => id !== eventId)
+        : [...prev, eventId];
+    });
+  };
+
+  const handleSave = async () => {
+    if (!url.trim()) {
+      setError('URL is required');
+      return;
+    }
+    
+    if (selectedEvents.length === 0) {
+      setError('Select at least one event type');
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const webhookData = {
+        url: url.trim(),
+        eventTypes: selectedEvents,
+        description: description.trim(),
+      };
+
+      if (editingWebhook) {
+        await updateWebhook(organizationId, editingWebhook.id, webhookData);
+        showSuccess('Webhook updated successfully');
+      } else {
+        const result = await createWebhook(organizationId, webhookData);
+        // Show the secret only on creation
+        if (result.secret) {
+          setNewWebhookSecret(result.secret);
+          showSuccess('Webhook created successfully! Save the secret below - it won\'t be shown again.');
+        } else {
+          showSuccess('Webhook created successfully');
+        }
+      }
+
+      await loadWebhooks();
+      
+      // Only close dialog if it's an edit or if user has seen the secret
+      if (editingWebhook) {
+        handleCloseDialog();
+      }
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (webhookId) => {
+    if (!window.confirm('Are you sure you want to delete this webhook?')) {
+      return;
+    }
+
+    try {
+      await deleteWebhook(organizationId, webhookId);
+      showSuccess('Webhook deleted successfully');
+      await loadWebhooks();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  };
+
+  const handleTest = async (webhookId) => {
+    try {
+      await testWebhook(organizationId, webhookId);
+      showSuccess('Test event sent successfully!');
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  return (
+    <Box data-testid="webhook-manager">
+      {/* Header */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Box>
+          <Typography variant="h6" gutterBottom>
+            {t('webhookManager.title')}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {t('webhookManager.description')}
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => handleOpenDialog()}
+        >
+          {t('webhookManager.createButton')}
+        </Button>
+      </Box>
+      {/* Error Alert */}
+      {error && (
+        <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 3 }}>
+          {error}
+        </Alert>
+      )}
+      {/* Info Alert */}
+      <Alert severity="info" sx={{ mb: 3 }}>
+        <Typography variant="body2">
+          Webhooks allow your application to receive real-time notifications about events in Marty.
+          Each webhook will receive a POST request with event data and a signature for verification.
+        </Typography>
+      </Alert>
+      {/* Webhooks Table */}
+      {webhooks.length === 0 ? (
+        <Paper sx={{ p: 4, textAlign: 'center', bgcolor: 'grey.50' }}>
+          <WebhookIcon sx={{ fontSize: 60, color: 'text.secondary', mb: 2 }} />
+          <Typography variant="h6" gutterBottom>
+            No Webhooks Configured
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Add a webhook endpoint to start receiving event notifications
+          </Typography>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpenDialog()}>
+            Add Your First Webhook
+          </Button>
+        </Paper>
+      ) : (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>URL</TableCell>
+                <TableCell>Description</TableCell>
+                <TableCell>Events</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Last Triggered</TableCell>
+                <TableCell align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {webhooks.map((webhook) => (
+                <TableRow key={webhook.id}>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                      {webhook.url}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>{webhook.description || '-'}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      {webhook.event_types?.includes('*') ? (
+                        <Chip 
+                          label="All Events" 
+                          size="small" 
+                          color="primary"
+                          sx={{ fontWeight: 'bold' }}
+                        />
+                      ) : (
+                        <>
+                          {webhook.event_types?.slice(0, 2).map((event) => (
+                            <Chip key={event} label={event} size="small" />
+                          ))}
+                          {webhook.event_types?.length > 2 && (
+                            <Chip label={`+${webhook.event_types.length - 2}`} size="small" variant="outlined" />
+                          )}
+                        </>
+                      )}
+                    </Box>
+                  </TableCell>
+                  <TableCell>
+                    {webhook.enabled ? (
+                      <Chip
+                        icon={<CheckCircleIcon />}
+                        label="Active"
+                        color="success"
+                        size="small"
+                      />
+                    ) : (
+                      <Chip
+                        icon={<ErrorIcon />}
+                        label="Inactive"
+                        color="error"
+                        size="small"
+                      />
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {webhook.last_triggered_at
+                      ? new Date(webhook.last_triggered_at).toLocaleString()
+                      : 'Never'}
+                  </TableCell>
+                  <TableCell align="right">
+                    <Tooltip title="Test webhook">
+                      <IconButton size="small" onClick={() => handleTest(webhook.id)}>
+                        <RefreshIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Edit webhook">
+                      <IconButton size="small" onClick={() => handleOpenDialog(webhook)}>
+                        <EditIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Delete webhook">
+                      <IconButton size="small" onClick={() => handleDelete(webhook.id)}>
+                        <DeleteIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+      {/* Add/Edit Dialog */}
+      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth>
+        <DialogTitle>
+          {editingWebhook ? 'Edit Webhook' : 'Add Webhook'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <TextField
+              label="Webhook URL"
+              fullWidth
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://your-domain.com/webhooks/marty"
+              helperText="The endpoint that will receive POST requests with event data"
+              sx={{ mb: 3 }}
+              required
+            />
+
+            <TextField
+              label="Description"
+              fullWidth
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Production webhook endpoint"
+              helperText="Optional description to help identify this webhook"
+              sx={{ mb: 3 }}
+            />
+
+            <FormControl component="fieldset" sx={{ mb: 3, width: '100%' }}>
+              <FormLabel component="legend">Event Types *</FormLabel>
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                Select which events should trigger this webhook
+              </Typography>
+              
+              {/* Grouped Events */}
+              <FormGroup>
+                <Box sx={{ mb: 2, pb: 2, borderBottom: 1, borderColor: 'divider' }}>
+                  <FormControlLabel
+                    control={(
+                      <Checkbox
+                        checked={selectedEvents.includes('*')}
+                        onChange={() => handleEventToggle('*')}
+                        color="primary"
+                      />
+                    )}
+                    label={(
+                      <Box>
+                        <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                          All Events
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Subscribe to all current and future supported events.
+                        </Typography>
+                      </Box>
+                    )}
+                  />
+                </Box>
+
+                {eventCategories.map((category) => (
+                  <Box key={category}>
+                    <Typography variant="subtitle2" color="primary" sx={{ mt: 2, mb: 1, fontWeight: 'bold' }}>
+                      {t(`webhookManager.eventCategories.${category}`, {
+                        defaultValue: `${category.charAt(0).toUpperCase()}${category.slice(1)} Events`,
+                      })}
+                    </Typography>
+                    {eventTypes.filter((event) => event.category === category).map((eventType) => (
+                      <FormControlLabel
+                        key={eventType.id}
+                        disabled={selectedEvents.includes('*')}
+                        control={(
+                          <Checkbox
+                            checked={selectedEvents.includes('*') || selectedEvents.includes(eventType.id)}
+                            onChange={() => handleEventToggle(eventType.id)}
+                          />
+                        )}
+                        label={(
+                          <Box>
+                            <Typography variant="body2">{eventType.label}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {eventType.description}
+                            </Typography>
+                          </Box>
+                        )}
+                      />
+                    ))}
+                  </Box>
+                ))}
+              </FormGroup>
+            </FormControl>
+
+            {/* Show secret after creation */}
+            {newWebhookSecret && (
+              <Alert severity="success" sx={{ mt: 3 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Webhook Secret (Save this now - it won&apos;t be shown again!)
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                  <TextField
+                    fullWidth
+                    value={newWebhookSecret}
+                    size="small"
+                    slotProps={{
+                      input: {
+                        readOnly: true,
+                        sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+                      }
+                    }}
+                  />
+                  <Tooltip title="Copy to clipboard">
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        navigator.clipboard.writeText(newWebhookSecret);
+                        showSuccess('Secret copied to clipboard');
+                      }}
+                    >
+                      <ContentCopyIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDialog}>
+            {newWebhookSecret ? 'Close' : 'Cancel'}
+          </Button>
+          {!newWebhookSecret && (
+            <Button
+              onClick={handleSave}
+              variant="contained"
+              disabled={saving || !url.trim() || selectedEvents.length === 0}
+            >
+              {saving ? 'Saving...' : editingWebhook ? 'Update' : 'Create'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+      {/* (success notifications handled by useNotifications) */}
+    </Box>
+  );
+}

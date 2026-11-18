@@ -1,0 +1,219 @@
+import hashlib
+import json
+import stat
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import record_selfhost_bundle_preparation as preparation
+from record_selfhost_bundle_preparation import record
+
+
+class BundlePreparationTest(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.archive = root / "bundle.zip"
+        self.lock = root / "images.json"
+        self.transaction = root / "transaction.json"
+        self.image = "example.org/app@sha256:" + "a" * 64
+        self.plugin_image = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
+        self.lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
+                                         "release": "marty-ui@1.2.3",
+                                         "openbao_didcomm_image": self.plugin_image,
+                                         "services": {"app": self.image}}))
+        self.transaction.write_text("{}")
+        source_image = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}"
+        openbao_source = (Path(__file__).resolve().parents[1] /
+                          "docker-compose.selfhost.openbao.yml").read_text(encoding="utf-8")
+        self.assertEqual(openbao_source.count(source_image), 4)
+        self.contents = {
+            ".marty-selfhost-images.json": self.lock.read_bytes(),
+            "docker-compose.selfhost.openbao.yml": openbao_source.replace(
+                source_image, self.plugin_image
+            ).encode(),
+            "docker-compose.yml": f"services:\n  app:\n    image: {self.image}\n".encode(),
+            "README.md": b"unqualified\n",
+        }
+        self.write_archive()
+
+    def write_archive(self):
+        marker = {"schema": "marty.selfhost-bundle-files/v1",
+                  "files": {name: hashlib.sha256(data).hexdigest()
+                            for name, data in self.contents.items()},
+                  "directories": [""]}
+        with zipfile.ZipFile(self.archive, "w") as bundle:
+            bundle.writestr("bundle/", b"")
+            for name, data in self.contents.items():
+                bundle.writestr("bundle/" + name, data)
+            bundle.writestr("bundle/.marty-selfhost-bundle.json", json.dumps(marker))
+
+    def check(self):
+        return record(self.archive, self.lock, self.transaction, "b" * 40, "123")
+
+    def test_records_exact_archive_and_embedded_lock(self):
+        receipt = self.check()
+        self.assertEqual(receipt["qualification"], "unqualified")
+        self.assertEqual(receipt["images"], {"app": self.image})
+        self.assertEqual(receipt["archive_sha256"], hashlib.sha256(self.archive.read_bytes()).hexdigest())
+        self.assertEqual(receipt["image_lock_sha256"], hashlib.sha256(self.lock.read_bytes()).hexdigest())
+
+    def test_streams_bundle_without_reading_the_archive_whole(self):
+        self.contents["fixture.bin"] = b"streamed bundle fixture" * 100_000
+        self.write_archive()
+        read_bytes = Path.read_bytes
+
+        def reject_archive_read(path):
+            if path == self.archive:
+                raise AssertionError("archive was read into memory")
+            return read_bytes(path)
+
+        with patch.object(Path, "read_bytes", reject_archive_read):
+            receipt = self.check()
+
+        self.assertEqual(receipt["archive_sha256"], hashlib.sha256(self.archive.read_bytes()).hexdigest())
+        self.assertEqual(receipt["images"], {"app": self.image})
+
+    def test_inventory_checks_written_file_bytes(self):
+        file_digest = preparation.file_digest
+
+        def altered_written_file(path):
+            if path.name == "README.md":
+                return "0" * 64
+            return file_digest(path)
+
+        with patch.object(preparation, "file_digest", altered_written_file):
+            with self.assertRaisesRegex(ValueError, "inventory differs"):
+                self.check()
+
+    def test_rejects_embedded_lock_mismatch(self):
+        self.contents[".marty-selfhost-images.json"] = b"{}"
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "embedded image lock"):
+            self.check()
+
+    def test_rejects_compose_image_mismatch(self):
+        self.contents["docker-compose.yml"] = b"services:\n  app:\n    image: other\n"
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "Compose image closure"):
+            self.check()
+
+    def test_rejects_network_name_that_joins_another_installation(self):
+        self.contents["docker-compose.yml"] = (
+            b"name: marty-selfhost-prod\nnetworks:\n  default:\n"
+            b"    name: marty-selfhost-prod_default\nservices:\n  app:\n"
+            + f"    image: {self.image}\n".encode()
+        )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "pins or changes the default network"):
+            self.check()
+
+    def test_rejects_external_default_network(self):
+        self.contents["docker-compose.yml"] = (
+            b"networks:\n  default:\n    external: true\nservices:\n  app:\n"
+            + f"    image: {self.image}\n".encode()
+        )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "pins or changes the default network"):
+            self.check()
+
+    def test_rejects_fixed_or_external_redis_socket_volume(self):
+        for volume in (
+            {"name": "marty-selfhost-prod_redis-socket"},
+            {"external": True},
+        ):
+            compose = yaml.safe_load(self.contents["docker-compose.yml"])
+            compose["volumes"] = {"redis-socket": volume}
+            self.contents["docker-compose.yml"] = yaml.safe_dump(compose).encode()
+            self.write_archive()
+            with self.assertRaisesRegex(
+                ValueError, "pins or changes the Redis socket volume"
+            ):
+                self.check()
+
+    def test_redis_service_requires_a_project_scoped_socket_volume(self):
+        lock = json.loads(self.lock.read_text())
+        lock["services"]["redis"] = self.image
+        self.lock.write_text(json.dumps(lock))
+        self.contents[".marty-selfhost-images.json"] = self.lock.read_bytes()
+        compose = yaml.safe_load(self.contents["docker-compose.yml"])
+        compose["services"]["redis"] = {"image": self.image}
+        self.contents["docker-compose.yml"] = yaml.safe_dump(compose).encode()
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "omits the project-scoped Redis socket"):
+            self.check()
+
+    def test_rejects_openbao_compose_image_mismatch(self):
+        self.contents["docker-compose.selfhost.openbao.yml"] = self.contents[
+            "docker-compose.selfhost.openbao.yml"
+        ].replace(self.plugin_image.encode(), b"quay.io/openbao/openbao:latest", 1)
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_missing_openbao_tls_init(self):
+        compose = yaml.safe_load(self.contents["docker-compose.selfhost.openbao.yml"])
+        del compose["services"]["openbao-tls-init"]
+        self.contents["docker-compose.selfhost.openbao.yml"] = yaml.safe_dump(compose).encode()
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_missing_openbao_compose(self):
+        del self.contents["docker-compose.selfhost.openbao.yml"]
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "omits pinned OpenBao Compose"):
+            self.check()
+
+    def test_rejects_owned_file_mutation(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("bundle/README.md", b"changed")
+        with self.assertRaisesRegex(ValueError, "duplicate ZIP member"):
+            self.check()
+
+    def test_rejects_uninventoried_file(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("bundle/extra.txt", b"unexpected")
+        with self.assertRaisesRegex(ValueError, "inventory differs"):
+            self.check()
+
+    def test_rejects_uninventoried_empty_directory(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("bundle/extra/", b"")
+        with self.assertRaisesRegex(ValueError, "directories differ"):
+            self.check()
+
+    def test_rejects_special_file_member(self):
+        member = zipfile.ZipInfo("bundle/fifo")
+        member.create_system = 3
+        member.external_attr = (stat.S_IFIFO | 0o644) << 16
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr(member, b"")
+        with self.assertRaisesRegex(ValueError, "special ZIP member"):
+            self.check()
+
+    def test_rejects_privileged_zip_file_mode(self):
+        member = zipfile.ZipInfo("bundle/privileged")
+        member.create_system = 3
+        member.external_attr = (stat.S_IFREG | 0o4755) << 16
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr(member, b"not executable")
+        with self.assertRaisesRegex(ValueError, "unsafe ZIP member permissions"):
+            self.check()
+
+    def test_rejects_path_traversal(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("bundle/../escape", b"bad")
+        with self.assertRaisesRegex(ValueError, "unsafe ZIP member"):
+            self.check()
+
+
+if __name__ == "__main__":
+    unittest.main()

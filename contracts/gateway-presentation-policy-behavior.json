@@ -1,0 +1,56 @@
+{
+  "schema_version":1,
+  "create_input":{
+    "organization_id":"org-1","name":"Verify DTC",
+    "credential_requirements":[{
+      "credential_template_id":"template-dtc","display_name":"Digital Travel Credential",
+      "credential_payload_format":"caller-controlled-wrong-format",
+      "requested_claims":[{"claim_name":"document_number","display_name":"Document Number","required":true}]
+    }]
+  },
+  "authoritative_formats":{"template-dtc":"MDOC"},
+  "expected_create_internal":{
+    "organization_id":"org-1","name":"Verify DTC",
+    "credential_requirements":[{
+      "credential_template_id":"template-dtc","display_name":"Digital Travel Credential",
+      "credential_payload_format":"MDOC",
+      "requested_claims":[{"claim_name":"document_number","display_name":"Document Number","required":true}]
+    }]
+  },
+  "proof_only_input":{
+    "organization_id":"org-1","name":"Verify proof","credential_requirements":[],
+    "holder_binding":{"required":true,"binding_methods":["DEVICE_KEY"],"proof_profiles":["OID4VP_VERIFIABLE_PRESENTATION"],"proof_freshness":{"challenge_required":true,"audience_binding_required":true,"replay_detection_required":false}}
+  },
+  "expected_proof_only_internal":{
+    "organization_id":"org-1","name":"Verify proof","credential_requirements":[],
+    "holder_binding":{"required":true,"binding_methods":["DEVICE_KEY"],"proof_profiles":["OID4VP_VERIFIABLE_PRESENTATION"],"proof_freshness":{"challenge_required":true,"audience_binding_required":true,"replay_detection_required":false}}
+  },
+  "invalid_requests":[
+    {"organization_id":"org-1","name":"No obligation","credential_requirements":[],"holder_binding":{"required":false}},
+    {"organization_id":"org-1","name":"Private","required_claims":[{"claim_name":"age"}],"issuer_profile_id":"private"},
+    {"organization_id":"org-1","name":"Bad holder","required_claims":[{"claim_name":"age"}],"holder_binding":{"required":false,"binding_methods":["DEVICE_KEY"]}},
+    {"organization_id":"org-1","name":"Bad custom","required_claims":[{"claim_name":"age"}],"credential_ranking_strategy":"CUSTOM"}
+  ],
+  "internal_response":{
+    "id":"policy-1","organization_id":"org-1","name":"Verify DTC","status":"draft",
+    "description":null,"purpose":null,
+    "required_claims":[{"claim_name":"document_number","credential_type":"DigitalTravelCredential","value_constraint":null,"predicate_spec":null}],
+    "accepted_credential_types":["DigitalTravelCredential"],"trust_profile_id":null,
+    "display_metadata":{"title":"Verify DTC","description":"","purpose":"identity_verification","purpose_description":null,"verifier_name":"","verifier_logo_url":null,"privacy_policy_url":null,"terms_of_service_url":null},
+    "credential_requirements":[],"alternative_requirements":[],"compliance_profile_id":null,
+    "holder_binding":{"required":false},"issuer_constraints":null,"freshness":null,
+    "prefer_predicates":false,"fallback_policy":null,"supported_circuits":[],
+    "credential_ranking_strategy":"FRESHEST_FIRST","credential_ranking_weights":null,
+    "version":1,"created_at":"2026-07-30T00:00:00Z","updated_at":"2026-07-30T00:00:00Z",
+    "issuer_profile_id":"private-selector","signing_service_id":"private-selector"
+  },
+  "expected_public_response":{
+    "id":"policy-1","organization_id":"org-1","name":"Verify DTC","status":"draft",
+    "required_claims":[{"claim_name":"document_number","credential_type":"DigitalTravelCredential"}],
+    "accepted_credential_types":["DigitalTravelCredential"],
+    "display_metadata":{"title":"Verify DTC","description":"","purpose":"identity_verification","verifier_name":""},
+    "credential_requirements":[],"alternative_requirements":[],"holder_binding":{"required":false},
+    "prefer_predicates":false,"supported_circuits":[],"credential_ranking_strategy":"FRESHEST_FIRST",
+    "version":1,"created_at":"2026-07-30T00:00:00Z","updated_at":"2026-07-30T00:00:00Z"
+  }
+}

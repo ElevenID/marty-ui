@@ -1,0 +1,189 @@
+# Deploy from pre-built GHCR images instead of building locally
+#
+# Usage:
+#   export MARTY_SERVICES_IMAGE=ghcr.io/elevenid/marty-ui/services@sha256:<digest>
+#   export MARTY_MIGRATIONS_IMAGE=ghcr.io/elevenid/marty-ui/migrations@sha256:<digest>
+#   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml pull
+#   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml up -d
+#
+# Infrastructure services (postgres, redis, keycloak, mailpit) come from
+# docker-compose.base.yml. Every inherited host publication is loopback-only;
+# public traffic must enter through a governed edge proxy/tunnel. The OpenBao
+# plugin image is pinned here too; it contains the TLS initializer and DIDComm
+# engine required by the base KMS graph.
+
+x-service-image: &service-image
+  image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}
+  pull_policy: always
+  build: !reset null
+
+services:
+  openbao-tls-init: &openbao-plugin-image
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to an immutable plugin image digest}
+    pull_policy: always
+    build: !reset null
+
+  openbao:
+    <<: *openbao-plugin-image
+    build: !reset null
+
+  openbao-init:
+    <<: *openbao-plugin-image
+    build: !reset null
+
+  oidf-tls-proxy:
+    <<: *service-image
+    # Compose 2.38 does not preserve !reset inherited through an alias.
+    build: !reset null
+
+  envoy-issuance-bridge:
+    <<: *service-image
+    build: !reset null
+
+  ui:
+    image: ${MARTY_UI_IMAGE:?set MARTY_UI_IMAGE to an immutable UI image digest}
+    pull_policy: always
+    restart: "no"
+    networks:
+      - marty-network
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  db-migrate:
+    image: ${MARTY_MIGRATIONS_IMAGE:?set MARTY_MIGRATIONS_IMAGE to an immutable digest}
+    pull_policy: always
+    build: !reset null
+
+  verification-migrations:
+    <<: *service-image
+    build: !reset null
+    entrypoint: ["/app/services/entrypoint.sh"]
+    environment:
+      SERVICE_NAME: verification
+
+  issuance-migrations:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
+
+  revocation-profile-migrate:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: revocation_profile
+
+  gateway:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: gateway
+
+  auth:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: auth
+
+  organization:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: organization
+
+  credential-template:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: credential_template
+
+  trust-profile:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: trust_profile
+
+  applicant:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: applicant
+
+  notification:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: notification
+
+  compliance-profile:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: compliance_profile
+
+  presentation-policy:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: presentation_policy
+
+  deployment-profile:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: deployment_profile
+
+  signing-keys:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: signing_keys
+
+  flow:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: flow
+
+  issuance:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
+
+  issuance-native:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
+
+  revocation-profile:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: revocation_profile
+
+  device-registration:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: device_registration
+
+  event-stream:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: event_stream
+
+  verification:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: verification

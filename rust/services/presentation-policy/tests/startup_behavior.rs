@@ -1,0 +1,224 @@
+use std::collections::BTreeMap;
+
+use marty_presentation_policy::{
+    PresentationPolicyConfigError, PresentationPolicyDependency, PresentationPolicyRuntime,
+    PresentationPolicyServiceConfig,
+};
+
+fn values(environment: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("ENVIRONMENT".into(), environment.into()),
+        (
+            "DATABASE_URL".into(),
+            "postgresql+asyncpg://marty:secret@postgres/marty".into(),
+        ),
+    ])
+}
+
+#[test]
+fn compose_compatible_development_configuration_is_normalized() {
+    let config = PresentationPolicyServiceConfig::from_values(values("development")).unwrap();
+    assert_eq!(config.http_addr.port(), 8009);
+    assert_eq!(config.grpc_addr.port(), 9009);
+    assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    assert!(config.database_url.starts_with("postgresql://"));
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+    assert!(config.workload_server_tls.is_none());
+    assert_eq!(config.marty_organization_id, uuid::Uuid::from_u128(1));
+}
+
+#[test]
+fn customer_organization_configuration_selects_builtin_policy_owner() {
+    let mut configured = values("development");
+    configured.insert(
+        "MARTY_ORG_ID".into(),
+        "750e8400-e29b-41d4-a716-446655440001".into(),
+    );
+    let config = PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap();
+    assert_eq!(
+        config.marty_organization_id.to_string(),
+        "750e8400-e29b-41d4-a716-446655440001"
+    );
+    configured.insert("MARTY_ORG_ID".into(), "not-a-uuid".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured).unwrap_err(),
+        PresentationPolicyConfigError::Invalid {
+            name: "MARTY_ORG_ID"
+        },
+    );
+}
+
+#[test]
+fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
+    let mut production = values("production");
+    production.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    production.extend([
+        ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        ("ORG_GRPC_CA_CERT".into(), "/ca.pem".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "/bao-ca.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "/token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "policy-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
+    ]);
+    let config = PresentationPolicyServiceConfig::from_values(production).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+
+    let mut development = values("development");
+    development.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    let config = PresentationPolicyServiceConfig::from_values(development).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+
+    let mut beta = values("development");
+    beta.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
+    beta.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        "http://issuance-native:8005".into(),
+    );
+    let config = PresentationPolicyServiceConfig::from_values(beta).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+}
+
+#[test]
+fn deployed_configuration_requires_secrets_and_complete_mtls() {
+    let mut beta = values("beta");
+    beta.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+    beta.insert("ORG_GRPC_CA_CERT".into(), "/ca.pem".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(beta).unwrap_err(),
+        PresentationPolicyConfigError::Missing {
+            name: "GRPC_SERVICE_TOKEN"
+        }
+    );
+
+    let mut configured = values("beta");
+    configured.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+    configured.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
+        PresentationPolicyConfigError::Missing {
+            name: "ORG_GRPC_CA_CERT"
+        }
+    );
+    configured.insert("ORG_GRPC_CA_CERT".into(), "/ca.pem".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
+        PresentationPolicyConfigError::Invalid {
+            name: "ORG_GRPC_TARGET"
+        }
+    );
+    configured.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
+        PresentationPolicyConfigError::Missing {
+            name: "GRPC_WORKLOAD_TLS_SERVER_CERT"
+        }
+    );
+    configured.insert("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into());
+    assert!(matches!(
+        PresentationPolicyServiceConfig::from_values(configured),
+        Err(PresentationPolicyConfigError::Invalid {
+            name: "GRPC_WORKLOAD_TLS_SERVER_CERT"
+        })
+    ));
+}
+
+#[test]
+fn deployed_configuration_supports_dynamic_issuers_without_static_scope() {
+    let mut configured = values("beta");
+    configured.extend([
+        ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        ("ORG_GRPC_CA_CERT".into(), "/ca.pem".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "/bao-ca.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "/token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "policy-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
+    ]);
+
+    let config = PresentationPolicyServiceConfig::from_values(configured).unwrap();
+    assert_eq!(
+        config.credential_status_url_template,
+        "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+}
+
+#[test]
+fn retired_server_private_key_file_is_rejected() {
+    let mut configured = values("development");
+    configured.insert("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured),
+        Err(PresentationPolicyConfigError::Invalid {
+            name: "GRPC_WORKLOAD_TLS_SERVER_KEY"
+        })
+    );
+}
+
+#[test]
+fn readiness_requires_every_native_runtime_dependency() {
+    let config = PresentationPolicyServiceConfig::from_values(values("test")).unwrap();
+    let runtime = PresentationPolicyRuntime::new(&config).unwrap();
+    assert!(runtime.activate().is_err());
+    for dependency in [
+        PresentationPolicyDependency::Database,
+        PresentationPolicyDependency::Schema,
+        PresentationPolicyDependency::ControlPlane,
+        PresentationPolicyDependency::NativeVerification,
+        PresentationPolicyDependency::HttpListener,
+        PresentationPolicyDependency::GrpcListener,
+    ] {
+        runtime.mark_healthy(dependency).unwrap();
+    }
+    runtime.activate().unwrap();
+}

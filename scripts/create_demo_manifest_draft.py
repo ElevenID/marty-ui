@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+"""Create the unbound MIP 0.5 demo catalog from the reviewed portfolio contract."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+if __package__:
+    from .demo_asset_hashes import public_asset_sha256
+else:
+    from demo_asset_hashes import public_asset_sha256
+
+
+ROOT = Path(__file__).resolve().parents[1]
+# Unbound next-edition draft only; VERSION and the public release index are unchanged.
+VERSION = "2026.08.1"
+MIP_VERSION = "0.5.0"
+POSTER_URL = f"/images/demos/{VERSION}/portfolio-draft.svg"
+POSTER_PATH = ROOT / "ui" / "public" / POSTER_URL.lstrip("/")
+CONTRACT_PATH = ROOT / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
+OUTPUT_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / f"{VERSION}.json"
+
+PRESENTATION = {
+    "passport-pre-boarding-clearance": (
+        "Passport Pre-Boarding Clearance",
+        "Validate a passport, issue a pre-boarding credential, and verify it rapidly at the gate.",
+        ["Holder", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "stable-issuer-identity-pluggable-kms": (
+        "Stable Issuer Identity with Pluggable KMS",
+        "Keep one issuer identity stable while changing its managed signing provider.",
+        ["Administrator", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "private-online-age-proof": (
+        "Private Online Age Proof",
+        "Request and verify only an age-over-21 fact from a trusted mobile document issuer.",
+        ["Holder", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "employee-onboarding-secure-access": (
+        "Employee Onboarding and Secure Access",
+        "Approve an employee, issue an access credential, and enforce suspension immediately.",
+        ["Holder", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "membership-badge-login": (
+        "Membership Badge and Login",
+        "Issue a governed Open Badge and use it for same-device passwordless account return.",
+        ["Holder", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
+    ),
+    "credential-lifecycle": (
+        "Credential Lifecycle",
+        "Renew, suspend, reinstate, and revoke while verification follows current status.",
+        ["Holder", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "offline-facility-verification": (
+        "Offline Facility Verification",
+        "Verify against provisioned trust offline, buffer the audit, and synchronize after reconnection.",
+        ["Holder", "Verifier", "Administrator"],
+        ["openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+    ),
+    "organization-primitives": (
+        "Organization and MIP Primitives",
+        "Configure the organization, issuer, trust, policy, deployment, and flow primitives required to operate.",
+        ["Administrator", "Issuer", "Verifier"],
+        ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc", "open-badges-3.0"],
+    ),
+    "external-admissions-gateway-webhooks": (
+        "External Admissions Gateway and Webhooks",
+        "Approve a learner through Marty's public gateway and correlate the signed webhook in an external admissions application.",
+        ["Administrator", "Integrator"],
+        ["https-webhooks"],
+    ),
+    "physical-passport-issuance-evidence": (
+        "Passport Issuance Simulator Evidence",
+        "Follow one synthetic passport job through managed issuer profiles, nine Rust Flow steps, and Marty's signed bureau simulator callback.",
+        ["Passport software reviewer", "Issuer operator", "Security architect"],
+        ["https-webhooks"],
+    ),
+}
+
+LEGACY_PRESENTATION = {
+    "first-party-browser-wallet": (
+        "First-Party Browser Wallet",
+        "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate.",
+        "FIRST_PARTY_CONTROL",
+    ),
+    "independent-wallet-interoperability": (
+        "Independent Wallet Interoperability",
+        "Preserved independent-wallet qualification surface for final-protocol interoperability.",
+        "INDEPENDENT_WALLET",
+    ),
+}
+
+
+def label(value: str) -> str:
+    return value.replace("_", " ").strip().capitalize()
+
+
+def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
+    slug = str(contract["slug"])
+    title, summary, audiences, protocols = PRESENTATION[slug]
+    happy = list(contract["happy_path"])
+    failures = list(contract["failure_paths"])
+    paths = happy + failures
+    scenario = {
+        "demo_id": contract["demo_id"],
+        "slug": slug,
+        "title": title,
+        "summary": summary,
+        "scenario_revision": 1,
+        "recording_classification": "FIRST_PARTY_CONTROL",
+        "revision_history": [],
+        "mip_version": MIP_VERSION,
+        "state": "DRAFT",
+        "audiences": audiences,
+        "capabilities": [label(item) for item in paths],
+        "protocols": protocols,
+        "recording_plan": {
+            "fresh_recording_required": True,
+            "happy_path": happy,
+            "failure_paths": failures,
+        },
+        "poster": {
+            "src": POSTER_URL,
+            "sha256": public_asset_sha256(POSTER_PATH),
+            "alt": f"Draft release card for {title}; fresh recording pending",
+        },
+        "youtube_id": None,
+        "media_evidence": None,
+        "transcript": {
+            "language": "en",
+            "segments": [
+                {
+                    "start_seconds": index * 30,
+                    "speaker": "Narrator",
+                    "text": f"The fresh recording will demonstrate: {label(item)}.",
+                }
+                for index, item in enumerate(paths)
+            ],
+        },
+        "chapters": [
+            {
+                "start_seconds": index * 30,
+                "title": label(item),
+                "role": audiences[0],
+                "mip_primitives": ["Release acceptance path"],
+                "standards": protocols,
+                "documentation_links": [{"label": "MIP protocol", "href": "/protocol"}],
+            }
+            for index, item in enumerate(paths)
+        ],
+        "wallets": [],
+        "assertions": [
+            {
+                "id": item,
+                "label": label(item),
+                "result": "NOT_RUN",
+                "evidence_sha256": None,
+            }
+            for item in paths
+        ],
+        "limitations": [
+            "Fresh release-bound recording and automated evidence are required before publication."
+        ],
+        "published_at": None,
+        "publication_attestation": None,
+        "inherited_evidence": None,
+    }
+    if slug == "external-admissions-gateway-webhooks":
+        scenario.update(
+            {
+                "summary": "Approve a synthetic learner from Northstar through the public API and complete enrollment from a verified webhook.",
+                "audiences": [
+                    "Integration developer",
+                    "Security architect",
+                    "Identity product buyer",
+                ],
+                "capabilities": [
+                    "Gateway-only API-key integration",
+                    "Least-privilege application approval",
+                    "Canonical webhook signature verification",
+                    "Public delivery-history correlation",
+                    "Insufficient scope denied",
+                ],
+                "transcript": {
+                    "language": "en",
+                    "segments": [
+                        {
+                            "start_seconds": 0,
+                            "speaker": "Narrator",
+                            "text": "Northstar uses only Marty's public gateway and keeps credentials on its server.",
+                        },
+                        {
+                            "start_seconds": 12,
+                            "speaker": "Narrator",
+                            "text": "A read-only key is denied without changing application state or producing a webhook.",
+                        },
+                        {
+                            "start_seconds": 24,
+                            "speaker": "Narrator",
+                            "text": "The applications approve scope accepts the same public request.",
+                        },
+                        {
+                            "start_seconds": 36,
+                            "speaker": "Narrator",
+                            "text": "A verified webhook completes Northstar's enrollment workflow and binds public delivery evidence.",
+                        },
+                    ],
+                },
+                "chapters": [
+                    {
+                        "start_seconds": 0,
+                        "title": "Gateway-only integration",
+                        "role": "Integration developer",
+                        "mip_primitives": ["External application boundary"],
+                        "standards": ["HTTPS", "HMAC-SHA256"],
+                        "documentation_links": [
+                            {"label": "Marty API", "href": "/docs/api"}
+                        ],
+                    },
+                    {
+                        "start_seconds": 24,
+                        "title": "Scoped approval and signed webhook",
+                        "role": "Security architect",
+                        "mip_primitives": [
+                            "Gateway authorization",
+                            "Webhook delivery",
+                        ],
+                        "standards": ["HTTPS", "HMAC-SHA256"],
+                        "documentation_links": [
+                            {"label": "Marty API", "href": "/docs/api"}
+                        ],
+                    },
+                ],
+                "assertions": [
+                    {
+                        "id": "gateway_only_summary",
+                        "label": "The partner browser exposes only a safe gateway integration summary.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "insufficient_scope_denied",
+                        "label": "The read-only key is denied without side effects.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "scoped_approval",
+                        "label": "The scoped key approves through the public gateway.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "signed_webhook_correlated",
+                        "label": "The verified event is bound to public delivery history.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "invalid_signature_rejected",
+                        "label": "A webhook with an invalid signature is rejected without changing admissions state.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                    {
+                        "id": "duplicate_event_ignored",
+                        "label": "A valid duplicate event is acknowledged without a second admissions transition.",
+                        "result": "NOT_RUN",
+                        "evidence_sha256": None,
+                    },
+                ],
+                "limitations": [
+                    "Fresh release-bound positive, insufficient-scope, invalid-signature, and duplicate-event runs are required before publication."
+                ],
+            }
+        )
+    if slug == "physical-passport-issuance-evidence":
+        scenario.update(
+            {
+                "capabilities": [
+                    "Distinct KMS-backed CSCA and DSC issuer profiles",
+                    "Nine-step Rust passport Flow",
+                    "Correlated Marty bureau simulator job",
+                    "Signed native personalization callback",
+                    "Unsigned and foreign-organization callback denial",
+                    "Physical claim: not claimed; no booklet verified",
+                ],
+                "transcript": {
+                    "language": "en",
+                    "segments": [
+                        {"start_seconds": 0, "speaker": "Narrator", "text": "This demonstration uses synthetic test data and AI-generated narration rendered locally. One synthetic passport job uses distinct KMS-backed CSCA and DSC issuer profiles."},
+                        {"start_seconds": 12, "speaker": "Narrator", "text": "The live Rust Flow completes nine ordered passport issuance steps for that job."},
+                        {"start_seconds": 24, "speaker": "Narrator", "text": "Marty's bureau simulator returns a correlated job and signs the native callback."},
+                        {"start_seconds": 36, "speaker": "Narrator", "text": "Unsigned and foreign-organization callbacks are denied without changing the job."},
+                        {"start_seconds": 48, "speaker": "Narrator", "text": "Physical claim: not claimed. No physical booklet has been verified."},
+                    ],
+                },
+                "chapters": [
+                    {"start_seconds": 0, "title": "Managed passport issuer profiles", "role": "Issuer operator", "mip_primitives": ["Issuer profiles", "KMS signing"], "standards": ["ICAO eMRTD"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 12, "title": "Nine-step Rust passport Flow", "role": "Passport software reviewer", "mip_primitives": ["Issuance Flow"], "standards": ["ICAO eMRTD"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 24, "title": "Signed Marty simulator callback", "role": "Security architect", "mip_primitives": ["Personalization callback"], "standards": ["HTTPS", "HMAC-SHA256"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                    {"start_seconds": 36, "title": "Callback denial and physical claim boundary", "role": "Security architect", "mip_primitives": ["Organization binding"], "standards": ["HTTPS", "HMAC-SHA256"], "documentation_links": [{"label": "Marty API", "href": "/docs/api"}]},
+                ],
+                "assertions": [
+                    {"id": item, "label": label(item), "result": "NOT_RUN", "evidence_sha256": None}
+                    for item in paths
+                ],
+                "limitations": [
+                    "Beta simulator evidence covers passport software only. Physical claim is not claimed and no booklet has been verified.",
+                    "Fresh source-bound recording, callback denial evidence, privacy review, and YouTube publication are required before this scenario can be published.",
+                ],
+            }
+        )
+    return scenario
+
+
+def legacy_scenario(
+    slug: str, title: str, summary: str, classification: str
+) -> dict[str, object]:
+    return {
+        "slug": slug,
+        "title": title,
+        "summary": summary,
+        "scenario_revision": 1,
+        "recording_classification": classification,
+        "revision_history": [],
+        "mip_version": MIP_VERSION,
+        "state": "DRAFT",
+        "audiences": ["Holder", "Developer"],
+        "capabilities": ["Historical behavior preservation"],
+        "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
+        "poster": {
+            "src": POSTER_URL,
+            "sha256": public_asset_sha256(POSTER_PATH),
+            "alt": f"Draft release card for {title}; historical capability preserved",
+        },
+        "youtube_id": None,
+        "media_evidence": None,
+        "transcript": {
+            "language": "en",
+            "segments": [{"start_seconds": 0, "speaker": "Narrator", "text": summary}],
+        },
+        "chapters": [
+            {
+                "start_seconds": 0,
+                "title": "Preserved qualification surface",
+                "role": "Developer",
+                "mip_primitives": ["Issuance Flow", "Verification Flow"],
+                "standards": ["OpenID4VCI 1.0", "OpenID4VP 1.0", "DCQL 1.0"],
+                "documentation_links": [{"label": "Standards", "href": "/standards"}],
+            }
+        ],
+        "wallets": [],
+        "assertions": [
+            {
+                "id": "historical-capability-preserved",
+                "label": "The historical qualification capability remains represented.",
+                "result": "NOT_RUN",
+                "evidence_sha256": None,
+            }
+        ],
+        "limitations": [
+            "This entry preserves the historical capability; it does not reuse prior media as MIP 0.5 evidence."
+        ],
+        "published_at": None,
+        "publication_attestation": None,
+        "inherited_evidence": None,
+    }
+
+
+def build_manifest() -> dict[str, object]:
+    contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    scenarios = [draft_scenario(item) for item in contract["scenarios"]]
+    scenarios.extend(
+        legacy_scenario(slug, *LEGACY_PRESENTATION[slug])
+        for slug in contract["preserved_legacy_scenarios"]
+    )
+    return {
+        "schema_version": 2,
+        "stack_version": VERSION,
+        "release_name": "Platform Connector Boundary",
+        "mip_version": MIP_VERSION,
+        "publication_state": "DRAFT",
+        "coverage_state": "PARTIAL",
+        "release_ready": False,
+        "public_demo_ready": False,
+        "binding_state": "PENDING_DEPLOYMENT",
+        "video_distribution": {
+            "provider": "YOUTUBE",
+            "status": "PENDING_CHANNEL_SETUP",
+            "channel_name": "ElevenID LLC",
+            "channel_id": None,
+            "channel_handle": None,
+            "channel_url": None,
+            "playlist_id": None,
+            "playlist_url": None,
+            "privacy_enhanced_embeds": True,
+            "verified_at": None,
+        },
+        "deployment_release_marker": None,
+        "published_at": None,
+        "publication_attestation": None,
+        "superseded_by": None,
+        "recorder_revision": {
+            "kind": "git",
+            "value": "3ff56936f31899840e190eba066b57be2d1f2d1d",
+        },
+        "demo_application_revision": None,
+        "component_revisions": [],
+        "image_digests": [],
+        "release_evidence": {
+            "environment": "beta",
+            "recorded_at": None,
+            "displayed_offers_invalidated_at": None,
+            "source_marker": None,
+            "artifacts": [],
+        },
+        "release_differences": {
+            "previous_stack_version": "2026.08.0",
+            "ux": [
+                "Retires the provider-specific demonstration from the platform catalog while retaining generic credential journeys and historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
+            ],
+            "services": [
+                "Qualifies the Rust-native platform through explicit happy and denial paths."
+            ],
+            "wallets": ["Requires fresh wallet evidence under MIP 0.5."],
+            "integrations": [
+                "External connectors submit evidence through the public Common Gateway. Provider administration and provider-specific demonstrations belong to the independently deployed connector."
+            ],
+            "operations": [
+                "Defers all release identity and digest binding until the aggregate beta deployment exists."
+            ],
+        },
+        "scenarios": scenarios,
+    }
+
+
+def main() -> int:
+    contents = json.dumps(build_manifest(), indent=2) + "\n"
+    if OUTPUT_PATH.exists():
+        if OUTPUT_PATH.read_text(encoding="utf-8") != contents:
+            raise ValueError("Refusing to overwrite an existing demo edition; choose a new draft version")
+    else:
+        OUTPUT_PATH.write_text(contents, encoding="utf-8")
+    print(OUTPUT_PATH)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

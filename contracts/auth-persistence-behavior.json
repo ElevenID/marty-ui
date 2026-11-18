@@ -1,0 +1,15 @@
+{
+  "migration_head": "rust_auth_0001",
+  "owned_schema": "auth_service",
+  "owned_tables": ["audit_logs", "session_history"],
+  "external_applicant_tables": [],
+  "audit_pairs": {
+    "authentication": ["user_authenticated", "session_created"],
+    "logout": ["logout", "session_revoked"]
+  },
+  "query_limits": {"default": 100, "maximum": 1000},
+  "transactional": [
+    "authentication audit and session history",
+    "logout audit and session revocation history"
+  ]
+}

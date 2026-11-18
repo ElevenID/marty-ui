@@ -1,0 +1,429 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "organization_id",
+    "identity",
+    "identity_created_at",
+    "identity_updated_at",
+    "inspected_at",
+    "canonical_document_url",
+    "registry",
+    "managed_signer",
+    "public_resolution",
+    "certificate",
+    "assertion_ready"
+  ],
+  "properties": {
+    "organization_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer_did",
+        "key_purpose",
+        "credential_format",
+        "algorithm",
+        "status"
+      ],
+      "properties": {
+        "issuer_did": {
+          "type": "string",
+          "pattern": "^did:"
+        },
+        "key_purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "active"
+        }
+      }
+    },
+    "identity_created_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "identity_updated_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "inspected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "canonical_document_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "updated_at",
+        "document",
+        "verification_methods",
+        "source"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "available",
+            "not_published"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "document": {
+          "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/document"
+        },
+        "verification_methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/method"
+          }
+        },
+        "source": {
+          "enum": [
+            "scoped_document",
+            "legacy_projection",
+            "empty_fallback"
+          ]
+        }
+      }
+    },
+    "managed_signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checked_at",
+        "verification_method_id",
+        "assertion_authorized",
+        "public_jwk"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "matched",
+            "mismatch",
+            "unavailable"
+          ]
+        },
+        "checked_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verification_method_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^did:"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assertion_authorized": {
+          "type": "boolean"
+        },
+        "public_jwk": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_jwk"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "public_resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checked_at",
+        "retrieved_at",
+        "content_sha256",
+        "assertion_authorized",
+        "document",
+        "verification_methods"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "matched",
+            "stale",
+            "unverified",
+            "unavailable",
+            "invalid",
+            "unsupported"
+          ]
+        },
+        "checked_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "retrieved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "content_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "assertion_authorized": {
+          "type": "boolean"
+        },
+        "document": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/document"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification_methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/method"
+          }
+        }
+      }
+    },
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "x5c",
+        "expires_at",
+        "public_key_matches"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "not_expired",
+            "expired",
+            "invalid",
+            "absent"
+          ]
+        },
+        "x5c": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "public_key_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "assertion_ready": {
+      "type": "boolean"
+    }
+  },
+  "title": "Issuer DID identity inspection",
+  "description": "Read-only current observations of the organization registry, managed signer public key and public HTTPS DID resolution. Assertion readiness does not qualify credential issuance, certificate trust or interoperability. This component uses document-local OpenAPI component references.",
+  "$defs": {
+    "public_json": {
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_json"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "rsa_d",
+                "d",
+                "p",
+                "q",
+                "dp",
+                "dq",
+                "qi",
+                "oth",
+                "k",
+                "privateKeyJwk",
+                "privateKeyMultibase",
+                "privateKeyBase58",
+                "private_key",
+                "key_reference",
+                "auth_reference",
+                "auth_token",
+                "access_token",
+                "api_key",
+                "secret",
+                "secret_key",
+                "seed",
+                "password",
+                "credentials",
+                "credential_reference",
+                "signing_service_id",
+                "signing_key_reference",
+                "issuer_profile_id",
+                "kms_provider",
+                "kms_arn",
+                "kms_region",
+                "provider_config",
+                "service_id",
+                "client_secret",
+                "key_binding"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_json"
+          }
+        }
+      ]
+    },
+    "public_jwk": {
+      "type": "object",
+      "required": [
+        "kty"
+      ],
+      "properties": {
+        "kty": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_json"
+        }
+      ]
+    },
+    "method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "controller",
+        "assertion_authorized",
+        "public_jwk",
+        "x5c"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^did:"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "controller": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assertion_authorized": {
+          "type": "boolean"
+        },
+        "public_jwk": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_jwk"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "x5c": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "document": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/runtime__issuer_identity_inspection/$defs/public_json"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^did:"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

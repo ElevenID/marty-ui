@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "service_token_header": "x-service-token",
+  "service_token_comparison": "constant_time",
+  "identity_source": "mutual_tls_certificate_uri_san",
+  "bearer_identity_allowed": false,
+  "sensitive_methods": {
+    "/marty.ui.flow.v1.FlowService/StartVerification": [
+      "spiffe://marty.internal/service/auth"
+    ],
+    "/marty.ui.flow.v1.FlowService/ApplicationApproved": [
+      "spiffe://marty.internal/service/applicant"
+    ]
+  },
+  "missing_service_token_status": "unauthenticated",
+  "missing_certificate_identity_status": "unauthenticated",
+  "wrong_certificate_identity_status": "permission_denied",
+  "server_transport": "mutual_tls",
+  "client_certificate_required": true,
+  "failure_behavior": "fail_closed"
+}

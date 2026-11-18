@@ -1,0 +1,70 @@
+[package]
+name = "marty-gateway"
+version = "0.1.0"
+description = "Marty Rust API gateway"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "marty-gateway"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+http-body-util.workspace = true
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
+marty-service-contracts = { path = "../../crates/service-contracts" }
+marty-service-runtime = { path = "../../crates/service-runtime" }
+mmf-runtime.workspace = true
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
+marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
+async-trait.workspace = true
+base64.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-core.workspace = true
+hex.workspace = true
+http.workspace = true
+marty-oid4vci.workspace = true
+marty-passport-auth = { path = "../../crates/passport-auth" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
+marty-deployment-profile = { path = "../deployment-profile" }
+marty-credential-template = { path = "../credential-template" }
+marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
+mmf-platform.workspace = true
+mmf-security.workspace = true
+percent-encoding.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+marty-auth = { path = "../auth" }
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
+hex.workspace = true
+hmac.workspace = true
+redis.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true

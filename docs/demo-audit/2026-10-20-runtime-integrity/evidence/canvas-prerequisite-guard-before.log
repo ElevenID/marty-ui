@@ -1,0 +1,113 @@
+✔ accepts only a fresh full portability pass with exact stock-Canvas boundaries (2.131961ms)
+✔ fails closed on readiness-only, modified Canvas, shortcuts, stale runs, or missing cases (2.124349ms)
+✔ rejects sensitive or non-canonical fields in the portability artifact (0.299111ms)
+✔ loads an attestation by path but returns only hash-bound sanitized prerequisite evidence (1.141098ms)
+✔ requires fixed origins and non-parameterized demo URLs (0.373202ms)
+✔ accepts only transient storage state or explicitly synthetic credentials (0.771472ms)
+✔ Canvas prepare is fail-closed for recording and keeps auth/path out of prerequisite evidence (1.585347ms)
+✔ dry-run config inspection does not pretend a portability run passed (0.144026ms)
+✔ Marty UI assertions require both a passed case and a preflighted stable test id (0.786975ms)
+✖ Canvas attested cases validate prerequisites without recording a current-run assertion (1.44112ms)
+✖ D-07 and D-08 reject imported prerequisite cases as current-run outcomes (0.519603ms)
+✖ Canvas recording preflight blocks incomplete assertion producers before requesting runtime inputs (0.388946ms)
+✖ Receipt-shaped action or runtime JSON cannot promote imported Canvas prerequisites (0.257588ms)
+✔ Canvas scenario has no fallback start URL, fake success, or browser-state artifact action (0.36535ms)
+✔ D-08 reuses the Canvas gate for the exact external-evidence contract (0.262445ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 11
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18.610924
+
+✖ failing tests:
+
+test at test/canvasPortability.test.js:254:1
+✖ Canvas attested cases validate prerequisites without recording a current-run assertion (1.44112ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   {
+  +     id: undefined,
+  +     outcome: {
+  +       detail: 'Every required Canvas portability case passed.',
+  +       evidence: {
+  +         attested_cases: [
+  +           'pre_issuance_grade_correction',
+  +           'legacy_event_ingest_unavailable'
+  +         ]
+  +       },
+  +       result: 'PASS'
+  +     }
+  +   }
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/test/canvasPortability.test.js:276:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Array],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at test/canvasPortability.test.js:284:1
+✖ D-07 and D-08 reject imported prerequisite cases as current-run outcomes (0.519603ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/test/canvasPortability.test.js:295:7)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [Function (anonymous)],
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test/canvasPortability.test.js:304:1
+✖ Canvas recording preflight blocks incomplete assertion producers before requesting runtime inputs (0.388946ms)
+  AssertionError [ERR_ASSERTION]: The validation function is expected to return "true". Received false
+  
+  Caught error:
+  
+  Error: DEMO_RELEASE_PROBE_URL is required for the Canvas portability recording
+      at async TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/test/canvasPortability.test.js:309:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: DEMO_RELEASE_PROBE_URL is required for the Canvas portability recording
+        at requiredEnv (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/demos/canvas-learning-achievement.hooks.js:22:21)
+        at Object.prepare (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/demos/canvas-learning-achievement.hooks.js:128:37)
+        at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/test/canvasPortability.test.js:309:32)
+        at Test.runInAsyncScope (node:async_hooks:227:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+        at Test.postRun (node:internal/test_runner/test:1522:19)
+        at Test.run (node:internal/test_runner/test:1447:12)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: [Function (anonymous)],
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at test/canvasPortability.test.js:317:1
+✖ Receipt-shaped action or runtime JSON cannot promote imported Canvas prerequisites (0.257588ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at async TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-runtime-integrity/test/canvasPortability.test.js:327:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: [Object],
+    operator: 'rejects',
+    diff: 'simple'
+  }

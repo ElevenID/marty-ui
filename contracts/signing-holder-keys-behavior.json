@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979",
+  "storage_key": "org:{organization_id}:holder-keys",
+  "routes": {
+    "register": {"method": "POST", "path": "/v1/signing-keys/holder-keys", "success_fields": ["ok", "record_id", "registered_at"]},
+    "list": {"method": "GET", "path": "/v1/signing-keys/holder-keys", "success_fields": ["organization_id", "keys"]}
+  },
+  "key_purposes": ["holder_binding", "presentation_signing"],
+  "default_key_purpose": "holder_binding",
+  "record_id_template": "holder:{device_id}:{credential_id}:{key_purpose}",
+  "rules": {
+    "registration_replaces_only_a_matching_record_id": true,
+    "list_may_filter_by_exact_device_id": true,
+    "tenant_storage_is_isolated": true,
+    "private_jwk_parameters_and_custody_fields_are_rejected_before_storage": true,
+    "registered_public_jwk_is_projected_to_standard_verification_fields": true
+  }
+}

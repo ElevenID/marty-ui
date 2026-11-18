@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "policy_binding": "exact_id_tenant_active",
+  "template_binding": "exact_id_tenant_active",
+  "template_source_fields": [
+    "credential_type",
+    "vct",
+    "doctype",
+    "supported_formats",
+    "claims"
+  ],
+  "wallet_format_source": "active_credential_template_wallet_registry",
+  "native_builder": "marty_oid4vci.presentation_request.build_presentation_request",
+  "outputs": ["presentation_definition", "dcql_query"],
+  "missing_requirement_template": "fail_closed",
+  "malformed_requested_claims": "fail_closed",
+  "provider_fallback": "none"
+}

@@ -1,0 +1,38 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/ui
+
+ ❯ src/components/__tests__/ClaimCredentialDialog.test.tsx (6 tests | 5 failed) 1560ms
+   ❯ ClaimCredentialDialog (6)
+     × explains when the issuer has not activated an OID4VCI issuance flow 177ms
+     × lets the applicant select a browser wallet in the claim flow 190ms
+     × loads a fresh wallet offer once a wallet app is selected 105ms
+     × uses the selected Spruce wallet-specific offer for the mobile open-wallet handoff 249ms
+     × keeps Canvas Credentials as an optional post-issuance mirror 106ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > explains when the issuer has not activated an OID4VCI issuance flow
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > lets the applicant select a browser wallet in the claim flow
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > loads a fresh wallet offer once a wallet app is selected
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > uses the selected Spruce wallet-specific offer for the mobile open-wallet handoff
+ FAIL  src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > keeps Canvas Credentials as an optional post-issuance mirror
+TypeError: nodeToRestore.current.focus is not a function
+ ❯ ../../marty-ui/ui/node_modules/@mui/material/Unstable_TrapFocus/FocusTrap.mjs:141:31
+ ❯ Object.react_stack_bottom_frame ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:26001:13
+ ❯ runWithFiberInDEV ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:874:13
+ ❯ commitHookEffectListUnmount ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:13316:17
+ ❯ commitHookPassiveUnmountEffects ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:13347:11
+ ❯ commitPassiveUnmountEffectsInsideOfDeletedTree_begin ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:16264:13
+ ❯ recursivelyTraversePassiveUnmountEffects ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:16085:13
+ ❯ commitPassiveUnmountOnFiber ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:16127:11
+ ❯ flushPassiveEffects ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:18428:9
+ ❯ flushPendingEffects ../../marty-ui/ui/node_modules/react-dom/cjs/react-dom-client.development.js:18358:14
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  5 failed | 1 passed (6)
+   Start at  03:16:51
+   Duration  4.90s (tests 34%, import 30%, environment 18%, transform 11%, setup 7%)
+

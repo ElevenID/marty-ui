@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "runtime_owner": "rust/services/flow",
+  "executable": "/usr/local/bin/marty-flow",
+  "python_runtime_removed": "services/flow",
+  "migration_owner": "rust/services/flow/migrations",
+  "shared_migration_runner_excludes_flow": true,
+  "development_environment": "development",
+  "deployed_environment": "beta",
+  "beta_workload_identity": {
+    "server": ["presentation-policy", "flow"],
+    "clients": ["flow", "auth", "applicant", "verification"],
+    "authorization_identity_source": "verified_certificate_uri_san",
+    "token_only_sensitive_rpc_allowed": false
+  },
+  "postgresql_behavior_gate": "rust/services/flow/tests/postgres_integration.rs",
+  "removed_python_contract_image": "tests/flow-idempotency-contract",
+  "failure_behavior": "fail_closed"
+}

@@ -1,0 +1,225 @@
+/**
+ * Team Snapshot Panel
+ * 
+ * Shows team visibility without navigating:
+ * - # Team members
+ * - Roles present (Admin / Dev / Operator)
+ * - Pending invites
+ * 
+ * Quick actions:
+ * - Invite user
+ * - Review roles
+ */
+
+import {
+  Box,
+  Paper,
+  Typography,
+  Grid,
+  Card,
+  CardContent,
+  Button,
+  Avatar,
+  AvatarGroup,
+  Tooltip,
+} from '@mui/material';
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import CodeIcon from '@mui/icons-material/Code';
+import SettingsIcon from '@mui/icons-material/Settings';
+import PeopleIcon from '@mui/icons-material/People';
+import EmailIcon from '@mui/icons-material/Email';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import DashboardErrorAlert from './DashboardErrorAlert';
+import { usePermissions } from '../../../hooks/usePermissions';
+
+/**
+ * Role badge configuration factory
+ */
+const getRoleConfig = (t) => ({
+  admin: {
+    label: t('dashboard.team.admin'),
+    icon: AdminPanelSettingsIcon,
+    color: 'error',
+  },
+  developer: {
+    label: t('dashboard.team.developer'),
+    icon: CodeIcon,
+    color: 'primary',
+  },
+  operator: {
+    label: t('dashboard.team.operator'),
+    icon: SettingsIcon,
+    color: 'info',
+  },
+});
+
+/**
+ * Role summary card
+ */
+function RoleCard({ role, count }) {
+  const { t } = useTranslation('console');
+  const ROLE_CONFIG = getRoleConfig(t);
+  const config = ROLE_CONFIG[role] || ROLE_CONFIG.operator;
+  const Icon = config.icon;
+
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <Icon color={config.color} fontSize="small" />
+          <Typography variant="caption" color="text.secondary">
+            {config.label}
+          </Typography>
+        </Box>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
+          {count}
+        </Typography>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Team Snapshot Panel Component
+ */
+export function TeamSnapshotPanel({ teamData, error = null, onRetry }) {
+  const { t } = useTranslation('console');
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canInvite = !permissionsLoading && can('team', 'invite');
+  
+  const {
+    members = [],
+    pendingInvites = [],
+    roleDistribution = {},
+  } = teamData || {};
+
+  // Calculate role counts
+  const adminCount = roleDistribution.admin || 0;
+  const developerCount = roleDistribution.developer || 0;
+  const operatorCount = roleDistribution.operator || 0;
+  const totalMembers = members.length || 0;
+
+  // Get first few member avatars for display
+  const memberAvatars = members.slice(0, 5);
+
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <PeopleIcon color="primary" />
+          <Box>
+            <Typography variant="h6">
+              {t('dashboard.team.title')}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {totalMembers} {totalMembers !== 1 ? t('dashboard.team.members') : t('dashboard.team.member')}
+              {pendingInvites.length > 0 && ` • ${pendingInvites.length} ${pendingInvites.length !== 1 ? t('dashboard.team.pendingInvites') : t('dashboard.team.pendingInvite')}`}
+            </Typography>
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {canInvite && <Button
+            component={Link}
+            to="/console/org/team?invite=1"
+            variant="contained"
+            startIcon={<PersonAddIcon />}
+            size="small"
+          >
+            {t('dashboard.team.invite')}
+          </Button>}
+          <Button
+            component={Link}
+            to="/console/org/team"
+            variant="outlined"
+            size="small"
+            endIcon={<ArrowForwardIcon />}
+          >
+            {t('dashboard.team.manage')}
+          </Button>
+        </Box>
+      </Box>
+
+      {error ? (
+        <DashboardErrorAlert
+          title="Team snapshot unavailable"
+          error={error}
+          onRetry={onRetry}
+          fallback="Team membership data could not be loaded from the organization service."
+        />
+      ) : null}
+
+      {!error && (
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <RoleCard role="admin" count={adminCount} />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <RoleCard role="developer" count={developerCount} />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 4 }}>
+          <RoleCard role="operator" count={operatorCount} />
+        </Grid>
+      </Grid>
+      )}
+
+      {!error && totalMembers > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <AvatarGroup max={5}>
+            {memberAvatars.map((member, idx) => (
+              <Tooltip key={member.id || idx} title={member.name || member.email}>
+                <Avatar
+                  alt={member.name || member.email}
+                  src={member.avatar}
+                  sx={{ width: 32, height: 32 }}
+                >
+                  {(member.name || member.email || '?')[0].toUpperCase()}
+                </Avatar>
+              </Tooltip>
+            ))}
+          </AvatarGroup>
+          {totalMembers > 5 && (
+            <Typography variant="caption" color="text.secondary">
+              {t('dashboard.team.moreMembers', { count: totalMembers - 5 })}
+            </Typography>
+          )}
+        </Box>
+      )}
+
+      {!error && pendingInvites.length > 0 && (
+        <Box sx={{ mt: 2, p: 2, bgcolor: 'info.light', borderRadius: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <EmailIcon fontSize="small" color="info" />
+          <Typography variant="body2" color="text.secondary">
+            {t('dashboard.team.pendingInvitationsCount', { count: pendingInvites.length })}
+          </Typography>
+          <Button
+            component={Link}
+            to="/console/org/team"
+            size="small"
+            sx={{ ml: 'auto' }}
+          >
+            {t('dashboard.team.review')}
+          </Button>
+        </Box>
+      )}
+
+      {!error && totalMembers === 0 && (
+        <Box sx={{ textAlign: 'center', py: 3 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {t('dashboard.team.noMembersYet')}
+          </Typography>
+          {canInvite && <Button
+            component={Link}
+            to="/console/org/team?invite=1"
+            variant="contained"
+            startIcon={<PersonAddIcon />}
+          >
+            {t('dashboard.team.inviteTeamMember')}
+          </Button>}
+        </Box>
+      )}
+    </Paper>
+  );
+}

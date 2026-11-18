@@ -1,0 +1,20 @@
+✔ all six source-bound native flows use real Add to Wallet and single-credential Approve/Cancel with explicit Chrome return (33.38388ms)
+✔ native contract rejects callbacks invented from package traces, substituted controls, weak reset and cross-organization receipts (13.629393ms)
+✔ frozen source requires real clean canonical routes, source pin, secret environment names and an actual registry ID (2.960318ms)
+✔ managed reset requires actual post-install pm clear Success and preserves failures (0.900156ms)
+✔ before claim refuses an existing holder application without issuing or withdrawing it (6.177432ms)
+✔ claim probe retains exact current ID before later failure and rejects different organizations and expired-offer reuse (7.273643ms)
+✔ expiry uses native server expiry and exact EXPIRED/OFFER_EXPIRED before handoff; a delay or generic failure cannot pass (17.194833ms)
+✔ canonical signed request observes the exact native Flow reference with distinct Auth/presentation nonces and blocks the chooser (1.874793ms)
+✔ generic trust error or missing authentication cannot become a typed native trust success (18.648351ms)
+✔ selectOption executes only an existing option and confirms the actual selected value (3.256854ms)
+✔ actual browser result probes require native page finalization and exact holder identity without consuming finalize (1.976467ms)
+✔ actual cancel probe checks its original pending request and same Chrome auth=false; a generic trust failure remains blocked (2.764944ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 127.084038

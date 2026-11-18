@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marty.dev/schemas/protocol-support-catalog.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "catalog_revision", "protocol_revision", "discovery_path", "support_levels", "qualification_levels", "entities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "catalog_revision": {"type": "string", "format": "date"},
+    "protocol_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "discovery_path": {"const": "/v1/protocol-support"},
+    "support_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implemented", "derived", "partial", "unsupported"],
+      "properties": {
+        "implemented": {"type": "string", "minLength": 1},
+        "derived": {"type": "string", "minLength": 1},
+        "partial": {"type": "string", "minLength": 1},
+        "unsupported": {"type": "string", "minLength": 1}
+      }
+    },
+    "qualification_levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["focused_source", "implementation_present", "not_applicable"],
+      "properties": {
+        "focused_source": {"type": "string", "minLength": 1},
+        "implementation_present": {"type": "string", "minLength": 1},
+        "not_applicable": {"type": "string", "minLength": 1}
+      }
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "display_name", "support_level", "qualification", "owner_service", "api_paths", "ui_paths", "schema_refs", "limitations"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "kind": {"type": "string", "minLength": 1},
+          "display_name": {"type": "string", "minLength": 1},
+          "support_level": {"enum": ["implemented", "derived", "partial", "unsupported"]},
+          "qualification": {"enum": ["focused_source", "implementation_present", "not_applicable"]},
+          "owner_service": {"type": ["string", "null"]},
+          "api_paths": {"type": "array", "items": {"type": "string", "pattern": "^/"}, "uniqueItems": true},
+          "ui_paths": {"type": "array", "items": {"type": "string", "pattern": "^/"}, "uniqueItems": true},
+          "schema_refs": {"type": "array", "items": {"type": "string", "pattern": "^#/components/schemas/"}, "uniqueItems": true},
+          "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"support_level": {"const": "unsupported"}}, "required": ["support_level"]},
+            "then": {
+              "properties": {
+                "qualification": {"const": "not_applicable"},
+                "owner_service": {"type": "null"},
+                "api_paths": {"maxItems": 0},
+                "ui_paths": {"maxItems": 0},
+                "schema_refs": {"maxItems": 0},
+                "limitations": {"minItems": 1}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"support_level": {"enum": ["implemented", "partial"]}}, "required": ["support_level"]},
+            "then": {"properties": {"api_paths": {"minItems": 1}, "owner_service": {"type": "string", "minLength": 1}}}
+          }
+        ]
+      }
+    }
+  }
+}

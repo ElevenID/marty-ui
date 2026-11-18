@@ -1,0 +1,147 @@
+{
+  "realm": "${KEYCLOAK_REALM}",
+  "enabled": true,
+  "displayName": "${KEYCLOAK_REALM}",
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 30,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Administrator role"
+      },
+      {
+        "name": "org_admin",
+        "description": "Organization administrator"
+      },
+      {
+        "name": "member",
+        "description": "Organization member"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "marty-ui",
+      "name": "Marty UI",
+      "description": "Marty web application",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/*",
+        "http://localhost:8001/*",
+        "http://localhost:3000/*",
+        "http://localhost:5173/*",
+        "${UI_BASE_URL}/*",
+        "${UI_BASE_URL}/auth/callback",
+        "${UI_BASE_URL}/v1/auth/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "${UI_BASE_URL}"
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "openid",
+        "email",
+        "profile"
+      ]
+    },
+    {
+      "clientId": "marty-api",
+      "name": "Marty API",
+      "description": "Marty API service account",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "marty-api-secret-change-in-production"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "email": "admin@marty.local",
+      "firstName": "Admin",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "canvas-demo-admin",
+      "email": "canvas.admin@marty.demo",
+      "firstName": "Canvas",
+      "lastName": "Demo Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "CanvasAdmin123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin", "org_admin"],
+      "attributes": {
+        "demo_context": ["canvas"],
+        "onboarding_completed": ["true"]
+      }
+    },
+    {
+      "username": "testuser",
+      "email": "test@marty.local",
+      "firstName": "Test",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["member"]
+    }
+  ],
+  "defaultDefaultClientScopes": [
+    "openid",
+    "email",
+    "profile"
+  ]
+}

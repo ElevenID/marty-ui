@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "oss-release": {
+      "description": "Public, signed Marty release artifacts built from this repository.",
+      "source_policy": "public-source",
+      "python_packaging": "released-packages",
+      "debug_tools": "excluded-by-default",
+      "source_maps": "included",
+      "image_signing": "required",
+      "sbom": "required"
+    }
+  }
+}

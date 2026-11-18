@@ -1,0 +1,54 @@
+# Default-off physical-provider beta variant. Compose with the base beta stack
+# and docker-compose.profile.passport-provider-base.yml, never the simulator
+# passport-native-beta profile. This file does not publish provider/signer ports.
+services:
+  gateway:
+    environment:
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?set beta DSC operator credential}
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:?set beta CSCA operator credential}
+      PASSPORT_NATIVE_GATEWAY_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "true"
+      PASSPORT_PROVIDER_INGRESS_SERVICE_URL: http://passport-provider-ingress:8021
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: ""
+
+  signing-keys:
+    environment:
+      ENVIRONMENT: beta
+      SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY:?set beta DSC operator credential}
+      SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY: ${SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY:?set beta CSCA operator credential}
+      SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED: "true"
+
+  flow:
+    environment:
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      PASSPORT_NATIVE_FLOW_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: ""
+
+  issuance-native:
+    environment:
+      PASSPORT_NATIVE_HTTP_ENABLED: "true"
+      PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: "true"
+      PASSPORT_KMS_ARTIFACTS_ENABLED: "true"
+      PASSPORT_KMS_CALLBACKS_ENABLED: "true"
+      PASSPORT_TENANT_API_KEYS: ""
+      PASSPORT_TENANT_API_KEYS_FILE: ""
+      PERSONALIZATION_BUREAU_URL: ${PASSPORT_PHYSICAL_PROVIDER_URL:?set an HTTPS physical bureau endpoint}
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:?select a registered physical bureau profile}
+      PERSONALIZATION_BUREAU_API_KEY: ""
+      PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/passport_physical_provider_api_key
+    secrets:
+      - passport_physical_provider_api_key
+
+  passport-provider-ingress:
+    environment:
+      ENVIRONMENT: beta
+      PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:?select a registered physical bureau profile}
+
+secrets:
+  passport_physical_provider_api_key:
+    file: ${PASSPORT_PROVIDER_SECRET_DIR:?set isolated beta physical provider secret root}/passport_physical_provider_api_key

@@ -1,0 +1,14 @@
+/**
+ * Deploy Page
+ * 
+ * Main Deploy section landing page.
+ * Redirects to Deployment Profiles by default.
+ */
+
+import { Navigate } from 'react-router';
+
+function DeployPage() {
+  return <Navigate to="/console/org/deploy/profiles" replace />;
+}
+
+export default DeployPage;

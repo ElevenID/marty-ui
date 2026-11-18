@@ -1,0 +1,19 @@
+✔ profile opt-in supplies the retained disclosure without changing legacy options (6.341479ms)
+✔ unbound plans and missing narration, caption, source or report files cannot opt in (2.476909ms)
+✔ the profile rejects missing context, abrupt crops, missing cursor events and unnumbered scenarios (4.080775ms)
+✔ source recording, run report and slate durations must match the retained edit binding (8.227308ms)
+✔ every secondary recording needs its own matching source hash (6.645556ms)
+✔ one through six profile roadmap cards stay in bounds and the four-stage legacy contract remains (1.440289ms)
+✔ composer validation and overlays both accept a six-stage profile roadmap (2.658473ms)
+✔ voice and captions retain provenance and draft status within the explicit timeline (7.002223ms)
+✔ profile CLI requires a retained composition report (54.784157ms)
+✔ a longer secondary recording cannot silently extend the guided edit timeline (0.454955ms)
+✔ the profile CLI composes a generated six-stage fixture with bound captions and a draft report (17866.888241ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 17968.023506

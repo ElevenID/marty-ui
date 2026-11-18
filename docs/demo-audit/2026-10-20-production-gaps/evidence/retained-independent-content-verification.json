@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "kind": "retained-independent-draft-content-verification",
+  "verifiedAt": "2026-10-20T05:24:46.578774+00:00",
+  "status": "PASS_FOCUSED_CONTENT_CHECKS",
+  "baselines": {
+    "marty-ui": "cab5d4df8ce1663142aeb16de60ddef921443579",
+    "marty-demo-recorder": "7c61c82b19cd3b7d050e7715d9b9ca58c30a0745"
+  },
+  "scenarioSlug": "independent-wallet-interoperability",
+  "scenarioRevision": 2,
+  "assertionIds": [
+    "fresh_native_credential_received",
+    "canonical_signed_request_presented",
+    "presentation_authenticated",
+    "holder_cancel_no_session"
+  ],
+  "catalog": {
+    "scenarios": 14,
+    "draftScenarios": 14,
+    "notRunAssertions": 66,
+    "publishedManifestUnchanged": true
+  },
+  "plan": {
+    "changedScenariosFromBaseline": [
+      "membership-badge-login",
+      "independent-wallet-interoperability"
+    ],
+    "storyBeats": 61,
+    "captureBinding": "ALL_UNBOUND",
+    "qualificationAndPresentationStatesUnchanged": true,
+    "roadmapTiming": "3 seconds used only for existing copy-validator input; actual capture timing remains unset"
+  },
+  "transcript": {
+    "source": "demos/transcripts/independent-wallet-interoperability.en.vtt",
+    "sha256": "5685635e98f48403656e5fb1ae49db1fdc698464c736a6ec7a23263704d632da",
+    "cueCount": 8,
+    "durationSeconds": 94.0,
+    "maximumCueWpm": 120.0,
+    "timingBasis": "PROVISIONAL_DRAFT_WINDOWS_UNBOUND_TO_SOURCE_VIDEO_OR_RENDERED_AUDIO",
+    "catalogTextAndCueStartsMatch": true,
+    "cues": [
+      {
+        "index": 1,
+        "start": 0.0,
+        "end": 10.0,
+        "wpm": 120.0
+      },
+      {
+        "index": 2,
+        "start": 10.0,
+        "end": 22.0,
+        "wpm": 105.0
+      },
+      {
+        "index": 3,
+        "start": 22.0,
+        "end": 34.0,
+        "wpm": 100.0
+      },
+      {
+        "index": 4,
+        "start": 34.0,
+        "end": 46.0,
+        "wpm": 90.0
+      },
+      {
+        "index": 5,
+        "start": 46.0,
+        "end": 58.0,
+        "wpm": 80.0
+      },
+      {
+        "index": 6,
+        "start": 58.0,
+        "end": 70.0,
+        "wpm": 85.0
+      },
+      {
+        "index": 7,
+        "start": 70.0,
+        "end": 82.0,
+        "wpm": 100.0
+      },
+      {
+        "index": 8,
+        "start": 82.0,
+        "end": 94.0,
+        "wpm": 85.0
+      }
+    ]
+  },
+  "checks": [
+    "Existing current and published manifest validators",
+    "Four assertion IDs and exact report-field mappings",
+    "Only retained-independent catalog entry changed since the component-fix checkpoint",
+    "Plan changes isolated to declared scenario follow-ups; all 61 capture beats remain unbound",
+    "Existing narration disclosure, timing and 160-WPM validator",
+    "Existing caption-layout and opening-roadmap copy validators",
+    "Catalog transcript exactly matches draft VTT",
+    "Generated manifest module current",
+    "Source paths and declared locators resolve",
+    "Both repositories git diff --check"
+  ],
+  "nodeVerification": {
+    "configuration": "PASS",
+    "captionLayout": "PASS",
+    "roadmapCopy": "PASS",
+    "cues": 8,
+    "headlineLines": 2,
+    "voiceRendered": false
+  },
+  "verificationMethods": {
+    "command": "python3 production-gap-evidence/verify-independent-content.py",
+    "node": {
+      "command": "node - 294ad0411901e30437a2d66fe0645bd012f5be24",
+      "script": "const fs=require('node:fs'), assert=require('node:assert/strict');\nconst {validateConfig}=require('./src/config');\nconst {spokenCaptionFilters}=require('./src/spokenCaptions');\nconst {validateOpeningRoadmap}=require('./src/openingRoadmap');\nconst cfg=JSON.parse(fs.readFileSync('demos/independent-wallet-interoperability.json'));\nassert.equal(cfg.externalQualification.driverSource.revision,'${env.DEMO_INDEPENDENT_DRIVER_REVISION}');\nassert.match(process.argv[2],/^[a-f0-9]{40}$/);\ncfg.externalQualification.driverSource.revision=process.argv[2];\nvalidateConfig(cfg);\nconst seconds=s=>s.split(':').reduce((v,p)=>v*60+Number(p),0);\nconst cues=fs.readFileSync(cfg.transcript.source,'utf8').split(/\\n\\s*\\n/).filter(b=>b.includes(' --> ')).map(block=>{\n const lines=block.split('\\n'), i=lines.findIndex(s=>s.includes(' --> '));\n const [start,end]=lines[i].split(' --> ').map(seconds); return {start,end,text:lines.slice(i+1).join(' ').trim()};\n});\nspokenCaptionFilters(cues,'/unused-font-path');\nconst plan=JSON.parse(fs.readFileSync('demos/lifecycle-alignment.json'));\nconst roadmap=validateOpeningRoadmap(plan.scenarios.find(s=>s.slug===cfg.slug).openingRoadmap,3);\nassert.equal(roadmap.stages.length,4);\nconsole.log(JSON.stringify({configuration:'PASS',captionLayout:'PASS',roadmapCopy:'PASS',cues:cues.length,headlineLines:roadmap.lines.length,voiceRendered:false}));",
+      "exitCode": 0,
+      "resolutionBoundary": "Only the required driver revision placeholder is supplied with the current local UI revision for structural validation. No release probe, hook, environment-secret resolution or capture is executed."
+    },
+    "generatedManifest": {
+      "command": "node scripts/generate-demo-manifest-module.mjs --check",
+      "exitCode": 0
+    }
+  },
+  "changedSources": [
+    {
+      "repository": "marty-ui",
+      "path": "ui/public/demos/manifests/2026.08.0.json",
+      "sha256": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1"
+    },
+    {
+      "repository": "marty-ui",
+      "path": "ui/src/generated/demoManifests.generated.js",
+      "sha256": "d91a7b665be67bf8a953fd5db3b99e3647317c838c8466ae3ed69cb18776732e"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/lifecycle-alignment.json",
+      "sha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/independent-wallet-interoperability.en.vtt",
+      "sha256": "5685635e98f48403656e5fb1ae49db1fdc698464c736a6ec7a23263704d632da"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "docs/independent-wallet-interoperability.md",
+      "sha256": "0710bd439475889ca628860a2ab587bdd7b7f58f5da1e9e8cd5ec5f17155375f"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "docs/first-party-browser-wallet.md",
+      "sha256": "984783378adf2cf504a3f2058997bf9e4ab22c6f59702347696d4d24d2f13892"
+    }
+  ],
+  "reviewedImplementationSources": [
+    {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-independent-wallet-interoperability.js",
+      "sha256": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-ui",
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "locator": "handleAutoApply; credential-claim-action",
+      "sha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0",
+      "locatorsChecked": [
+        "handleAutoApply",
+        "credential-claim-action"
+      ]
+    },
+    {
+      "repository": "marty-ui",
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "locator": "data-application-id; wallet-selector; wallet-open-link; handleOpenInWallet",
+      "sha256": "90974fd6391bab40b7bd14ae59fe8c7e36411a515d3836fa87d3ad8d8b5e201f",
+      "locatorsChecked": [
+        "data-application-id",
+        "wallet-selector",
+        "wallet-open-link",
+        "handleOpenInWallet"
+      ]
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentWallet.js",
+      "sha256": "e90c2a1dd94061c6e3340926890a900990328244c5a8fd8313532270b6eaecbc",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipFlow.js",
+      "sha256": "4c439c14ab14e27c844f49afc1074ca9c44e24a8d73651062e83ca34f5c7a72e",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipBrowser.js",
+      "sha256": "8ebe08b8f89d24c9980bf1a86eafc46e76f1f33c77a76c1212af101019b03de2",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidReleaseGateway.js",
+      "sha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidRecorder.js",
+      "sha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/independent-wallet-interoperability.json",
+      "sha256": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/independent-wallet-interoperability.en.vtt",
+      "sha256": "5685635e98f48403656e5fb1ae49db1fdc698464c736a6ec7a23263704d632da",
+      "locatorsChecked": []
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentOverview.js",
+      "sha256": "09026dd4cb54b989a00e9744d6b8d5ee2eb04bd3d6043592f9943d222d51f5ac",
+      "locatorsChecked": []
+    }
+  ],
+  "firstPartyReadmeFollowup": {
+    "scope": "Documentation link and boundary wording for the new separate independent contract; first-party runtime unchanged",
+    "path": "docs/first-party-browser-wallet.md",
+    "sha256": "984783378adf2cf504a3f2058997bf9e4ab22c6f59702347696d4d24d2f13892"
+  },
+  "boundary": {
+    "nativeExecution": "NOT_RUN",
+    "liveRequests": 0,
+    "newMediaCreated": false,
+    "audioRendered": false,
+    "frameOrAudioAlignmentMeasured": false,
+    "publicationPerformed": false,
+    "qualification": "DRAFT / NOT_RUN"
+  }
+}

@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+package marty.ui.presentation_policy.v1;
+
+import "google/api/annotations.proto";
+
+option py_generic_services = true;
+
+// ---------------------------------------------------------------------------
+// Presentation Policy Service — manages OID4VP presentation policies and
+// evaluates verifiable presentations against those policies.
+//
+// Used by the flow service to:
+//   1. Look up a policy (GetPolicy) to resolve org ownership / build
+//      presentation definitions.
+//   2. Evaluate a submitted VP token (EvaluatePresentation) post-submission.
+// ---------------------------------------------------------------------------
+
+service PresentationPolicyService {
+  // Retrieve a single presentation policy by ID.
+  rpc GetPolicy(GetPolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies/{policy_id}"
+    };
+  }
+
+  // List policies (optionally filtered by organization).
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies"
+    };
+  }
+
+  // Create a new presentation policy (draft).
+  rpc CreatePolicy(CreatePolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies"
+      body: "*"
+    };
+  }
+
+  // Update mutable fields of a draft policy.
+  rpc UpdatePolicy(UpdatePolicyRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      patch: "/v1/presentation-policies/{policy_id}"
+      body: "*"
+    };
+  }
+
+  // Activate a draft or suspended policy.
+  rpc ActivatePolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/activate"
+      body: "*"
+    };
+  }
+
+  // Suspend an active policy.
+  rpc SuspendPolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/suspend"
+      body: "*"
+    };
+  }
+
+  // Create a new draft version from an existing policy.
+  rpc NewVersionPolicy(PolicyIdRequest) returns (PolicyResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/new-version"
+      body: "*"
+    };
+  }
+
+  // Delete a draft policy.
+  rpc DeletePolicy(PolicyIdRequest) returns (DeletePolicyResponse) {
+    option (google.api.http) = {
+      delete: "/v1/presentation-policies/{policy_id}"
+    };
+  }
+
+  // Evaluate a verifiable presentation against a stored policy.
+  rpc EvaluatePresentation(EvaluatePresentationRequest) returns (PolicyEvaluationResponse) {
+    option (google.api.http) = {
+      post: "/v1/presentation-policies/{policy_id}/evaluate"
+      body: "*"
+    };
+  }
+
+  // Health check.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
+    option (google.api.http) = {
+      get: "/v1/presentation-policies/health"
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message GetPolicyRequest {
+  string policy_id = 1;
+}
+
+message PolicyIdRequest {
+  string policy_id = 1;
+}
+
+message CreatePolicyRequest {
+  string organization_id = 1;
+  string name = 2;
+  string description = 3;
+  string compliance_profile_id = 4;
+  string credential_requirements_json = 5;  // JSON-encoded list
+  string alternative_requirements_json = 6; // JSON-encoded list
+  string display_metadata_json = 7;         // JSON-encoded display metadata
+  bool prefer_predicates = 8;
+  string fallback_policy = 9;
+  string prerequisite_evidence_profile = 10;
+  string trust_profile_id = 11;
+  string holder_binding_json = 12;
+  string freshness_json = 13;
+}
+
+message UpdatePolicyRequest {
+  string policy_id = 1;
+  string name = 2;
+  string description = 3;
+  string compliance_profile_id = 4;
+  optional string prerequisite_evidence_profile = 5;
+}
+
+message DeletePolicyResponse {
+  bool success = 1;
+}
+
+message ListPoliciesRequest {
+  string organization_id = 1;
+  string status = 2;       // "active", "draft", etc.
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListPoliciesResponse {
+  repeated PolicyResponse policies = 1;
+  int32 total = 2;
+}
+
+message PolicyResponse {
+  string id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;
+  string display_metadata_json = 6;          // JSON-encoded display metadata
+  string credential_requirements_json = 7;   // JSON-encoded list
+  string alternative_requirements_json = 8;  // JSON-encoded list
+  string compliance_profile_id = 9;
+  int32 version = 10;
+  string created_at = 11;
+  string updated_at = 12;
+  PolicyRevision policy_revision = 13;
+  string prerequisite_evidence_profile = 14;
+  string credential_authority_snapshot_json = 15;
+  // Saved credential-holder policy, independent of holder-only proof obligations.
+  bool holder_binding_required = 16;
+}
+
+// Server-computed identity of the exact saved policy snapshot. A revision is
+// metadata, not credential or presentation authentication evidence.
+message PolicyRevision {
+  string organization_id = 1;
+  string id = 2;
+  uint32 version = 3;
+  string content_digest = 4;
+}
+
+message EvaluatePresentationRequest {
+  string policy_id = 1;
+  string vp_token = 2;
+  string nonce = 3;
+  string audience = 4;
+  string trust_profile_id = 5;     // optional override
+  string context_json = 6;        // JSON-encoded extra context
+  Oid4vpEvaluationTransport oid4vp_transport = 7; // optional, unverified metadata
+  // Required by the gRPC evaluator; must match the current active saved policy.
+  PolicyRevision expected_policy_revision = 8;
+}
+
+// Producer-owned query plus structure-preserving untrusted wallet submission. Presence and
+// structural validity do not grant presentation, credential, or holder proof.
+message Oid4vpEvaluationTransport {
+  string query_kind = 1; // "dcql" or "presentation_exchange"
+  string query_document_json = 2;
+  string query_digest = 3;
+  optional string presentation_submission_json = 4;
+  string vp_token_raw = 5; // exact wallet token field, not verified evidence
+  string verifier_client_id = 6; // exact producer-owned client_id
+  string request_nonce = 7; // exact producer-owned nonce
+  // Frozen owner-issued authority; only the selected managed profile admits it.
+  string credential_authority_snapshot_json = 8;
+}
+
+message PolicyEvaluationResponse {
+  string result = 1;               // "passed", "failed"
+  string policy_id = 2;
+  string policy_name = 3;
+  string credential_results_json = 4;  // JSON-encoded list
+  int32 total_requirements = 5;
+  int32 satisfied_requirements = 6;
+  int32 required_satisfied = 7;
+  int32 required_total = 8;
+  string decision = 9;            // "allow", "deny", "manual_review"
+  string decision_reason = 10;
+  string verified_claims_json = 11; // JSON-encoded dict
+  string evaluation_timestamp = 12;
+  string nonce = 13;
+  string authentication_diagnostic_json = 14; // Optional server-owned request-bound diagnostic; never credential authority
+  PolicyRevision policy_revision = 15;
+  // Optional request/result-bound finalization deadline from native managed evidence.
+  // Correspondence only; consumers must authenticate the Policy channel.
+  string evaluation_validity_json = 16;
+  // Native managed evidence before durable replay finalization. This projection
+  // requires an authenticated Policy acquisition and a committed Flow receipt.
+  string managed_policy_evidence_json = 17;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+}

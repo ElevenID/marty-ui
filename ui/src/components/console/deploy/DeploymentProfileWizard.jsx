@@ -1,0 +1,330 @@
+/**
+ * Deployment Profile Wizard
+ * 
+ * Multi-step wizard for creating deployment profiles.
+ * Binds identity logic to runtime environments (API, Kiosk, Mobile).
+ */
+
+import { useNavigate } from 'react-router';
+import { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Box,
+  Container,
+  Paper,
+  Stepper,
+  Step,
+  StepLabel,
+  Button,
+  Typography,
+  CircularProgress,
+} from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+
+import { useWizard } from '../../../hooks/useWizard';
+import { createDeploymentProfile } from '../../../services/deploymentProfilesApi';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import EnvironmentStep from './steps/EnvironmentStep';
+import RuntimeSettingsStep from './steps/RuntimeSettingsStep';
+import IntegrationStep from './steps/IntegrationStep';
+import ReviewStep from './steps/ReviewStep';
+
+const DeploymentProfileWizardForm = () => {
+  const navigate = useNavigate();
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const submissionPending = useRef(false);
+
+  const STEPS = [
+    t('wizards.deploymentProfile.steps.environment'),
+    t('wizards.deploymentProfile.steps.runtimeSettings'),
+    t('wizards.deploymentProfile.steps.integration'),
+    t('wizards.deploymentProfile.steps.review'),
+  ];
+
+  const validateStep = useCallback((stepIndex, data) => {
+    switch (stepIndex) {
+      case 0: // Environment
+        return data.name?.trim().length > 0 && data.environment_type;
+      case 1: // Runtime Settings
+        return data.runtime_catalog_ready && Boolean(data.default_policy_id);
+      case 2: // Integration (optional)
+        return true;
+      case 3: // Review
+        return true;
+      default:
+        return false;
+    }
+  }, []);
+
+  const handleSubmit = useCallback(async (data) => {
+    if (!activeOrgId) {
+      throw new Error('Select an organization before creating a deployment profile.');
+    }
+
+    const callbackFields = {
+      'credential.issued': 'issuance_complete_url',
+      'credential.verified': 'verification_complete_url',
+      'credential.revoked': 'credential_revoked_url',
+      'verification.failed': 'verification_failed_url',
+    };
+    const callbacks = data.webhooks.url
+      ? Object.fromEntries(
+          data.webhooks.events
+            .filter((event) => callbackFields[event])
+            .map((event) => [callbackFields[event], data.webhooks.url])
+        )
+      : undefined;
+    const {
+      qr_code: qrCode,
+      nfc,
+      ble,
+      ...serviceFeatureFlags
+    } = data.feature_flags;
+
+    const payload = {
+      name: data.name,
+      description: data.description,
+      network_mode: data.network_mode,
+      trust_profile_id: data.trust_profile_id || null,
+      default_policy_id: data.default_policy_id || null,
+      presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
+      credential_template_ids: data.credential_template_ids,
+      enabled_flow_ids: data.enabled_flows,
+      callbacks,
+      feature_flags: {
+        ...serviceFeatureFlags,
+        enable_qr_code_generation: qrCode,
+        custom_flags: { nfc, ble },
+      },
+      environment_config: data.environment_config,
+      organization_id: activeOrgId,
+      status: data.activate_immediately ? 'active' : 'draft',
+      activate_immediately: data.activate_immediately !== false,
+    };
+    
+    return createDeploymentProfile(payload);
+  }, [activeOrgId]);
+
+  const submitReviewedData = useCallback(async (data) => {
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      submissionPending.current = false;
+    }
+  }, [handleSubmit]);
+
+  const wizard = useWizard({
+    steps: STEPS,
+    initialData: {
+      name: '',
+      description: '',
+      environment_type: 'api',
+      network_mode: 'ONLINE',
+      default_policy_id: null,
+      trust_profile_id: null,
+      enabled_flows: [],
+      credential_template_ids: [],
+      runtime_catalog_ready: false,
+      runtime_catalog: null,
+      webhooks: {
+        url: '',
+        events: [],
+      },
+      feature_flags: {
+        qr_code: true,
+        nfc: false,
+        ble: false,
+      },
+      environment_config: {
+        theme: 'light',
+        language: 'en-US',
+      },
+      status: 'active',
+      activate_immediately: true,
+    },
+    validateStep,
+    onSubmit: submitReviewedData,
+    onComplete: () => {
+      navigate('/console/org/flows/definitions');
+    },
+    onCancel: () => {
+      navigate('/console/org/deploy/profiles');
+    },
+  });
+
+  const { updateData, goToStep } = wizard;
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateData(updates);
+  }, [updateData]);
+
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToStep(step);
+  }, [goToStep]);
+
+  const renderStepContent = () => {
+    switch (wizard.activeStep) {
+      case 0:
+        return (
+          <EnvironmentStep
+            data={wizard.data}
+            onChange={updateFormData}
+          />
+        );
+      case 1:
+        return (
+          <RuntimeSettingsStep
+            data={wizard.data}
+            onChange={updateFormData}
+          />
+        );
+      case 2:
+        return (
+          <IntegrationStep
+            data={wizard.data}
+            onChange={updateFormData}
+          />
+        );
+      case 3:
+        return (
+          <ReviewStep
+            data={wizard.data}
+            onChange={updateFormData}
+            onEdit={editStep}
+          />
+        );
+      default:
+        return <Typography>{t('wizards.deploymentProfile.unknownStep')}</Typography>;
+    }
+  };
+
+  // Success screen
+  if (wizard.success) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
+          <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
+          <Typography variant="h5" gutterBottom>
+            {t('wizards.deploymentProfile.success.title')}
+          </Typography>
+          <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
+            {wizard.data.activate_immediately
+              ? t('wizards.deploymentProfile.success.messageActive', { name: wizard.data.name })
+              : t('wizards.deploymentProfile.success.messageDraft', { name: wizard.data.name })}
+          </Typography>
+          <Typography color="text.secondary" variant="body2" sx={{ mt: 1 }}>
+            {t('wizards.deploymentProfile.success.redirecting')}
+          </Typography>
+        </Paper>
+      </Container>
+    );
+  }
+
+  return (
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Paper elevation={3} sx={{ p: 4 }}>
+        {/* Header */}
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h4" gutterBottom>
+            {t('wizards.deploymentProfile.title')}
+          </Typography>
+          <Typography color="text.secondary">
+            {t('wizards.deploymentProfile.description')}
+          </Typography>
+        </Box>
+
+        {/* Stepper */}
+        <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
+          {STEPS.map((label) => (
+            <Step key={label}>
+              <StepLabel>{label}</StepLabel>
+            </Step>
+          ))}
+        </Stepper>
+
+        {/* Error Alert */}
+        {wizard.error && (
+          <Box sx={{ mb: 3, p: 2, bgcolor: 'error.light', borderRadius: 1 }}>
+            <Typography color="error.contrastText">
+              {wizard.error}
+            </Typography>
+          </Box>
+        )}
+
+        {/* Step Content */}
+        <Box
+          component="fieldset"
+          disabled={wizard.loading}
+          aria-label={STEPS[wizard.activeStep]}
+          sx={{ minHeight: 400, minWidth: 0, border: 0, p: 0, m: 0, mb: 4 }}
+        >
+          {renderStepContent()}
+        </Box>
+
+        {/* Navigation Buttons */}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
+          <Button
+            onClick={() => {
+              if (submissionPending.current) return;
+              if (wizard.isFirstStep) wizard.cancel();
+              else wizard.goBack();
+            }}
+            startIcon={<ArrowBackIcon />}
+            disabled={wizard.loading}
+            data-testid={wizard.isFirstStep ? 'wizard.deployment.cancel' : 'wizard.deployment.back'}
+          >
+            {wizard.isFirstStep
+              ? t('wizards.deploymentProfile.buttons.cancel')
+              : t('wizards.deploymentProfile.buttons.back')}
+          </Button>
+
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            {/* Show Skip button for optional Integration step */}
+            {wizard.activeStep === 2 && (
+              <Button
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
+                disabled={wizard.loading}
+                data-testid="wizard.deployment.skip"
+              >
+                {t('wizards.deploymentProfile.buttons.skip')}
+              </Button>
+            )}
+
+            {wizard.isLastStep ? (
+              <Button
+                variant="contained"
+                onClick={wizard.submit}
+                disabled={!wizard.isStepValid() || wizard.loading}
+                startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+                data-testid="wizard.deployment.submit"
+              >
+                {wizard.loading
+                  ? t('wizards.deploymentProfile.buttons.submitting')
+                  : t('wizards.deploymentProfile.buttons.submit')}
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
+                disabled={!wizard.isStepValid() || wizard.loading}
+                endIcon={<ArrowForwardIcon />}
+                data-testid="wizard.deployment.next"
+              >
+                {t('wizards.deploymentProfile.buttons.next')}
+              </Button>
+            )}
+          </Box>
+        </Box>
+      </Paper>
+    </Container>
+  );
+};
+
+export default function DeploymentProfileWizard() {
+  const { activeOrgId } = useConsole();
+  if (!activeOrgId) return <Typography>Select an organization before creating a deployment profile.</Typography>;
+  return <DeploymentProfileWizardForm key={activeOrgId} />;
+}

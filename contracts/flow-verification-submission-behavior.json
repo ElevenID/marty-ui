@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "accepted_states": ["awaiting_wallet", "in_progress"],
+  "expiry_boundary": "expires_at_is_exclusive",
+  "state_binding": "exact_constant_time_when_issued",
+  "presentation_submission": "object_with_nonempty_id_definition_id_and_array_descriptor_map",
+  "token_selection": "single_dcql_query_single_string_then_recursive_token",
+  "cryptographic_authority": "presentation_policy_provider_only",
+  "authentication_gate": "nonempty_credential_results_all_signature_valid",
+  "provider_failure": "retryable_without_state_nonce_or_callback_consumption",
+  "terminal_allow": "evaluation_passed_and_decision_allow",
+  "terminal_deny": "failed_with_verified_claims_cleared",
+  "sensitive_retention": "hashes_only_no_raw_token_or_submission",
+  "replay": "same_digest_returns_terminal_result_different_digest_conflicts",
+  "finalization": "nonce_terminal_record_and_callback_atomic_compare_and_set",
+  "mdoc_binding": "native_iso_18013_7_session_transcript",
+  "encrypted_response": "native_haip_jwe_header_validation_and_decryption",
+  "callback": "registered_tenant_destination_and_minimum_32_byte_secret",
+  "result_message": "mip_verification_result_0_3_1"
+}

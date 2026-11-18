@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "scope": "Exact owned credential retirement, retained application history, and same-application D05 unused-offer reissue",
+  "source_repository": "https://github.com/ElevenID/marty-ui.git",
+  "implementation_revision": "b5d08219b900f38ad01217db8f1eab60e054a401",
+  "native_withdrawal_contract_revision": "0a2b100c8202e2ebfb2870377df95f2981da5042",
+  "native_transaction_reconciliation_revision": "23331ae1bcf5201cd514f5de4dfd5cbc5a627d9d",
+  "source_files": [
+    {
+      "path": "tests/scripts/beta-demo-resource-helpers.js",
+      "bytes": 35755,
+      "sha256": "1079b8aff83d550010ac1c0ccb53afc959057aa6c8b3f0ade8fce524a7e04ea1"
+    },
+    {
+      "path": "tests/scripts/beta-demo-resource-helpers.test.js",
+      "bytes": 39425,
+      "sha256": "d8e4fa9b3bd56ab3c3e8e58b16ca5eb033e848819ae5499177fddfae05b5cef3"
+    },
+    {
+      "path": "tests/scripts/audit-beta-employee-access.js",
+      "bytes": 30221,
+      "sha256": "f4ab6cdb89d84a6e1767d12f691e42b0309852eb3611b58fa3806608f0dcbbf1"
+    },
+    {
+      "path": "tests/scripts/audit-beta-passport-clearance.js",
+      "bytes": 33206,
+      "sha256": "563f21677ce0006ebb4b2883afe771a78487eea018439d94572688e5a7090cdd"
+    },
+    {
+      "path": "tests/scripts/audit-beta-membership-support.js",
+      "bytes": 41422,
+      "sha256": "034d82f7cb5d5474bad95c53f47f69fb277aca2c3650bc1a6dc4b0b7a4709160"
+    },
+    {
+      "path": "tests/scripts/audit-beta-membership-support.test.js",
+      "bytes": 35961,
+      "sha256": "da34d36eeda74dc303dffeae1af5b4f73ecffc5819752f072a322f09f34909be"
+    }
+  ],
+  "verification": [
+    {
+      "command": "node tests/scripts/beta-demo-resource-helpers.test.js",
+      "working_directory": "marty-ui-runtime-integrity",
+      "log": "owned-retirement-verified-helper.log",
+      "exit_code": 0,
+      "log_bytes": 3330,
+      "log_sha256": "0abae8258a48ce6f3808064da43fc9e4846d6d0f955ff151e67e8c6d85a51f87",
+      "tests": 33,
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0,
+      "scenario_id": null,
+      "scenario_name": "Shared demo resource helpers"
+    },
+    {
+      "command": "node tests/scripts/audit-beta-employee-access.test.js",
+      "working_directory": "marty-ui-runtime-integrity",
+      "log": "owned-retirement-verified-d01.log",
+      "exit_code": 0,
+      "log_bytes": 880,
+      "log_sha256": "d9e7ddfebab5e353064a6d69aa57388f25495f1bc581a112d9b32236d583e3cd",
+      "tests": 8,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "scenario_id": "D04",
+      "scenario_name": "Employee Onboarding and Secure Access"
+    },
+    {
+      "command": "node tests/scripts/audit-beta-passport-clearance.test.js",
+      "working_directory": "marty-ui-runtime-integrity",
+      "log": "owned-retirement-verified-d04.log",
+      "exit_code": 0,
+      "log_bytes": 1019,
+      "log_sha256": "da9667652d9dc4381da57b48ba1ec2d2bc54f65e99f746e0384dc334e1eff738",
+      "tests": 9,
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "scenario_id": "D01",
+      "scenario_name": "Passport Pre-Boarding Clearance"
+    },
+    {
+      "command": "node tests/scripts/audit-beta-membership-support.test.js",
+      "working_directory": "marty-ui-runtime-integrity",
+      "log": "owned-retirement-verified-d05.log",
+      "exit_code": 0,
+      "log_bytes": 3460,
+      "log_sha256": "e4378b50e58ece069cf50d773dc3ead8fae4acb6f7fdb98cbc50b13848393c06",
+      "tests": 24,
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "scenario_id": "D05",
+      "scenario_name": "Membership Badge and Login"
+    }
+  ],
+  "regression_baseline": {
+    "source_revision": "e67364c367a09d184246f7c7af83317beb9f4d1e",
+    "source_path": "tests/scripts/beta-demo-resource-helpers.js",
+    "source_sha256": "f8955b3d2965093007f09bfb489936969d756970af125857f9e00a112899bf5a",
+    "test_path": "tests/scripts/beta-demo-resource-helpers.test.js",
+    "test_sha256": "d8e4fa9b3bd56ab3c3e8e58b16ca5eb033e848819ae5499177fddfae05b5cef3",
+    "fixture_path": "contracts/gateway-issuance-response-projection.json",
+    "fixture_sha256": "447ef48e5098860d1e46a3f3df652c283ee015eb59a375cf131972a1626ca28f",
+    "command": "node tests/scripts/beta-demo-resource-helpers.test.js",
+    "working_directory": "runtime-integrity-evidence/owned-retirement-verified-baseline",
+    "materialization": "The baseline committed helper is paired with the exact final committed test bytes and unchanged projection fixture.",
+    "log": "owned-retirement-verified-baseline.log",
+    "exit_code": 1,
+    "log_bytes": 8708,
+    "log_sha256": "a4f9e8ec4c35ffcd1561c4960c5c845cec35d14653b7dcd97280f06c2788b47c",
+    "tests": 33,
+    "passed": 26,
+    "failed": 7,
+    "skipped": 0
+  },
+  "recorder_binding": {
+    "repository": "https://github.com/ElevenID/marty-demo-recorder.git",
+    "implementation_revision": "5f99d6a3f0e5831d2fb9b8ffa54e3d9ab7183a4e",
+    "source_files": [
+      {
+        "path": "demos/membership-badge-login-expired-offer.json",
+        "bytes": 2962,
+        "sha256": "b6f72cd4326a523dd1de7ae442232a369c4476c1ab1a29c8c7066c53ae25d9f7"
+      },
+      {
+        "path": "demos/membership-badge-login-untrusted-issuer.json",
+        "bytes": 3033,
+        "sha256": "682e43e730a4a00c6b993747eebe4d69c952bec7da9556fb67d4ac75ae72b733"
+      },
+      {
+        "path": "docs/d05-supporting-lanes.md",
+        "bytes": 13887,
+        "sha256": "91e111d5e171492a58688d3ad85ab581a1711d8e04c945fd066c79a600f76b3b"
+      }
+    ],
+    "driver_revision": "b5d08219b900f38ad01217db8f1eab60e054a401",
+    "driver_entrypoint": "tests/scripts/audit-beta-membership-support.js",
+    "driver_sha256": "034d82f7cb5d5474bad95c53f47f69fb277aca2c3650bc1a6dc4b0b7a4709160",
+    "config_test": {
+      "command": "node test/config.test.js",
+      "working_directory": "marty-demo-recorder-runtime-integrity",
+      "log": "owned-retirement-recorder-config-tests.log",
+      "exit_code": 0,
+      "log_bytes": 1023,
+      "log_sha256": "b780136e3fc641d4c904418c13f1dd5be88f45507cb549376f7b95b4dce663f4",
+      "tests": 11,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0
+    },
+    "pin_check": {
+      "scope": "Two local committed-byte hash and config schema checks; no release probe or live driver execution.",
+      "inputs": "owned-retirement-driver-pin-inputs.json",
+      "inputs_sha256": "428e5520f4858547c5ad6cf6a2ebdb8dfc6af75312fd0372dcfaa72e7e33c601",
+      "log": "owned-retirement-recorder-driver-pins-verified.log",
+      "exit_code": 0,
+      "log_bytes": 659,
+      "log_sha256": "525f39adb4fe317d463e0c19ec448c11e3c68c71be9533136c292392f6431767"
+    },
+    "historical_assertions_scenario_revision_and_recording_classification_changed": false
+  },
+  "behavior": [
+    "Issued cleanup revokes only the exact owned credential and requires fresh REVOKED inventory plus exact application identity/readback; applicationWithdrawn remains false and applicationHistoryPreserved is explicit.",
+    "Unused offer cleanup requires exact revoked authenticated detail, no issued_at and no issued credential; approved/unknown/inflight or failed/expired-but-unrevoked outcomes remain incomplete.",
+    "D01 and D04 readiness require credentialRevoked, applicationHistoryPreserved and complete cleanup.",
+    "D05 recovery preserves the captured application and run marker, reuses canonical operator /issue, tracks exact retired transaction tuples, and requires a new pending transaction and fresh offer contents/code.",
+    "Every historical exclusion is freshly proved from scoped transaction detail plus credential inventory; the original strict selectors and first-run duplicate protection are unchanged.",
+    "Foreign, active, issued, unknown extra, ambiguous, hidden/withdrawn application and uncertain mutation states cannot authorize completion; a lost response resolves only through strict public readback."
+  ],
+  "boundaries": [
+    "These are isolated source regressions and local configuration checks, not Canvas/beta/signing/wallet/live runtime qualification.",
+    "Same-application reissue is sequential and is not claimed to be a globally atomic cancel/reissue transaction.",
+    "The retained history path supports unused canceled offers only; issued credential history is not silently excluded.",
+    "No application sweep, same-template mutation, release-manifest qualification change, deployment change, runtime receipt, or successful capture is introduced."
+  ],
+  "checkpoints_not_final_evidence": [
+    {
+      "log": "owned-retirement-final-d05.log",
+      "description": "Intermediate 17/18 checkpoint exposed duplicate-application reissue after correct history preservation; the final 24/24 suite covers the repaired same-application path."
+    },
+    {
+      "log": "owned-retirement-recorder-driver-pins.log",
+      "description": "Initial verification harness failed with Node spawnSync git EPERM. Python read-only Git extraction plus in-process Node schema validation produced the final successful pin check."
+    }
+  ],
+  "verification_metadata_note": "The D01 and D04 labels in the harness log filenames are swapped: employee-access has 8 cases and is D04; passport-clearance has 9 cases and is D01. The command and canonical scenario_id/scenario_name establish suite identity. Raw log filenames, bytes, hashes, and the 74-case total are preserved."
+}

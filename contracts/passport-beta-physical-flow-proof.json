@@ -1,0 +1,14 @@
+{
+  "schema": "marty.passport-beta-physical-flow-proof/v2",
+  "flow_type": "physical_document_issuance",
+  "physical_claim": "not_claimed",
+  "steps_source": "contracts/flow-service-behavior.json:flow_types.physical_document_issuance.steps",
+  "source_binding": ["signed_stack_manifest_sha256", "marty_ui_source_commit", "simulator_deployment_mode", "inspected_simulator_container_id"],
+  "instance_binding": ["organization_id", "flow_definition_id", "generated_external_reference", "instance_id", "issuer_did", "native_application_id", "native_job_id", "bureau_job_id"],
+  "physical_input_reference": "contracts/issuance-physical-passport-native.json:application_validation_base_input",
+  "physical_input_preflight": "Before either lifecycle mutates beta, require three uppercase country letters, applicant object, string-valued MRZ, optional TD1/TD2/TD3, DG1 and DG2 plus only ASCII-numbered DG keys with nonempty canonical base64. This deliberately narrows acceptance inputs; it does not change the released application parser.",
+  "successful_execution": "Read and advance all nine ordered steps through Gateway. The Flow-created native job has a managed SOD signature and digest, the same durable bureau UUID reaches SHIPPED with a BETA-SIM tracking marker and signed callback receipt in the authenticated private simulator poll, and terminal Flow and native job states are COMPLETED and ACTIVE.",
+  "execution_relationship": "The existing direct Gateway lifecycle and this Flow execution create separate jobs. Only the Flow instance's own native application, job, bureau UUID, SOD, callback receipt, and terminal state can qualify its nine-route chain; the direct lifecycle is separate compatibility evidence.",
+  "provider_callback": "No external provider or physical booklet is claimed. The private simulator receipt is accepted only for the same Flow-bound bureau UUID after native accepted the KMS-signed callback.",
+  "default": "The Flow probe is opt-in; aggregate beta acceptance remains blocked until Rust-only deployment, supported-consumer, Rust restart/resume, and production-isolation gates pass."
+}

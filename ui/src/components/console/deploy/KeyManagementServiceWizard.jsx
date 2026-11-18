@@ -1,0 +1,1141 @@
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { useTranslation } from 'react-i18next';
+import {
+  Alert,
+  Box,
+  Chip,
+  Button,
+  Checkbox,
+  CircularProgress,
+  Container,
+  Divider,
+  FormControl,
+  FormControlLabel,
+  FormGroup,
+  List,
+  ListItem,
+  ListItemText,
+  InputLabel,
+  MenuItem,
+  Paper,
+  Select,
+  Step,
+  StepLabel,
+  Stepper,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import HubIcon from '@mui/icons-material/Hub';
+import VerifiedIcon from '@mui/icons-material/Verified';
+
+import signingKeysApi from '../../../services/signingKeysApi';
+import { authFieldsForMode, authModeHelp, isAuthComplete, isAuthModeAvailable, serializeAuthReference } from './keyManagementAuth';
+import { useWizard } from '../../../hooks/useWizard';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
+import { useNotifications } from '../../../hooks/useNotifications';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import {
+  DEFAULT_KEY_MANAGEMENT_CONFIG,
+  KEY_MANAGEMENT_ALGORITHM_OPTIONS,
+  KEY_MANAGEMENT_PURPOSES,
+  PURPOSES_REQUIRING_AUTHORITY,
+  createKeyManagementServicePayload,
+  createKeyManagementRegistrationPayload,
+  getServiceTypeDefinition,
+  isAlgorithmAllowedForPurpose,
+  normalizeKeyManagementConfig,
+} from './keyManagementServiceCatalog';
+
+const MANAGED_OPENBAO_SERVICE_ID = 'managed-openbao-transit';
+
+const STEPS = [
+  'Choose Service',
+  'Connection',
+  'Key Access',
+  'Review',
+];
+
+const CONNECTION_LABELS = {
+  endpoint: 'Service URL',
+  region: 'Region / location',
+  mount: 'Transit mount',
+  namespace: 'Namespace',
+  ca_cert_file: 'TLS CA certificate file',
+};
+
+// Labels and registration preferences do not change connection or key validation.
+const preflightConfiguration = (data) => ({
+  service_type: data.service_type,
+  endpoint: data.endpoint,
+  region: data.region,
+  mount: data.mount,
+  namespace: data.namespace,
+  ca_cert_file: data.ca_cert_file,
+  auth_mode: data.auth_mode,
+  auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+  key_reference: data.key_reference,
+  key_aliases: data.key_aliases,
+  algorithms: data.algorithms,
+  key_purposes: data.key_purposes,
+});
+
+function logKeyManagementWizardError(message, error) {
+  if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
+    console.error(message, error);
+  }
+}
+
+const getProviderRunbook = (data, definition) => {
+  const keyReference = data.key_reference?.trim() || '<key-reference>';
+  const region = data.region?.trim() || '<region>';
+  const endpoint = data.endpoint?.trim() || '<service-url>';
+  const mount = data.mount?.trim() || 'transit';
+
+  switch (definition.provider) {
+    case 'aws':
+      return {
+        docsLabel: 'AWS KMS key creation guide',
+        docsUrl: 'https://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html',
+        command: [
+          'aws kms create-key \\\n  --region ' + region + ' \\\n  --key-spec ECC_NIST_P256 \\\n  --key-usage SIGN_VERIFY',
+          '# Optional alias for readability',
+          'aws kms create-alias \\\n  --alias-name alias/marty-issuer-signing \\\n  --target-key-id <kms-key-id>',
+          '# Use resulting key ARN as key reference in Marty',
+        ].join('\n'),
+      };
+    case 'azure': {
+      const isManagedHsm = data.endpoint?.trim().toLowerCase().replace(/\/$/, '').endsWith('.managedhsm.azure.net');
+      return {
+        docsLabel: isManagedHsm ? 'Azure Managed HSM key guide' : 'Azure Key Vault key creation guide',
+        docsUrl: isManagedHsm
+          ? 'https://learn.microsoft.com/en-us/azure/key-vault/managed-hsm/key-management'
+          : 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
+        command: [
+          'az keyvault key create \\\n  --vault-name <vault-name> \\\n  --name <marty-signing-key> \\\n  --kty EC \\\n  --curve P-256',
+          '# Use key identifier URI as key reference in Marty',
+        ].join('\n')
+          .replace('--vault-name <vault-name>', isManagedHsm ? '--hsm-name <hsm-name>' : '--vault-name <vault-name>')
+          .replace('--kty EC', isManagedHsm ? '--kty EC-HSM' : '--kty EC'),
+      };
+    }
+    case 'gcp':
+      return {
+        docsLabel: 'Google Cloud KMS key creation guide',
+        docsUrl: 'https://docs.cloud.google.com/kms/docs/create-key',
+        command: [
+          'gcloud kms keys create <marty-signing-key> \\\n  --location=' + region + ' \\\n  --keyring=<key-ring> \\\n  --purpose=asymmetric-signing \\\n  --default-algorithm=ec-sign-p256-sha256',
+          '# Use crypto key resource path as key reference in Marty',
+        ].join('\n'),
+      };
+    case 'openbao':
+    case 'hashicorp-vault':
+    case 'custom':
+      return {
+        docsLabel: 'Vault/OpenBao transit key guide',
+        docsUrl: 'https://developer.hashicorp.com/vault/docs/secrets/transit',
+        command: [
+          mount === 'transit' ? 'vault secrets enable transit' : 'vault secrets enable -path=' + mount + ' transit',
+          'vault write -f ' + mount + '/keys/' + keyReference + ' type=ecdsa-p256',
+          'vault read ' + mount + '/keys/' + keyReference,
+          '# Ensure Marty can reach ' + endpoint + ' and mount ' + mount,
+        ].join('\n'),
+      };
+    default:
+      return {
+        docsLabel: 'KMS provider key creation guide',
+        docsUrl: 'https://docs.example.com/signing-keys',
+        command: '# Create a signing-capable key in your provider and paste its identifier into Key reference.',
+      };
+  }
+};
+
+const authModeLabel = (value) => {
+  switch (value) {
+    case 'service_token':
+      return 'Managed service token';
+    case 'token':
+      return 'Token';
+    case 'approle':
+      return 'AppRole';
+    case 'mtls':
+      return 'mTLS';
+    case 'iam_role':
+      return 'IAM role';
+    case 'access_key':
+      return 'Access key';
+    case 'assume_role':
+      return 'Assume role';
+    case 'managed_identity':
+      return 'Managed identity';
+    case 'client_secret':
+      return 'Client secret';
+    case 'certificate':
+      return 'Certificate';
+    case 'workload_identity':
+      return 'Workload identity';
+    case 'service_account':
+      return 'Service account';
+    case 'api_key':
+      return 'API key';
+    default:
+      return value || 'Custom';
+  }
+};
+
+function ServiceTypeCard({ definition, selected, onSelect }) {
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(definition);
+    }
+  };
+
+  return (
+    <Paper
+      variant="outlined"
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`${definition.label} key management service`}
+      onClick={() => onSelect(definition)}
+      onKeyDown={handleKeyDown}
+      sx={{
+        p: 2.5,
+        cursor: 'pointer',
+        borderColor: selected ? 'primary.main' : 'divider',
+        bgcolor: selected ? 'action.selected' : 'background.paper',
+        outline: 'none',
+        '&:focus-visible': {
+          borderColor: 'primary.main',
+          boxShadow: (theme) => `0 0 0 3px ${theme.palette.primary.main}33`,
+        },
+      }}
+    >
+      <Typography variant="h6" sx={{ mb: 0.5 }}>
+        {definition.label}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        {definition.description}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+        Protocol: {definition.protocol}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+        Category: {definition.category}
+      </Typography>
+    </Paper>
+  );
+}
+
+const KeyManagementServiceWizardContent = ({ browserEntry }) => {
+  const navigate = useNavigate();
+  const { showNotification } = useNotifications();
+  const { activeOrgId } = useConsole();
+  const orgRequestParams = useMemo(
+    () => (activeOrgId ? { organization_id: activeOrgId } : {}),
+    [activeOrgId],
+  );
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightChecks, setPreflightChecks] = useState([]);
+  const [registeredService, setRegisteredService] = useState(null);
+  const [defaultSelectionSynced, setDefaultSelectionSynced] = useState(false);
+  const pending = useRef(false);
+  const startAction = useAsyncActionScope();
+  const startClipboardAction = useAsyncActionScope();
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
+  const canEdit = useCallback(() => !pending.current && isCurrentBrowserEntry(), [isCurrentBrowserEntry]);
+
+  const {
+    data: configData,
+    loading: configLoading,
+    error: configError,
+  } = useAsyncData(
+    async () => normalizeKeyManagementConfig(
+      await signingKeysApi.getKeyManagementConfig(orgRequestParams)
+    ),
+    [activeOrgId]
+  );
+
+  const currentConfig = normalizeKeyManagementConfig(configData || DEFAULT_KEY_MANAGEMENT_CONFIG);
+  const serviceCatalog = currentConfig.service_type_catalog;
+
+  const validateStep = useCallback((stepIndex, data) => {
+    const definition = getServiceTypeDefinition(serviceCatalog, data.service_type);
+    switch (stepIndex) {
+      case 0:
+        return Boolean(data.service_type);
+      case 1:
+        if (!data.name?.trim()) {
+          return false;
+        }
+        if (definition.connection_fields.includes('endpoint') && !data.endpoint?.trim()) {
+          return false;
+        }
+        if (definition.connection_fields.includes('region') && !data.region?.trim()) {
+          return false;
+        }
+        if (definition.connection_fields.includes('mount') && !data.mount?.trim()) {
+          return false;
+        }
+        return Boolean(data.auth_mode) && isAuthComplete(data.auth_mode, data.auth_fields);
+      case 2:
+        if (!(data.key_reference?.trim() || data.key_aliases?.trim())) {
+          return false;
+        }
+        {
+          const algorithms = Array.isArray(data.algorithms)
+            ? data.algorithms.filter((algorithm) => typeof algorithm === 'string' && algorithm)
+            : [];
+          const purposes = Array.isArray(data.key_purposes)
+            ? data.key_purposes.filter((purpose) => typeof purpose === 'string' && purpose)
+            : [];
+          const hasIncompatiblePurpose = purposes.some(
+            (purpose) => !algorithms.some((algorithm) => isAlgorithmAllowedForPurpose(purpose, algorithm)),
+          );
+          return algorithms.length > 0 && !hasIncompatiblePurpose;
+        }
+      case 3:
+        return true;
+      default:
+        return false;
+    }
+  }, [serviceCatalog]);
+
+  const handleSubmit = useCallback(async (data) => {
+    if (!canEdit()) return null;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    pending.current = true;
+    try {
+      const newService = createKeyManagementServicePayload({
+        ...data,
+        auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+      }, serviceCatalog);
+      const validation = await action.run(signingKeysApi.validateKeyManagementService, {
+        ...orgRequestParams,
+        ...newService,
+        live_probe: true,
+      });
+      if (!isCurrent()) return null;
+      setPreflightChecks(Array.isArray(validation?.checks) ? validation.checks : []);
+      if (validation?.ok !== true || validation?.basis !== 'live') {
+        throw new Error('Key management service validation failed. Review the checks before registering.');
+      }
+      await action.run(signingKeysApi.updateKeyManagementConfig, {
+        ...orgRequestParams,
+        ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),
+      });
+      if (!isCurrent()) return null;
+
+      setRegisteredService(newService);
+      showNotification?.('Registered key management service.', 'success');
+      return newService;
+    } catch (error) {
+      if (isCurrent()) throw error;
+      return null;
+    } finally {
+      if (isCurrent()) pending.current = false;
+    }
+  }, [canEdit, currentConfig, isCurrentBrowserEntry, orgRequestParams, serviceCatalog, showNotification, startAction]);
+
+  const wizard = useWizard({
+    steps: STEPS,
+    initialData: {
+      service_type: '',
+      name: '',
+      description: '',
+      endpoint: '',
+      region: '',
+      mount: 'transit',
+      namespace: '',
+      ca_cert_file: '',
+      auth_mode: '',
+      auth_fields: {},
+      key_reference: '',
+      key_aliases: '',
+      algorithms: ['ES256'],
+      key_purposes: [],
+      credential_formats: [],
+      rotation_interval_days: '',
+      rotation_overlap_days: '7',
+      rotation_auto_publish: false,
+      country_code: '',
+      authority_code: '',
+      make_default: !currentConfig.default_service_id,
+    },
+    validateStep,
+    onSubmit: handleSubmit,
+    onCancel: () => {
+      navigate('/console/org/operator/key-management/services');
+    },
+  });
+  const rawUpdateWizardData = wizard.updateData;
+  const updateWizardData = useCallback((updates) => {
+    if (!canEdit()) return;
+    const previousConfiguration = JSON.stringify(preflightConfiguration(wizard.data));
+    const nextConfiguration = JSON.stringify(preflightConfiguration({ ...wizard.data, ...updates }));
+    if (previousConfiguration !== nextConfiguration) setPreflightChecks([]);
+    rawUpdateWizardData(updates);
+  }, [canEdit, rawUpdateWizardData, wizard.data]);
+
+  useEffect(() => {
+    if (configLoading || defaultSelectionSynced || !canEdit()) {
+      return;
+    }
+
+    updateWizardData({ make_default: !currentConfig.default_service_id });
+    setDefaultSelectionSynced(true);
+  }, [canEdit, configLoading, currentConfig.default_service_id, defaultSelectionSynced, updateWizardData]);
+
+  const selectedDefinition = getServiceTypeDefinition(serviceCatalog, wizard.data.service_type);
+  const providerRunbook = useMemo(
+    () => getProviderRunbook(wizard.data, selectedDefinition),
+    [selectedDefinition, wizard.data]
+  );
+  const registeredServiceIsManagedOpenBao = registeredService?.id === MANAGED_OPENBAO_SERVICE_ID;
+  const issuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
+
+  const copyText = useCallback(async (text) => {
+    if (!canEdit()) return;
+    const action = startClipboardAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    try {
+      await action.run(() => navigator.clipboard.writeText(text));
+      if (isCurrent()) showNotification?.('Copied to clipboard.', 'success');
+    } catch (error) {
+      if (!isCurrent()) return;
+      logKeyManagementWizardError('Failed to copy command:', error);
+      showNotification?.('Unable to copy to clipboard.', 'error');
+    }
+  }, [canEdit, isCurrentBrowserEntry, showNotification, startClipboardAction]);
+
+  const runPreflightChecks = useCallback(async () => {
+    if (!canEdit()) return;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    pending.current = true;
+    setPreflightLoading(true);
+    try {
+      const response = await action.run(signingKeysApi.validateKeyManagementService, {
+        ...orgRequestParams,
+        service_type: wizard.data.service_type,
+        name: wizard.data.name,
+        endpoint: wizard.data.endpoint,
+        region: wizard.data.region,
+        mount: wizard.data.mount,
+        namespace: wizard.data.namespace,
+        ca_cert_file: wizard.data.ca_cert_file,
+        auth_mode: wizard.data.auth_mode,
+        auth_reference: serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields),
+        key_reference: wizard.data.key_reference,
+        key_aliases: wizard.data.key_aliases,
+        algorithms: wizard.data.algorithms,
+      });
+      if (!isCurrent()) return;
+
+      const checks = Array.isArray(response?.checks)
+        ? response.checks.filter((entry) => entry && typeof entry.name === 'string')
+        : [];
+
+      if (checks.length === 0) {
+        setPreflightChecks([
+          {
+            name: 'Validation status',
+            status: 'warning',
+            detail: 'No validation results were returned by the gateway.',
+          },
+        ]);
+      } else {
+        setPreflightChecks(checks);
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+      logKeyManagementWizardError('Failed to run preflight checks:', error);
+      setPreflightChecks([
+        {
+          name: 'Validation status',
+          status: 'warning',
+          detail: 'Gateway validation failed. Verify connectivity and credentials, then try again.',
+        },
+      ]);
+    } finally {
+      if (isCurrent()) {
+        pending.current = false;
+        setPreflightLoading(false);
+      }
+    }
+  }, [canEdit, isCurrentBrowserEntry, orgRequestParams, startAction, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+
+  const handleSelectServiceType = (definition) => {
+    if (!canEdit() || wizard.data.service_type === definition.id) return;
+    setPreflightChecks([]);
+    updateWizardData({
+      service_type: definition.id,
+      auth_mode: definition.auth_modes.find(isAuthModeAvailable) || '',
+      auth_fields: {},
+      mount: definition.connection_fields.includes('mount') ? (wizard.data.mount || 'transit') : '',
+      namespace: definition.connection_fields.includes('namespace') ? wizard.data.namespace : '',
+      ca_cert_file: definition.connection_fields.includes('ca_cert_file') ? wizard.data.ca_cert_file : '',
+      endpoint: definition.connection_fields.includes('endpoint') ? wizard.data.endpoint : '',
+      region: definition.connection_fields.includes('region') ? wizard.data.region : '',
+    });
+  };
+
+  const toggleAlgorithm = (algorithm) => {
+    if (!canEdit()) return;
+    const currentAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
+    const nextAlgorithms = currentAlgorithms.includes(algorithm)
+      ? currentAlgorithms.filter((value) => value !== algorithm)
+      : [...currentAlgorithms, algorithm]
+
+    const normalizedAlgorithms = nextAlgorithms.length > 0 ? nextAlgorithms : [algorithm]
+    const currentPurposes = Array.isArray(wizard.data.key_purposes) ? wizard.data.key_purposes : []
+    const compatiblePurposes = currentPurposes.filter((purpose) => (
+      normalizedAlgorithms.some((candidateAlgorithm) => isAlgorithmAllowedForPurpose(purpose, candidateAlgorithm))
+    ))
+
+    updateWizardData({
+      algorithms: normalizedAlgorithms,
+      key_purposes: compatiblePurposes,
+    });
+  };
+
+  const renderChooseServiceStep = () => (
+    <Box>
+      <Typography variant="h5" gutterBottom>
+        Choose a key management service
+      </Typography>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>
+        Marty expects private signing keys to stay in your KMS, HSM, or transit-compatible signer. This flow registers how we reach that service.
+      </Typography>
+      <Alert severity="info" sx={{ mb: 3 }}>
+        Known providers are listed first, plus a custom transit-compatible option for services that implement the protocol Marty supports.
+      </Alert>
+      <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
+        {serviceCatalog.map((definition) => (
+          <ServiceTypeCard
+            key={definition.id}
+            definition={definition}
+            selected={wizard.data.service_type === definition.id}
+            onSelect={handleSelectServiceType}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
+
+  const renderConnectionField = (fieldName) => {
+    const isOptional = ['namespace', 'ca_cert_file'].includes(fieldName);
+    return (
+      <TextField
+        key={fieldName}
+        fullWidth
+        label={CONNECTION_LABELS[fieldName] || fieldName}
+        value={wizard.data[fieldName] || ''}
+        required={!isOptional}
+        helperText={fieldName === 'ca_cert_file'
+          ? 'Optional path to a CA certificate file already mounted on the signing server. Leave blank to use the system trust store.'
+          : undefined}
+        onChange={(event) => updateWizardData({ [fieldName]: event.target.value })}
+      />
+    );
+  };
+
+  const renderConnectionStep = () => (
+    <Box>
+      <Typography variant="h5" gutterBottom>
+        Connection details
+      </Typography>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>
+        Tell Marty how to reach {selectedDefinition.label} and which credentials or workload identity it should use.
+      </Typography>
+      <Box sx={{ display: 'grid', gap: 2 }}>
+        <TextField
+          fullWidth
+          required
+          label="Service name"
+          value={wizard.data.name}
+          onChange={(event) => updateWizardData({ name: event.target.value })}
+        />
+        <TextField
+          fullWidth
+          multiline
+          minRows={2}
+          label="Description"
+          value={wizard.data.description}
+          onChange={(event) => updateWizardData({ description: event.target.value })}
+        />
+        {selectedDefinition.connection_fields.map((fieldName) => renderConnectionField(fieldName))}
+        <FormControl fullWidth>
+          <InputLabel id="kms-auth-mode-label">Authentication mode</InputLabel>
+          <Select
+            labelId="kms-auth-mode-label"
+            label="Authentication mode"
+            value={wizard.data.auth_mode || selectedDefinition.auth_modes[0] || ''}
+            onChange={(event) => updateWizardData({ auth_mode: event.target.value, auth_fields: {} })}
+          >
+            {selectedDefinition.auth_modes.map((authMode) => (
+              <MenuItem key={authMode} value={authMode} disabled={!isAuthModeAvailable(authMode)}>
+                {authModeLabel(authMode)}{!isAuthModeAvailable(authMode) ? ' (not yet supported)' : ''}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Typography variant="body2" color="text.secondary">{authModeHelp(wizard.data.auth_mode)}</Typography>
+        {wizard.data.auth_mode === 'token' && (
+          <TextField
+            fullWidth required label="Transit token" type="password" autoComplete="new-password"
+            value={wizard.data.auth_fields.token || ''}
+            onChange={(event) => updateWizardData({ auth_fields: { ...wizard.data.auth_fields, token: event.target.value } })}
+          />
+        )}
+        {authFieldsForMode(wizard.data.auth_mode).map((field) => (
+          <TextField
+            key={field.name} fullWidth required={Boolean(field.required)} label={field.label}
+            type={field.secret ? 'password' : 'text'}
+            autoComplete={field.secret ? 'new-password' : 'off'}
+            value={wizard.data.auth_fields[field.name] || ''}
+            onChange={(event) => updateWizardData({ auth_fields: { ...wizard.data.auth_fields, [field.name]: event.target.value } })}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
+
+  const togglePurpose = (purpose) => {
+    if (!canEdit()) return;
+    const current = Array.isArray(wizard.data.key_purposes) ? wizard.data.key_purposes : [];
+    const selectedAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
+    const isCompatible = selectedAlgorithms.some((algorithm) => isAlgorithmAllowedForPurpose(purpose, algorithm));
+
+    if (!current.includes(purpose) && !isCompatible) {
+      showNotification?.('This purpose is incompatible with the currently selected algorithms.', 'warning');
+      return;
+    }
+
+    const next = current.includes(purpose)
+      ? current.filter((p) => p !== purpose)
+      : [...current, purpose];
+    updateWizardData({ key_purposes: next });
+  };
+
+  const selectedAlgorithms = Array.isArray(wizard.data.algorithms) ? wizard.data.algorithms : [];
+  const selectedPurposes = Array.isArray(wizard.data.key_purposes) ? wizard.data.key_purposes : [];
+  const incompatibleSelectedPurposes = selectedPurposes.filter(
+    (purpose) => !selectedAlgorithms.some((algorithm) => isAlgorithmAllowedForPurpose(purpose, algorithm)),
+  );
+  const showAuthorityFields = selectedPurposes.some((p) => PURPOSES_REQUIRING_AUTHORITY.includes(p));
+
+  const renderKeyAccessStep = () => (
+    <Box>
+      <Typography variant="h5" gutterBottom>
+        Key access
+      </Typography>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>
+        Identify the signing key, its purposes, and optional rotation policy.
+      </Typography>
+      <Box sx={{ display: 'grid', gap: 2 }}>
+        <TextField
+          fullWidth
+          required
+          label={selectedDefinition.key_reference_label}
+          value={wizard.data.key_reference}
+          onChange={(event) => updateWizardData({ key_reference: event.target.value })}
+        />
+        <TextField
+          fullWidth
+          label="Additional key aliases"
+          helperText="Optional comma-separated aliases or secondary references."
+          value={wizard.data.key_aliases}
+          onChange={(event) => updateWizardData({ key_aliases: event.target.value })}
+        />
+        <FormControl component="fieldset">
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
+            Supported algorithms
+          </Typography>
+          <FormGroup row>
+            {KEY_MANAGEMENT_ALGORITHM_OPTIONS.map((algorithm) => (
+              <FormControlLabel
+                key={algorithm}
+                control={(
+                  <Checkbox
+                    checked={(wizard.data.algorithms || []).includes(algorithm)}
+                    onChange={() => toggleAlgorithm(algorithm)}
+                  />
+                )}
+                label={algorithm}
+              />
+            ))}
+          </FormGroup>
+        </FormControl>
+
+        <FormControl component="fieldset">
+          <Typography variant="body2" sx={{ fontWeight: 'medium', mb: 1 }}>
+            Key purposes
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+            Select all purposes this signing key will serve. Marty uses these to automatically select the right key during issuance.
+          </Typography>
+
+          {incompatibleSelectedPurposes.length > 0 && (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              Update selected algorithms or remove incompatible purposes: {incompatibleSelectedPurposes.join(', ')}.
+            </Alert>
+          )}
+
+          <FormGroup>
+            {KEY_MANAGEMENT_PURPOSES.map((purpose) => {
+              const allowedWithSelection = selectedAlgorithms.some((algorithm) => isAlgorithmAllowedForPurpose(purpose.value, algorithm));
+              return (
+                <FormControlLabel
+                  key={purpose.value}
+                  control={(
+                    <Checkbox
+                      checked={selectedPurposes.includes(purpose.value)}
+                      disabled={!allowedWithSelection && !selectedPurposes.includes(purpose.value)}
+                      onChange={() => togglePurpose(purpose.value)}
+                    />
+                  )}
+                  label={
+                    <Box>
+                      <Typography variant="body2">{purpose.label}</Typography>
+                      {purpose.formats.length > 0 && (
+                        <Typography variant="caption" color="text.secondary">
+                          Formats: {purpose.formats.join(', ')}
+                        </Typography>
+                      )}
+                      {!allowedWithSelection && (
+                        <Typography variant="caption" color="warning.main" sx={{ display: 'block' }}>
+                          Select a compatible algorithm first.
+                        </Typography>
+                      )}
+                    </Box>
+                  }
+                />
+              );
+            })}
+          </FormGroup>
+        </FormControl>
+
+        {showAuthorityFields && (
+          <>
+            <TextField
+              fullWidth
+              label="Country code (ISO 3166-1 alpha-2)"
+              helperText="Required for VDS-NC, CSCA, and mDoc DSC services."
+              value={wizard.data.country_code || ''}
+              onChange={(event) => updateWizardData({ country_code: event.target.value.toUpperCase() })}
+              slotProps={{
+                htmlInput: { maxLength: 2 }
+              }}
+            />
+            <TextField
+              fullWidth
+              label="Authority code"
+              helperText="Optional issuing authority identifier."
+              value={wizard.data.authority_code || ''}
+              onChange={(event) => updateWizardData({ authority_code: event.target.value })}
+            />
+          </>
+        )}
+
+        <Divider />
+        <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
+          Rotation policy (optional)
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: -1, display: 'block' }}>
+          Leave blank to manage rotation manually.
+        </Typography>
+        <TextField
+          fullWidth
+          type="number"
+          label="Rotation interval (days)"
+          helperText="How often to rotate this key. Leave blank for manual rotation."
+          value={wizard.data.rotation_interval_days || ''}
+          onChange={(event) => updateWizardData({ rotation_interval_days: event.target.value })}
+          slotProps={{
+            htmlInput: { min: 1 }
+          }}
+        />
+        {wizard.data.rotation_interval_days && (
+          <TextField
+            fullWidth
+            type="number"
+            label="Key overlap period (days)"
+            helperText="How long to keep the old key active after rotation for in-flight verifications."
+            value={wizard.data.rotation_overlap_days || '7'}
+            onChange={(event) => updateWizardData({ rotation_overlap_days: event.target.value })}
+            slotProps={{
+              htmlInput: { min: 0 }
+            }}
+          />
+        )}
+        <Divider />
+        <FormControlLabel
+          control={(
+            <Switch
+              checked={Boolean(wizard.data.make_default)}
+              onChange={(event) => updateWizardData({ make_default: event.target.checked })}
+            />
+          )}
+          label="Use as the default signing service"
+        />
+        <Alert severity="info">
+          This registers the service metadata only. Private keys remain in your external KMS/HSM.
+        </Alert>
+      </Box>
+    </Box>
+  );
+
+  const renderReviewStep = () => (
+    <Box>
+      <Typography variant="h5" gutterBottom>
+        Review
+      </Typography>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>
+        Confirm the registration details before saving this signing service.
+      </Typography>
+      <Paper variant="outlined" sx={{ p: 3 }}>
+        <Typography variant="h6" sx={{ mb: 1.5 }}>
+          {wizard.data.name || selectedDefinition.label}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Service type: {selectedDefinition.label}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Protocol: {selectedDefinition.protocol}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Endpoint: {wizard.data.endpoint || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Region: {wizard.data.region || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Mount: {wizard.data.mount || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Authentication: {authModeLabel(wizard.data.auth_mode)}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Authentication details: {serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields) ? 'Configured (hidden)' : 'Workload identity'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          {selectedDefinition.key_reference_label}: {wizard.data.key_reference || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Additional aliases: {wizard.data.key_aliases || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Algorithms: {(wizard.data.algorithms || []).join(', ') || '-'}
+        </Typography>
+        <Typography variant="body2" sx={{ mb: 0.75 }}>
+          Key purposes: {(wizard.data.key_purposes || []).join(', ') || 'Not specified'}
+        </Typography>
+        {wizard.data.country_code && (
+          <Typography variant="body2" sx={{ mb: 0.75 }}>
+            Country code: {wizard.data.country_code}
+            {wizard.data.authority_code ? ` / Authority: ${wizard.data.authority_code}` : ''}
+          </Typography>
+        )}
+        {wizard.data.rotation_interval_days && (
+          <Typography variant="body2" sx={{ mb: 0.75 }}>
+            Rotation: every {wizard.data.rotation_interval_days} days
+            {wizard.data.rotation_overlap_days ? `, ${wizard.data.rotation_overlap_days}d overlap` : ''}
+            {wizard.data.rotation_auto_publish ? ', auto-publish' : ''}
+          </Typography>
+        )}
+        <Typography variant="body2">
+          Default signer: {wizard.data.make_default ? 'Yes' : 'No'}
+        </Typography>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 3, mt: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', mb: 2 }}>
+          <Box>
+            <Typography variant="h6" sx={{ mb: 0.5 }}>
+              Validate connection
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Run preflight checks for authentication, key reference, algorithm coverage, and signer capability before saving.
+            </Typography>
+          </Box>
+          <Button
+            variant="outlined"
+            startIcon={preflightLoading ? <CircularProgress size={16} /> : <VerifiedIcon />}
+            onClick={runPreflightChecks}
+            disabled={preflightLoading || wizard.loading}
+          >
+            {preflightLoading ? 'Validating...' : 'Validate connection'}
+          </Button>
+        </Stack>
+
+        {preflightChecks.length > 0 ? (
+          <List dense>
+            {preflightChecks.map((entry) => (
+              <ListItem key={entry.name} disableGutters>
+                <ListItemText
+                  primary={entry.name}
+                  secondary={entry.detail}
+                />
+                <Chip
+                  size="small"
+                  label={entry.status === 'pass' ? 'Pass' : entry.status === 'fail' ? 'Fail' : 'Warning'}
+                  color={entry.status === 'pass' ? 'success' : entry.status === 'fail' ? 'error' : 'warning'}
+                />
+              </ListItem>
+            ))}
+          </List>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No preflight checks run yet.
+          </Typography>
+        )}
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 3, mt: 2 }}>
+        <Typography variant="h6" sx={{ mb: 0.5 }}>
+          Provider setup shortcut
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Use this command to create or reference a signer in your provider, then keep the resulting key identifier in the Key reference field.
+        </Typography>
+
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+          <Button
+            component="a"
+            href={providerRunbook.docsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="text"
+          >
+            {providerRunbook.docsLabel}
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<ContentCopyIcon />}
+            onClick={() => copyText(providerRunbook.command)}
+          >
+            Copy command
+          </Button>
+        </Stack>
+
+        <Divider sx={{ mb: 2 }} />
+        <Box
+          component="pre"
+          sx={{
+            p: 2,
+            borderRadius: 1,
+            bgcolor: 'grey.100',
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            fontFamily: 'monospace',
+            fontSize: '0.8rem',
+            m: 0,
+          }}
+        >
+          {providerRunbook.command}
+        </Box>
+
+        <Alert severity="info" sx={{ mt: 2 }}>
+          Registering a service does not create a signing key. For external KMS services, create the key in the provider
+          and validate its reference first. The issuer identity form asks for the public DID and signing compatibility;
+          Marty resolves the authorized signing profile and key custody on the server.
+        </Alert>
+      </Paper>
+    </Box>
+  );
+
+  const renderStepContent = () => {
+    switch (wizard.activeStep) {
+      case 0:
+        return renderChooseServiceStep();
+      case 1:
+        return renderConnectionStep();
+      case 2:
+        return renderKeyAccessStep();
+      case 3:
+        return renderReviewStep();
+      default:
+        return null;
+    }
+  };
+
+  if (!isCurrentBrowserEntry()) return <CircularProgress />;
+
+  if (configLoading) {
+    return (
+      <Container maxWidth="md" sx={{ py: 6 }}>
+        <Paper elevation={2} sx={{ p: 4, textAlign: 'center' }}>
+          <CircularProgress />
+          <Typography sx={{ mt: 2 }}>Loading key management services...</Typography>
+        </Paper>
+      </Container>
+    );
+  }
+
+  if (configError) {
+    return (
+      <Container maxWidth="md" sx={{ py: 6 }}>
+        <Paper elevation={2} sx={{ p: 4 }}>
+          <Alert severity="error">Unable to load the signing service registry.</Alert>
+        </Paper>
+      </Container>
+    );
+  }
+
+  if (wizard.success && registeredService) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Paper elevation={3} sx={{ p: 4 }}>
+          <Stack spacing={3} sx={{ alignItems: 'center', textAlign: 'center' }}>
+            <CheckCircleIcon color="success" sx={{ fontSize: 64 }} />
+            <Box>
+              <Typography variant="h5" gutterBottom>
+                Signing service registered
+              </Typography>
+              <Typography color="text.secondary">
+                {wizard.data.name || selectedDefinition.label} has been added to the signing service registry.
+              </Typography>
+            </Box>
+          </Stack>
+
+          <Alert severity={registeredServiceIsManagedOpenBao ? 'success' : 'info'} sx={{ mt: 3 }}>
+            {registeredServiceIsManagedOpenBao
+              ? 'Next, create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized managed signing profile and provisions its key internally.'
+              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized signing profile and key custody on the server.'}
+          </Alert>
+
+          {!registeredServiceIsManagedOpenBao && (
+            <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}>
+                <Box sx={{ textAlign: 'left' }}>
+                  <Typography variant="subtitle2">Provider key setup</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Create or verify {wizard.data.key_reference || 'the configured key reference'} before issuer identity setup.
+                  </Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => copyText(providerRunbook.command)}
+                >
+                  Copy command
+                </Button>
+              </Stack>
+            </Paper>
+          )}
+
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ justifyContent: 'center', mt: 3 }}>
+            <Button
+              variant="contained"
+              onClick={() => { if (canEdit()) navigate(issuerIdentityCreateUrl); }}
+            >
+              Create issuer identity
+            </Button>
+            <Button variant="outlined" onClick={() => { if (canEdit()) navigate('/console/org/operator/key-management/services'); }}>
+              View key management
+            </Button>
+          </Stack>
+        </Paper>
+      </Container>
+    );
+  }
+
+  return (
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Paper elevation={3} sx={{ p: 4 }}>
+        <Box sx={{ mb: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+            <HubIcon color="primary" />
+            <Typography variant="h4">Register Key Management Service</Typography>
+          </Box>
+          <Typography color="text.secondary">
+            Create a reusable registration for a KMS, HSM, or custom transit-compatible signing service.
+          </Typography>
+        </Box>
+
+        <Stepper activeStep={wizard.activeStep} sx={{ mb: 4 }}>
+          {STEPS.map((label) => (
+            <Step key={label}>
+              <StepLabel>{label}</StepLabel>
+            </Step>
+          ))}
+        </Stepper>
+
+        {wizard.error && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {wizard.error}
+          </Alert>
+        )}
+
+        <Box component="fieldset" disabled={wizard.loading || preflightLoading} sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 420, mb: 4 }}>
+          {renderStepContent()}
+        </Box>
+
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
+          <Button
+            onClick={() => { if (canEdit()) (wizard.isFirstStep ? wizard.cancel : wizard.goBack)(); }}
+            startIcon={<ArrowBackIcon />}
+            disabled={wizard.loading || preflightLoading}
+          >
+            {wizard.isFirstStep ? 'Cancel' : 'Back'}
+          </Button>
+
+          {wizard.isLastStep ? (
+            <Button
+              variant="contained"
+              onClick={() => { if (canEdit()) wizard.submit(); }}
+              disabled={!wizard.isStepValid() || wizard.loading || preflightLoading}
+              startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
+            >
+              {wizard.loading ? 'Saving...' : 'Register service'}
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              onClick={() => { if (canEdit()) wizard.goNext(); }}
+              disabled={!wizard.isStepValid() || wizard.loading || preflightLoading}
+              endIcon={<ArrowForwardIcon />}
+            >
+              Next
+            </Button>
+          )}
+        </Box>
+      </Paper>
+    </Container>
+  );
+};
+
+export default function KeyManagementServiceWizard() {
+  const { t } = useTranslation('console');
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const { can, isLoading } = usePermissions();
+  const location = useLocation();
+  const browserEntry = useBrowserEntry(location);
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const canView = can('signing-key', 'view');
+  const canCreate = can('signing-key', 'create');
+
+  if (isLoading) return <CircularProgress />;
+  if (typeof activeOrgId !== 'string' || !activeOrgId.trim()) {
+    return <Alert severity="info">{t('deploy.keyManagementWizard.selectOrganization')}</Alert>;
+  }
+  if (!isAuthenticated || !canView) return <Alert severity="error">{t('deploy.keyManagementWizard.readDenied')}</Alert>;
+  if (!canCreate) return <Alert severity="error">{t('deploy.keyManagementWizard.createDenied')}</Alert>;
+  return <KeyManagementServiceWizardContent browserEntry={browserEntry} key={JSON.stringify([activeOrgId, principalId, isAuthenticated,
+    location.key, location.pathname, location.search, location.hash, canView, canCreate, browserEntry.generation])} />;
+}

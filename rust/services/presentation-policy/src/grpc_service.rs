@@ -1,0 +1,709 @@
+use std::sync::Arc;
+
+use chrono::Utc;
+use marty_oid4vp_contract::{
+    FrozenPolicyIdentity, Oid4vpEvaluationTransportV1, QueryKind, MAX_QUERY_DOCUMENT_BYTES,
+    MAX_TRANSPORT_CLIENT_ID_BYTES, MAX_TRANSPORT_RAW_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES,
+};
+use mmf_security::{SecurityError, ServiceTokenAuthenticator};
+use serde_json::{json, Map, Value};
+use tonic::{Request, Response, Status};
+use uuid::Uuid;
+
+use crate::{
+    grpc_security::{PresentationGrpcSecurity, EVALUATE_PRESENTATION_METHOD, GET_POLICY_METHOD},
+    http_service::{
+        apply_update_from_transport, build_policy_from_transport, evaluate_policy,
+        PresentationPolicyHttpError,
+    },
+    presentation_policy_proto::{
+        presentation_policy_service_server::PresentationPolicyService, CreatePolicyRequest,
+        DeletePolicyResponse, EvaluatePresentationRequest as EvaluatePresentationMessage,
+        GetPolicyRequest, HealthCheckRequest, HealthCheckResponse, ListPoliciesRequest,
+        ListPoliciesResponse, PolicyEvaluationResponse, PolicyIdRequest, PolicyResponse,
+        PolicyRevision, UpdatePolicyRequest,
+    },
+    EvaluatePresentationRequest, PolicyApplication, PolicyApplicationError, PolicyStatus,
+    PresentationPolicy, PresentationVerificationOrchestrator,
+};
+
+#[derive(Clone)]
+pub struct PresentationPolicyGrpcService {
+    application: Arc<PolicyApplication>,
+    verification: Arc<dyn PresentationVerificationOrchestrator>,
+    service_authenticator: Arc<ServiceTokenAuthenticator>,
+    workload_security: Option<Arc<PresentationGrpcSecurity>>,
+}
+
+impl PresentationPolicyGrpcService {
+    pub fn new(
+        application: Arc<PolicyApplication>,
+        verification: Arc<dyn PresentationVerificationOrchestrator>,
+        service_token: Option<String>,
+        service_authentication_required: bool,
+    ) -> Result<Self, SecurityError> {
+        Ok(Self {
+            application,
+            verification,
+            service_authenticator: Arc::new(ServiceTokenAuthenticator::new(
+                service_token,
+                service_authentication_required,
+            )?),
+            workload_security: None,
+        })
+    }
+
+    pub fn with_workload_security(mut self, security: Arc<PresentationGrpcSecurity>) -> Self {
+        self.workload_security = Some(security);
+        self
+    }
+
+    fn authenticate<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        self.service_authenticator
+            .authenticate(metadata(request, "x-service-token").as_deref())
+            .map_err(|_| {
+                Status::unauthenticated("PRESENTATION_POLICY.GRPC_SERVICE_AUTHENTICATION_REQUIRED")
+            })
+    }
+
+    fn authenticate_workload<T>(&self, request: &Request<T>, method: &str) -> Result<(), Status> {
+        self.authenticate(request)?;
+        self.workload_security
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("workload authorization is unavailable"))?
+            .authorize(request, method)
+    }
+
+    fn principal<T>(&self, request: &Request<T>) -> Result<String, Status> {
+        metadata(request, "x-user-id").ok_or_else(|| {
+            Status::unauthenticated("PRESENTATION_POLICY.GRPC_AUTHENTICATION_REQUIRED")
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl PresentationPolicyService for PresentationPolicyGrpcService {
+    async fn get_policy(
+        &self,
+        request: Request<GetPolicyRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        if self.workload_security.is_some() {
+            self.authenticate_workload(&request, GET_POLICY_METHOD)?;
+        } else {
+            self.authenticate(&request)?;
+        }
+        let policy = self
+            .application
+            .get_for_internal_service(parse_uuid(&request.get_ref().policy_id)?)
+            .await
+            .map_err(application_status)?;
+        let mut response = policy_message(&policy)?;
+        if policy.prerequisite_evidence_profile.is_some() {
+            let authority = self
+                .verification
+                .freeze_credential_authority(&policy)
+                .await
+                .map_err(|_| {
+                    Status::unavailable("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_UNAVAILABLE")
+                })?
+                .ok_or_else(|| {
+                    Status::unavailable("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_UNAVAILABLE")
+                })?;
+            response.credential_authority_snapshot_json = serialize(&authority)?;
+        }
+        Ok(Response::new(response))
+    }
+
+    async fn list_policies(
+        &self,
+        request: Request<ListPoliciesRequest>,
+    ) -> Result<Response<ListPoliciesResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let input = request.into_inner();
+        let organization_id = parse_uuid(&input.organization_id)?;
+        let status = parse_optional_status(&input.status)?;
+        let limit = if input.limit <= 0 {
+            100usize
+        } else {
+            usize::try_from(input.limit).unwrap_or(usize::MAX).min(500)
+        };
+        let offset = usize::try_from(input.offset.max(0)).unwrap_or(0);
+        let all = self
+            .application
+            .list(&principal, organization_id)
+            .await
+            .map_err(application_status)?;
+        let matching = all
+            .into_iter()
+            .filter(|policy| status.is_none_or(|status| policy.status == status))
+            .collect::<Vec<_>>();
+        let total = i32::try_from(matching.len()).unwrap_or(i32::MAX);
+        let policies = matching
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(policy_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Response::new(ListPoliciesResponse { policies, total }))
+    }
+
+    async fn create_policy(
+        &self,
+        request: Request<CreatePolicyRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let input = request.into_inner();
+        let mut value = Map::new();
+        value.insert("organization_id".into(), json!(input.organization_id));
+        value.insert("name".into(), json!(input.name));
+        insert_text(&mut value, "description", input.description);
+        insert_text(
+            &mut value,
+            "compliance_profile_id",
+            input.compliance_profile_id,
+        );
+        value.insert("prefer_predicates".into(), json!(input.prefer_predicates));
+        insert_text(&mut value, "fallback_policy", input.fallback_policy);
+        insert_json(
+            &mut value,
+            "credential_requirements",
+            input.credential_requirements_json,
+        )?;
+        insert_json(
+            &mut value,
+            "alternative_requirements",
+            input.alternative_requirements_json,
+        )?;
+        insert_json(&mut value, "display_metadata", input.display_metadata_json)?;
+        insert_text(
+            &mut value,
+            "prerequisite_evidence_profile",
+            input.prerequisite_evidence_profile,
+        );
+        insert_text(&mut value, "trust_profile_id", input.trust_profile_id);
+        insert_json(&mut value, "holder_binding", input.holder_binding_json)?;
+        insert_json(&mut value, "freshness", input.freshness_json)?;
+        let policy =
+            build_policy_from_transport(Value::Object(value), Utc::now()).map_err(http_status)?;
+        let policy = self
+            .application
+            .create(&principal, policy)
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(policy_message(&policy)?))
+    }
+
+    async fn update_policy(
+        &self,
+        request: Request<UpdatePolicyRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let input = request.into_inner();
+        let mut policy = self
+            .application
+            .get_for_update(&principal, parse_uuid(&input.policy_id)?)
+            .await
+            .map_err(application_status)?;
+        let mut patch = Map::new();
+        if let Some(profile) = input.prerequisite_evidence_profile {
+            patch.insert(
+                "prerequisite_evidence_profile".into(),
+                if profile.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(profile)
+                },
+            );
+        }
+        insert_text(&mut patch, "name", input.name);
+        insert_text(&mut patch, "description", input.description);
+        insert_text(
+            &mut patch,
+            "compliance_profile_id",
+            input.compliance_profile_id,
+        );
+        apply_update_from_transport(&mut policy, Value::Object(patch), Utc::now())
+            .map_err(http_status)?;
+        let policy = self
+            .application
+            .update(&principal, policy)
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(policy_message(&policy)?))
+    }
+
+    async fn activate_policy(
+        &self,
+        request: Request<PolicyIdRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let policy = self
+            .application
+            .activate(
+                &principal,
+                parse_uuid(&request.get_ref().policy_id)?,
+                Utc::now(),
+            )
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(policy_message(&policy)?))
+    }
+
+    async fn suspend_policy(
+        &self,
+        request: Request<PolicyIdRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let policy = self
+            .application
+            .suspend(
+                &principal,
+                parse_uuid(&request.get_ref().policy_id)?,
+                Utc::now(),
+            )
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(policy_message(&policy)?))
+    }
+
+    async fn new_version_policy(
+        &self,
+        request: Request<PolicyIdRequest>,
+    ) -> Result<Response<PolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        let policy = self
+            .application
+            .new_version(
+                &principal,
+                parse_uuid(&request.get_ref().policy_id)?,
+                Uuid::new_v4(),
+                Utc::now(),
+            )
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(policy_message(&policy)?))
+    }
+
+    async fn delete_policy(
+        &self,
+        request: Request<PolicyIdRequest>,
+    ) -> Result<Response<DeletePolicyResponse>, Status> {
+        self.authenticate(&request)?;
+        let principal = self.principal(&request)?;
+        self.application
+            .delete(&principal, parse_uuid(&request.get_ref().policy_id)?)
+            .await
+            .map_err(application_status)?;
+        Ok(Response::new(DeletePolicyResponse { success: true }))
+    }
+
+    async fn evaluate_presentation(
+        &self,
+        request: Request<EvaluatePresentationMessage>,
+    ) -> Result<Response<PolicyEvaluationResponse>, Status> {
+        let workload_authenticated = self.workload_security.is_some();
+        let policy_id = parse_uuid(&request.get_ref().policy_id)?;
+        let policy = if self.workload_security.is_some() {
+            self.authenticate_workload(&request, EVALUATE_PRESENTATION_METHOD)?;
+            self.application.get_for_internal_service(policy_id).await
+        } else {
+            self.authenticate(&request)?;
+            let principal = self.principal(&request)?;
+            self.application
+                .get_for_evaluation(&principal, policy_id)
+                .await
+        }
+        .map_err(application_status)?;
+        let input = request.into_inner();
+        if input.oid4vp_transport.is_some() && !workload_authenticated {
+            return Err(Status::permission_denied(
+                "OID4VP transport requires an authenticated workload",
+            ));
+        }
+        // Bind the exact saved snapshot before any native verification or
+        // trust/status lookups. A missing reference cannot use a legacy fallback.
+        require_expected_policy_revision(&policy, input.expected_policy_revision.as_ref())?;
+        let context = if input.context_json.trim().is_empty() {
+            Map::new()
+        } else {
+            serde_json::from_str::<Value>(&input.context_json)
+                .map_err(|_| Status::invalid_argument("context_json must be a JSON object"))?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| Status::invalid_argument("context_json must be a JSON object"))?
+        };
+        let oid4vp_transport = input
+            .oid4vp_transport
+            .map(parse_oid4vp_transport)
+            .transpose()?;
+        let evaluation = EvaluatePresentationRequest {
+            vp_token: Value::String(input.vp_token),
+            trust_profile_id: optional_text(input.trust_profile_id),
+            nonce: optional_text(input.nonce),
+            audience: optional_text(input.audience),
+            context,
+            oid4vp_transport,
+            trusted_internal_context: true,
+        };
+        let result = evaluate_policy(self.verification.as_ref(), &policy, &evaluation)
+            .await
+            .map_err(http_status)?;
+        Ok(Response::new(evaluation_message(&result)?))
+    }
+
+    async fn health_check(
+        &self,
+        request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
+        self.authenticate(&request)?;
+        Ok(Response::new(HealthCheckResponse {
+            status: "serving".into(),
+        }))
+    }
+}
+
+fn parse_oid4vp_transport(
+    input: crate::presentation_policy_proto::Oid4vpEvaluationTransport,
+) -> Result<Oid4vpEvaluationTransportV1, Status> {
+    let query_kind = match input.query_kind.as_str() {
+        "dcql" => QueryKind::Dcql,
+        "presentation_exchange" => QueryKind::PresentationExchange,
+        _ => return Err(Status::invalid_argument("unsupported OID4VP query kind")),
+    };
+    if input.query_document_json.len() > MAX_QUERY_DOCUMENT_BYTES
+        || input.credential_authority_snapshot_json.len()
+            > marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES
+        || input.vp_token_raw.len() > MAX_TRANSPORT_RAW_TOKEN_BYTES
+        || input.verifier_client_id.len() > MAX_TRANSPORT_CLIENT_ID_BYTES
+        || input
+            .presentation_submission_json
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_WALLET_SUBMISSION_BYTES)
+    {
+        return Err(Status::invalid_argument(
+            "OID4VP transport exceeds its byte limit",
+        ));
+    }
+    let query_document = serde_json::from_str(&input.query_document_json)
+        .map_err(|_| Status::invalid_argument("OID4VP query is not valid JSON"))?;
+    let presentation_submission = input
+        .presentation_submission_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| Status::invalid_argument("OID4VP submission is not valid JSON"))?;
+    let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: if input.credential_authority_snapshot_json.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str(&input.credential_authority_snapshot_json).map_err(|_| {
+                    Status::invalid_argument("invalid credential authority snapshot")
+                })?,
+            )
+        },
+        query_kind,
+        query_document,
+        query_digest: input.query_digest,
+        presentation_submission,
+        vp_token_raw: input.vp_token_raw,
+        verifier_client_id: input.verifier_client_id,
+        request_nonce: input.request_nonce,
+    };
+    transport
+        .validate_transport()
+        .map_err(|_| Status::invalid_argument("OID4VP transport is invalid"))?;
+    Ok(transport)
+}
+
+fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status> {
+    Ok(PolicyResponse {
+        prerequisite_evidence_profile: policy
+            .prerequisite_evidence_profile
+            .map(|profile| profile.as_str().to_owned())
+            .unwrap_or_default(),
+        credential_authority_snapshot_json: String::new(),
+        holder_binding_required: policy.holder_binding.required,
+        id: policy.id.to_string(),
+        organization_id: policy.organization_id.to_string(),
+        name: policy.name.clone(),
+        description: policy.description.clone().unwrap_or_default(),
+        status: policy.status.as_str().into(),
+        display_metadata_json: serialize(&policy.display_metadata)?,
+        credential_requirements_json: serialize(&policy.credential_requirements)?,
+        alternative_requirements_json: serialize(&policy.alternative_requirements)?,
+        compliance_profile_id: policy
+            .compliance_profile_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        version: i32::try_from(policy.version).unwrap_or(i32::MAX),
+        created_at: policy.created_at.to_rfc3339(),
+        updated_at: policy.updated_at.to_rfc3339(),
+        policy_revision: Some(policy_revision_message(policy)?),
+    })
+}
+
+fn policy_revision_message(policy: &PresentationPolicy) -> Result<PolicyRevision, Status> {
+    let revision = crate::policy_revision(policy)
+        .map_err(|_| Status::internal("policy revision could not be constructed"))?;
+    Ok(PolicyRevision {
+        organization_id: policy.organization_id.to_string(),
+        id: revision.id,
+        version: revision.version,
+        content_digest: revision.content_digest,
+    })
+}
+
+fn require_expected_policy_revision(
+    policy: &PresentationPolicy,
+    expected: Option<&PolicyRevision>,
+) -> Result<(), Status> {
+    let expected =
+        expected.ok_or_else(|| Status::invalid_argument("expected_policy_revision is required"))?;
+    let identity = FrozenPolicyIdentity {
+        id: expected.id.clone(),
+        version: expected.version,
+        content_digest: expected.content_digest.clone(),
+    };
+    identity
+        .validate()
+        .map_err(|_| Status::invalid_argument("expected_policy_revision is invalid"))?;
+    parse_uuid(&expected.organization_id)?;
+    let current = policy_revision_message(policy)?;
+    if policy.status != PolicyStatus::Active || *expected != current {
+        return Err(Status::failed_precondition(
+            "PRESENTATION_POLICY.POLICY_REVISION_MISMATCH",
+        ));
+    }
+    Ok(())
+}
+
+fn result_policy_revision(value: &Value) -> Result<PolicyRevision, Status> {
+    let value = &value["policy_revision"];
+    let identity: FrozenPolicyIdentity = serde_json::from_value(json!({
+        "id": value["id"],
+        "version": value["version"],
+        "content_digest": value["content_digest"],
+    }))
+    .map_err(|_| Status::internal("policy result has no valid revision"))?;
+    identity
+        .validate()
+        .map_err(|_| Status::internal("policy result has no valid revision"))?;
+    let organization_id = text(value, "organization_id")?;
+    Uuid::parse_str(&organization_id)
+        .map_err(|_| Status::internal("policy result has no valid organization"))?;
+    Ok(PolicyRevision {
+        organization_id,
+        id: identity.id,
+        version: identity.version,
+        content_digest: identity.content_digest,
+    })
+}
+
+fn evaluation_message(value: &Value) -> Result<PolicyEvaluationResponse, Status> {
+    Ok(PolicyEvaluationResponse {
+        result: text(value, "result")?,
+        policy_id: text(value, "policy_id")?,
+        policy_name: text(value, "policy_name")?,
+        credential_results_json: serialize(&value["credential_results"])?,
+        authentication_diagnostic_json: serialize(
+            &value[marty_oid4vp_contract::AUTHENTICATION_DIAGNOSTIC],
+        )?,
+        total_requirements: integer(value, "total_requirements")?,
+        satisfied_requirements: integer(value, "satisfied_requirements")?,
+        required_satisfied: integer(value, "required_satisfied")?,
+        required_total: integer(value, "required_total")?,
+        decision: text(value, "decision")?,
+        decision_reason: text(value, "decision_reason")?,
+        verified_claims_json: serialize(&value["verified_claims"])?,
+        evaluation_timestamp: text(value, "evaluation_timestamp")?,
+        evaluation_validity_json: value
+            .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+            .map(serialize)
+            .transpose()?
+            .unwrap_or_default(),
+        managed_policy_evidence_json: value
+            .get(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2)
+            .map(serialize)
+            .transpose()?
+            .unwrap_or_default(),
+        nonce: value["nonce"].as_str().unwrap_or_default().to_owned(),
+        policy_revision: Some(result_policy_revision(value)?),
+    })
+}
+
+#[cfg(test)]
+mod authenticated_id_transport_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn grpc_evaluation_preserves_bound_credential_id_without_inventing_one() {
+        let mut value = json!({
+            "result": "success", "policy_id": "policy-1", "policy_name": "Policy",
+            "credential_results": [{"credential_id": "urn:uuid:signed-1", "signature_valid": true}],
+            "total_requirements": 1, "satisfied_requirements": 1,
+            "required_satisfied": 1, "required_total": 1,
+            "decision": "allow", "decision_reason": "satisfied",
+            "verified_claims": {}, "evaluation_timestamp": "2026-10-27T00:00:00Z",
+            "policy_revision": {
+                "organization_id": "00000000-0000-0000-0000-000000000001",
+                "id": "policy-1", "version": 1,
+                "content_digest": format!("sha256:{}", "1".repeat(64))
+            }
+        });
+        let message = evaluation_message(&value).unwrap();
+        let carried: Value = serde_json::from_str(&message.credential_results_json).unwrap();
+        assert_eq!(carried[0]["credential_id"], "urn:uuid:signed-1");
+        value["credential_results"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("credential_id");
+        let message = evaluation_message(&value).unwrap();
+        let carried: Value = serde_json::from_str(&message.credential_results_json).unwrap();
+        assert!(carried[0].get("credential_id").is_none());
+    }
+}
+
+fn insert_text(object: &mut Map<String, Value>, name: &str, value: String) {
+    if let Some(value) = optional_text(value) {
+        object.insert(name.into(), Value::String(value));
+    }
+}
+
+fn insert_json(object: &mut Map<String, Value>, name: &str, value: String) -> Result<(), Status> {
+    if let Some(value) = optional_text(value) {
+        object.insert(
+            name.into(),
+            serde_json::from_str(&value)
+                .map_err(|_| Status::invalid_argument(format!("{name} must be valid JSON")))?,
+        );
+    }
+    Ok(())
+}
+
+fn serialize(value: &impl serde::Serialize) -> Result<String, Status> {
+    serde_json::to_string(value)
+        .map_err(|_| Status::internal("PRESENTATION_POLICY.SERIALIZATION_FAILED"))
+}
+
+fn text(value: &Value, name: &str) -> Result<String, Status> {
+    value[name]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Status::internal("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))
+}
+
+fn integer(value: &Value, name: &str) -> Result<i32, Status> {
+    value[name]
+        .as_i64()
+        .and_then(|value| i32::try_from(value).ok())
+        .ok_or_else(|| Status::internal("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))
+}
+
+fn parse_uuid(value: &str) -> Result<Uuid, Status> {
+    Uuid::parse_str(value).map_err(|_| Status::invalid_argument("identifier must be a UUID"))
+}
+
+fn parse_optional_status(value: &str) -> Result<Option<PolicyStatus>, Status> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "draft" => Ok(Some(PolicyStatus::Draft)),
+        "active" => Ok(Some(PolicyStatus::Active)),
+        "suspended" => Ok(Some(PolicyStatus::Suspended)),
+        "archived" => Ok(Some(PolicyStatus::Archived)),
+        _ => Err(Status::invalid_argument("invalid policy status")),
+    }
+}
+
+fn optional_text(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn metadata<T>(request: &Request<T>, name: &str) -> Option<String> {
+    request
+        .metadata()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn application_status(error: PolicyApplicationError) -> Status {
+    match error {
+        PolicyApplicationError::NotFound => Status::not_found("Presentation Policy not found"),
+        PolicyApplicationError::Forbidden => {
+            Status::permission_denied("PRESENTATION_POLICY.FORBIDDEN")
+        }
+        PolicyApplicationError::Conflict(detail) => Status::failed_precondition(detail),
+        PolicyApplicationError::Domain(error) => Status::invalid_argument(error.to_string()),
+        PolicyApplicationError::Dependency => {
+            Status::unavailable("PRESENTATION_POLICY.DEPENDENCY_UNAVAILABLE")
+        }
+    }
+}
+
+fn http_status(error: PresentationPolicyHttpError) -> Status {
+    match error.status.as_u16() {
+        400 => Status::failed_precondition(error.detail),
+        401 => Status::unauthenticated(error.detail),
+        403 => Status::permission_denied(error.detail),
+        404 => Status::not_found(error.detail),
+        409 => Status::aborted(error.detail),
+        422 => Status::invalid_argument(error.detail),
+        503 => Status::unavailable(error.detail),
+        _ => Status::internal(error.detail),
+    }
+}
+
+#[cfg(test)]
+mod oid4vp_transport_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_transport_preserves_legacy_structure_and_rejects_mutations() {
+        let query = json!({"credentials": [{"id": "member"}]});
+        let wire = crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            credential_authority_snapshot_json: String::new(),
+            query_kind: "dcql".into(),
+            query_document_json: query.to_string(),
+            query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
+            presentation_submission_json: Some(
+                json!({"id": "legacy", "descriptor_map": [], "extension": true}).to_string(),
+            ),
+            vp_token_raw: "header.payload.signature".into(),
+            verifier_client_id: "did:web:verifier.example".into(),
+            request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
+        };
+        let parsed = parse_oid4vp_transport(wire.clone()).unwrap();
+        assert_eq!(parsed.query_kind, QueryKind::Dcql);
+        assert!(parsed.compatible_presentation_submission().is_err());
+        assert_eq!(parsed.presentation_submission.unwrap()["extension"], true);
+
+        let mut wrong_digest = wire.clone();
+        wrong_digest.query_digest = "0".repeat(64);
+        assert_eq!(
+            parse_oid4vp_transport(wrong_digest).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut wrong_kind = wire.clone();
+        wrong_kind.query_kind = "untrusted".into();
+        assert_eq!(
+            parse_oid4vp_transport(wrong_kind).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut oversized = wire;
+        oversized.query_document_json = "x".repeat(MAX_QUERY_DOCUMENT_BYTES + 1);
+        assert_eq!(
+            parse_oid4vp_transport(oversized).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+}

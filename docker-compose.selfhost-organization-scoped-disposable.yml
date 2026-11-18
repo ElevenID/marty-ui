@@ -1,0 +1,35 @@
+# Opt-in unqualified continuation of the exact-bundle migration fixture.
+# No host ports, source builds, persistent volumes, or operator secrets.
+services:
+  organization:
+    image: ${PROBE_SERVICES_IMAGE:?exact bundle services digest required}
+    platform: linux/amd64
+    environment:
+      SERVICE_NAME: organization
+      ENVIRONMENT: production
+      MARTY_RELEASE_VERSION: scoped-probe
+      ORGANIZATION_SERVICE_PORT: "8002"
+      ORG_GRPC_PORT: "9002"
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
+      MARTY_ORG_ADMIN_EMAIL: probe@migration.invalid
+      ORGANIZATION_CREATION_ENABLED: "false"
+      ES_GRPC_TARGET: event-stream:9015
+      ES_GRPC_TIMEOUT_SECONDS: "1"
+    secrets: [marty_db_password, grpc_service_token]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8002/health]
+      interval: 2s
+      retries: 30
+    networks: [private]
+    restart: "no"
+secrets:
+  grpc_service_token:
+    file: ${PROBE_SECRET_DIR:?disposable secret root required}/grpc_service_token

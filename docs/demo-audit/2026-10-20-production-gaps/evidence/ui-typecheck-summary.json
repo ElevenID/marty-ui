@@ -1,0 +1,31 @@
+{
+  "command": "node node_modules/typescript/bin/tsc --noEmit",
+  "configuration": "ui/tsconfig.json including test sources",
+  "exitCode": 2,
+  "result": "FAIL",
+  "diagnosticLines": 1527,
+  "diagnosticCount": 1520,
+  "productionGate": false,
+  "baselineComparison": "NOT_RUN",
+  "scope": "Broad development/test typing was attempted inadvertently; no test typing configuration was weakened and no full test-typecheck pass is claimed.",
+  "productionCheck": {
+    "command": "node node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "exitCode": 0,
+    "result": "PASS",
+    "scope": "Production TypeScript configuration; before final Android manifest consumer edits, which receive their own check."
+  },
+  "sampleDiagnostics": [
+    "src/application/__tests__/authRoutingInteraction.test.ts(18,3): error TS6133: 'resolveAuthCallbackRedirect' is declared but its value is never read.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(19,3): error TS6133: 'waitForAuthCallbackConsole' is declared but its value is never read.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(24,3): error TS6133: 'resolveCapabilityChecker' is declared but its value is never read.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(94,47): error TS2741: Property 'sleep' is missing in type '{ searchParams: URLSearchParams; refreshUser: Mock<Procedure>; consoleContext: { isLoading: boolean; }; getDefaultLandingPath: () => string; }' but required in type '{ consoleContext: any; exchangeAuthCallback?: (({ code, state }: { code: any; state: any; }) => Promise<any>) | undefined; fallback?: string | undefined; getDefaultLandingPath: any; refreshUser: any; searchParams: any; sleep: any; }'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(145,12): error TS18047: 'enrichedUser' is possibly 'null'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(145,25): error TS2339: Property 'organization_id' does not exist on type 'Object'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(146,12): error TS18047: 'enrichedUser' is possibly 'null'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(146,25): error TS2339: Property 'organization_name' does not exist on type 'Object'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(147,12): error TS18047: 'enrichedUser' is possibly 'null'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(147,25): error TS2339: Property 'organizations' does not exist on type 'Object'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(154,20): error TS18047: 'enrichedUser' is possibly 'null'.",
+    "src/application/__tests__/authRoutingInteraction.test.ts(154,33): error TS2339: Property 'organizations' does not exist on type 'Object'."
+  ]
+}

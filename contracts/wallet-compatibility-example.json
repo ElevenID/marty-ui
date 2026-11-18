@@ -1,0 +1,33 @@
+{
+  "derived_from": {
+    "credential_format": "SD_JWT_VC",
+    "issuance_protocol": "OID4VCI_PRE_AUTH",
+    "compliance_profile_code": "COMPLIANCE-1"
+  },
+  "is_override": false,
+  "override_precedence": 0,
+  "merge_strategy": "APPEND",
+  "name": "Generic SD-JWT VC Wallet",
+  "description": "Derived compatibility profile for generic SD-JWT VC issuance.",
+  "credential_format": "SD_JWT_VC",
+  "issuance_protocol": "OID4VCI_PRE_AUTH",
+  "compliance_profile_code": "COMPLIANCE-1",
+  "wallet_apps": [
+    "EUDI Wallet",
+    "OID4VCI-compatible wallets"
+  ],
+  "specifications": [
+    "SD-JWT VC",
+    "OID4VCI"
+  ],
+  "supported_platforms": [
+    "ios",
+    "android",
+    "web"
+  ],
+  "deep_link_pattern": "openid-credential-offer://?credential_offer_uri={offer_uri}",
+  "applied_override_ids": [],
+  "template_wallet_configs": [],
+  "created_at": "2026-10-23T12:00:00+00:00",
+  "updated_at": "2026-10-23T12:00:00+00:00"
+}

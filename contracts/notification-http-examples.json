@@ -1,0 +1,50 @@
+{
+  "send": {
+    "organization_id": "org-a",
+    "recipient_id": "user-a",
+    "title": "Credential ready",
+    "message": "Open the application to continue.",
+    "event_type": "credential.issued",
+    "priority": "urgent",
+    "data": {
+      "application_id": "application-a",
+      "status": "ISSUED"
+    },
+    "target": {
+      "organization_id": "org-a",
+      "user_id": "user-a",
+      "channels": [
+        "FCM",
+        "SSE"
+      ]
+    }
+  },
+  "response": {
+    "id": "notification-1",
+    "organization_id": "org-a",
+    "title": "Credential ready",
+    "body": "Open the application to continue.",
+    "read": false,
+    "severity": "info",
+    "status": "failed",
+    "data": {
+      "application_id": "application-a",
+      "status": "ISSUED"
+    },
+    "event_type": "credential.issued",
+    "priority": "CRITICAL",
+    "target": {
+      "organization_id": "org-a",
+      "user_id": "user-a",
+      "channels": [
+        "FCM",
+        "SSE"
+      ],
+      "device_tokens": [],
+      "webhook_endpoints": [],
+      "email_addresses": []
+    },
+    "ttl_seconds": 86400,
+    "created_at": "2026-10-24T01:00:00+00:00"
+  }
+}

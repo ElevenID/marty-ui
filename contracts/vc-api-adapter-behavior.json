@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "serialization": [
+    {
+      "name": "jwt_string",
+      "field": "verifiableCredential",
+      "input": "header.payload.signature",
+      "expected": "header.payload.signature",
+      "error": null
+    },
+    {
+      "name": "vc_jose_envelope",
+      "field": "verifiableCredential",
+      "input": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["EnvelopedVerifiableCredential"],
+        "id": "data:application/vc%2Bjwt,header.payload.signature"
+      },
+      "expected": "header.payload.signature",
+      "error": null
+    },
+    {
+      "name": "vp_jose_envelope",
+      "field": "verifiablePresentation",
+      "input": {
+        "@context": "https://www.w3.org/ns/credentials/v2",
+        "type": "EnvelopedVerifiablePresentation",
+        "id": "data:application/vp+jwt,header.payload.signature"
+      },
+      "expected": "header.payload.signature",
+      "error": null
+    },
+    {
+      "name": "data_integrity_document",
+      "field": "verifiableCredential",
+      "input": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "proof": {"type": "DataIntegrityProof", "cryptosuite": "eddsa-rdfc-2022"}
+      },
+      "expected": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "proof": {"type": "DataIntegrityProof", "cryptosuite": "eddsa-rdfc-2022"}
+      },
+      "error": null
+    },
+    {
+      "name": "wrong_envelope_media_type",
+      "field": "verifiableCredential",
+      "input": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["EnvelopedVerifiableCredential"],
+        "id": "data:application/ld+json,header.payload.signature"
+      },
+      "expected": null,
+      "error": "unsupported_serialization"
+    },
+    {
+      "name": "malformed_jws",
+      "field": "verifiableCredential",
+      "input": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["EnvelopedVerifiableCredential"],
+        "id": "data:application/vc+jwt,not-a-jws"
+      },
+      "expected": null,
+      "error": "invalid_envelope"
+    },
+    {
+      "name": "ordinary_json_without_data_integrity",
+      "field": "verifiableCredential",
+      "input": {"proof": {"cryptosuite": "eddsa-rdfc-2022"}},
+      "expected": null,
+      "error": "unsupported_serialization"
+    }
+  ],
+  "offers": [
+    {
+      "name": "valid_inline_offer",
+      "uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example%2Forg%2Forg-1%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23ldp-vc%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22pre-auth-1%22%7D%7D%7D",
+      "expected_issuer": "https://issuer.example/org/org-1",
+      "configuration_id": "EmployeeCredential#ldp-vc",
+      "pre_authorized_code": "pre-auth-1",
+      "error": null
+    },
+    {
+      "name": "cross_tenant_offer",
+      "uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example%2Forg%2Forg-2%22%2C%22credential_configuration_ids%22%3A%5B%22EmployeeCredential%23ldp-vc%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22pre-auth-1%22%7D%7D%7D",
+      "expected_issuer": "https://issuer.example/org/org-1",
+      "configuration_id": null,
+      "pre_authorized_code": null,
+      "error": "credential offer issuer does not match the selected organization"
+    },
+    {
+      "name": "missing_inline_offer",
+      "uri": "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.invalid%2Foffer",
+      "expected_issuer": "https://issuer.example/org/org-1",
+      "configuration_id": null,
+      "pre_authorized_code": null,
+      "error": "credential_offer_uri must contain one inline credential_offer"
+    }
+  ],
+  "evaluations": [
+    {
+      "name": "policy_allow",
+      "input": {"decision": "allow", "result": "passed", "checks": ["signature"]},
+      "status": 200,
+      "output": {
+        "verified": true,
+        "results": {"decision": "allow", "result": "passed", "checks": ["signature"]},
+        "problemDetails": []
+      },
+      "error": null
+    },
+    {
+      "name": "policy_deny",
+      "input": {"decision": "deny", "result": "failed"},
+      "status": 422,
+      "output": {"verified": false, "errors": ["verification_failed"]},
+      "error": null
+    },
+    {
+      "name": "invalid_policy_shape",
+      "input": ["not", "an", "object"],
+      "status": 502,
+      "output": null,
+      "error": "invalid_policy_response"
+    }
+  ],
+  "issued_credentials": [
+    {
+      "name": "native_data_integrity_credential",
+      "issuer_did": "did:web:issuer.example",
+      "input": {
+        "credentials": [
+          {
+            "format": "ldp_vc",
+            "credential": {
+              "@context": ["https://www.w3.org/ns/credentials/v2"],
+              "type": ["VerifiableCredential"],
+              "issuer": "did:web:issuer.example",
+              "credentialSubject": {"id": "did:example:subject"},
+              "proof": {"type": "DataIntegrityProof", "cryptosuite": "eddsa-rdfc-2022"}
+            }
+          }
+        ]
+      },
+      "expected_issuer": "did:web:issuer.example",
+      "error": null
+    },
+    {
+      "name": "wrong_issuer_fails_closed",
+      "issuer_did": "did:web:issuer.example",
+      "input": {
+        "credentials": [
+          {
+            "format": "ldp_vc",
+            "credential": {
+              "issuer": {"id": "did:web:other.example"},
+              "proof": {"type": "DataIntegrityProof", "cryptosuite": "eddsa-rdfc-2022"}
+            }
+          }
+        ]
+      },
+      "expected_issuer": null,
+      "error": "invalid_issued_credential"
+    },
+    {
+      "name": "multiple_credentials_fail_closed",
+      "issuer_did": "did:web:issuer.example",
+      "input": {"credentials": [{"format": "ldp_vc"}, {"format": "ldp_vc"}]},
+      "expected_issuer": null,
+      "error": "invalid_issued_credential"
+    }
+  ]
+}

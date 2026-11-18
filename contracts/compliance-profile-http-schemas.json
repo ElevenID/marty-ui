@@ -1,0 +1,1207 @@
+{
+  "runtime__compliance_profile_create_request": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "organization_id": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "pattern": "\\S"
+      },
+      "description": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 2000
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "compliance_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "credential_format": {
+        "type": "string",
+        "description": "Validated and canonicalized by the native credential-format parser; canonical values: MDOC, SD_JWT_VC, VC_JWT, JSON_LD, ZK_MDOC, VDS_NC, ICAO_EMRTD"
+      },
+      "issuance_protocol": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "OID4VCI_PRE_AUTH",
+              "OID4VCI_AUTH_CODE",
+              "DIRECT",
+              "CREDENTIAL_MANAGER",
+              "APPLE_WALLET",
+              "PHYSICAL_DOCUMENT"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "issuer_artifact_requirements": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requires_x509_cert": {
+                "type": "boolean"
+              },
+              "requires_did": {
+                "type": "boolean"
+              },
+              "requires_jwk": {
+                "type": "boolean"
+              },
+              "cert_key_usage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recommended_algorithms": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "verification_policy_set_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "trust_profile_constraints": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "compatible_profile_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required_source_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required_formats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "api_surface": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rel": {
+              "type": "string"
+            },
+            "path_template": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "auth_required": {
+              "type": "boolean"
+            },
+            "org_scoped_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "response_schema_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "standard_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "rel",
+            "path_template"
+          ]
+        }
+      },
+      "discoverable": {
+        "type": "boolean"
+      },
+      "is_system": {
+        "type": "boolean"
+      },
+      "frameworks": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "data_retention": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "retention_period": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "session",
+                  "1_day",
+                  "1_week",
+                  "1_month",
+                  "1_year",
+                  "3_years",
+                  "7_years",
+                  "indefinite"
+                ]
+              },
+              "retain_metadata_only": {
+                "type": "boolean"
+              },
+              "anonymize_after_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "deletion_confirmation_required": {
+                "type": "boolean"
+              },
+              "backup_retention_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "consent_requirement": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consent_type": {
+                "type": "string",
+                "enum": [
+                  "explicit",
+                  "implicit",
+                  "opt_out",
+                  "none"
+                ]
+              },
+              "consent_text": {
+                "type": "string"
+              },
+              "consent_version": {
+                "type": "string"
+              },
+              "require_re_consent_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "allow_partial_consent": {
+                "type": "boolean"
+              },
+              "track_consent_history": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "audit_configuration": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "audit_level": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "standard",
+                  "detailed",
+                  "forensic"
+                ]
+              },
+              "log_credential_access": {
+                "type": "boolean"
+              },
+              "log_verification_results": {
+                "type": "boolean"
+              },
+              "log_consent_changes": {
+                "type": "boolean"
+              },
+              "log_data_exports": {
+                "type": "boolean"
+              },
+              "tamper_evident": {
+                "type": "boolean"
+              },
+              "retention_days": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "data_minimization_rules": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "applies_to_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "object",
+              "description": "Native validation rejects private key material recursively."
+            }
+          },
+          "required": [
+            "description"
+          ]
+        }
+      },
+      "jurisdictional_constraints": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "allowed_countries": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocked_countries": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "allowed_data_regions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "data_residency_required": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      "age_verification": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "minimum_age": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "verification_method": {
+                "type": "string"
+              },
+              "allow_credential_expiry_check": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "system_profile": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "description": "Native create DTO. An authorized nonempty organization is required by the service; organization profiles start DRAFT. System ownership fields may only be false. Internal policy sections are accepted but are not returned in public metadata."
+  },
+  "runtime__compliance_profile_update_request": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "\\S"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 2000
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "compliance_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "credential_format": {
+        "anyOf": [
+          {
+            "type": "string",
+            "description": "Validated and canonicalized by the native credential-format parser; canonical values: MDOC, SD_JWT_VC, VC_JWT, JSON_LD, ZK_MDOC, VDS_NC, ICAO_EMRTD"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "issuance_protocol": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "OID4VCI_PRE_AUTH",
+              "OID4VCI_AUTH_CODE",
+              "DIRECT",
+              "CREDENTIAL_MANAGER",
+              "APPLE_WALLET",
+              "PHYSICAL_DOCUMENT"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "issuer_artifact_requirements": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requires_x509_cert": {
+                "type": "boolean"
+              },
+              "requires_did": {
+                "type": "boolean"
+              },
+              "requires_jwk": {
+                "type": "boolean"
+              },
+              "cert_key_usage": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recommended_algorithms": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "verification_policy_set_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "trust_profile_constraints": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "compatible_profile_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required_source_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "required_formats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "api_surface": {
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "rel": {
+                  "type": "string"
+                },
+                "path_template": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ]
+                },
+                "auth_required": {
+                  "type": "boolean"
+                },
+                "org_scoped_path": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "response_schema_ref": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "standard_ref": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "rel",
+                "path_template"
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "discoverable": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "is_system": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "frameworks": {
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "data_retention": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "retention_period": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "session",
+                  "1_day",
+                  "1_week",
+                  "1_month",
+                  "1_year",
+                  "3_years",
+                  "7_years",
+                  "indefinite"
+                ]
+              },
+              "retain_metadata_only": {
+                "type": "boolean"
+              },
+              "anonymize_after_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "deletion_confirmation_required": {
+                "type": "boolean"
+              },
+              "backup_retention_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "consent_requirement": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consent_type": {
+                "type": "string",
+                "enum": [
+                  "explicit",
+                  "implicit",
+                  "opt_out",
+                  "none"
+                ]
+              },
+              "consent_text": {
+                "type": "string"
+              },
+              "consent_version": {
+                "type": "string"
+              },
+              "require_re_consent_days": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "allow_partial_consent": {
+                "type": "boolean"
+              },
+              "track_consent_history": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "audit_configuration": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "audit_level": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "standard",
+                  "detailed",
+                  "forensic"
+                ]
+              },
+              "log_credential_access": {
+                "type": "boolean"
+              },
+              "log_verification_results": {
+                "type": "boolean"
+              },
+              "log_consent_changes": {
+                "type": "boolean"
+              },
+              "log_data_exports": {
+                "type": "boolean"
+              },
+              "tamper_evident": {
+                "type": "boolean"
+              },
+              "retention_days": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "data_minimization_rules": {
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "applies_to_claims": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "action": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Native validation rejects private key material recursively."
+                }
+              },
+              "required": [
+                "description"
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "jurisdictional_constraints": {
+        "anyOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "allowed_countries": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "blocked_countries": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "allowed_data_regions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "data_residency_required": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "age_verification": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "minimum_age": {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              "verification_method": {
+                "type": "string"
+              },
+              "allow_credential_expiry_check": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "description": "Sparse native update DTO. Omission or null preserves the stored field. Explicit false, empty strings, arrays and objects are changes subject to native validation. System profiles are immutable; organization/status/ID/timestamps are not editable here."
+  },
+  "runtime__compliance_profile_response": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "organization_id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "pattern": "\\S"
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "compliance_code": {
+        "type": "string"
+      },
+      "credential_format": {
+        "type": "string",
+        "description": "Validated and canonicalized by the native credential-format parser; canonical values: MDOC, SD_JWT_VC, VC_JWT, JSON_LD, ZK_MDOC, VDS_NC, ICAO_EMRTD"
+      },
+      "issuance_protocol": {
+        "type": "string",
+        "enum": [
+          "OID4VCI_PRE_AUTH",
+          "OID4VCI_AUTH_CODE",
+          "DIRECT",
+          "CREDENTIAL_MANAGER",
+          "APPLE_WALLET",
+          "PHYSICAL_DOCUMENT"
+        ]
+      },
+      "issuer_artifact_requirements": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "requires_x509_cert": {
+            "type": "boolean"
+          },
+          "requires_did": {
+            "type": "boolean"
+          },
+          "requires_jwk": {
+            "type": "boolean"
+          },
+          "cert_key_usage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommended_algorithms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "requires_x509_cert",
+          "requires_did",
+          "requires_jwk",
+          "cert_key_usage",
+          "recommended_algorithms"
+        ]
+      },
+      "verification_policy_set_id": {
+        "type": "string"
+      },
+      "trust_profile_constraints": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "compatible_profile_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_source_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "compatible_profile_types",
+          "required_source_types",
+          "required_formats"
+        ]
+      },
+      "api_surface": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rel": {
+              "type": "string"
+            },
+            "path_template": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "auth_required": {
+              "type": "boolean"
+            },
+            "org_scoped_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "response_schema_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "standard_ref": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "rel",
+            "path_template",
+            "method",
+            "auth_required",
+            "org_scoped_path",
+            "response_schema_ref",
+            "standard_ref"
+          ]
+        }
+      },
+      "discoverable": {
+        "type": "boolean"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "DRAFT",
+          "ACTIVE",
+          "SUSPENDED",
+          "DEPRECATED"
+        ]
+      },
+      "is_system": {
+        "type": "boolean"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "updated_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "credential_format",
+      "trust_profile_constraints",
+      "api_surface",
+      "discoverable",
+      "status",
+      "is_system",
+      "created_at",
+      "updated_at"
+    ],
+    "description": "Actual native public metadata projection. Seven internal policy enforcement sections are intentionally omitted. This is a partial implementation of the pinned protocol compliance-profile entity; protocol-only features are not implied."
+  }
+}

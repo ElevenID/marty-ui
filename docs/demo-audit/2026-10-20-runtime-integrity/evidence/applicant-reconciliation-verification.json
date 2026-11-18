@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "topic": "Bind asynchronous applicant reconciliation to its observed issuance transaction",
+  "recordedAt": "2026-10-20T07:55:03.633555+00:00",
+  "status": "LOCAL_SOURCE_VERIFIED",
+  "sourceRepository": "ElevenID/marty-ui",
+  "branch": "audit/demo-runtime-integrity-2026-10-20",
+  "baseRevision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+  "priorClaimCommit": "e67364c367a09d184246f7c7af83317beb9f4d1e",
+  "implementationCommit": "23331ae1bcf5201cd514f5de4dfd5cbc5a627d9d",
+  "ownedChangedPaths": [
+    "rust/services/applicant/src/http.rs",
+    "rust/services/applicant/src/service.rs",
+    "rust/services/applicant/tests/application_behavior.rs",
+    "rust/services/applicant/tests/http_behavior.rs"
+  ],
+  "observedProblem": [
+    "sync_issuance captured the current transaction ID before an asynchronous issuer GET, but passed only application ID and returned status into the mutation.",
+    "A concurrently completed operator reissue replaced the transaction and offer while that old GET remained in flight.",
+    "The old revoked response then expired the replacement offer; the old issued response marked the replacement offer and applicant credentialed, despite the replacement transaction still being pending."
+  ],
+  "implementation": {
+    "expectedTransactionIdRequiredByServiceCall": true,
+    "comparisonUnderStoreWriteLock": true,
+    "comparisonPrecedesLocalExpiryAndStatusMutation": true,
+    "staleReadReturnsCurrentApplicationWithoutPersistence": true,
+    "httpBranchesCarryTheObservedBinding": [
+      "normal issuer response",
+      "issuer transaction not found",
+      "absent, empty or local transaction ID without remote read"
+    ],
+    "preservedBehavior": "Matching current transaction responses retain existing status and expiry reconciliation semantics. There is no new remote request, cancellation, issuance, or revocation side effect.",
+    "sharedRustGuard": "HTTP adapters pass the observed binding; the shared ApplicantService method performs the comparison and all permitted mutations under one write lock."
+  },
+  "verification": [
+    {
+      "phase": "reproduce before production change",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --test http_behavior issuance_reconciliation_ -- --nocapture",
+      "log": "applicant-reconciliation-before.log",
+      "exitCode": 101,
+      "passed": 1,
+      "failed": 2,
+      "ignored": 0,
+      "cases": {
+        "issuance_reconciliation_discards_old_revoked_response_after_reissue": "FAIL: old revoked response mutated the replacement offer",
+        "issuance_reconciliation_discards_old_issued_response_after_reissue": "FAIL: old issued response mutated the replacement offer and applicant",
+        "issuance_reconciliation_applies_current_transaction_responses": "PASS: legitimate current transaction response control"
+      },
+      "productionFilesMatchedObservedCommittedHead": true,
+      "productionBaselineRevision": "0943e115b987be1208238c61dcb1437c16f23fe0",
+      "exactInputSourceHashes": "applicant-reconciliation-baseline.json",
+      "boundary": "The HTTP tests were added before production changes and subsequently formatted. The local-expiry binding test was added after the service signature changed, and is not claimed as part of this before-run input."
+    },
+    {
+      "phase": "final focused verification",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --test application_behavior --test http_behavior --test issuance_behavior --test domain_behavior",
+      "log": "applicant-reconciliation-after.log",
+      "exitCode": 0,
+      "passed": 42,
+      "failed": 0,
+      "ignored": 0,
+      "suites": {
+        "application_behavior": 18,
+        "http_behavior": 12,
+        "issuance_behavior": 6,
+        "domain_behavior": 6
+      },
+      "newNamedCasesThisCommit": 4,
+      "newNamedCasesAcrossThreeApplicantCommits": 18,
+      "existingNamedCasesBeforeThisContinuation": 24,
+      "overlap": "The previous 38 claim/withdrawal test cases are included in these 42; repeated executions are not additional unique cases.",
+      "focusedProof": [
+        "The issuer fixture blocks an actual HTTP transaction read; the real operator /issue route completes a replacement through the real service and a controlled FlowProvider; then the old HTTP response is released.",
+        "Both stale revoked and stale issued responses return the replacement OFFERED/OFFER_READY DTO, preserve the whole store and timestamps, and perform zero additional persistence writes.",
+        "Current revoked and issued responses still produce the established EXPIRED and CLAIMED projections and persist normally.",
+        "Absent, empty, local and prior remote transaction bindings are checked before local expiry; the matching current binding can still expire the offer normally."
+      ]
+    },
+    {
+      "phase": "source whitespace",
+      "command": "git diff --check -- rust/services/applicant",
+      "exitCode": 0
+    }
+  ],
+  "executionEnvironment": {
+    "network": "Offline Cargo; ephemeral localhost Axum fixtures only, using synthetic data.",
+    "loopbackApproval": "Automatic review permitted the focused test processes to bind ephemeral localhost listeners. No approval rejection or live-service contact occurred.",
+    "sharedRustTargetReleased": true
+  },
+  "logFiles": {
+    "applicant-reconciliation-before.log": {
+      "sha256": "16f986d8ab47eb5078140dd619803a59117aed536f277fee576bbe0ca3cf945b",
+      "bytes": 8453
+    },
+    "applicant-reconciliation-after.log": {
+      "sha256": "45015b35c396a946649745883b8973a63a2d12ed7928a65a4b78bfadbe036c7e",
+      "bytes": 4416
+    }
+  },
+  "baselineEvidence": {
+    "file": "applicant-reconciliation-baseline.json",
+    "sha256": "85b54c59a81dc809a0a6271b7b1e47b9e7636805138c03dadb45909fea37ec6b",
+    "bytes": 716,
+    "input": {
+      "phase": "Before reconciliation production repair",
+      "observedHead": "0943e115b987be1208238c61dcb1437c16f23fe0",
+      "productionFilesEqualCommittedSource": true,
+      "sourceFiles": [
+        {
+          "path": "rust/services/applicant/src/http.rs",
+          "bytes": 55205,
+          "sha256": "7a565c4b85bf20505ea151a617d83601f8d03de6a60d8fb28bf989c77c0977e1"
+        },
+        {
+          "path": "rust/services/applicant/src/service.rs",
+          "bytes": 60344,
+          "sha256": "1623301eafafe8526aff80630fba729858eb3c8d845b3920d28583a9ffe69382"
+        },
+        {
+          "path": "rust/services/applicant/tests/http_behavior.rs",
+          "bytes": 30180,
+          "sha256": "f257df759317051923700cedd1977c9892588a482d1b0ba6e88dc0a1bc236191"
+        }
+      ]
+    }
+  },
+  "sourceFiles": [
+    {
+      "path": "rust/services/applicant/src/http.rs",
+      "sha256": "26fa44811cb2b991c43da13757c5d1bbeac19ad6dc59e9ea1ac195bfc40d0367",
+      "bytes": 55599,
+      "gitBlob": "826ddc14ec5a0e7e015774a3005b625503d53050"
+    },
+    {
+      "path": "rust/services/applicant/src/service.rs",
+      "sha256": "e94520b21e34bb91e9e9314ba78a6089a8115eb5afde16eef5b25accfb01c789",
+      "bytes": 60848,
+      "gitBlob": "d777d1d2aa57aec44df63541dfb3185057bebf10"
+    },
+    {
+      "path": "rust/services/applicant/tests/application_behavior.rs",
+      "sha256": "6a219dae7d75ca9f5830fdd41a1ead72bf6519ee7cc01c85059a9c782b53f62a",
+      "bytes": 34845,
+      "gitBlob": "33f27b290812a095e1f584fa4e62d1d68528994a"
+    },
+    {
+      "path": "rust/services/applicant/tests/http_behavior.rs",
+      "sha256": "afaef17f1a98003dfa6c1f7a5659c649397411c71db61af1b1e04430c338edb2",
+      "bytes": 30317,
+      "gitBlob": "5f95b98f2c18c168fe7eff462e354cb560b692e7"
+    },
+    {
+      "path": "rust/services/applicant/src/issuance.rs",
+      "sha256": "ee50d824e4830fdc9961a5688d3974f12f8e2001ad5659d44b83085aa0034fde",
+      "bytes": 11652,
+      "gitBlob": "e23942a9841301223898c48dca633893b76cc1f1"
+    },
+    {
+      "path": "rust/services/applicant/tests/issuance_behavior.rs",
+      "sha256": "13255c116bdf5761c8f64106c7308e9442557348175ba65ab08076626e4cc060",
+      "bytes": 6848,
+      "gitBlob": "22c9635a3f4deecf22e05b5e337a6c75d5f78bd1"
+    },
+    {
+      "path": "rust/services/applicant/tests/domain_behavior.rs",
+      "sha256": "48692c7b21e57e5f4f57aab323e03798a83d2bbf23c4ffd16c9438c2efbb477f",
+      "bytes": 7050,
+      "gitBlob": "1b87a9b42222fefdfb839503a39a99998c7a2df0"
+    },
+    {
+      "path": "rust/services/applicant/Cargo.toml",
+      "sha256": "c8c90c533bc7d2edb85a9d147a69e68b0bbee08028e6adc087e41395f1e655e7",
+      "bytes": 931,
+      "gitBlob": "5a64670964fa870d7e5f46243c62ee58b8d0e530"
+    },
+    {
+      "path": "rust/Cargo.toml",
+      "sha256": "a2407d78f8577263f5963270557da8063f93c23a8d1a452b35f6a2b78e68a6a5",
+      "bytes": 6733,
+      "gitBlob": "e137dcd100ef913a687e5b93811565432f3f2df9"
+    },
+    {
+      "path": "rust/Cargo.lock",
+      "sha256": "27053750b90bc41a547b3300734ab40745c35ea5b9cef9c075af767489c45750",
+      "bytes": 210829,
+      "gitBlob": "a51d4bbfcad18aaa25592aeeaefc6439ac9897e5"
+    },
+    {
+      "path": "contracts/applicant-service-behavior.json",
+      "sha256": "d11fe61311b03b2b9dd668acda48d53733273656824f4ff5dcd6020e48895998",
+      "bytes": 5097,
+      "gitBlob": "b112665a18f753929e27d878aacbfb6018a2f105"
+    }
+  ],
+  "priorEvidence": [
+    {
+      "file": "applicant-withdrawal-verification.json",
+      "sha256": "8ee7071171b57e11863029c338f422306cc188d9f88bc36897cb5022c2e6c2cc",
+      "bytes": 7666,
+      "preservedUnchanged": true
+    },
+    {
+      "file": "applicant-claim-verification.json",
+      "sha256": "9f5bdb6f974ae52b778bad1ef074743769c08bdf2a187bdc7d3a92336d340843",
+      "bytes": 12279,
+      "preservedUnchanged": true
+    }
+  ],
+  "followupExplanation": "Four applicant files from the previous claim evidence subsequently changed in this separately committed reconciliation repair. Their final hashes are recorded here, and the final 42-test run repeats all previous 38 applicant cases.",
+  "remainingBoundaries": [
+    "This guard discards a response for a different transaction after replacement; existing reconciliation behavior for the same transaction remains unchanged.",
+    "The change does not make transaction cancellation and operator reissue one atomic operation. Exact owned old/new transaction proof remains required in demo helpers.",
+    "No deployment, live beta flow, physical or native wallet, external Canvas delivery, resource cleanup, or real credential issuance was exercised.",
+    "Native server retirement remains NOT_PERFORMED.",
+    "No UI, demo script, documentation, Cargo manifest, dependency, lockfile, or frozen route inventory files were changed in this commit."
+  ]
+}

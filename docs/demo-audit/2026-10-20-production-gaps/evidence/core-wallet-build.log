@@ -1,0 +1,14 @@
+warning: patch `ssi v0.16.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-bbs v0.2.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-did-test v0.3.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-ssh v0.3.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-status v0.8.1 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-tzkey v0.4.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-ucan v0.5.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-zcap-ld v0.8.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling marty-test-wallet v0.2.2 (/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation/marty-test-wallet)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.54s

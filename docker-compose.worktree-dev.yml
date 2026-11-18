@@ -1,0 +1,49 @@
+# Local-only port isolation. Use with scripts/dev/worktree_stack.py, never for
+# a published image or protected acceptance evidence.
+services:
+  postgres:
+    ports: !override ["127.0.0.1:${WT_POSTGRES_PORT:?}:5432"]
+  redis:
+    ports: !override ["127.0.0.1:${WT_REDIS_PORT:?}:6379"]
+  keycloak:
+    ports: !override ["127.0.0.1:${WT_KEYCLOAK_PORT:?}:8080"]
+  mailpit:
+    ports: !override
+      - "127.0.0.1:${WT_MAILPIT_PORT:?}:8025"
+      - "127.0.0.1:${WT_SMTP_PORT:?}:1025"
+  openbao:
+    ports: !override ["127.0.0.1:${WT_OPENBAO_PORT:?}:8200"]
+  gateway:
+    ports: !override ["127.0.0.1:${WT_GATEWAY_PORT:?}:8000"]
+  auth:
+    ports: !override []
+  organization:
+    ports: !override []
+  credential-template:
+    ports: !override []
+  trust-profile:
+    ports: !override []
+  applicant:
+    ports: !override []
+  notification:
+    ports: !override []
+  compliance-profile:
+    ports: !override []
+  presentation-policy:
+    ports: !override []
+  deployment-profile:
+    ports: !override []
+  flow:
+    ports: !override []
+  issuance:
+    ports: !override []
+  revocation-profile:
+    ports: !override []
+  device-registration:
+    ports: !override []
+  event-stream:
+    ports: !override []
+  verification:
+    ports: !override []
+  envoy:
+    ports: !override []

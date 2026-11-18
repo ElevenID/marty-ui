@@ -1,0 +1,183 @@
+# =============================================================================
+# Dependencies
+# =============================================================================
+node_modules/
+.node_modules-incomplete-*/
+.pnp
+.pnp.js
+.pnpm-store/
+
+# =============================================================================
+# Build Outputs
+# =============================================================================
+dist/
+ui/dist-selfhost/
+build/
+**/target/
+out/
+.next/
+*.tsbuildinfo
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+pytest-cache-files-*/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+*.egg
+
+# =============================================================================
+# Bun
+# =============================================================================
+.bun/
+bun.lockb
+
+# Keep text-based bun.lock for reproducible installs
+# !bun.lock
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Cloudflare Tunnel configuration (contains secrets)
+.env.tunnel
+.env.tunnel-auth
+
+# Oracle Cloud production secrets (NEVER commit)
+.env.production
+.secrets/
+
+# Keep example env files tracked
+!.env.example
+!.env*.example
+!.env.production.example
+
+# =============================================================================
+# IDE & Editors
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+marty-recovery.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# =============================================================================
+# Testing
+# =============================================================================
+test-results/
+playwright-report/
+playwright/.cache/
+coverage/
+storybook-static/
+.vitest/
+tests/artifacts/
+
+# Runtime state and generated browser evidence belong in local volumes or CI artifacts.
+.selfhost-state/
+.beta-workload-identity/
+.dev-integration-secret-tls/
+tests/demo-recordings/
+tests/demo-recordings-report/
+
+# =============================================================================
+# Debug / Development Scripts
+# =============================================================================
+debug-login.js
+debug-*.png
+tests/wallet-debug-*.png
+
+# =============================================================================
+# Temporary Files
+# =============================================================================
+*.tmp
+.cache/
+.temp/
+tmp/
+
+# Vite timestamp cache files
+vite.config.ts.timestamp*
+
+# Lint/debug output
+/ui/build_log.txt
+/ui/build_output.txt
+eslint_output*
+full_eslint_output*
+api.log
+
+# Scratch / workspace debug files
+temp.html
+temp.txt
+docker_compose_results.txt
+
+# =============================================================================
+# OS Files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# =============================================================================
+# Core-owned native wheels are resolved from digest-pinned releases.
+# =============================================================================
+wheels/
+
+# WASM build artifact
+ui/src/wasm/marty-biometrics-pkg/
+
+# Generated diagnostics and per-task implementation evidence
+tests/pytest-results/
+tests/wallet-debug.png
+.hermes/implementation_reuse_review.yaml
+
+# Local qualification receipts are generated output.
+
+# Generated implementation/review evidence: keep out of source control.
+# Retain only for active review; see ElevenID/.github local-evidence retention.
+/artifacts/
+/_codex-artifacts/
+/_codex-diagnostics/
+/_codex-ci-diagnostics/
+/.codex-validation/
+/_codex-validation/
+/test-temp/
+/.hermes/implementation_reuse_review.yaml
+/_codex-worktrees/
+/worktrees/
+/reports/generated/

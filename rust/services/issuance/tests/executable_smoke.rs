@@ -1,0 +1,737 @@
+use std::{process::Child, time::Duration};
+
+use mmf_platform::{KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles};
+use serde_json::{json, Value};
+
+use marty_issuance_service::issuance_proto::{
+    issuance_service_client::IssuanceServiceClient, CredentialLifecycleRequest,
+    ExchangeTokenRequest, GetCredentialStatusRequest, GetOfferRequest, GetTransactionRequest,
+    HealthCheckRequest, InitiateIssuanceRequest, IssueCredentialRequest, ListTransactionsRequest,
+    StreamCredentialEventsRequest,
+};
+
+#[path = "support/issuance_process.rs"]
+mod issuance_process;
+
+use issuance_process::{
+    bounded_http_client, isolated_smoke_command, reserve_port, smoke_command,
+    wait_for_health_with_client, ChildGuard,
+};
+
+/// Read a fixed-size snapshot without moving the child writer's shared file
+/// offset. This is also safe while an unhealthy child remains alive.
+fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
+    let length = stderr.metadata()?.len();
+    let start = length.saturating_sub(16 * 1024);
+    let mut bytes = vec![0; (length - start) as usize];
+    let mut filled = 0;
+    while filled < bytes.len() {
+        #[cfg(unix)]
+        let count = {
+            use std::os::unix::fs::FileExt;
+            stderr.read_at(&mut bytes[filled..], start + filled as u64)?
+        };
+        #[cfg(windows)]
+        let count = {
+            use std::os::windows::fs::FileExt;
+            stderr.seek_read(&mut bytes[filled..], start + filled as u64)?
+        };
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    bytes.truncate(filled);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn retryable_listener_bind_failure(terminal_failure: bool, diagnostic: &str) -> bool {
+    terminal_failure && diagnostic.contains("kind: AddrInUse")
+}
+
+/// A released ephemeral port may be claimed before the child reaches bind.
+/// Keep a bounded diagnostic from a terminal child; callers retry only the
+/// classified collision and report every other failure as before.
+struct TerminalStartupFailure {
+    bind_collision: bool,
+    diagnostic: String,
+}
+
+fn terminal_startup_failure(
+    child: &mut Child,
+    stderr: &std::fs::File,
+) -> Option<TerminalStartupFailure> {
+    let status = child.try_wait().ok().flatten()?;
+    if status.success() {
+        return None;
+    }
+    let diagnostic = bounded_startup_diagnostic(stderr).ok()?;
+    Some(TerminalStartupFailure {
+        bind_collision: retryable_listener_bind_failure(true, &diagnostic),
+        diagnostic,
+    })
+}
+
+async fn wait_for_health(port: u16) -> Option<Value> {
+    let client = reqwest::Client::new();
+    wait_for_health_with_client(port, &client).await
+}
+
+/// Return the real, dedicated PostgreSQL fixture required by production
+/// startup migration. Keeping this executable-test policy local prevents other
+/// process fixtures from inheriting or contacting this database accidentally.
+fn smoke_database_url() -> Option<String> {
+    let Ok(database_url) = std::env::var("ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL") else {
+        eprintln!(
+            "skipping executable smoke test; ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL is not set"
+        );
+        return None;
+    };
+    let parsed = url::Url::parse(&database_url).expect("valid executable smoke database URL");
+    assert!(
+        parsed.path().trim_start_matches('/').ends_with("_test"),
+        "executable smoke database must be a dedicated *_test database"
+    );
+    Some(database_url)
+}
+
+fn flow_issuance_fixture(name: &str) -> String {
+    std::env::var(format!("MARTY_TEST_FLOW_ISSUANCE_{name}"))
+        .unwrap_or_else(|_| panic!("missing disposable Flow/Issuance {name} fixture"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable PostgreSQL after Organization and Credential Template migrations, and scripts/with_disposable_event_stream_kms.py --profile flow-issuance"]
+async fn executable_serves_issuance_rpc_with_remote_key_mutual_tls() {
+    let database_url = smoke_database_url().expect("dedicated disposable issuance database");
+    assert!(
+        std::process::Command::new(issuance_process::issuance_binary())
+            .arg("migrate")
+            .env("DATABASE_URL", &database_url)
+            .status()
+            .expect("run Issuance schema-owner migration")
+            .success(),
+        "the real Issuance schema-owner migration must succeed"
+    );
+    let (http_reservation, http_port) = reserve_port();
+    let (grpc_reservation, grpc_port) = reserve_port();
+    let service_token = flow_issuance_fixture("SERVICE_TOKEN");
+    let ca = std::path::PathBuf::from(flow_issuance_fixture("WORKLOAD_CA"));
+    let mut command = smoke_command(http_port, grpc_port);
+    command
+        .env("DATABASE_URL", database_url)
+        .env("GRPC_SERVICE_TOKEN", &service_token)
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            flow_issuance_fixture("ISSUANCE_SERVER_CERT"),
+        )
+        .env("GRPC_WORKLOAD_TLS_CA_CERT", &ca)
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+            flow_issuance_fixture("KMS_URL"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            flow_issuance_fixture("KMS_CA"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            flow_issuance_fixture("ISSUANCE_SERVER_KMS_TOKEN_FILE"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            flow_issuance_fixture("ISSUANCE_SERVER_KMS_KEY_NAME"),
+        )
+        .env("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1");
+    drop(http_reservation);
+    drop(grpc_reservation);
+    let mut child = ChildGuard(command.spawn().expect("start real Issuance executable"));
+    let client = bounded_http_client(Duration::from_secs(2));
+    let health = tokio::time::timeout(
+        Duration::from_secs(15),
+        wait_for_health_with_client(http_port, &client),
+    )
+    .await
+    .expect("bounded Issuance executable readiness");
+    assert_eq!(
+        health,
+        Some(json!({"status":"healthy", "service":"issuance-service"})),
+        "Issuance exited before readiness: {:?}",
+        child.0.try_wait().unwrap()
+    );
+    let client_identity = OpenBaoTlsIdentityFiles {
+        certificate_chain_file: flow_issuance_fixture("FLOW_CLIENT_CERT").into(),
+        kms_ca_cert_file: flow_issuance_fixture("KMS_CA").into(),
+        kms_endpoint: flow_issuance_fixture("KMS_URL"),
+        kms_token_file: flow_issuance_fixture("FLOW_CLIENT_KMS_TOKEN_FILE").into(),
+        kms_key_name: flow_issuance_fixture("FLOW_CLIENT_KMS_KEY_NAME"),
+        kms_key_version: 1,
+        request_timeout: Duration::from_secs(10),
+        max_concurrent_signs: 16,
+    };
+    let target = format!("https://localhost:{grpc_port}");
+    let ca_only = tonic::transport::Endpoint::from_shared(target.clone())
+        .unwrap()
+        .tls_config(tonic::transport::ClientTlsConfig::new().ca_certificate(
+            tonic::transport::Certificate::from_pem(std::fs::read(&ca).unwrap()),
+        ))
+        .unwrap()
+        .connect_timeout(Duration::from_secs(5))
+        .connect()
+        .await;
+    if let Ok(channel) = ca_only {
+        assert!(
+            tonic_health::pb::health_client::HealthClient::new(channel)
+                .check(tonic_health::pb::HealthCheckRequest {
+                    service: String::new(),
+                })
+                .await
+                .is_err(),
+            "Issuance executable must reject a client without its certificate"
+        );
+    }
+    let channel_result = client_identity
+        .grpc_channel_connected(&target, &ca, KeylessGrpcTransportOptions::default())
+        .await;
+    assert!(
+        channel_result.is_ok(),
+        "remote-key Flow identity must connect to the Issuance executable: {:?}; process status: {:?}",
+        channel_result.as_ref().err(),
+        child.0.try_wait().unwrap()
+    );
+    let channel = channel_result.unwrap();
+    let mut issuance = IssuanceServiceClient::new(channel);
+    assert_eq!(
+        issuance
+            .health_check(HealthCheckRequest {})
+            .await
+            .expect_err("business RPC requires a service token")
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut request = tonic::Request::new(HealthCheckRequest {});
+    request
+        .metadata_mut()
+        .insert("x-service-token", service_token.parse().unwrap());
+    assert_eq!(
+        issuance
+            .health_check(request)
+            .await
+            .unwrap()
+            .into_inner()
+            .status,
+        "serving"
+    );
+}
+
+#[tokio::test]
+async fn executable_serves_unrelated_health_with_missing_or_malformed_didcomm_ca() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
+    use std::io::Write;
+    struct OwnedFile(std::path::PathBuf);
+    impl Drop for OwnedFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let path = std::env::temp_dir().join(format!(
+        "marty-didcomm-ca-smoke-{}.pem",
+        uuid::Uuid::new_v4()
+    ));
+    assert!(!path.exists());
+    let mut file_guard = None;
+    for malformed in [false, true] {
+        if malformed {
+            let mut file = std::fs::File::create_new(&path).unwrap();
+            file_guard = Some(OwnedFile(path.clone()));
+            file.write_all(b"synthetic-invalid-ca").unwrap();
+        }
+        let (http_reservation, port) = reserve_port();
+        let (_grpc_reservation, grpc_port) = reserve_port();
+        let mut command = isolated_smoke_command(port, grpc_port);
+        command
+            .env("DIDCOMM_TLS_CA_FILE", &path)
+            .env("DATABASE_URL", &database_url);
+        drop(http_reservation);
+        let child = ChildGuard(
+            command
+                .spawn()
+                .expect("start isolated issuance with deferred CA"),
+        );
+        let client = bounded_http_client(Duration::from_secs(2));
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                wait_for_health_with_client(port, &client)
+            )
+            .await
+            .expect("bounded unrelated health readiness"),
+            Some(json!({"status":"healthy", "service":"issuance-service"})),
+        );
+        drop(child);
+    }
+    drop(file_guard);
+    assert!(!path.exists(), "owned malformed CA cleanup");
+}
+
+#[tokio::test]
+async fn executable_serves_health_readiness_and_version() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
+    // Startup validates or migrates only the dedicated *_test database before
+    // binding. A released ephemeral port can be claimed during that interval.
+    // Keep all service assertions below; repeat only a terminal bind collision.
+    let mut retries = 0;
+    let (_child, port, grpc_port, health) = loop {
+        let (http_reservation, port) = reserve_port();
+        let (grpc_reservation, grpc_port) = reserve_port();
+        assert_ne!(port, grpc_port);
+        let stderr = tempfile::tempfile().expect("owned smoke stderr");
+        let mut command = smoke_command(port, grpc_port);
+        command
+            .env("DATABASE_URL", &database_url)
+            .env(
+                "GRPC_SERVICE_TOKEN",
+                "executable-smoke-service-token-at-least-32-bytes",
+            )
+            .stderr(stderr.try_clone().expect("clone owned smoke stderr"));
+        drop(http_reservation);
+        drop(grpc_reservation);
+        let mut child = ChildGuard(command.spawn().expect("start issuance candidate"));
+        let health = wait_for_health(port).await;
+        if let Some(failure) = terminal_startup_failure(&mut child.0, &stderr) {
+            if retries == 0 && failure.bind_collision {
+                retries += 1;
+                drop(child);
+                continue;
+            }
+            eprintln!("Issuance smoke startup failed: {}", failure.diagnostic);
+        } else if health.is_none() {
+            // A live but unhealthy child is never retried. Preserve the same
+            // actionable startup logs formerly inherited on stderr.
+            eprintln!(
+                "Issuance smoke unhealthy: {}",
+                bounded_startup_diagnostic(&stderr)
+                    .unwrap_or_else(|_| "<stderr unavailable>".into())
+            );
+        }
+        break (child, port, grpc_port, health);
+    };
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+    let ready = client
+        .get(format!("{base}/ready"))
+        .send()
+        .await
+        .expect("readiness");
+    let version = client
+        .get(format!("{base}/version"))
+        .send()
+        .await
+        .expect("version")
+        .json::<Value>()
+        .await
+        .expect("version json");
+    let grpc_uri = format!("http://127.0.0.1:{grpc_port}");
+    let grpc_status = async {
+        for _ in 0..50 {
+            if let Ok(channel) = tonic::transport::Endpoint::from_shared(grpc_uri.clone())
+                .expect("gRPC endpoint")
+                .connect()
+                .await
+            {
+                let mut health = tonic_health::pb::health_client::HealthClient::new(channel);
+                if let Ok(response) = health
+                    .check(tonic_health::pb::HealthCheckRequest {
+                        service: "marty.ui.issuance.v1.IssuanceService".to_owned(),
+                    })
+                    .await
+                {
+                    return Some(response.into_inner().status);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+    .await;
+    let channel = tonic::transport::Endpoint::from_shared(grpc_uri)
+        .expect("issuance gRPC endpoint")
+        .connect()
+        .await
+        .expect("issuance gRPC channel");
+    let mut issuance = IssuanceServiceClient::new(channel);
+    let mut authenticated_health = tonic::Request::new(HealthCheckRequest {});
+    authenticated_health.metadata_mut().insert(
+        "x-service-token",
+        "executable-smoke-service-token-at-least-32-bytes"
+            .parse()
+            .expect("service token metadata"),
+    );
+    assert_eq!(
+        issuance
+            .health_check(authenticated_health)
+            .await
+            .expect("authenticated issuance health")
+            .into_inner()
+            .status,
+        "serving"
+    );
+    macro_rules! assert_unauthenticated {
+        ($rpc:expr) => {
+            assert_eq!(
+                $rpc.await.expect_err("service token required").code(),
+                tonic::Code::Unauthenticated
+            );
+        };
+    }
+    assert_unauthenticated!(issuance.initiate_issuance(InitiateIssuanceRequest::default()));
+    assert_unauthenticated!(issuance.exchange_token(ExchangeTokenRequest::default()));
+    assert_unauthenticated!(issuance.issue_credential(IssueCredentialRequest::default()));
+    assert_unauthenticated!(issuance.get_offer(GetOfferRequest::default()));
+    assert_unauthenticated!(issuance.list_transactions(ListTransactionsRequest::default()));
+    assert_unauthenticated!(issuance.get_transaction(GetTransactionRequest::default()));
+    assert_unauthenticated!(issuance.revoke_credential(CredentialLifecycleRequest::default()));
+    assert_unauthenticated!(issuance.suspend_credential(CredentialLifecycleRequest::default()));
+    assert_unauthenticated!(issuance.reinstate_credential(CredentialLifecycleRequest::default()));
+    assert_unauthenticated!(issuance.get_credential_status(GetCredentialStatusRequest::default()));
+    assert_unauthenticated!(
+        issuance.stream_credential_events(StreamCredentialEventsRequest::default())
+    );
+    assert_unauthenticated!(issuance.health_check(HealthCheckRequest {}));
+    let issuer_metadata = client
+        .get(format!("{base}/.well-known/openid-credential-issuer"))
+        .send()
+        .await
+        .expect("issuer metadata")
+        .json::<Value>()
+        .await
+        .expect("issuer metadata json");
+    assert_eq!(
+        health,
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    assert_eq!(ready.status(), 200);
+    assert_eq!(
+        grpc_status,
+        Some(tonic_health::pb::health_check_response::ServingStatus::Serving as i32)
+    );
+    assert_eq!(version["service"], "issuance-service");
+    assert_eq!(version["version"], "9.8.7");
+    assert_eq!(version["build_revision"], "smoke-revision");
+    assert_eq!(
+        issuer_metadata["credential_issuer"],
+        "https://issuer.example"
+    );
+    assert_eq!(issuer_metadata["display"][0]["name"], "Example Issuer");
+}
+
+#[tokio::test]
+async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
+    let (http_listener, http_port) = reserve_port();
+    let (grpc_reservation, grpc_port) = reserve_port();
+    assert_ne!(http_port, grpc_port);
+    let mut command = smoke_command(http_port, grpc_port);
+    drop(http_listener);
+    let _child = ChildGuard(
+        command
+            .env("DATABASE_URL", &database_url)
+            .env("ISSUANCE_GRPC_ENABLED", "false")
+            .spawn()
+            .expect("start HTTP-only issuance candidate"),
+    );
+
+    assert_eq!(
+        wait_for_health(http_port).await,
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    drop(grpc_reservation);
+}
+
+/// Retired provider operations are absent from the actual executable router.
+/// Startup uses the disposable migration database; no provider is contacted.
+#[tokio::test]
+async fn executable_retired_provider_operations_return_not_found() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-canvas-operations.json"
+    ))
+    .unwrap();
+    let routes = contract["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 8);
+    let (http_reservation, port) = reserve_port();
+    let (_grpc_reservation, grpc_port) = reserve_port();
+    let mut command = isolated_smoke_command(port, grpc_port);
+    command
+        .stderr(std::process::Stdio::inherit())
+        .env("ISSUANCE_API_KEY", "synthetic-process-operations-key")
+        .env("DATABASE_URL", &database_url);
+    drop(http_reservation);
+    let child = ChildGuard(command.spawn().expect("start actual issuance process"));
+    let client = bounded_http_client(Duration::from_secs(2));
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_health_with_client(port, &client)
+        )
+        .await
+        .expect("bounded native process readiness"),
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+    let base = format!("http://127.0.0.1:{port}");
+    let mut covered = std::collections::BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        let method = route["method"].as_str().unwrap();
+        let path = route["path"]
+            .as_str()
+            .unwrap()
+            .replace("{application_id}", "synthetic-application")
+            .replace("{job_id}", "synthetic-job")
+            .replace("{review_id}", "synthetic-review");
+        assert!(!path.contains(['{', '}']));
+        assert!(covered.insert((method.to_owned(), path.clone())));
+        for wrong_key in [false, true] {
+            let request_id = format!("operations-auth-{index}-{wrong_key}");
+            let mut request = client
+                .request(
+                    method.parse().unwrap(),
+                    format!("{base}{}{path}", contract["route_prefix"].as_str().unwrap()),
+                )
+                .header("origin", "https://wallet.example")
+                .header("x-request-id", &request_id)
+                .header("x-organization-id", "synthetic-organization");
+            if method == "POST" {
+                // Valid JSON avoids exercising the separate pre-auth syntax
+                // error path on review resolution.
+                request = request.json(&json!({"action":"dismiss"}));
+            }
+            if wrong_key {
+                request = request.header("x-api-key", "synthetic-wrong-key");
+            }
+            let response = request.send().await.expect("owned process auth response");
+            assert_eq!(response.status(), 404, "route {index}");
+            assert_eq!(response.headers()["x-request-id"], request_id.as_str());
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                "https://wallet.example"
+            );
+            assert_eq!(
+                response.headers()["access-control-allow-credentials"],
+                "true"
+            );
+            assert_eq!(response.headers()["vary"], "Origin");
+        }
+    }
+    assert_eq!(covered.len(), 8);
+    let missing = client
+        .get(format!(
+            "{base}/v1/integrations/canvas/synthetic-unregistered-route"
+        ))
+        .header("x-api-key", "synthetic-process-operations-key")
+        .header("origin", "https://wallet.example")
+        .header("x-request-id", "operations-negative-route")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        missing.headers()["x-request-id"],
+        "operations-negative-route"
+    );
+    assert_eq!(
+        missing.headers()["access-control-allow-origin"],
+        "https://wallet.example"
+    );
+    drop(child);
+}
+
+/// Exercise main -> IssuanceServices.with_internal_applications ->
+/// router_with_all_services for the retained projection of the frozen routes.
+/// Authentication must finish before retained repository operations. The two
+/// retired provider reconcilers must stay absent, even with the configured key.
+/// Startup itself uses the real migration database.
+#[tokio::test]
+async fn executable_mounts_complete_internal_application_contract() {
+    let Some(database_url) = smoke_database_url() else {
+        return;
+    };
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-internal-applications.json"
+    ))
+    .unwrap();
+    let probes = contract["security"]["route_probes"].as_array().unwrap();
+    assert_eq!(probes.len(), 14);
+    let retired_operations = std::collections::BTreeSet::from([
+        "reconcile_application_evidence",
+        "get_application_evidence_reconciliation_report",
+    ]);
+
+    let (http_reservation, port) = reserve_port();
+    let (_grpc_reservation, grpc_port) = reserve_port();
+    let mut command = isolated_smoke_command(port, grpc_port);
+    command
+        .env("ISSUANCE_API_KEY", "synthetic-internal-application-key")
+        .env("DATABASE_URL", &database_url);
+    drop(http_reservation);
+    let child = ChildGuard(
+        command
+            .spawn()
+            .expect("start actual issuance process with internal Applications"),
+    );
+    let client = bounded_http_client(Duration::from_secs(2));
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_health_with_client(port, &client)
+        )
+        .await
+        .expect("bounded native process readiness"),
+        Some(json!({"status":"healthy", "service":"issuance-service"}))
+    );
+
+    let base = format!("http://127.0.0.1:{port}");
+    let mut covered = std::collections::BTreeSet::new();
+    let mut retained = std::collections::BTreeSet::new();
+    let mut retired = std::collections::BTreeSet::new();
+    for (index, probe) in probes.iter().enumerate() {
+        let operation = probe["operation"].as_str().unwrap();
+        let method = probe["method"].as_str().unwrap();
+        let path = probe["path"].as_str().unwrap();
+        assert!(covered.insert(operation));
+        let is_retired = retired_operations.contains(operation);
+        assert!(if is_retired {
+            retired.insert(operation)
+        } else {
+            retained.insert(operation)
+        });
+        let key_cases = [
+            None,
+            Some("synthetic-wrong-key"),
+            Some("synthetic-internal-application-key"),
+        ];
+        for (key_index, supplied_key) in key_cases
+            .iter()
+            .take(if is_retired { 3 } else { 2 })
+            .enumerate()
+        {
+            let request_id = format!("internal-application-auth-{index}-{key_index}");
+            let mut request = client
+                .request(method.parse().unwrap(), format!("{base}{path}"))
+                .header("origin", "https://wallet.example")
+                .header("x-request-id", &request_id)
+                .header("x-organization-id", "org-123");
+            if let Some(body) = probe.get("json") {
+                request = request.json(body);
+            }
+            if let Some(key) = supplied_key {
+                request = request.header("x-api-key", *key);
+            }
+            let response = request.send().await.expect("owned process auth response");
+            assert_eq!(
+                response.status(),
+                if is_retired { 404 } else { 401 },
+                "route {operation} key case {key_index}"
+            );
+            assert_eq!(response.headers()["x-request-id"], request_id.as_str());
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                "https://wallet.example"
+            );
+            assert_eq!(
+                response.headers()["access-control-allow-credentials"],
+                "true"
+            );
+            assert_eq!(response.headers()["vary"], "Origin");
+            if !is_retired {
+                assert_eq!(
+                    response.json::<Value>().await.unwrap(),
+                    json!({"detail": if supplied_key.is_some() { "Invalid API Key" } else { "X-API-Key header is missing" }})
+                );
+            }
+        }
+    }
+    assert_eq!(covered.len(), 14);
+    assert_eq!(retained.len(), 12);
+    assert_eq!(retired, retired_operations);
+
+    let missing = client
+        .get(format!(
+            "{base}/internal/applications/application-1/unknown"
+        ))
+        .header("x-api-key", "synthetic-internal-application-key")
+        .header("origin", "https://wallet.example")
+        .header("x-request-id", "internal-application-negative-route")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        missing.headers()["x-request-id"],
+        "internal-application-negative-route"
+    );
+    assert_eq!(
+        missing.headers()["access-control-allow-origin"],
+        "https://wallet.example"
+    );
+
+    drop(child);
+}
+
+#[cfg(test)]
+mod listener_bind_collision_tests {
+    use super::{bounded_startup_diagnostic, retryable_listener_bind_failure};
+    use std::io::Write;
+
+    #[test]
+    fn retries_only_terminal_addr_in_use() {
+        let bind = "Error: Os { code: 98, kind: AddrInUse, message: \"Address already in use\" }";
+        assert!(retryable_listener_bind_failure(true, bind));
+        assert!(!retryable_listener_bind_failure(false, bind));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "Error: database migration failed"
+        ));
+        assert!(!retryable_listener_bind_failure(
+            true,
+            "timed out waiting for readiness"
+        ));
+    }
+
+    #[test]
+    fn retains_bounded_tail_for_non_bind_failure() {
+        let path = std::env::temp_dir().join(format!(
+            "marty-issuance-stderr-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut child_writer = file.try_clone().unwrap();
+        child_writer.write_all(&vec![b'x'; 17 * 1024]).unwrap();
+        child_writer
+            .write_all(b"Error: database migration failed")
+            .unwrap();
+        let diagnostic = bounded_startup_diagnostic(&file).unwrap();
+        assert!(diagnostic.len() <= 16 * 1024);
+        assert!(diagnostic.ends_with("Error: database migration failed"));
+        assert!(!retryable_listener_bind_failure(true, &diagnostic));
+        child_writer.write_all(b"; writer remains at end").unwrap();
+        let later = bounded_startup_diagnostic(&file).unwrap();
+        assert!(later.ends_with("Error: database migration failed; writer remains at end"));
+        drop(child_writer);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+}

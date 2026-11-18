@@ -1,0 +1,77 @@
+/**
+ * Shared query utilities for service modules.
+ *
+ * Note: `buildTruthyQueryString` intentionally preserves existing behavior in
+ * many services where falsy values are omitted (e.g., 0/false/empty string).
+ */
+
+/**
+ * Build a query string from key/value pairs, omitting falsy values.
+ *
+ * @param {Record<string, any>} params
+ * @returns {string}
+ */
+export function buildTruthyQueryString(params = {}) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      searchParams.append(key, String(value));
+    }
+  });
+
+  return searchParams.toString();
+}
+
+/**
+ * Build a query string from key/value pairs, omitting only undefined/null.
+ *
+ * @param {Record<string, any>} params
+ * @returns {string}
+ */
+export function buildDefinedQueryString(params = {}) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      searchParams.append(key, String(value));
+    }
+  });
+
+  return searchParams.toString();
+}
+
+/**
+ * Append query string to a path only when query has content.
+ *
+ * @param {string} path
+ * @param {string} queryString
+ * @returns {string}
+ */
+export function withQuery(path, queryString) {
+  return queryString ? `${path}?${queryString}` : path;
+}
+
+/**
+ * Require a real organization id before constructing org-scoped requests.
+ *
+ * @param {string} organizationId
+ * @param {string} action
+ * @param {string} [errorMessage] - Optional existing service-specific message.
+ * @returns {string}
+ */
+export function requireOrganizationId(organizationId, action = 'using organization-scoped API', errorMessage = `Organization is required for ${action}.`) {
+  if (
+    organizationId === undefined
+    || organizationId === null
+    || String(organizationId).trim() === ''
+    || String(organizationId).trim().toLowerCase() === 'null'
+    || String(organizationId).trim().toLowerCase() === 'undefined'
+  ) {
+    const error = new Error(errorMessage);
+    error.code = 'ORG_REQUIRED';
+    error.status = 400;
+    throw error;
+  }
+  return String(organizationId).trim();
+}

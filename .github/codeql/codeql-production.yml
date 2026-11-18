@@ -1,0 +1,9 @@
+name: Production Rust
+
+paths:
+  - rust/crates/**
+  - rust/services/**
+paths-ignore:
+  - rust/**/tests/**
+  - rust/third_party/**
+

@@ -1,0 +1,24 @@
+{
+  "schema": "elevenid.canvas-worker-process-signals/v1",
+  "legacy_observation": {
+    "image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176",
+    "python": "3.12.13",
+    "worker_sha256": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+    "command": ["python", "-m", "issuance.canvas_worker"],
+    "startup_observed": true,
+    "network": "none",
+    "configuration": "synthetic secrets, unavailable loopback database, 60-second polling wait",
+    "signal": "SIGINT",
+    "exit_code": 130,
+    "finished_at": "2026-09-05T11:58:28.801775575Z",
+    "scope": "actual published initialized process interrupt and exit status; not database disposal or successful-cycle proof"
+  },
+  "native_cases": [
+    {"phase": "idle", "signal": "SIGINT", "exit_code": 130, "drains_blocked_cycle": false},
+    {"phase": "database_wait", "signal": "SIGINT", "exit_code": 130, "drains_blocked_cycle": false},
+    {"phase": "idle", "signal": "SIGTERM", "exit_code": 0, "drains_blocked_cycle": true},
+    {"phase": "database_wait", "signal": "SIGTERM", "exit_code": 0, "drains_blocked_cycle": true}
+  ],
+  "native_extensions": ["SIGTERM graceful drain is retained native candidate policy, not observed Python SIGTERM handling"],
+  "excluded_claims": ["SIGKILL cleanup", "host failure cleanup", "provider behavior", "full-worker parity", "published-schema migration", "production cutover"]
+}

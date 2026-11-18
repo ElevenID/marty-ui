@@ -1,0 +1,11 @@
+{
+  "state": "BUILD_PASS_NOT_DEPLOYED",
+  "role": "gateway",
+  "source_revision": "1e6d88b82163f1de19a4b9e948c3415a5cb707e5",
+  "version": "beta-v259-vc-api-auth-1e6d88b82163",
+  "tag": "elevenid-beta-vc-di-gateway:1e6d88b82163",
+  "exit_code": 0,
+  "log_sha256": "3d77039879e5606766f4432c00de5d2e942220b737fb8c61ca74f27279a71be3",
+  "image_id": "sha256:49fd714a0d87362b3760b7cc5a0dec3e5abe5fa525a6b6c44e63582d42c3774c",
+  "bytes": 40818927
+}

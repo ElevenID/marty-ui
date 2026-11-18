@@ -1,0 +1,88 @@
+{
+  "schema": "marty.http-timeout-scalar-scenarios/v1",
+  "provenance": {
+    "repository": "ElevenID/marty-ui",
+    "commit": "3f8c7b8ae3116408e2de743320be3627e52f18bb",
+    "git_blob": "0b61b57ee74c2f97ab48c8ef5a435ae449775f7b",
+    "projection": "timeouts"
+  },
+  "timeouts": [
+    {
+      "name": "defaults"
+    },
+    {
+      "name": "publish_fallback",
+      "publish": "2.75"
+    },
+    {
+      "name": "status_precedence",
+      "publish": "2.75",
+      "status": "3.25"
+    },
+    {
+      "name": "malformed_publish_not_hidden",
+      "publish": "invalid",
+      "status": "3.25"
+    },
+    {
+      "name": "blank_publish",
+      "publish": ""
+    },
+    {
+      "name": "blank_status",
+      "status": ""
+    },
+    {
+      "name": "whitespace",
+      "status": "  2.5  "
+    },
+    {
+      "name": "unicode_digits",
+      "status": "２.５"
+    },
+    {
+      "name": "digit_separators",
+      "status": "1_0.5"
+    },
+    {
+      "name": "zero",
+      "status": "0"
+    },
+    {
+      "name": "negative_zero",
+      "status": "-0.0"
+    },
+    {
+      "name": "negative",
+      "status": "-1"
+    },
+    {
+      "name": "nan",
+      "status": "NaN"
+    },
+    {
+      "name": "infinity",
+      "status": "inf"
+    },
+    {
+      "name": "negative_infinity",
+      "status": "-inf"
+    },
+    {
+      "name": "huge_finite",
+      "status": "1e30"
+    },
+    {
+      "name": "overflow_to_infinity",
+      "status": "1e9999"
+    },
+    {
+      "name": "tiny_positive",
+      "status": "1e-30"
+    },
+    {
+      "name": "malformed_separator",
+      "status": "1__0"
+    }
+  ]
+}

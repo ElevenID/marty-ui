@@ -1,0 +1,757 @@
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Utc};
+use marty_verification::flow::TransitionOutcome;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use serde_json::{json, Map, Value};
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::{
+    definition_protocol_step, effective_flow_type, ArtifactStatus, CredentialTemplateReference,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, FlowProviderError,
+    FlowProviderRegistry, FlowType, IssuanceInitiationRequest, PhysicalDocumentOperation,
+    PhysicalDocumentRequest, PhysicalDocumentResult, PhysicalDocumentRoute,
+};
+
+const MIP_MESSAGE_VERSION: &str = "0.3.1";
+const PYTHON_QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'/')
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedInstanceStart {
+    pub instance: FlowInstanceRecord,
+    pub artifact: Option<FlowArtifactRecord>,
+}
+
+#[derive(Debug, Error)]
+pub enum FlowInstanceSideEffectError {
+    #[error(transparent)]
+    Provider(#[from] FlowProviderError),
+    #[error("FLOW.INSTANCE_SIDE_EFFECT_INVALID_CONTEXT: {0}")]
+    InvalidContext(&'static str),
+    #[error("FLOW.INSTANCE_SIDE_EFFECT_INVALID_RESPONSE: {0}")]
+    InvalidResponse(&'static str),
+    #[error("FLOW.INSTANCE_SIDE_EFFECT_PROTOCOL: {0}")]
+    Protocol(String),
+    #[error("FLOW.INSTANCE_SIDE_EFFECT_INVALID_CLOCK")]
+    InvalidClock,
+}
+
+pub async fn prepare_instance_start(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    prepare_instance_start_with_key(
+        providers,
+        definition,
+        instance,
+        public_base_url,
+        now,
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn prepare_instance_start_with_key(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    start_idempotency_key: Option<&str>,
+    physical_issuer_did: Option<&str>,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    match effective_flow_type(definition) {
+        FlowType::PhysicalDocumentIssuance => {
+            initialize_physical_document(
+                providers,
+                definition,
+                &mut instance,
+                start_idempotency_key,
+                physical_issuer_did,
+            )
+            .await?;
+            Ok(PreparedInstanceStart {
+                instance,
+                artifact: None,
+            })
+        }
+        FlowType::Oid4vciPreAuthorized => {
+            let artifact = initialize_oid4vci(
+                providers,
+                definition,
+                &mut instance,
+                public_base_url,
+                now,
+                1,
+            )
+            .await?;
+            Ok(PreparedInstanceStart {
+                instance,
+                artifact: Some(artifact),
+            })
+        }
+        _ => Ok(PreparedInstanceStart {
+            instance,
+            artifact: None,
+        }),
+    }
+}
+
+pub async fn prepare_oid4vci_retry(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    attempt_number: u32,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    if effective_flow_type(definition) != FlowType::Oid4vciPreAuthorized || attempt_number < 2 {
+        return Err(FlowInstanceSideEffectError::InvalidContext(
+            "OID4VCI retry requires an issuance flow and later attempt",
+        ));
+    }
+    let artifact = initialize_oid4vci(
+        providers,
+        definition,
+        &mut instance,
+        public_base_url,
+        now,
+        attempt_number,
+    )
+    .await?;
+    // The HTTP caller supplies a monotonic replacement time while retaining
+    // the persisted timestamp for compare-and-swap. Advance only on success.
+    instance.updated_at = now;
+    Ok(PreparedInstanceStart {
+        instance,
+        artifact: Some(artifact),
+    })
+}
+
+pub async fn apply_physical_advance_side_effect(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    outcome: TransitionOutcome,
+    data: &Value,
+) -> Result<FlowInstanceRecord, FlowInstanceSideEffectError> {
+    if effective_flow_type(definition) != FlowType::PhysicalDocumentIssuance
+        || outcome != TransitionOutcome::Success
+    {
+        return Ok(instance);
+    }
+    let step_id =
+        instance
+            .current_step_id
+            .as_deref()
+            .ok_or(FlowInstanceSideEffectError::InvalidContext(
+                "current_step_id is required",
+            ))?;
+    let Some(operation) =
+        definition_protocol_step(definition, step_id).and_then(physical_operation_for_step)
+    else {
+        return Ok(instance);
+    };
+    let context = context_mut(&mut instance)?;
+    let application_id = context
+        .get("physical_document_job")
+        .and_then(Value::as_object)
+        .and_then(|job| job.get("application_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "physical document job is not initialized",
+        ))?;
+    let mut request_data = BTreeMap::from([(
+        "application_id".into(),
+        Value::String(application_id.into()),
+    )]);
+    if operation == PhysicalDocumentOperation::QualityVerify {
+        request_data.insert(
+            "passed".into(),
+            Value::Bool(data.get("passed").and_then(Value::as_bool).unwrap_or(false)),
+        );
+        request_data.insert(
+            "failure_codes".into(),
+            data.get("failure_codes")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+    }
+    let provider = providers
+        .physical_document
+        .as_ref()
+        .ok_or(FlowProviderError::Unavailable {
+            provider: "physical_document",
+        })?;
+    let result = provider
+        .execute(&PhysicalDocumentRequest {
+            organization_id: instance.organization_id.clone(),
+            flow_instance_id: instance.id.clone(),
+            operation,
+            start_idempotency_key: None,
+            data: request_data,
+        })
+        .await?;
+    validate_physical_result(operation, &result, None)?;
+    let context = context_mut(&mut instance)?;
+    record_physical_route(context, result.route.as_ref(), false)?;
+    let previous =
+        context
+            .get("physical_document_job")
+            .ok_or(FlowInstanceSideEffectError::InvalidContext(
+                "physical document job is not initialized",
+            ))?;
+    let refreshed = preserve_signed_physical_material(previous, json!(result.data))?;
+    context.insert("physical_document_job".into(), refreshed);
+    Ok(instance)
+}
+
+fn preserve_signed_physical_material(
+    previous: &Value,
+    mut refreshed: Value,
+) -> Result<Value, FlowInstanceSideEffectError> {
+    let old = previous
+        .as_object()
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "physical document job",
+        ))?;
+    let new = refreshed
+        .as_object_mut()
+        .ok_or(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document job",
+        ))?;
+    // Each native operation returns a fresh status DTO. It can omit signed-SOD
+    // fields, but must never switch the owned job or contradict signed material.
+    for field in [
+        "id",
+        "organization_id",
+        "application_id",
+        "flow_execution_id",
+        "issuer_did",
+    ] {
+        if let Some(value) = old.get(field).filter(|value| !value.is_null()) {
+            if new.get(field) != Some(value) {
+                return Err(FlowInstanceSideEffectError::InvalidResponse(
+                    "physical document identity changed",
+                ));
+            }
+        }
+    }
+    for field in ["sod_sha256", "sod_signature_verified"] {
+        if let Some(value) = old.get(field).filter(|value| !value.is_null()) {
+            match new.get(field) {
+                Some(incoming) if !incoming.is_null() && incoming != value => {
+                    return Err(FlowInstanceSideEffectError::InvalidResponse(
+                        "signed physical document material changed",
+                    ));
+                }
+                Some(incoming) if !incoming.is_null() => {}
+                _ => {
+                    new.insert(field.into(), value.clone());
+                }
+            }
+        }
+    }
+    Ok(refreshed)
+}
+
+async fn initialize_physical_document(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    instance: &mut FlowInstanceRecord,
+    start_idempotency_key: Option<&str>,
+    physical_issuer_did: Option<&str>,
+) -> Result<(), FlowInstanceSideEffectError> {
+    let physical = context_mut(instance)?
+        .remove("physical_document")
+        .and_then(|value| value.as_object().cloned())
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "initial_context.physical_document is required",
+        ))?;
+    for field in ["country_code", "applicant", "mrz", "data_groups"] {
+        if physical.get(field).is_none_or(empty_json_value) {
+            return Err(FlowInstanceSideEffectError::InvalidContext(
+                "physical_document is missing required fields",
+            ));
+        }
+    }
+    let required_reference = |value: &Option<String>| {
+        value
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(FlowInstanceSideEffectError::InvalidContext(
+                "physical document definition references are required",
+            ))
+    };
+    let template_id = required_reference(&definition.credential_template_id)?;
+    let issuer_did = if let Some(issuer_did) = physical_issuer_did {
+        issuer_did.to_owned()
+    } else {
+        let template_provider =
+            providers
+                .credential_template
+                .as_ref()
+                .ok_or(FlowProviderError::Unavailable {
+                    provider: "credential_template",
+                })?;
+        let template = template_provider.get_template(&template_id).await?;
+        validate_template(&template, &template_id, &instance.organization_id)?;
+        crate::validate_physical_document_template(&template)?;
+        template.issuer_did
+    };
+    let data = BTreeMap::from([
+        (
+            "application_template_id".into(),
+            json!(required_reference(&definition.application_template_id)?),
+        ),
+        ("credential_template_id".into(), json!(template_id)),
+        ("issuer_did".into(), json!(issuer_did)),
+        (
+            "delivery_destination_profile_id".into(),
+            json!(required_reference(
+                &definition.delivery_destination_profile_id
+            )?),
+        ),
+        (
+            "document_type".into(),
+            physical
+                .get("document_type")
+                .cloned()
+                .unwrap_or_else(|| json!("TD3")),
+        ),
+        ("country_code".into(), physical["country_code"].clone()),
+        ("applicant".into(), physical["applicant"].clone()),
+        ("mrz".into(), physical["mrz"].clone()),
+        ("data_groups".into(), physical["data_groups"].clone()),
+    ]);
+    let provider = providers
+        .physical_document
+        .as_ref()
+        .ok_or(FlowProviderError::Unavailable {
+            provider: "physical_document",
+        })?;
+    let result = provider
+        .execute(&PhysicalDocumentRequest {
+            organization_id: instance.organization_id.clone(),
+            flow_instance_id: instance.id.clone(),
+            operation: PhysicalDocumentOperation::Initialize,
+            start_idempotency_key: start_idempotency_key.map(str::to_owned),
+            data,
+        })
+        .await?;
+    let application_id = validate_physical_result(
+        PhysicalDocumentOperation::Initialize,
+        &result,
+        Some(&instance.id),
+    )?;
+    let context = context_mut(instance)?;
+    record_physical_route(context, result.route.as_ref(), true)?;
+    context.insert("physical_document_job".into(), json!(result.data));
+    context.insert("application_id".into(), json!(application_id));
+    Ok(())
+}
+
+async fn initialize_oid4vci(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    instance: &mut FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    attempt_number: u32,
+) -> Result<FlowArtifactRecord, FlowInstanceSideEffectError> {
+    let template_id = definition
+        .credential_template_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "credential template is required",
+        ))?;
+    let template_provider =
+        providers
+            .credential_template
+            .as_ref()
+            .ok_or(FlowProviderError::Unavailable {
+                provider: "credential_template",
+            })?;
+    let template = template_provider.get_template(template_id).await?;
+    validate_template(&template, template_id, &instance.organization_id)?;
+    let context =
+        instance
+            .context
+            .as_object()
+            .ok_or(FlowInstanceSideEffectError::InvalidContext(
+                "instance context must be an object",
+            ))?;
+    let claims = context
+        .get("claims")
+        .and_then(Value::as_object)
+        .map(|claims| claims.clone().into_iter().collect())
+        .unwrap_or_default();
+    let application_id = nonempty_context_string(context, "application_id");
+    let idempotency_key = instance
+        .application_flow_key_hash
+        .as_ref()
+        .filter(|_| application_id.is_some())
+        .map_or_else(
+            || {
+                if attempt_number == 1 {
+                    format!("flow-instance-offer-v1:{}", instance.id)
+                } else {
+                    format!("flow-instance-offer-v1:{}:{attempt_number}", instance.id)
+                }
+            },
+            |digest| {
+                if attempt_number == 1 {
+                    format!("application-flow-offer-v1:{digest}")
+                } else {
+                    format!("application-flow-offer-v1:{digest}:{attempt_number}")
+                }
+            },
+        );
+    let issuance = providers
+        .issuance
+        .as_ref()
+        .ok_or(FlowProviderError::Unavailable {
+            provider: "issuance",
+        })?
+        .initiate(&IssuanceInitiationRequest {
+            offer_ttl_seconds: context
+                .get("_marty_offer_ttl_seconds")
+                .and_then(Value::as_u64),
+            organization_id: instance.organization_id.clone(),
+            flow_instance_id: instance.id.clone(),
+            credential_template_id: template_id.into(),
+            applicant_id: instance.subject_id.clone(),
+            subject_did: nonempty_context_string(context, "subject_did"),
+            holder_did: nonempty_context_string(context, "holder_did"),
+            authorized_client_id: None,
+            application_id,
+            issuer_did: template.issuer_did.clone(),
+            delivery_mode: Some("wallet_only".into()),
+            idempotency_key: Some(idempotency_key),
+            claims,
+        })
+        .await?;
+    let mut offer_uris = issuance.credential_offer_uris;
+    let mut offer_labels = issuance.credential_offer_labels;
+    if offer_uris.is_empty() {
+        if let Some(code) = issuance.pre_authorized_code.as_deref() {
+            (offer_uris, offer_labels) =
+                build_wallet_offers(&template, &instance.organization_id, code, public_base_url);
+        }
+    }
+    let offer_uri = issuance
+        .credential_offer_uri
+        .or_else(|| offer_uris.values().find(|value| !value.is_empty()).cloned())
+        .ok_or(FlowInstanceSideEffectError::InvalidResponse(
+            "issuance did not return a credential offer URI",
+        ))?;
+    let expires_at = issuance
+        .expires_at_ms
+        .map(|value| {
+            DateTime::from_timestamp_millis(
+                i64::try_from(value).map_err(|_| FlowInstanceSideEffectError::InvalidClock)?,
+            )
+            .ok_or(FlowInstanceSideEffectError::InvalidClock)
+        })
+        .transpose()?
+        .or_else(|| now.checked_add_signed(Duration::minutes(15)))
+        .ok_or(FlowInstanceSideEffectError::InvalidClock)?;
+    let artifact_id = Uuid::new_v4().to_string();
+    let artifact = FlowArtifactRecord {
+        id: artifact_id.clone(),
+        flow_instance_id: instance.id.clone(),
+        issuance_transaction_id: Some(issuance.transaction_id.clone()),
+        credential_offer_uri: Some(offer_uri.clone()),
+        credential_offer_uris: offer_uris.clone(),
+        credential_offer_labels: offer_labels.clone(),
+        pre_authorized_code: issuance.pre_authorized_code.clone(),
+        issuance_status: Some(issuance.status.clone()),
+        qr_payload: None,
+        expires_at: Some(expires_at),
+        scanned_at: None,
+        status: ArtifactStatus::Active,
+        state: Some(issuance.transaction_id.clone()),
+        wallet_metadata: json!({}),
+        attempt_number,
+        created_at: now,
+        updated_at: now,
+    };
+    let instance_id = instance.id.clone();
+    let context = context_mut(instance)?;
+    context.insert("oid4vci_artifact_id".into(), json!(artifact_id));
+    context.insert(
+        "credential_offer_transaction_id".into(),
+        json!(issuance.transaction_id),
+    );
+    context.insert("offer_id".into(), json!(artifact.issuance_transaction_id));
+    context.insert("credential_offer_uri".into(), json!(offer_uri));
+    context.insert("credential_offer_uris".into(), json!(offer_uris));
+    context.insert("credential_offer_labels".into(), json!(offer_labels));
+    context.insert("issuance_status".into(), json!(issuance.status));
+    if let Some(code) = issuance.pre_authorized_code {
+        context.insert("pre_auth_code".into(), json!(code));
+    }
+    let message = json!({
+        "mip_version": MIP_MESSAGE_VERSION,
+        "message_type": "CredentialOffer",
+        "message_id": Uuid::new_v4().to_string(),
+        "correlation_id": instance_id,
+        "timestamp": now.to_rfc3339(),
+        "sender_id": public_base_url,
+        "nonce": null,
+        "payload": {
+            "credential_issuer": public_base_url,
+            "credential_configuration_ids": [template_id],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": artifact.pre_authorized_code
+                }
+            },
+            "mip_flow_instance_id": instance_id
+        },
+        "signature": null
+    });
+    context
+        .entry("mip_messages")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "mip_messages must be an object",
+        ))?
+        .insert("credential_offer".into(), message);
+    Ok(artifact)
+}
+
+fn build_wallet_offers(
+    template: &CredentialTemplateReference,
+    organization_id: &str,
+    pre_authorized_code: &str,
+    public_base_url: &str,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let mut uris = BTreeMap::new();
+    let mut labels = BTreeMap::new();
+    let issuer_url = format!(
+        "{}/org/{organization_id}",
+        public_base_url.trim_end_matches('/')
+    );
+    for wallet in &template.wallet_configurations {
+        if wallet.wallet_id.trim().is_empty() {
+            continue;
+        }
+        let suffix = if wallet.format_variant.as_deref() == Some("mso_mdoc") {
+            "mdoc"
+        } else {
+            "sd-jwt"
+        };
+        let configuration = format!("{}#{suffix}", template.credential_type);
+        let Ok(offer) = marty_oid4vci::issuer::create_credential_offer(
+            &issuer_url,
+            &[configuration],
+            Some(pre_authorized_code),
+            false,
+        ) else {
+            continue;
+        };
+        let separator = if wallet.deep_link_scheme.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        uris.insert(
+            wallet.wallet_id.clone(),
+            format!(
+                "{}{separator}credential_offer={}",
+                wallet.deep_link_scheme,
+                utf8_percent_encode(&offer, PYTHON_QUOTE_SET)
+            ),
+        );
+        if let Some(label) = wallet
+            .display_name
+            .as_ref()
+            .filter(|value| !value.is_empty())
+        {
+            labels.insert(wallet.wallet_id.clone(), label.clone());
+        }
+    }
+    (uris, labels)
+}
+
+pub(crate) fn validate_template(
+    template: &CredentialTemplateReference,
+    expected_id: &str,
+    organization_id: &str,
+) -> Result<(), FlowInstanceSideEffectError> {
+    if template.id != expected_id
+        || template.organization_id != organization_id
+        || !template.status.eq_ignore_ascii_case("active")
+        || !template.issuer_did.starts_with("did:")
+        || template.credential_type.trim().is_empty()
+    {
+        return Err(FlowInstanceSideEffectError::InvalidResponse(
+            "credential template binding",
+        ));
+    }
+    Ok(())
+}
+
+fn physical_operation_for_step(value: &str) -> Option<PhysicalDocumentOperation> {
+    match value {
+        "generate_data_groups" => Some(PhysicalDocumentOperation::GenerateDataGroups),
+        "sign_sod" => Some(PhysicalDocumentOperation::SignSod),
+        "submit_to_personalization" => Some(PhysicalDocumentOperation::SubmitToPersonalization),
+        "track_production" => Some(PhysicalDocumentOperation::TrackProduction),
+        "quality_verify" => Some(PhysicalDocumentOperation::QualityVerify),
+        "activate_credential" => Some(PhysicalDocumentOperation::ActivateCredential),
+        _ => None,
+    }
+}
+
+fn validate_physical_result(
+    operation: PhysicalDocumentOperation,
+    result: &PhysicalDocumentResult,
+    expected_flow_execution_id: Option<&str>,
+) -> Result<String, FlowInstanceSideEffectError> {
+    if result.operation != operation || result.status.trim().is_empty() {
+        return Err(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document operation binding",
+        ));
+    }
+    let application_id = result
+        .data
+        .get("application_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document application_id",
+        ))?;
+    if expected_flow_execution_id.is_some_and(|expected| {
+        result.data.get("flow_execution_id").and_then(Value::as_str) != Some(expected)
+    }) {
+        return Err(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document flow_execution_id",
+        ));
+    }
+    Ok(application_id.into())
+}
+
+fn context_mut(
+    instance: &mut FlowInstanceRecord,
+) -> Result<&mut Map<String, Value>, FlowInstanceSideEffectError> {
+    instance
+        .context
+        .as_object_mut()
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "instance context must be an object",
+        ))
+}
+
+fn record_physical_route(
+    context: &mut Map<String, Value>,
+    route: Option<&PhysicalDocumentRoute>,
+    initialize: bool,
+) -> Result<(), FlowInstanceSideEffectError> {
+    const KEY: &str = "physical_document_route_trace";
+    if initialize {
+        // Initial context is caller supplied. Only the HTTP provider may seed
+        // a trace after its first successful native response.
+        context.remove(KEY);
+        if let Some(route) = route {
+            context.insert(KEY.into(), json!([route]));
+        }
+        return Ok(());
+    }
+    match (context.get_mut(KEY), route) {
+        (None, None) => Ok(()),
+        (Some(Value::Array(trace)), Some(route)) => {
+            trace.push(json!(route));
+            Ok(())
+        }
+        _ => Err(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document route trace",
+        )),
+    }
+}
+
+fn nonempty_context_string(context: &Map<String, Value>, name: &str) -> Option<String> {
+    context
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn empty_json_value(value: &Value) -> bool {
+    value.is_null()
+        || value.as_str().is_some_and(str::is_empty)
+        || value.as_array().is_some_and(Vec::is_empty)
+        || value.as_object().is_some_and(Map::is_empty)
+}
+
+#[cfg(test)]
+mod route_trace_tests {
+    use super::*;
+
+    #[test]
+    fn native_status_refresh_preserves_only_verified_signed_material() {
+        let signed = json!({
+            "id":"job-1", "organization_id":"org-1", "application_id":"app-1",
+            "flow_execution_id":"flow-1", "issuer_did":"did:web:issuer.example",
+            "status":"SOD_SIGNED", "sod_sha256":"signed-hash",
+            "sod_signature_verified":true
+        });
+        let submitted = json!({
+            "id":"job-1", "organization_id":"org-1", "application_id":"app-1",
+            "flow_execution_id":"flow-1", "issuer_did":"did:web:issuer.example",
+            "status":"READY_FOR_ACTIVATION", "bureau_job_id":"bureau-1"
+        });
+        let merged = preserve_signed_physical_material(&signed, submitted.clone()).unwrap();
+        assert_eq!(merged["sod_sha256"], "signed-hash");
+        assert_eq!(merged["sod_signature_verified"], true);
+        assert_eq!(merged["status"], "READY_FOR_ACTIVATION");
+        assert_eq!(merged["bureau_job_id"], "bureau-1");
+        let mut foreign = submitted.clone();
+        foreign["id"] = json!("foreign-job");
+        assert!(preserve_signed_physical_material(&signed, foreign).is_err());
+        let mut conflicting = submitted;
+        conflicting["sod_sha256"] = json!("different-hash");
+        assert!(preserve_signed_physical_material(&signed, conflicting).is_err());
+    }
+
+    #[test]
+    fn provider_trace_overwrites_caller_context_and_requires_continuity() {
+        let mut context = json!({
+            "physical_document_route_trace": [{"method": "POST", "path": "/forged"}]
+        });
+        let context = context.as_object_mut().unwrap();
+        let created = PhysicalDocumentRoute {
+            method: "POST".into(),
+            path: "/v1/passport/applications".into(),
+        };
+        record_physical_route(context, Some(&created), true).unwrap();
+        assert_eq!(context["physical_document_route_trace"], json!([created]));
+        let signed = PhysicalDocumentRoute {
+            method: "POST".into(),
+            path: "/v1/passport/applications/app-1/generate-sod".into(),
+        };
+        record_physical_route(context, Some(&signed), false).unwrap();
+        assert_eq!(
+            context["physical_document_route_trace"],
+            json!([created, signed])
+        );
+        assert!(record_physical_route(context, None, false).is_err());
+        record_physical_route(context, None, true).unwrap();
+        assert!(context.get("physical_document_route_trace").is_none());
+    }
+}

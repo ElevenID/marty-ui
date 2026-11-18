@@ -1,0 +1,137 @@
+# Self-Host Docker Compose Secret Files
+
+These files are placeholders for the self-host deployment.
+
+- Copy this directory to a location outside the workspace
+- Put real secret values into the copied files
+- Point `SELFHOST_SECRET_DIR` in `.env.selfhost.production.local` at that copied directory
+- The container wrapper scripts read the mounted secret files and export the real environment variables before starting the app process
+
+The self-host startup scripts intentionally fail if a required secret file is still blank or still uses the shipped `change-me...` placeholder values.
+
+Do not keep the real secret directory under this repo if an AI agent can read the workspace. Docker Compose secrets on a local machine are still ordinary host files; they are not hidden from tools that can read the same directory.
+
+Required files:
+
+- `postgres_password`
+- `keycloak_db_password`
+- `marty_db_password`
+- `keycloak_admin_password`
+- `keycloak_signing_kms_token` (scoped OpenBao Transit read/sign/HMAC/verify token for both realms)
+- `keycloak_master_rs256_cert` and `keycloak_11id_rs256_cert` (public certificates for the pinned non-exportable Transit signing keys)
+- `keycloak_master_cookie_token`, `keycloak_master_ciba_token`, `keycloak_11id_cookie_token`, and `keycloak_11id_ciba_token` (separate OpenBao direct-JWE read/encode/decode tokens for each realm and purpose)
+- `marty_api_client_secret`
+- `issuance_api_key`
+- `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
+- `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, and Issuance; distinct random value, at least 32 characters)
+- `signing_keys_integration_secret_key` (distinct transport credential shared by native Issuance and Signing Keys)
+- `grpc_service_token`
+- `device_registration_gateway_key` (distinct random value, at least 32 characters)
+- `device_registration_signing_keys_key` (a different random value, at least 32 characters)
+- `notification_webhook_secret`
+- `notification_applicant_event_token`
+- `workload_identity_ca_cert`
+- `org_workload_server_cert`
+- `org_tls_kms_token`
+- `es_workload_server_cert`
+- `es_tls_kms_token`
+- `rp_workload_server_cert`
+- `rp_tls_kms_token`
+- `ct_workload_server_cert`
+- `ct_tls_kms_token`
+- `signing_keys_workload_server_cert`
+- `openbao_tls_ca_cert`
+- `signing_keys_tls_kms_token`
+- `pp_workload_server_cert`
+- `pp_tls_kms_token`
+- `flow_workload_client_cert`
+- `flow_client_tls_kms_token`
+- `flow_workload_server_cert`
+- `flow_server_tls_kms_token`
+- `auth_workload_client_cert`
+- `auth_tls_kms_token`
+- `auth_workload_server_cert`
+- `auth_server_tls_kms_token`
+- `gateway_workload_client_cert`
+- `gateway_tls_kms_token`
+  - `issuance_workload_server_cert`
+  - `issuance_tls_kms_token`
+- `verification_workload_client_cert`
+- `verification_tls_kms_token`
+- `deployment_profile_workload_client_cert`
+- `deployment_profile_tls_kms_token`
+- `compliance_profile_workload_client_cert`
+- `compliance_profile_tls_kms_token`
+- `flow_application_event_hmac_key`
+- `flow_webhook_secret`
+- `token_hmac_key`
+- `openbao_service_token`
+- `signing_keys_openbao_token`
+- `didcomm_issuance_openbao_token`
+- `notification_openbao_token`
+- `haip_kms_token`
+- `sign_grant_verify_token`
+- `sign_grant_mint_flow_wallet_token`
+- `sign_grant_mint_gateway_service_token`
+- `sign_grant_mint_gateway_issuer_did_token`
+- `sign_grant_mint_issuance_credential_token`
+- `sign_grant_mint_issuance_passport_token`
+
+`flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
+
+`passport_tenant_api_keys` and `personalization_bureau_api_key` are optional,
+empty placeholders. Import the tenant keyring only when the Passport tenant-key
+mode is selected; internal service authentication leaves its `_FILE` setting
+empty. The tenant file is mounted only by Gateway, Flow, and native Issuance.
+The bureau credential is mounted only by native Issuance and is selected through
+`PERSONALIZATION_BUREAU_API_KEY_FILE`. Do not put either value in Compose arguments.
+
+`openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
+
+`signing_keys_openbao_token` is a distinct token with `credential-service` and `signing-keys-managed` policies, issued without the default policy. Only signing-keys receives managed key create/rotate access. The bootstrap scripts mint it; an external OpenBao operator must supply an equivalent scoped token.
+
+The `sign_grant_mint_*` files hold separate OpenBao HMAC mint tokens for each
+workload and signing origin. `sign_grant_verify_token` is verify-only and
+belongs to Signing Keys. Run `scripts/bootstrap-selfhost-vault.sh` with
+`SELFHOST_SECRET_DIR` set to the operator secret directory, or provision
+equivalent scoped tokens in an external OpenBao instance. Every grant token
+must differ from the other grant tokens and from the workload's provider
+tokens; the self-host preflight checks this separation.
+
+The Signing Keys TLS certificate must chain to `workload_identity_ca_cert` and
+contain the `signing-keys` DNS name. Its key terminates the private
+integration-secret transport and is distinct from every non-exportable KMS
+application key. Rotate it with the CA/trust file and restart Signing Keys,
+and native Issuance together so cached TLS clients adopt
+the new trust root.
+
+`didcomm_issuance_openbao_token` is a separate token with only the `didcomm-issuance` policy and no default policy. Native Issuance uses it to read public sender versions and request complete authcrypt envelopes; key creation and rotation remain operator operations. The self-host OpenBao bootstrap mints it after mounting the DIDComm plugin. An external operator must provide the equivalent policy and token.
+
+`notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification runtime and one-shot `db-migrate` job receive it; other services must not mount it. The migration job needs it to re-encrypt legacy webhook secrets.
+
+`haip_kms_token` is the dedicated OpenBao plugin token for HAIP response-key creation and decryption. The self-host OpenBao bootstrap mints it without the default policy from `docker/openbao-haip-workload-policy.hcl`; only signing-keys receives it. An external OpenBao operator must provision an equivalent token and policy before starting the stack.
+
+`flow_application_event_hmac_key` is a distinct random value of at least 32
+bytes shared only by the Applicant and Flow services. It authenticates approval
+events that can create credential offers; do not reuse `grpc_service_token`.
+
+Optional files may be left empty when the related integration is disabled:
+
+- `passport_tenant_api_keys`
+- `personalization_bureau_api_key`
+- `cloudflare_beta_tunnel_token`
+- `google_client_id`
+- `google_client_secret`
+- `google_analytics_measurement_id`
+- `google_site_verification`
+- `smtp_password`
+
+`cloudflare_tunnel_token` is required only for the explicitly selected Cloudflare integration; the core installer and direct hosting do not need it. The signed installer copies a separately supplied private token into its owned secret generation.
+
+`cloudflare_beta_tunnel_token` is only required when the optional self-host `beta-tunnel` compose profile is enabled to route a second Cloudflare tunnel, such as `beta.elevenidllc.com`, into the same self-host edge.
+
+`google_client_id` and `google_client_secret` are the OAuth web client credentials used by Keycloak's Google identity provider.
+
+`google_analytics_measurement_id` is the GA4 `G-...` measurement ID. It is public by nature, but the self-host UI startup wrapper can read it from the secret directory for operator convenience.
+
+`google_site_verification` is the Google Search Console verification token. It is also public by nature, but the self-host UI startup wrapper can inject it from the secret directory into the served `index.html`.

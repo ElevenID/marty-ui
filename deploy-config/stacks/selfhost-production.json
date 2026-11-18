@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "name": "selfhost-production",
+  "description": "Open-source self-host production stack with configurable hosting and optional tunnel integration.",
+  "env_file": ".env.selfhost.production.local",
+  "compose_files": [
+    "docker-compose.selfhost.prod.yml"
+  ],
+  "compose_profiles": [],
+  "domains": [
+    "elevenidllc.com"
+  ],
+  "primary_domain": "elevenidllc.com",
+  "required_service_groups": [
+    "infra",
+    "selfhost_core",
+    "app"
+  ],
+  "required_services": [],
+  "optional_services": [
+    "device-registration"
+  ],
+  "required_secrets": [
+    "postgres_password",
+    "keycloak_db_password",
+    "marty_db_password",
+    "keycloak_admin_password",
+    "keycloak_signing_kms_token",
+    "keycloak_master_rs256_cert",
+    "keycloak_11id_rs256_cert",
+    "keycloak_master_cookie_token",
+    "keycloak_master_ciba_token",
+    "keycloak_11id_cookie_token",
+    "keycloak_11id_ciba_token",
+    "marty_api_client_secret",
+    "issuance_api_key",
+    "signing_keys_issuer_sign_key",
+    "signing_keys_integration_secret_key",
+    "signing_keys_service_sign_gateway_key",
+    "grpc_service_token",
+    "device_registration_gateway_key",
+    "device_registration_signing_keys_key",
+    "flow_webhook_secret",
+    "notification_webhook_secret",
+    "notification_applicant_event_token",
+    "workload_identity_ca_cert",
+    "org_workload_server_cert",
+    "org_tls_kms_token",
+    "es_workload_server_cert",
+    "es_tls_kms_token",
+    "notification_workload_server_cert",
+    "notification_tls_kms_token",
+    "rp_workload_server_cert",
+    "rp_tls_kms_token",
+    "ct_workload_server_cert",
+    "ct_tls_kms_token",
+    "pp_workload_server_cert",
+    "pp_tls_kms_token",
+    "flow_workload_client_cert",
+    "flow_client_tls_kms_token",
+    "flow_workload_server_cert",
+    "flow_server_tls_kms_token",
+    "auth_workload_client_cert",
+    "auth_tls_kms_token",
+    "auth_workload_server_cert",
+    "auth_server_tls_kms_token",
+    "gateway_workload_client_cert",
+    "gateway_tls_kms_token",
+    "issuance_workload_server_cert",
+    "issuance_tls_kms_token",
+    "verification_workload_client_cert",
+    "verification_tls_kms_token",
+    "deployment_profile_workload_client_cert",
+    "deployment_profile_tls_kms_token",
+    "compliance_profile_workload_client_cert",
+    "compliance_profile_tls_kms_token",
+    "flow_application_event_hmac_key",
+    "token_hmac_key",
+    "openbao_service_token",
+    "signing_keys_openbao_token",
+    "didcomm_issuance_openbao_token",
+    "notification_openbao_token",
+    "sign_grant_verify_token",
+    "sign_grant_mint_flow_wallet_token",
+    "sign_grant_mint_gateway_service_token",
+    "sign_grant_mint_gateway_issuer_did_token",
+    "sign_grant_mint_issuance_credential_token",
+    "sign_grant_mint_issuance_passport_token",
+    "haip_kms_token",
+    "signing_keys_workload_server_cert",
+    "openbao_tls_ca_cert",
+    "signing_keys_tls_kms_token"
+  ],
+  "artifact_profile": "oss-release",
+  "deployment_targets": [
+    "docker-compose",
+    "customer-bundle"
+  ],
+  "operations": {
+    "config": [
+      "config"
+    ],
+    "up": [
+      "up",
+      "-d",
+      "--build"
+    ],
+    "down": [
+      "down"
+    ],
+    "ps": [
+      "ps"
+    ],
+    "logs": [
+      "logs",
+      "-f",
+      "edge",
+      "gateway",
+      "keycloak"
+    ]
+  },
+  "smoke_tests": {
+    "public_routes": [
+      "/",
+      "/login",
+      "/console",
+      "/v1/auth/me"
+    ],
+    "auth_login_callback_host": "elevenidllc.com"
+  }
+}

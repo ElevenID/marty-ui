@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source": "pre-Rust services/gateway/routes/signing_keys.py at parent of e1ebad979 and signing-keys document_vectors.json",
+  "method": "GET",
+  "path": "/v1/signing-keys/config/certificate-expiry-alerts",
+  "query": {"organization_id": "trusted Gateway scope", "days_until_expiry_default": 30},
+  "response_fields": ["alerts", "alert_threshold_days", "checked_at"],
+  "alert_fields": ["service_id", "service_name", "cert_expires_at", "days_until_expiry", "status"],
+  "rules": {
+    "service_certificate_override_precedes_registry_certificate": true,
+    "profile_certificates_are_not_service_alerts": true,
+    "invalid_certificate_expiry_is_ignored": true,
+    "critical_when_days_left_at_most": 7,
+    "no_private_key_or_custody_field_in_response": true
+  }
+}

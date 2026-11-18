@@ -1,0 +1,2130 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::LazyLock,
+};
+
+use mmf_platform::{
+    AuthenticationType, GatewayRequest, HttpMethod, PlatformError, RouteConfig, RouteMatchType,
+    RouteTable,
+};
+use regex::Regex;
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+
+use crate::issuance_native;
+
+pub const EXPECTED_ROUTE_COUNT: usize = 400;
+const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
+    "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
+    "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
+];
+const MDOC_CRL_PATHS: [(HttpMethod, &str, bool); 2] = [
+    (
+        HttpMethod::Get,
+        "/v1/signing-keys/mdoc-crls/{organization_id}/{file}",
+        false,
+    ),
+    (
+        HttpMethod::Post,
+        "/v1/signing-keys/mdoc-crls/{certificate_id}",
+        true,
+    ),
+];
+#[cfg(test)]
+const PHYSICAL_START_EXTENSION_ROUTE_COUNT: usize = 1;
+
+#[derive(Debug, Deserialize)]
+pub struct GatewayContract {
+    pub middleware: MiddlewareContract,
+    pub route_count: usize,
+    pub routes: Vec<DeclaredRoute>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MiddlewareContract {
+    pub execution_order: Vec<String>,
+    pub registration_order: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct DeclaredRoute {
+    pub include_in_schema: bool,
+    pub method: HttpMethod,
+    pub path: String,
+    pub status_code: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RouteOwnership {
+    pub service: &'static str,
+    pub requires_authentication: bool,
+    pub gateway_owned: bool,
+}
+
+impl GatewayContract {
+    pub fn load() -> Result<Self, PlatformError> {
+        let contract: Self =
+            serde_json::from_str(include_str!("../../../../contracts/gateway-routes.json"))
+                .map_err(|error| PlatformError::InvalidConfiguration(error.to_string()))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    pub fn validate(&self) -> Result<(), PlatformError> {
+        if self.route_count != EXPECTED_ROUTE_COUNT || self.routes.len() != self.route_count {
+            return Err(PlatformError::InvalidConfiguration(format!(
+                "gateway route contract must contain exactly {EXPECTED_ROUTE_COUNT} routes"
+            )));
+        }
+        let unique = self
+            .routes
+            .iter()
+            .map(|route| (route.method, route.path.as_str()))
+            .collect::<BTreeSet<_>>();
+        if unique.len() != self.route_count {
+            return Err(PlatformError::InvalidConfiguration(
+                "gateway route contract contains duplicate method/path entries".into(),
+            ));
+        }
+        let expected_execution = [
+            "MIPVersionMiddleware",
+            "RateLimitMiddleware",
+            "AuthMiddleware",
+            "ContentTypeEnforcementMiddleware",
+            "ETagMiddleware",
+            "GatewayCedarAuthMiddleware",
+            "IdempotencyMiddleware",
+            "CORSMiddleware",
+        ];
+        if self.middleware.execution_order != expected_execution {
+            return Err(PlatformError::InvalidConfiguration(
+                "gateway middleware execution order drifted".into(),
+            ));
+        }
+        let reverse = self
+            .middleware
+            .registration_order
+            .iter()
+            .rev()
+            .collect::<Vec<_>>();
+        if reverse != self.middleware.execution_order.iter().collect::<Vec<_>>() {
+            return Err(PlatformError::InvalidConfiguration(
+                "gateway middleware registration order must reverse execution order".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn route_table(&self) -> Result<RouteTable, PlatformError> {
+        self.route_table_with_passport_native(false)
+    }
+
+    /// The passport selector is explicit and default-off until the gateway
+    /// tenant-authentication and per-organization key boundary is qualified.
+    pub fn route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        self.route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table = RouteTable::default();
+        for (index, declared) in self.routes.iter().enumerate() {
+            let owner = route_ownership(&declared.path);
+            let rewrite_path = upstream_rewrite(declared.method, &declared.path);
+            let upstream_service = if owner.service == issuance_native::LEGACY_SERVICE {
+                let upstream_path = rewrite_path.as_deref().unwrap_or(&declared.path);
+                if provider_ingress
+                    && issuance_native::is_passport_signed_webhook(declared.method, upstream_path)
+                {
+                    "passport-provider-ingress"
+                } else if passport_native
+                    && (issuance_native::is_passport_public_http(declared.method, upstream_path)
+                        || issuance_native::is_passport_signed_webhook(
+                            declared.method,
+                            upstream_path,
+                        ))
+                {
+                    issuance_native::NATIVE_SERVICE
+                } else {
+                    issuance_native::upstream_service(declared.method, upstream_path)
+                }
+            } else {
+                owner.service
+            };
+            table.add(RouteConfig {
+                name: format!("{}:{index}:{}", method_name(declared.method), declared.path),
+                pattern: declared.path.clone(),
+                match_type: if declared.path.contains('{') {
+                    RouteMatchType::Template
+                } else {
+                    RouteMatchType::Exact
+                },
+                upstream_service: upstream_service.into(),
+                methods: BTreeSet::from([declared.method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path,
+                timeout_ms: 30_000,
+                retries: 2,
+                auth_required: owner.requires_authentication,
+                authentication_type: if owner.requires_authentication {
+                    AuthenticationType::Jwt
+                } else {
+                    AuthenticationType::None
+                },
+                priority: route_priority(&declared.path),
+                tags: BTreeSet::from([if owner.gateway_owned {
+                    "gateway-owned".into()
+                } else {
+                    "proxied".into()
+                }]),
+            })?;
+        }
+        table.add(RouteConfig {
+            name: "external-observation:submit".into(),
+            pattern: crate::external_observation::PATH.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "issuance".into(),
+            methods: BTreeSet::from([HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 30_000,
+            retries: 0,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority(crate::external_observation::PATH),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
+        for path in [
+            crate::external_observation::ADMIN_PATH,
+            crate::external_observation::APPROVE_PATH,
+            crate::external_observation::ROTATE_PATH,
+            crate::external_observation::CREATE_PATH,
+            crate::external_observation::EXPIRY_PATH,
+            crate::external_observation::BINDINGS_PATH,
+            crate::external_observation::BINDING_CREATE_PATH,
+            crate::external_observation::BINDING_ACTIVATE_PATH,
+            crate::external_observation::BINDING_DEACTIVATE_PATH,
+            crate::external_observation::BINDING_REPLACE_PATH,
+            crate::external_observation::GRANT_READ_PATH,
+            crate::external_observation::GRANT_AUDIT_PATH,
+            crate::external_observation::BINDING_READ_PATH,
+            crate::external_observation::BINDING_AUDIT_PATH,
+            crate::external_observation::RECEIPT_READ_PATH,
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            table.add(RouteConfig {
+                name: format!("external-observation:manage:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        issuance_native::add_public_native_extensions(&mut table, passport_native)?;
+        for (path, _) in crate::external_association::paths() {
+            table.add(RouteConfig {
+                name: format!("external-association:{path}"),
+                pattern: path.clone(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(&path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            table.add(RouteConfig {
+                name: format!("application-ownership:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        for path in MDOC_CERTIFICATE_PATHS {
+            table.add(RouteConfig {
+                name: format!("signing-keys-native:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Exact,
+                upstream_service: "signing-keys".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 2,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        for (method, path, auth_required) in MDOC_CRL_PATHS {
+            table.add(RouteConfig {
+                name: format!("signing-keys-mdoc-crl:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "signing-keys".into(),
+                methods: BTreeSet::from([method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required,
+                authentication_type: if auth_required {
+                    AuthenticationType::Jwt
+                } else {
+                    AuthenticationType::None
+                },
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+
+        table.add(RouteConfig {
+            name: "flow-native:physical-start-intents".into(),
+            pattern: "/v1/flows/physical-start-intents".into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "flows".into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority("/v1/flows/physical-start-intents"),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
+        for &(method, path) in crate::public_verification::ROUTES {
+            table.add(RouteConfig {
+                name: format!("flow-public:{}:{path}", method_name(method)),
+                pattern: path.into(),
+                match_type: if path.contains('{') {
+                    RouteMatchType::Template
+                } else {
+                    RouteMatchType::Exact
+                },
+                upstream_service: "flows".into(),
+                methods: BTreeSet::from([method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 10_000,
+                retries: 0,
+                auth_required: false,
+                authentication_type: AuthenticationType::None,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        Ok(table)
+    }
+
+    /// Build the public table plus explicit gateway-to-service helper routes.
+    /// Internal helpers are not public API declarations and therefore do not
+    /// alter the frozen public-route contract.
+    pub fn proxy_route_table(&self) -> Result<RouteTable, PlatformError> {
+        self.proxy_route_table_with_passport_native(false)
+    }
+
+    pub fn proxy_route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        self.proxy_route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn proxy_route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table =
+            self.route_table_with_passport_selectors(passport_native, provider_ingress)?;
+        add_gateway_documentation_routes(&mut table)?;
+        table.add(RouteConfig {
+            name: "internal:compliance-profiles:discoverable".into(),
+            pattern: "/v1/compliance-profiles/system/discoverable".into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "compliance-profiles".into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 5_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:issuance-native:composition".into(),
+            pattern: "/__gateway/issuance-native/{path:path}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: issuance_native::NATIVE_SERVICE.into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/{path}".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 100,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:issuance-native:oid4vci-client-management".into(),
+            pattern: OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: issuance_native::NATIVE_SERVICE.into(),
+            methods: BTreeSet::from([HttpMethod::Put]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/v1/issuance/oid4vci-clients".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:issuance:public-discovery".into(),
+            pattern: "/__gateway/issuance/{path:path}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "issuance".into(),
+            methods: BTreeSet::from([HttpMethod::Get, HttpMethod::Post, HttpMethod::Put]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/{path}".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 100,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        for service in [
+            "organizations",
+            "applicant",
+            "credential-templates",
+            "presentation-policies",
+            "deployment-profiles",
+            "flows",
+        ] {
+            table.add(RouteConfig {
+                name: format!("internal:composition:{service}"),
+                pattern: format!("/__gateway/composition/{service}/{{path:path}}"),
+                match_type: RouteMatchType::Template,
+                upstream_service: service.into(),
+                methods: BTreeSet::from([
+                    HttpMethod::Get,
+                    HttpMethod::Post,
+                    HttpMethod::Put,
+                    HttpMethod::Patch,
+                    HttpMethod::Delete,
+                ]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: Some("/{path}".into()),
+                timeout_ms: 30_000,
+                retries: 1,
+                auth_required: false,
+                authentication_type: AuthenticationType::None,
+                priority: 100,
+                tags: BTreeSet::from(["gateway-internal".into()]),
+            })?;
+        }
+        table.add(RouteConfig {
+            name: "internal:signing-keys:compatibility".into(),
+            pattern: "/__gateway/signing-keys/{path:path}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "signing-keys".into(),
+            methods: BTreeSet::from([
+                HttpMethod::Get,
+                HttpMethod::Post,
+                HttpMethod::Put,
+                HttpMethod::Patch,
+                HttpMethod::Delete,
+            ]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/{path}".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 100,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:organizations:legacy-api-key-collection".into(),
+            pattern: "/v1/organizations/{organization_id}/api-keys".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "organizations".into(),
+            methods: BTreeSet::from([HttpMethod::Get, HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:organizations:legacy-api-key-item".into(),
+            pattern: "/v1/organizations/{organization_id}/api-keys/{key_id}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "organizations".into(),
+            methods: BTreeSet::from([HttpMethod::Delete]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        Ok(table)
+    }
+
+    /// Build the table used by request middleware. Documentation handlers are
+    /// real public routes, while proxy-only helper routes remain unreachable
+    /// from the external request classifier.
+    pub fn runtime_route_table(&self) -> Result<RouteTable, PlatformError> {
+        self.runtime_route_table_with_passport_native(false)
+    }
+
+    pub fn runtime_route_table_with_passport_native(
+        &self,
+        passport_native: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        self.runtime_route_table_with_passport_selectors(passport_native, false)
+    }
+
+    pub fn runtime_route_table_with_passport_selectors(
+        &self,
+        passport_native: bool,
+        provider_ingress: bool,
+    ) -> Result<RouteTable, PlatformError> {
+        let mut table =
+            self.route_table_with_passport_selectors(passport_native, provider_ingress)?;
+        add_gateway_documentation_routes(&mut table)?;
+        Ok(table)
+    }
+
+    /// Generate the public OpenAPI surface from the same frozen route
+    /// contract used by the proxy. This keeps discovery DRY and prevents the
+    /// documentation endpoint from silently drifting after the Python/FastAPI
+    /// gateway is removed.
+    #[must_use]
+    pub fn openapi_document(&self, release_version: &str) -> Value {
+        let mut paths = Map::new();
+        for route in self.routes.iter().filter(|route| route.include_in_schema) {
+            let owner = route_ownership(&route.path);
+            let path_item = paths
+                .entry(route.path.clone())
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+                .expect("OpenAPI path items are objects");
+            let mut operation = json!({
+                "operationId": operation_id(route.method, &route.path),
+                "tags": [owner.service],
+                "responses": {
+                    route.status_code.to_string(): {
+                        "description": status_description(route.status_code)
+                    }
+                },
+                "x-marty-upstream-service": owner.service,
+                "x-marty-gateway-owned": owner.gateway_owned
+            });
+            let parameters = path_parameters(&route.path);
+            if !parameters.is_empty() {
+                operation["parameters"] = Value::Array(parameters);
+            }
+            operation["security"] = if owner.requires_authentication {
+                json!([{"bearerAuth": []}, {"apiKeyAuth": []}, {"sessionCookie": []}])
+            } else {
+                json!([])
+            };
+            crate::openapi::describe_operation(
+                &mut operation,
+                route.method,
+                &route.path,
+                route.status_code,
+            );
+            path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
+        }
+        paths.insert(
+            crate::external_observation::PATH.into(),
+            json!({
+                "post": crate::external_observation::openapi_operation()
+            }),
+        );
+        for (path,operation_id,summary) in [
+            (crate::external_observation::ADMIN_PATH,"revoke_external_observation_producer","Revoke a canonical external observation producer grant"),
+            (crate::external_observation::APPROVE_PATH,"approve_external_observation_producer","Approve the current canonical external observation producer grant revision"),
+            (crate::external_observation::ROTATE_PATH,"rotate_external_observation_producer_key","Replace the canonical producer key and deactivate its grant pending fresh approval"),
+            (crate::external_observation::CREATE_PATH,"create_external_observation_producer","Create an inactive external observation producer grant"),
+            (crate::external_observation::EXPIRY_PATH,"change_external_observation_producer_expiry","Change producer grant expiry and require fresh approval"),
+            (crate::external_observation::BINDINGS_PATH,"replace_external_observation_producer_bindings","Replace canonical producer binding membership and require fresh approval"),
+        ] {
+            let mut properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
+            let mut required=vec!["expected_revision"];
+            if path==crate::external_observation::ROTATE_PATH {
+                properties.as_object_mut().expect("static schema object").insert("new_api_key_id".into(),json!({"type":"string","format":"uuid"}));
+                required.push("new_api_key_id");
+            }
+            if path==crate::external_observation::CREATE_PATH {
+                properties=json!({"api_key_id":{"type":"string","format":"uuid"},
+                  "source_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},
+                  "expires_at_ms":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
+                required=vec!["api_key_id","source_id","expires_at_ms"];
+            } else if path==crate::external_observation::EXPIRY_PATH {
+                properties.as_object_mut().expect("static schema object").insert("expires_at_ms".into(),json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64}));
+                required.push("expires_at_ms");
+            }
+            if path==crate::external_observation::BINDINGS_PATH {
+                properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64},
+                  "bindings":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,
+                    "required":["binding_id","expected_revision"],"properties":{
+                      "binding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},
+                      "expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}}}}});
+                required=vec!["expected_revision","bindings"];
+            }
+            paths.insert(path.into(),json!({"post":{
+                "operationId":operation_id,"tags":["evidence"],"summary":summary,
+                "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Membership replacement accepts only current same-tenant/source binding IDs at exact revisions, including an empty set, and clears grant approval. It never changes binding definitions or applications. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
+                "security":[{"sessionCookie":[]}],
+                "parameters":[
+                    {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"grant_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+                "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"required":required,"properties":properties}}}},
+                "responses":{"200":{"description":"Committed revision and audit_id; no-store"},
+                    "400":{"description":"Invalid or ambiguous request"},"401":{"description":"Session required"},
+                    "403":{"description":"Tenant, Origin, canonical permission or replacement key denied"},"409":{"description":"Revision, state or transaction conflict"},
+                    "413":{"description":"Request exceeds 4096 bytes"},"503":{"description":"Unavailable or uncertain commit; reconcile"}}
+            }}));
+        }
+        for (path, action) in [
+            (crate::external_observation::BINDING_CREATE_PATH, "create"),
+            (
+                crate::external_observation::BINDING_ACTIVATE_PATH,
+                "activate",
+            ),
+            (
+                crate::external_observation::BINDING_DEACTIVATE_PATH,
+                "deactivate",
+            ),
+            (
+                crate::external_observation::BINDING_REPLACE_PATH,
+                "replace-definition",
+            ),
+        ] {
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::binding_admin_operation(action)}),
+            );
+        }
+        for path in [
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            paths.insert(path.into(),json!({"post":crate::external_observation::materialization_operation(path==crate::external_observation::MATERIALIZATION_READ_PATH)}));
+        }
+        for (path, kind) in [
+            (crate::external_observation::GRANT_READ_PATH, "grant"),
+            (crate::external_observation::GRANT_AUDIT_PATH, "grant_audit"),
+            (crate::external_observation::BINDING_READ_PATH, "binding"),
+            (
+                crate::external_observation::BINDING_AUDIT_PATH,
+                "binding_audit",
+            ),
+            (crate::external_observation::RECEIPT_READ_PATH, "receipt"),
+        ] {
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::admin_read_operation(kind)}),
+            );
+        }
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            let action = path.rsplit('/').next().expect("static ownership action");
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::ownership_operation(action)}),
+            );
+        }
+        for (path, access) in crate::external_association::paths() {
+            paths.insert(
+                path.clone(),
+                json!({"post":crate::external_association::operation(&path,access)}),
+            );
+        }
+        json!({
+            "openapi": "3.1.0",
+            "info": {
+                "title": "Marty API Gateway",
+                "version": release_version,
+                "description": "Canonical public HTTP surface for the Marty Rust service platform."
+            },
+            "paths": paths,
+            "x-marty-protocol-revision": crate::openapi::protocol_revision(),
+            "components": {
+                "schemas": crate::openapi::schemas(),
+                "securitySchemes": {
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "Marty API key",
+                        "description": "Use an organization-bound Marty API key with an mk_live_, mk_test_, pk_live_ or pk_test_ prefix. OAuth access tokens and ID tokens are not accepted by this gateway authentication scheme. API-key scopes and tenant authorization still apply."
+                    },
+                    "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+                    "sessionCookie": {"type": "apiKey", "in": "cookie", "name": "sessionId"}
+                }
+            }
+        })
+    }
+}
+
+fn add_gateway_documentation_routes(table: &mut RouteTable) -> Result<(), PlatformError> {
+    for path in ["/openapi.json", "/docs", "/redoc"] {
+        table.add(RouteConfig {
+            name: format!("internal:gateway-documentation:{path}"),
+            pattern: path.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "gateway".into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 5_000,
+            retries: 0,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+    }
+    Ok(())
+}
+
+fn operation_id(method: HttpMethod, path: &str) -> String {
+    // Both URLs remain supported by the same notification handler. Keep the
+    // UI's nested path ID stable and disambiguate its dashed compatibility alias.
+    if path == "/v1/notifications/unread-count" {
+        return format!(
+            "{}_v1_notifications_unread_count_legacy_alias",
+            method_name(method).to_ascii_lowercase()
+        );
+    }
+    let normalized = path
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!(
+        "{}_{}",
+        method_name(method).to_ascii_lowercase(),
+        normalized.trim_matches('_')
+    )
+}
+
+fn path_parameters(path: &str) -> Vec<Value> {
+    path.split('{')
+        .skip(1)
+        .filter_map(|tail| tail.split_once('}').map(|(parameter, _)| parameter))
+        .map(|parameter| parameter.split(':').next().unwrap_or(parameter))
+        .filter(|parameter| !parameter.is_empty())
+        .map(|parameter| {
+            json!({
+                "name": parameter,
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            })
+        })
+        .collect()
+}
+
+const fn status_description(status: u16) -> &'static str {
+    match status {
+        200 => "Successful response",
+        201 => "Resource created",
+        202 => "Request accepted",
+        204 => "Successful response with no content",
+        _ => "Declared response",
+    }
+}
+
+pub fn route_ownership(path: &str) -> RouteOwnership {
+    if gateway_owned(path) {
+        return RouteOwnership {
+            service: "gateway",
+            requires_authentication: !public_route(path),
+            gateway_owned: true,
+        };
+    }
+    let service = special_service(path).unwrap_or_else(|| {
+        SERVICE_PREFIXES
+            .iter()
+            .find(|(prefix, _)| path.starts_with(prefix))
+            .map_or("gateway", |(_, service)| *service)
+    });
+    RouteOwnership {
+        service,
+        requires_authentication: !public_route(path),
+        gateway_owned: service == "gateway",
+    }
+}
+
+fn special_service(path: &str) -> Option<&'static str> {
+    if path == crate::external_observation::PATH
+        || crate::external_association::is_namespace(path)
+        || crate::external_observation::is_admin_namespace(path)
+    {
+        return Some("issuance");
+    }
+    if STATUS_PUBLIC.is_match(path) {
+        return Some("revocation-profiles");
+    }
+    if path == "/v1/me/preferences" {
+        return Some("organizations");
+    }
+    if path == "/v1/issued-credentials/mine" {
+        return Some("applicant");
+    }
+    if ORGANIZATION_APPLICANT.is_match(path) {
+        return Some(if APPLICANT_ISSUANCE_ADAPTER.is_match(path) {
+            "issuance"
+        } else {
+            "applicant"
+        });
+    }
+    None
+}
+
+pub fn route_for(
+    table: &RouteTable,
+    method: HttpMethod,
+    path: &str,
+) -> Result<mmf_platform::RouteMatch, PlatformError> {
+    table.find(&GatewayRequest::new(method, path, 0))
+}
+
+#[cfg(test)]
+mod association_route_contract_tests {
+    use super::*;
+    #[test]
+    fn every_association_route_preserves_core_service_auth_and_zero_retries() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let paths = crate::external_association::paths();
+        assert_eq!(paths.len(), 19);
+        for (template, _) in paths {
+            let path = template
+                .replace("{organization_id}", "20000000-0000-4000-8000-000000000001")
+                .replace("{resource_id}", "30000000-0000-4000-8000-000000000001");
+            let found = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route_ownership(&path).service, "issuance");
+            assert!(requires_issuance_service_auth(&path));
+            assert!(found.route.auth_required);
+            assert_eq!(found.route.retries, 0);
+            assert_eq!(found.route.upstream_service, "issuance");
+        }
+    }
+}
+const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
+    "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
+
+#[must_use]
+pub fn requires_issuance_service_auth(path: &str) -> bool {
+    (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
+        && path != "/v1/issuance/authorize"
+        && path != "/v1/passport/webhooks/personalization"
+}
+
+const SERVICE_PREFIXES: &[(&str, &str)] = &[
+    ("/v1/organizations/invitations/validate", "auth"),
+    ("/v1/organizations/join/code/validate", "organizations"),
+    ("/v1/issuance/deferred-credential", "issuance"),
+    ("/v1/issuance/didcomm/deliver", "issuance"),
+    ("/v1/presentation-policies", "presentation-policies"),
+    ("/v1/compliance-profiles", "compliance-profiles"),
+    ("/v1/credential-templates", "credential-templates"),
+    ("/v1/delivery-destinations", "credential-templates"),
+    ("/v1/deployment-profiles", "deployment-profiles"),
+    ("/v1/device-registration", "device-registration"),
+    ("/v1/revocation-profiles", "revocation-profiles"),
+    ("/v1/cascade-revocations", "revocation-profiles"),
+    ("/v1/revocation-batches", "revocation-profiles"),
+    ("/v1/application-templates", "issuance"),
+    ("/v1/issued-credentials", "issuance"),
+    ("/v1/trust-frameworks", "trust-profiles"),
+    ("/v1/trust-registry", "trust-profiles"),
+    ("/v1/trust-profiles", "trust-profiles"),
+    ("/v1/issuer-entities", "trust-profiles"),
+    ("/v1/wallet-registry", "credential-templates"),
+    ("/v1/flows/instances", "flows"),
+    ("/v1/flows/siop/submit", "flows"),
+    ("/v1/issuance/offers", "issuance"),
+    ("/v1/issuance/authorize", "issuance"),
+    ("/v1/issuance/credential", "issuance"),
+    ("/v1/issuance/notification", "issuance"),
+    ("/v1/issuance/nonce", "issuance"),
+    ("/v1/issuance/token", "issuance"),
+    ("/v1/issuance/par", "issuance"),
+    ("/v1/flows/siop", "flows"),
+    ("/v1/organizations", "organizations"),
+    ("/v1/notifications", "notifications"),
+    ("/v1/subscriptions", "notifications"),
+    ("/v1/webhooks", "notifications"),
+    ("/v1/policy-sets", "organizations"),
+    ("/v1/signing-keys", "signing-keys"),
+    ("/v1/api-keys", "organizations"),
+    ("/v1/passport", "issuance"),
+    ("/v1/issuance", "issuance"),
+    ("/v1/flows", "flows"),
+    ("/v1/verify", "verification"),
+    ("/v1/devices", "device-registration"),
+    ("/v1/auth", "auth"),
+    ("/v1/me", "applicant"),
+];
+
+static WALLET_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/v1/(?:flows/instances|verify)/[^/]+/(?:request|submit)$")
+        .expect("static wallet route regex")
+});
+
+static STATUS_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$")
+        .expect("static status route regex")
+});
+
+static ORGANIZATION_APPLICANT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/v1/organizations/[^/]+/applicants(?:/|$)")
+        .expect("static organization applicant regex")
+});
+
+static APPLICANT_ISSUANCE_ADAPTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^/v1/organizations/[^/]+/applicants/[^/]+/(?:evidence-facts|evidence/api-checks/[^/]+/run)$",
+    )
+    .expect("static applicant issuance adapter regex")
+});
+
+static APPLICANT_EVIDENCE_SUMMARY_COMPOSITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/v1/organizations/[^/]+/applicants/[^/]+/evidence-summary$")
+        .expect("static applicant evidence summary composition regex")
+});
+
+static ORGANIZATION_COMPOSITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^/v1/organizations/[^/]+/(?:lifecycle(?:/purge)?|runtime/status|dashboard/applicant-stats|integration-info)$",
+    )
+    .expect("static organization composition regex")
+});
+
+static APPENDED_DISCOVERY_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^/org/[^/]+(?:/(?:waltid|credential-manager|apple-wallet))?/\.well-known/(?:openid-credential-issuer|oauth-authorization-server)$",
+    )
+    .expect("static appended discovery route regex")
+});
+
+static DID_WEB_PUBLIC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^/orgs/[^/]+/did\.json$").expect("static DID Web route regex"));
+
+pub(crate) fn oid4vci_protocol_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/issuance/offers"
+            | "/v1/issuance/token"
+            | "/v1/issuance/credential"
+            | "/v1/issuance/nonce"
+            | "/v1/issuance/notification"
+            | "/v1/issuance/deferred-credential"
+            | "/v1/issuance/authorize"
+            | "/v1/issuance/par"
+    ) || path
+        .strip_prefix("/v1/issuance/offers/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+pub(crate) fn public_mdoc_crl_path(path: &str) -> bool {
+    static RESOURCE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^/v1/signing-keys/mdoc-crls/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[A-Za-z0-9_-]{1,128}\.crl$")
+            .expect("owned MDOC CDP path")
+    });
+    RESOURCE.is_match(path)
+}
+
+pub(crate) fn mdoc_crl_operator_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/mdoc-crls/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+fn public_route(path: &str) -> bool {
+    crate::public_verification::is_public_path(path)
+        || public_mdoc_crl_path(path)
+        || path == "/openapi.json"
+        || path == "/v1/protocol-support"
+        || path == "/docs"
+        || path == "/redoc"
+        || path == "/ready"
+        || path == "/health"
+        || path.starts_with("/health/")
+        || path.starts_with("/.well-known/")
+        || path.starts_with("/credentials/")
+        || path.starts_with("/internal/signing-keys")
+        || path.ends_with("/did.json")
+        || path.starts_with("/v1/auth")
+        || path == "/v1/devices/pair"
+        || path == "/v1/devices/pairing-ack"
+        || path == "/v1/devices/holder-signatures"
+        || path == "/v1/devices/holder-credential-rotations"
+        || path == "/v1/devices/wallet-issuer-keys"
+        || path == "/v1/devices/wallet-verifier-authority"
+        || path == "/v1/organizations/invitations/validate"
+        || path == "/v1/organizations/join/code/validate"
+        || path == "/v1/passport/webhooks/personalization"
+        || path.starts_with("/v1/trust-registry")
+        || APPENDED_DISCOVERY_PUBLIC.is_match(path)
+        || DID_WEB_PUBLIC.is_match(path)
+        || oid4vci_protocol_route(path)
+        || path.starts_with("/v1/flows/siop/submit")
+        || WALLET_PUBLIC.is_match(path)
+        || STATUS_PUBLIC.is_match(path)
+}
+
+fn gateway_owned(path: &str) -> bool {
+    path == "/openapi.json"
+        || path == "/v1/protocol-support"
+        || path == "/v1/credential-templates/issuer-options"
+        || path == "/docs"
+        || path == "/redoc"
+        || path.starts_with("/.well-known/")
+        || path.starts_with("/credentials/")
+        || path.starts_with("/health")
+        || path.starts_with("/internal/signing-keys")
+        || path.starts_with("/org/")
+        || path.starts_with("/orgs/")
+        || path.starts_with("/v1/vc-api")
+        || path == "/v1/notifications/events/push"
+        || APPLICANT_EVIDENCE_SUMMARY_COMPOSITION.is_match(path)
+        || ORGANIZATION_COMPOSITION.is_match(path)
+}
+
+fn upstream_rewrite(method: HttpMethod, declared_path: &str) -> Option<String> {
+    let path = match (method, declared_path) {
+        (HttpMethod::Post, "/v1/issuance") => "/v1/issuance/initiate",
+        (HttpMethod::Get, "/v1/issuance") => "/v1/issuance/transactions",
+        (HttpMethod::Get, "/v1/issuance/{issuance_id}") => {
+            "/v1/issuance/transactions/{issuance_id}"
+        }
+        (HttpMethod::Post, "/v1/issuance/{issuance_id}/revoke") => {
+            "/v1/issuance/transactions/{issuance_id}/revoke"
+        }
+        (HttpMethod::Get, "/v1/issuance/{issuance_id}/revocation-status") => {
+            "/v1/issuance/transactions/{issuance_id}/revocation-status"
+        }
+        (
+            HttpMethod::Get,
+            "/v1/organizations/{organization_id}/applicants/{application_id}/evidence-facts",
+        ) => "/internal/applications/{application_id}/evidence-facts",
+        (
+            HttpMethod::Post,
+            "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/api-checks/{check_id}/run",
+        ) => "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
+        _ => return None,
+    };
+    Some(path.into())
+}
+
+fn route_priority(path: &str) -> i32 {
+    let segments = path.split('/').filter(|value| !value.is_empty());
+    let mut priority = 0;
+    for segment in segments {
+        priority += if segment.contains(":path}") {
+            1
+        } else if segment.starts_with('{') {
+            10
+        } else {
+            100
+        };
+    }
+    if !path.contains('{') {
+        priority += 10_000;
+    }
+    priority
+}
+
+const fn method_name(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+        HttpMethod::Put => "PUT",
+        HttpMethod::Delete => "DELETE",
+        HttpMethod::Patch => "PATCH",
+        HttpMethod::Head => "HEAD",
+        HttpMethod::Options => "OPTIONS",
+        HttpMethod::Trace => "TRACE",
+        HttpMethod::Connect => "CONNECT",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_suspension_requires_tenant_bound_write_scope() {
+        use crate::authorization::{
+            api_key_allowed, authorize_api_key, resolve_action, OrganizationMembership,
+        };
+        let path = "/v1/presentation-policies/policy-one/suspend";
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        let route = route_for(&table, HttpMethod::Post, path).unwrap();
+        assert_eq!(route.route.upstream_service, "presentation-policies");
+        assert!(route.route.auth_required);
+        let permission = resolve_action("POST", path).unwrap();
+        assert_eq!(permission.permission, "presentation-policy:edit");
+        let mut membership = OrganizationMembership {
+            user_id: "editor".into(),
+            organization_id: "org-one".into(),
+            status: "active".into(),
+            role_names: Default::default(),
+            permissions: ["presentation-policy:edit".into()].into(),
+            is_owner: false,
+        };
+        assert!(membership.allows(permission.permission));
+        membership.permissions = ["presentation-policy:view".into()].into();
+        assert!(!membership.allows(permission.permission));
+        assert!(api_key_allowed(
+            permission.permission,
+            &["trust:write".into()]
+        ));
+        assert!(!api_key_allowed(
+            permission.permission,
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(permission.permission, &[]));
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("other-org"),
+            &["trust:write".into()]
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("org-one"),
+            &["trust:write".into()]
+        )
+        .is_ok());
+        assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+    }
+
+    #[test]
+    fn passport_route_table_opt_in_changes_only_frozen_public_owners() {
+        #[derive(Deserialize)]
+        struct PassportRoutes {
+            routes: Vec<PassportRoute>,
+        }
+        #[derive(Deserialize)]
+        struct PassportRoute {
+            method: HttpMethod,
+            path: String,
+        }
+
+        let frozen: PassportRoutes = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-physical-passport-native.json"
+        ))
+        .unwrap();
+        let contract = GatewayContract::load().unwrap();
+        let legacy = contract.proxy_route_table().unwrap();
+        let native = contract
+            .proxy_route_table_with_passport_native(true)
+            .unwrap();
+        let provider_ingress = contract
+            .proxy_route_table_with_passport_selectors(true, true)
+            .unwrap();
+        assert_eq!(
+            legacy.routes().len() + issuance_native::PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT,
+            native.routes().len()
+        );
+        assert_eq!(provider_ingress.routes().len(), native.routes().len());
+        let mut public_count = 0;
+        for route in frozen.routes {
+            let path = route.path.replace("{application_id}", "job-1");
+            if path == "/v1/passport/webhooks/personalization" {
+                let old = route_for(&legacy, route.method, &path).unwrap();
+                let new = route_for(&native, route.method, &path).unwrap();
+                assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
+                assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+                let ingress = route_for(&provider_ingress, route.method, &path).unwrap();
+                assert_eq!(ingress.route.upstream_service, "passport-provider-ingress");
+                assert!(!ingress.route.auth_required);
+                assert!(!old.route.auth_required);
+                assert!(!new.route.auth_required);
+                assert!(!requires_issuance_service_auth(&path));
+                continue;
+            }
+            public_count += 1;
+            let old = route_for(&legacy, route.method, &path).unwrap();
+            let new = route_for(&native, route.method, &path).unwrap();
+            assert_eq!(old.route.upstream_service, issuance_native::LEGACY_SERVICE);
+            assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);
+            assert_eq!(
+                route_for(&provider_ingress, route.method, &path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                issuance_native::NATIVE_SERVICE
+            );
+            assert!(new.route.auth_required, "{path} must stay authenticated");
+        }
+        assert_eq!(public_count, 8);
+        let read = "/v1/passport/applications/job-1";
+        assert!(route_for(&legacy, HttpMethod::Get, read).is_err());
+        let read_route = route_for(&native, HttpMethod::Get, read).unwrap();
+        assert_eq!(
+            read_route.route.upstream_service,
+            issuance_native::NATIVE_SERVICE
+        );
+        assert!(read_route.route.auth_required);
+        assert_eq!(
+            issuance_native::passport_required_permission(HttpMethod::Get, read),
+            Some("issuance:view")
+        );
+        let cancel = "/v1/passport/applications/job-1/cancel";
+        assert!(route_for(&legacy, HttpMethod::Post, cancel).is_err());
+        let administrative = route_for(&native, HttpMethod::Post, cancel).unwrap();
+        assert_eq!(
+            administrative.route.upstream_service,
+            issuance_native::NATIVE_SERVICE
+        );
+        assert!(administrative.route.auth_required);
+        assert!(route_for(
+            &native,
+            HttpMethod::Post,
+            "/v1/passport/applications/job-1/activate/extra"
+        )
+        .is_err());
+    }
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct ProxyTrustContract {
+        schema_version: u32,
+        issuance_service_auth: Vec<IssuanceAuthCase>,
+        special_ownership: Vec<OwnershipCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct IssuanceAuthCase {
+        name: String,
+        path: String,
+        required: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct OwnershipCase {
+        method: HttpMethod,
+        path: String,
+        service: String,
+        gateway_owned: bool,
+        upstream_path: String,
+    }
+
+    #[test]
+    fn language_neutral_proxy_trust_boundary_contract() {
+        let contract: ProxyTrustContract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-proxy-trust-boundary.json"
+        ))
+        .expect("proxy trust contract");
+        assert_eq!(contract.schema_version, 1);
+        for case in contract.issuance_service_auth {
+            assert_eq!(
+                requires_issuance_service_auth(&case.path),
+                case.required,
+                "{}",
+                case.name
+            );
+        }
+        for case in contract.special_ownership {
+            let owner = route_ownership(&case.path);
+            assert_eq!(owner.service, case.service, "{}", case.path);
+            assert_eq!(owner.gateway_owned, case.gateway_owned, "{}", case.path);
+            let matched = route_for(
+                &GatewayContract::load()
+                    .expect("gateway contract")
+                    .route_table()
+                    .expect("route table"),
+                case.method,
+                &case.path,
+            )
+            .expect("special ownership route");
+            let rewritten = matched.route.rewrite_path.as_deref().map_or_else(
+                || case.path.clone(),
+                |template| {
+                    matched
+                        .params
+                        .iter()
+                        .fold(template.to_owned(), |path, (key, value)| {
+                            path.replace(&format!("{{{key}}}"), value)
+                        })
+                },
+            );
+            assert_eq!(rewritten, case.upstream_path, "{}", case.path);
+        }
+    }
+
+    #[test]
+    fn frozen_route_and_middleware_contract_builds_one_mmf_table() {
+        let contract = GatewayContract::load().expect("gateway contract");
+        let table = contract.route_table().expect("route table");
+        assert_eq!(
+            table.routes().len(),
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
+                + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
+                + 42
+        );
+        assert_eq!(
+            route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
+                .expect("catch-all auth route")
+                .route
+                .upstream_service,
+            "auth"
+        );
+        assert_eq!(
+            route_for(
+                &table,
+                HttpMethod::Get,
+                "/v1/organizations/org-1/scim/v2/Users/user-1",
+            )
+            .expect("catch-all SCIM route")
+            .route
+            .upstream_service,
+            "organizations"
+        );
+    }
+
+    #[test]
+    fn public_verification_routes_are_narrow_and_do_not_open_flow_management() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let id = "54cfd66e-b7ed-8926-9f8b-18e63fa83797";
+        for &(method, template) in crate::public_verification::ROUTES {
+            let path = template.replace("{session_id}", id);
+            let selected = route_for(&table, method, &path).unwrap();
+            assert_eq!(selected.route.upstream_service, "flows");
+            assert!(!selected.route.auth_required);
+            assert_eq!(selected.route.retries, 0);
+            assert!(!route_ownership(&path).requires_authentication);
+            assert!(crate::authorization::skips_tenant_authorization(&path));
+        }
+        for path in [
+            "/v1/flows/definitions",
+            "/v1/flows/instances",
+            "/v1/flows/instances/flow-1/result",
+            "/v1/flows/public/verification/sessions/54cfd66e-b7ed-8926-9f8b-18e63fa83797/result",
+        ] {
+            assert!(route_ownership(path).requires_authentication, "{path}");
+            assert!(
+                !crate::authorization::skips_tenant_authorization(path),
+                "{path}"
+            );
+        }
+        assert!(route_for(
+            &table,
+            HttpMethod::Delete,
+            "/v1/flows/public/verification/catalog"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn notification_routes_describe_native_operations_instead_of_a_management_catch_all() {
+        let contract = GatewayContract::load().unwrap();
+        let routes = contract.route_table().unwrap();
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications/send"),
+            (HttpMethod::Get, "/v1/notifications/unread/count"),
+            (
+                HttpMethod::Get,
+                "/v1/notifications/notification-one/delivery-results",
+            ),
+            (HttpMethod::Patch, "/v1/notifications/notification-one/read"),
+            (
+                HttpMethod::Delete,
+                "/v1/notifications/notification-one/read",
+            ),
+            (HttpMethod::Post, "/v1/notifications/read-all"),
+        ] {
+            assert_eq!(
+                route_for(&routes, method, path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                "notifications"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications"),
+            (HttpMethod::Put, "/v1/notifications/notification-one"),
+            (HttpMethod::Post, "/v1/notifications/rules"),
+            (HttpMethod::Patch, "/v1/notifications/rules/rule-one"),
+            (HttpMethod::Patch, "/v1/notifications/preferences"),
+        ] {
+            assert!(
+                route_for(&routes, method, path).is_err(),
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_operation_ids_are_unique_and_notification_aliases_remain_present() {
+        let contract = GatewayContract::load().unwrap();
+        let document = contract.openapi_document("test");
+        let mut identifiers = BTreeSet::new();
+        for path in document["paths"].as_object().unwrap().values() {
+            for operation in path.as_object().unwrap().values() {
+                let id = operation["operationId"].as_str().unwrap();
+                assert!(identifiers.insert(id), "duplicate operation ID: {id}");
+            }
+        }
+        assert_eq!(
+            identifiers.len(),
+            contract
+                .routes
+                .iter()
+                .filter(|route| route.include_in_schema)
+                .count()
+                + 42
+        );
+        for operation in [
+            "submit_external_observation",
+            "revoke_external_observation_producer",
+            "approve_external_observation_producer",
+            "rotate_external_observation_producer_key",
+            "create_external_observation_producer",
+            "change_external_observation_producer_expiry",
+            "replace_external_observation_producer_bindings",
+            "create_external_observation_binding",
+            "activate_external_observation_binding",
+            "deactivate_external_observation_binding",
+            "replace_external_observation_binding_definition",
+            "inspect_external_observation_producer",
+            "read_external_observation_producer_audit",
+            "inspect_external_observation_binding",
+            "read_external_observation_binding_audit",
+            "inspect_external_observation_receipt",
+            "materialize_external_observation_receipt",
+            "inspect_external_observation_materialization",
+        ] {
+            assert!(
+                identifiers.contains(operation),
+                "missing operation: {operation}"
+            );
+        }
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread/count"]["get"]["operationId"],
+            "get_v1_notifications_unread_count"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread-count"]["get"]["operationId"],
+            "get_v1_notifications_unread_count_legacy_alias"
+        );
+    }
+
+    #[test]
+    fn openapi_bearer_scheme_matches_gateway_key_authentication() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let scheme = &document["components"]["securitySchemes"]["bearerAuth"];
+        assert_eq!(scheme["type"], "http");
+        assert_eq!(scheme["scheme"], "bearer");
+        assert_eq!(scheme["bearerFormat"], "Marty API key");
+        let description = scheme["description"].as_str().unwrap();
+        for prefix in ["mk_live_", "mk_test_", "pk_live_", "pk_test_"] {
+            let key = format!("{prefix}contract-test");
+            let headers = std::collections::BTreeMap::from([(
+                "authorization".to_owned(),
+                format!("Bearer {key}"),
+            )]);
+            assert!(description.contains(prefix));
+            assert_eq!(
+                crate::middleware::extract_api_key(&headers),
+                Some(key.as_str())
+            );
+        }
+        let jwt_headers = std::collections::BTreeMap::from([(
+            "authorization".to_owned(),
+            "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJjbGllbnQifQ.signature".to_owned(),
+        )]);
+        assert!(crate::middleware::extract_api_key(&jwt_headers).is_none());
+        assert!(description.contains("OAuth access tokens and ID tokens are not accepted"));
+    }
+
+    #[test]
+    fn organization_defaults_have_native_routes_scoped_grants_and_strict_public_schemas() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.proxy_route_table().unwrap();
+        let public_path = "/v1/organizations/11111111-1111-1111-1111-111111111111/defaults";
+        for (method, permission) in [
+            (HttpMethod::Get, "organization:view"),
+            (HttpMethod::Patch, "organization:edit"),
+        ] {
+            let route = route_for(&table, method, public_path).unwrap();
+            assert_eq!(route.route.upstream_service, "organizations");
+            assert_eq!(
+                crate::authorization::resolve_action(method_name(method), public_path)
+                    .unwrap()
+                    .permission,
+                permission
+            );
+        }
+        assert!(route_for(&table, HttpMethod::Put, public_path).is_err());
+        assert!(!crate::authorization::skips_tenant_authorization(
+            public_path
+        ));
+        let document = contract.openapi_document("test");
+        let operations = &document["paths"]["/v1/organizations/{org_id}/defaults"];
+        for method in ["get", "patch"] {
+            assert_eq!(
+                operations[method]["responses"]["200"]["content"]["application/json"]["schema"]
+                    ["$ref"],
+                "#/components/schemas/runtime__organization_defaults"
+            );
+        }
+        assert_eq!(
+            operations["patch"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__organization_defaults_patch"
+        );
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["runtime__organization_defaults_patch"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults_patch"]["minProperties"],
+            1
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schemas["runtime__organization_defaults"]["required"],
+            json!(marty_service_contracts::organization_defaults::FIELDS)
+        );
+    }
+
+    #[test]
+    fn openapi_is_derived_from_every_schema_visible_route() {
+        let contract = GatewayContract::load().expect("gateway contract");
+        let document = contract.openapi_document("1.2.3");
+        assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(
+            document["paths"]["/v1/organizations/{org_id}"]["patch"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/schemas__organization_update_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/trust-profiles/{profile_id}"]["get"]
+                ["x-marty-response-schema-documented"],
+            true
+        );
+        assert_eq!(document["info"]["title"], "Marty API Gateway");
+        assert_eq!(document["info"]["version"], "1.2.3");
+        let paths = document["paths"].as_object().expect("OpenAPI paths");
+        let mut operations = 0;
+        for route in &contract.routes {
+            let operation = paths
+                .get(&route.path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get(&method_name(route.method).to_ascii_lowercase()));
+            if route.include_in_schema {
+                let operation = operation.unwrap_or_else(|| {
+                    panic!(
+                        "missing OpenAPI operation {} {}",
+                        method_name(route.method),
+                        route.path
+                    )
+                });
+                assert!(operation["responses"]
+                    .get(route.status_code.to_string())
+                    .is_some());
+                assert_eq!(
+                    operation["x-marty-upstream-service"],
+                    route_ownership(&route.path).service
+                );
+                operations += 1;
+            } else {
+                assert!(operation.is_none(), "excluded operation was documented");
+            }
+        }
+        assert_eq!(
+            operations,
+            contract
+                .routes
+                .iter()
+                .filter(|route| route.include_in_schema)
+                .count()
+        );
+        assert_eq!(
+            document["paths"]["/v1/organizations/{organization_id}/applicants"]["get"]
+                ["parameters"][0]["name"],
+            "organization_id"
+        );
+        assert!(document.to_string().find("commerce").is_none());
+    }
+
+    #[test]
+    fn protocol_support_catalog_is_public_gateway_owned_discovery() {
+        let ownership = route_ownership("/v1/protocol-support");
+        assert_eq!(ownership.service, "gateway");
+        assert!(ownership.gateway_owned);
+        assert!(!ownership.requires_authentication);
+        let contract = GatewayContract::load().expect("gateway contract");
+        let route = route_for(
+            &contract.runtime_route_table().expect("runtime routes"),
+            HttpMethod::Get,
+            "/v1/protocol-support",
+        )
+        .expect("support route");
+        assert_eq!(route.route.upstream_service, "gateway");
+        let operation = &contract.openapi_document("test")["paths"]["/v1/protocol-support"]["get"];
+        assert_eq!(operation["security"], json!([]));
+        assert_eq!(operation["x-marty-protocol-support"], "implemented");
+    }
+
+    #[test]
+    fn internal_proxy_routes_do_not_mutate_public_contract() {
+        let contract = GatewayContract::load().expect("gateway contract");
+        let public = contract.route_table().expect("public routes");
+        let pending = route_for(&public, HttpMethod::Get, "/v1/flows/physical-start-intents")
+            .expect("physical start recovery route");
+        assert_eq!(pending.route.upstream_service, "flows");
+        assert!(pending.route.auth_required);
+        assert!(route_for(
+            &public,
+            HttpMethod::Post,
+            "/v1/flows/physical-start-intents"
+        )
+        .is_err());
+        assert!(route_for(
+            &public,
+            HttpMethod::Get,
+            "/internal/passport/flow-starts/owned-id"
+        )
+        .is_err());
+        assert_eq!(
+            public.routes().len(),
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
+                + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
+                + 42
+        );
+        assert_eq!(
+            contract
+                .runtime_route_table()
+                .expect("runtime")
+                .routes()
+                .len(),
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
+                + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
+                + 42
+                + 3
+        );
+        let proxy = contract.proxy_route_table().expect("proxy");
+        assert_eq!(
+            proxy.routes().len(),
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
+                + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
+                + 42
+                + 16
+        );
+        assert_eq!(
+            route_for(
+                &proxy,
+                HttpMethod::Get,
+                "/v1/compliance-profiles/system/discoverable"
+            )
+            .expect("internal route")
+            .route
+            .upstream_service,
+            "compliance-profiles"
+        );
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/organizations/org-1/api-keys")
+                .expect("legacy API-key upstream route")
+                .route
+                .upstream_service,
+            "organizations"
+        );
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/issuance"),
+            (HttpMethod::Post, "/v1/issuance/credential"),
+            (HttpMethod::Post, "/v1/issuance/token"),
+            (HttpMethod::Post, "/v1/issuance/nonce"),
+            (HttpMethod::Get, "/v1/issuance/offers/tx-1"),
+            (HttpMethod::Get, "/v1/issuance"),
+            (HttpMethod::Get, "/v1/issuance/tx-1"),
+            (HttpMethod::Get, "/v1/issued-credentials"),
+            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/revoke",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/suspend",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/reinstate",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/issued-credentials/credential-1/renew",
+            ),
+            (HttpMethod::Get, "/v1/issuance/authorize"),
+            (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
+            (HttpMethod::Post, "/v1/issuance/notification"),
+        ] {
+            assert_eq!(
+                route_for(&proxy, method, path)
+                    .expect("native issuance route")
+                    .route
+                    .upstream_service,
+                issuance_native::NATIVE_SERVICE,
+                "{method:?} {path}"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Put, "/v1/issuance/oid4vci-clients"),
+            (HttpMethod::Post, "/v1/issuance/transactions/tx-1/revoke"),
+            (HttpMethod::Get, "/v1/issuance/credentials"),
+        ] {
+            assert_eq!(
+                issuance_native::upstream_service(method, path),
+                issuance_native::NATIVE_SERVICE,
+                "migrated management route must remain native-owned: {method:?} {path}"
+            );
+        }
+        let internal_management_path = format!(
+            "/__gateway/{}/v1/issuance/oid4vci-clients",
+            issuance_native::NATIVE_SERVICE
+        );
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Put, &internal_management_path)
+                .expect("native management helper route")
+                .route
+                .upstream_service,
+            issuance_native::NATIVE_SERVICE,
+            "gateway-originated registered-client updates must remain native-owned"
+        );
+        assert!(
+            route_for(&proxy, HttpMethod::Post, &internal_management_path).is_err(),
+            "the native helper must not broaden management access to unsupported methods"
+        );
+        for method in [HttpMethod::Post, HttpMethod::Put] {
+            assert!(
+                route_for(
+                    &proxy,
+                    method,
+                    "/__gateway/issuance-native/internal/applications/app-1/evidence-summary"
+                )
+                .is_err(),
+                "native read-only composition must reject {method:?}"
+            );
+        }
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/passport/capabilities")
+                .expect("retained legacy issuance route")
+                .route
+                .upstream_service,
+            issuance_native::LEGACY_SERVICE
+        );
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/issued-credentials/mine")
+                .expect("applicant issued-credential route")
+                .route
+                .upstream_service,
+            "applicant"
+        );
+        assert!(
+            route_for(
+                &proxy,
+                HttpMethod::Get,
+                "/v1/issued-credentials/credential-1/status"
+            )
+            .is_err(),
+            "internal lifecycle status must not become a public gateway route"
+        );
+    }
+
+    #[test]
+    fn offline_audit_routes_require_authenticated_organization_ingestion_scope() {
+        use crate::authorization::{api_key_allowed, authorize_api_key, resolve_action};
+        let org = "28d552e4-4a94-4fd6-9b60-55e5e9ccb1a3";
+        let base = format!("/v1/organizations/{org}/offline-verification-events");
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        for (method, path) in [
+            (HttpMethod::Get, base.clone()),
+            (HttpMethod::Post, base.clone()),
+            (
+                HttpMethod::Get,
+                format!("{base}/10b796cf-17c0-4f71-bd4e-2ec62089c0b2"),
+            ),
+        ] {
+            let route = route_for(&table, method, &path).expect("public audit ingestion route");
+            assert_eq!(route.route.upstream_service, "organizations");
+            assert!(route.route.auth_required);
+            let method_name = if method == HttpMethod::Get {
+                "GET"
+            } else {
+                "POST"
+            };
+            let permission =
+                resolve_action(method_name, &path).expect("explicit ingestion authorization");
+            assert_eq!(permission.permission, "audit:ingest");
+        }
+        assert!(api_key_allowed("audit:ingest", &["audit:write".into()]));
+        for scopes in [vec![], vec!["audit:read".into()], vec!["admin:full".into()]] {
+            assert!(!api_key_allowed("audit:ingest", &scopes));
+        }
+        assert!(authorize_api_key("audit:ingest", org, Some(org), &["audit:write".into()]).is_ok());
+        assert!(authorize_api_key(
+            "audit:ingest",
+            org,
+            Some("another-org"),
+            &["audit:write".into()]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn d11_routes_resolve_only_through_the_public_gateway_contract() {
+        let proxy = GatewayContract::load()
+            .expect("gateway contract")
+            .proxy_route_table()
+            .expect("proxy routes");
+        for (method, path, service) in [
+            (HttpMethod::Post, "/v1/api-keys", "organizations"),
+            (HttpMethod::Delete, "/v1/api-keys/key-1", "organizations"),
+            (
+                HttpMethod::Get,
+                "/v1/credential-templates",
+                "credential-templates",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/application-templates",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates/template-1/validate",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/application-templates/template-1/activate",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (HttpMethod::Post, "/v1/me/applications", "applicant"),
+            (
+                HttpMethod::Post,
+                "/v1/me/applications/application-1/submit",
+                "applicant",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/organizations/org-1/applicants",
+                "applicant",
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/organizations/org-1/applicants/application-1/approve",
+                "applicant",
+            ),
+            (
+                HttpMethod::Get,
+                "/v1/organizations/org-1/applicants/application-1/evidence-facts",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (
+                HttpMethod::Post,
+                "/v1/organizations/org-1/applicants/application-1/evidence/api-checks/check-1/run",
+                issuance_native::NATIVE_SERVICE,
+            ),
+            (HttpMethod::Post, "/v1/webhooks", "notifications"),
+            (HttpMethod::Post, "/v1/subscriptions", "notifications"),
+            (
+                HttpMethod::Get,
+                "/v1/webhooks/webhook-1/deliveries",
+                "notifications",
+            ),
+        ] {
+            let matched = route_for(&proxy, method, path)
+                .unwrap_or_else(|_| panic!("missing D-11 route {method:?} {path}"));
+            assert_eq!(matched.route.upstream_service, service, "{method:?} {path}");
+            assert!(!path.contains("/internal/"), "{path}");
+        }
+    }
+
+    #[test]
+    fn managed_mdoc_certificate_routes_are_exact_authenticated_signing_keys_routes() {
+        let contract = GatewayContract::load().unwrap();
+        assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
+        for table in [
+            contract.route_table().unwrap(),
+            contract.proxy_route_table().unwrap(),
+        ] {
+            for path in MDOC_CERTIFICATE_PATHS {
+                let matched = route_for(&table, HttpMethod::Post, path).unwrap();
+                assert_eq!(matched.route.pattern, path);
+                assert_eq!(matched.route.upstream_service, "signing-keys");
+                assert!(matched.route.auth_required);
+                assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
+                assert!(matched.route.rewrite_path.is_none());
+                assert_eq!(matched.route.methods, BTreeSet::from([HttpMethod::Post]));
+                assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn governed_mdoc_crl_has_one_public_resource_and_one_authenticated_mutation() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let org = "00000000-0000-0000-0000-000000000001";
+        let get_path = format!("/v1/signing-keys/mdoc-crls/{org}/iaca_1.crl");
+        let get = route_for(&table, HttpMethod::Get, &get_path).unwrap();
+        assert_eq!(get.route.upstream_service, "signing-keys");
+        assert!(!get.route.auth_required);
+        assert!(!route_ownership(&get_path).requires_authentication);
+        assert!(crate::authorization::skips_tenant_authorization(&get_path));
+        for foreign in [
+            format!("/v1/signing-keys/mdoc-crls/{org}/iaca_1.crl/extra"),
+            "/v1/signing-keys/mdoc-crls/not-an-org/iaca_1.crl".into(),
+        ] {
+            assert!(route_ownership(&foreign).requires_authentication);
+            assert!(!crate::authorization::skips_tenant_authorization(&foreign));
+        }
+        let post_path = "/v1/signing-keys/mdoc-crls/iaca_1";
+        let post = route_for(&table, HttpMethod::Post, post_path).unwrap();
+        assert_eq!(post.route.upstream_service, "signing-keys");
+        assert!(post.route.auth_required);
+        assert_eq!(post.route.authentication_type, AuthenticationType::Jwt);
+        assert_eq!(
+            crate::authorization::resolve_action("POST", post_path)
+                .unwrap()
+                .permission,
+            "mdoc-certificate:issue-iaca"
+        );
+        assert!(!crate::authorization::skips_tenant_authorization(post_path));
+    }
+
+    #[test]
+    fn public_and_management_boundaries_match_legacy_gateway() {
+        for path in [
+            "/health",
+            "/.well-known/openid-configuration",
+            "/credentials/member-badge",
+            "/v1/issuance/token",
+            "/v1/flows/instances/flow-1/request",
+            "/org/org-1/waltid/.well-known/openid-credential-issuer",
+            "/orgs/example/did.json",
+        ] {
+            assert!(!route_ownership(path).requires_authentication, "{path}");
+        }
+        for path in [
+            "/v1/organizations",
+            "/v1/signing-keys/services",
+            "/v1/flows",
+            "/v1/verify",
+            "/v1/devices/challenge",
+        ] {
+            assert!(route_ownership(path).requires_authentication, "{path}");
+        }
+        assert_eq!(
+            route_ownership("/v1/devices/challenge").service,
+            "device-registration"
+        );
+    }
+}
+
+#[cfg(test)]
+mod observation_admin_contract_tests {
+    use super::*;
+    #[test]
+    fn administrator_revocation_is_public_gateway_to_issuance_with_no_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        let path="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+        for action in [
+            "revoke",
+            "approve",
+            "rotate-api-key",
+            "create",
+            "change-expiry",
+            "replace-bindings",
+        ] {
+            let path = path.replace("/revoke", &format!("/{action}"));
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod binding_admin_route_contract_tests {
+    use super::*;
+    #[test]
+    fn binding_administration_uses_issuance_service_auth_without_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        for action in ["create", "activate", "deactivate", "replace-definition"] {
+            let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod admin_read_route_tests {
+    use super::*;
+    #[test]
+    fn snapshots_are_authenticated_post_queries_to_issuance_with_no_retry() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        for tail in [
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/inspect",
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/audit",
+            "external-observation-bindings/binding-one/inspect",
+            "external-observation-bindings/binding-one/audit",
+            "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
+        ] {
+            let path = format!("/v1/organizations/20000000-0000-4000-8000-000000000001/{tail}");
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod observation_administrator_openapi_security_tests {
+    use super::*;
+    #[test]
+    fn every_observation_administrator_operation_uses_defined_session_only_security() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let mut count = 0;
+        for (path, item) in document["paths"].as_object().unwrap() {
+            if !crate::external_observation::is_admin_namespace(path) {
+                continue;
+            }
+            count += 1;
+            let operation = &item["post"];
+            assert_eq!(operation["security"], json!([{"sessionCookie":[]}]));
+            assert!(document["components"]["securitySchemes"]["sessionCookie"].is_object());
+            assert!(operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
+        assert_eq!(count, 22);
+    }
+}

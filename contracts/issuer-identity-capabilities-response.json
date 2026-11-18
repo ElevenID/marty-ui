@@ -1,0 +1,30 @@
+{
+  "title": "Organization issuer identity capabilities",
+  "description": "Creation tuples derived from current organization configuration using the provisioning selector. Availability of a tuple is not proof of provider health or public DID publication; creation revalidates dependencies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["organization_id", "managed_issuer_did_prefix", "basis", "creation_options"],
+  "properties": {
+    "organization_id": {"type": "string", "minLength": 1},
+    "managed_issuer_did_prefix": {
+      "type": ["string", "null"],
+      "pattern": "^did:web:.*:orgs:$",
+      "description": "Canonical deployment authority and organization path prefix, or null when managed publication is not configured."
+    },
+    "basis": {"const": "configuration"},
+    "creation_options": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key_purpose", "credential_format", "algorithm"],
+        "properties": {
+          "key_purpose": {"type": "string", "minLength": 1},
+          "credential_format": {"type": "string", "minLength": 1},
+          "algorithm": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

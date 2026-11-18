@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Marty Identity Protocol Blog</title>
+    <link>https://elevenidllc.com/blog</link>
+    <description>Technical insights, implementation guides, and business perspectives on the Marty Identity Protocol and verifiable credentials.</description>
+    <language>en-us</language>
+    <managingEditor>blog@elevenidllc.com (Marty Team)</managingEditor>
+    <webMaster>blog@elevenidllc.com (Marty Team)</webMaster>
+    <lastBuildDate>Mon, 13 Jul 2026 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://elevenidllc.com/blog/rss.xml" rel="self" type="application/rss+xml"/>
+    <image>
+      <url>https://elevenidllc.com/favicon-96x96.png</url>
+      <title>Marty Identity Protocol Blog</title>
+      <link>https://elevenidllc.com/blog</link>
+    </image>
+
+    <item>
+      <title>Revocation Strategies Compared: CRL, OCSP, StatusList, and Accumulator</title>
+      <link>https://elevenidllc.com/blog/revocation-strategies-compared</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/revocation-strategies-compared</guid>
+      <description>Credentials get revoked. MIP&apos;s revocation model supports four strategies with different privacy, latency, and offline trade-offs.</description>
+      <pubDate>Mon, 13 Jul 2026 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>Conformance Testing: Proving Your MIP Implementation Works</title>
+      <link>https://elevenidllc.com/blog/conformance-testing-for-implementers</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/conformance-testing-for-implementers</guid>
+      <description>MIP ships a conformance test suite with valid and invalid fixtures. Here&apos;s how to use it to validate your implementation.</description>
+      <pubDate>Mon, 29 Jun 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>MIP and Open Badges: Verifiable Education Credentials</title>
+      <link>https://elevenidllc.com/blog/mip-and-open-badges-education-credentials</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/mip-and-open-badges-education-credentials</guid>
+      <description>Open Badges 3.0 meets MIP — how the protocol brings trust governance to education and workforce credentials.</description>
+      <pubDate>Mon, 15 Jun 2026 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Holder Binding: Beyond Biometrics</title>
+      <link>https://elevenidllc.com/blog/holder-binding-beyond-biometrics</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/holder-binding-beyond-biometrics</guid>
+      <description>How do you prove the person presenting a credential is the person it was issued to? MIP supports cryptographic, biometric, and knowledge-based binding.</description>
+      <pubDate>Mon, 01 Jun 2026 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>Offline Verification: Design Patterns for Disconnected Environments</title>
+      <link>https://elevenidllc.com/blog/offline-verification-design-patterns</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/offline-verification-design-patterns</guid>
+      <description>Airports, border crossings, and field operations can&apos;t always reach the cloud. MIP&apos;s offline patterns maintain security without connectivity.</description>
+      <pubDate>Mon, 18 May 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>Building Trust Registries at Scale</title>
+      <link>https://elevenidllc.com/blog/building-trust-registries-at-scale</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/building-trust-registries-at-scale</guid>
+      <description>Who is authorized to issue which credentials? Trust registries answer this question — and MIP provides a framework for building them.</description>
+      <pubDate>Mon, 04 May 2026 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Post-Quantum Readiness in Identity Protocols</title>
+      <link>https://elevenidllc.com/blog/post-quantum-readiness-in-identity</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/post-quantum-readiness-in-identity</guid>
+      <description>Quantum computers will break RSA and ECDSA. MIP&apos;s algorithm-agnostic Trust Profiles are designed for the transition — here&apos;s how.</description>
+      <pubDate>Mon, 20 Apr 2026 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>MIP JSON Schemas: A Walkthrough for Implementers</title>
+      <link>https://elevenidllc.com/blog/mip-json-schemas-walkthrough</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/mip-json-schemas-walkthrough</guid>
+      <description>MIP ships with 35 JSON Schemas covering every protocol entity. Here&apos;s how to use them for validation, code generation, and API contracts.</description>
+      <pubDate>Mon, 06 Apr 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>Introducing the Marty Identity Protocol</title>
+      <link>https://elevenidllc.com/blog/introducing-mip</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/introducing-mip</guid>
+      <description>Today we open-source MIP — a vendor-neutral specification for cryptographically verifiable digital identity management. Five primitives, one protocol, zero lock-in.</description>
+      <pubDate>Mon, 23 Mar 2026 00:00:00 GMT</pubDate>
+      <category>Announcement</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Writing Cedar Policies for Identity Governance</title>
+      <link>https://elevenidllc.com/blog/cedar-policies-for-identity-governance</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/cedar-policies-for-identity-governance</guid>
+      <description>A practical guide to writing Cedar authorization policies for MIP — from basic access control to complex approval workflows.</description>
+      <pubDate>Mon, 16 Mar 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>SD-JWT Selective Disclosure: A Deep Dive</title>
+      <link>https://elevenidllc.com/blog/sd-jwt-selective-disclosure-deep-dive</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/sd-jwt-selective-disclosure-deep-dive</guid>
+      <description>How SD-JWT enables selective disclosure without zero-knowledge proofs — and where MIP uses it across Credential Templates and Presentation Policies.</description>
+      <pubDate>Mon, 02 Mar 2026 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>Compliance Profiles: Bridging Standards and Regulation</title>
+      <link>https://elevenidllc.com/blog/compliance-profiles-bridging-regulation</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/compliance-profiles-bridging-regulation</guid>
+      <description>ICAO, AAMVA, EUDI, Open Badges — every standard has its own rules. Compliance Profiles map them to MIP primitives so you configure once and comply everywhere.</description>
+      <pubDate>Mon, 16 Feb 2026 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Flows: Orchestrating the Identity Lifecycle</title>
+      <link>https://elevenidllc.com/blog/flows-orchestrating-identity-lifecycle</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/flows-orchestrating-identity-lifecycle</guid>
+      <description>Apply, Approve, Issue, Present, Verify. Flows are MIP&apos;s fifth primitive — the user-facing product that ties everything together.</description>
+      <pubDate>Mon, 02 Feb 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>Zero-Knowledge Predicates in Identity: What, Why, and How</title>
+      <link>https://elevenidllc.com/blog/zero-knowledge-predicates-identity</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/zero-knowledge-predicates-identity</guid>
+      <description>Proving you&apos;re over 21 without revealing your birthday. ZK predicates in MIP enable privacy-preserving identity verification at protocol level.</description>
+      <pubDate>Mon, 19 Jan 2026 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>Deployment Profiles: From Design to Production</title>
+      <link>https://elevenidllc.com/blog/deployment-profiles-from-design-to-production</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/deployment-profiles-from-design-to-production</guid>
+      <description>Trust Profiles and Presentation Policies are design-time. Deployment Profiles are how they get to devices, kiosks, and APIs in the real world.</description>
+      <pubDate>Mon, 05 Jan 2026 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>EUDI Wallet Readiness: What the Regulation Actually Requires</title>
+      <link>https://elevenidllc.com/blog/eudi-wallet-readiness</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/eudi-wallet-readiness</guid>
+      <description>The EU Digital Identity Wallet regulation is coming. Here&apos;s what it means for your identity infrastructure — and how protocol-first design helps.</description>
+      <pubDate>Mon, 22 Dec 2025 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Presentation Policies and the Art of Minimum Disclosure</title>
+      <link>https://elevenidllc.com/blog/presentation-policies-minimum-disclosure</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/presentation-policies-minimum-disclosure</guid>
+      <description>Verifiers shouldn&apos;t ask for everything. Presentation Policies formalize exactly what&apos;s needed — and nothing more.</description>
+      <pubDate>Mon, 08 Dec 2025 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>Credential Templates: Designing What Gets Issued</title>
+      <link>https://elevenidllc.com/blog/credential-templates-designing-what-gets-issued</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/credential-templates-designing-what-gets-issued</guid>
+      <description>A credential is more than a signed JSON blob. Credential Templates define the schema, claims, validity, and disclosure rules that make credentials meaningful.</description>
+      <pubDate>Mon, 24 Nov 2025 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>Cryptographic Trust Anchors: A Primer for Identity Systems</title>
+      <link>https://elevenidllc.com/blog/cryptographic-trust-anchors-primer</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/cryptographic-trust-anchors-primer</guid>
+      <description>X.509 chains, CSCA/DS certificates, and DID documents — the cryptographic foundations that make verifiable credentials actually verifiable.</description>
+      <pubDate>Mon, 10 Nov 2025 00:00:00 GMT</pubDate>
+      <category>Cryptography</category>
+      <dc:creator>Dr. Anika Patel</dc:creator>
+    </item>
+
+    <item>
+      <title>The Business Case for Credential Portability</title>
+      <link>https://elevenidllc.com/blog/business-case-for-credential-portability</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/business-case-for-credential-portability</guid>
+      <description>Vendor lock-in costs enterprises millions in re-verification. Portable credentials built on open standards eliminate that waste.</description>
+      <pubDate>Mon, 27 Oct 2025 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+    <item>
+      <title>Trust Profiles: The Foundation of Every Identity Decision</title>
+      <link>https://elevenidllc.com/blog/trust-profiles-explained</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/trust-profiles-explained</guid>
+      <description>Before you can verify a credential, you need to decide who to trust. Trust Profiles formalize that decision as configuration, not code.</description>
+      <pubDate>Mon, 13 Oct 2025 00:00:00 GMT</pubDate>
+      <category>Technical</category>
+      <dc:creator>Marcus Webb</dc:creator>
+    </item>
+
+    <item>
+      <title>Why Digital Identity Needs a Protocol, Not Another Platform</title>
+      <link>https://elevenidllc.com/blog/why-identity-needs-a-protocol</link>
+      <guid isPermaLink="true">https://elevenidllc.com/blog/why-identity-needs-a-protocol</guid>
+      <description>Platforms create lock-in. Protocols create ecosystems. Here&apos;s why the identity industry is ready for a protocol-first approach.</description>
+      <pubDate>Mon, 29 Sep 2025 00:00:00 GMT</pubDate>
+      <category>Business</category>
+      <dc:creator>Sarah Chen</dc:creator>
+    </item>
+
+  </channel>
+</rss>

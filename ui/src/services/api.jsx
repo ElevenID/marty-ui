@@ -1,0 +1,92 @@
+/**
+ * API Service — Browser entry point.
+ *
+ * Thin wrapper over @elevenid/marty-api-core that injects browser-specific config:
+ *   • Base URL from Vite env (import.meta.env.VITE_API_URL)
+ *   • Cookie-based auth (credentials: 'include')
+ *
+ * All retry logic, error parsing, and request helpers live in the shared
+ * @elevenid/marty-api-core package so they can be shared with the CLI
+ * and test harnesses.
+ */
+import {
+  createApiClient,
+  getErrorMessage,
+  getErrorCode,
+  isAuthError,
+  isRetryableError,
+  handleApiError,
+} from '@elevenid/marty-api-core';
+
+const client = createApiClient({
+  baseUrl: import.meta.env.VITE_API_URL || '',
+  requestOptions: () => ({ credentials: 'include', cache: 'no-store' }),
+});
+
+export const {
+  fetchWithRetry,
+  apiRequest,
+  get,
+  post,
+  put,
+  patch,
+  del,
+  reportClientError,
+  apiClient,
+} = client;
+
+/** Normalize legacy service errors without changing the shared transport policy. */
+export async function withApiErrorHandling(operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw handleApiError(error);
+  }
+}
+
+export async function getWithRetryConfig(endpoint, options = {}, retryConfig = {}) {
+  let url = endpoint.startsWith('http') ? endpoint : `${import.meta.env.VITE_API_URL || ''}${endpoint}`;
+  if (options.params) {
+    const query = new URLSearchParams(options.params).toString();
+    if (query) {
+      url += `${url.includes('?') ? '&' : '?'}${query}`;
+    }
+  }
+
+  const { params: _params, ...fetchOptions } = options;
+  const response = await fetchWithRetry(
+    url,
+    {
+      ...fetchOptions,
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+    },
+    retryConfig,
+  );
+  const contentType = response.headers.get('Content-Type');
+  if (!contentType || !contentType.includes('application/json')) {
+    return null;
+  }
+  return response.json();
+}
+
+export { getErrorMessage, getErrorCode, isAuthError, isRetryableError, handleApiError };
+
+export default {
+  withApiErrorHandling,
+  fetchWithRetry,
+  apiRequest,
+  get,
+  getWithRetryConfig,
+  post,
+  put,
+  patch,
+  del,
+  reportClientError,
+  getErrorMessage,
+  getErrorCode,
+  isAuthError,
+  isRetryableError,
+  apiClient,
+  handleApiError,
+};

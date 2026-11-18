@@ -1,0 +1,19 @@
+{
+  "scope": "STOCK_CANVAS_IMAGE_PUBLICATION_REVIEW",
+  "publisherRunId": 39527943630,
+  "publisherUrl": "https://github.com/ElevenID/marty-ui/actions/runs/39527943630",
+  "publisherSource": "956bfa2985ef3e9854fe22cac089f190da0327ee",
+  "image": "ghcr.io/elevenid/canvas-oss-portability@sha256:70745c55755d3b7f013837e8d3bce749bedcfaebdd332c2747841adc0abe466b",
+  "imageId": "sha256:70745c55755d3b7f013837e8d3bce749bedcfaebdd332c2747841adc0abe466b",
+  "imageSizeBytes": 3061870552,
+  "actualOciLabelsMatchLock": true,
+  "registryByteHashesVerified": true,
+  "githubAttestationVerified": true,
+  "signerWorkflow": "ElevenID/marty-ui/.github/workflows/canvas-oss-image.yml",
+  "signerRef": "refs/heads/main",
+  "hostedRunnerRequired": true,
+  "attestationResultSha256": "e0166bb4c922340e5e3f2852eafbde6b767ca007d6f368744dffa96d65e9aee2",
+  "imageManifestSha256": "44b6e6589c70bba27bcd04270c5a0cada9b2659918c1c2ccb14636d704c2cb6e",
+  "stockCanvasRuntimeQualified": false,
+  "productionDemoQualified": false
+}

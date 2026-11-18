@@ -1,0 +1,49 @@
+# Apply only after selecting the CA account and accepting its subscriber terms.
+# Replace the namespace, account email and IPv4 address before use.
+# cert-manager v1.21.3; CRDs must already be installed.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-ip
+  namespace: marty-dev
+spec:
+  acme:
+    email: OPERATOR_EMAIL
+    server: https://acme-v02.api.letsencrypt.org/directory
+    profile: shortlived
+    privateKeySecretRef:
+      name: letsencrypt-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: marty-public
+  namespace: marty-dev
+spec:
+  secretName: marty-public-tls
+  ipAddresses:
+    - PUBLIC_IPV4
+  duration: 160h
+  renewBefore: 48h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: letsencrypt-ip
+    kind: Issuer
+---
+# IP-address clients may omit SNI; configure Traefik's default certificate.
+# Keep this distribution-specific object outside the portable application chart.
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: marty-dev
+spec:
+  defaultCertificate:
+    secretName: marty-public-tls

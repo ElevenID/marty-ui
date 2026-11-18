@@ -1,0 +1,43 @@
+# Immutable third-party infrastructure for release-grade interoperability runs.
+#
+# Development remains free to follow the readable tags in the base file. The
+# official-suite launcher adds this overlay only with released GHCR artifacts,
+# making a clean run reproducible without any local image build.
+
+services:
+  postgres:
+    image: postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+    pull_policy: always
+  redis:
+    image: redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    pull_policy: always
+  keycloak:
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
+    pull_policy: always
+  keycloak-configurator:
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
+    pull_policy: always
+  mailpit:
+    image: axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+    pull_policy: always
+  openbao:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?pin the released OpenBao DIDComm KMS image}
+    pull_policy: always
+  openbao-init:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?pin the released OpenBao DIDComm KMS image}
+    pull_policy: always
+  envoy:
+    image: envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd
+    # conformance_stack.py acquires this exact digest before runtime startup.
+    # Reuse its cache while preserving cold-cache direct Compose consumers.
+    pull_policy: missing
+    build: !reset null
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9901 &&
+          printf 'GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q LIVE <&3

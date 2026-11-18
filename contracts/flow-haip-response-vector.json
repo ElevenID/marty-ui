@@ -1,0 +1,5 @@
+{
+  "compact_jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImVwayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImtoMnZkbndhY21PZU1UdnNrUGxFM28wcFJtdHNqZ0hqUGZSYkp5TTU5UWMiLCJ5IjoiVTRCejExb1hmXzRuRU4xSXN2d29RVTNBc1hqeWd6Q1RUbmdSeXM5TTlaNCJ9fQ..xxlWxWnqIjyCcEk8.Kedj8YQZCAmf4i539LlzVBE33C0fsw.0m7aoF-0RHfBYzXk8P38Sw",
+  "plaintext": "{\"vp_token\":\"fixture\"}",
+  "source": "public JWE header rejection vector"
+}

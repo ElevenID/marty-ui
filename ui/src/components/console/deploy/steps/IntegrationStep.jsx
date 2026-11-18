@@ -1,0 +1,212 @@
+/**
+ * Integration Step - Deployment Profile Wizard
+ * 
+ * Configure webhooks, feature flags, and UX settings.
+ * This step is optional.
+ */
+
+import {
+  Box,
+  Typography,
+  TextField,
+  FormGroup,
+  FormControlLabel,
+  Checkbox,
+  Alert,
+  Divider,
+  Grid,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  FormHelperText,
+} from '@mui/material';
+import InfoIcon from '@mui/icons-material/Info';
+import { useTranslation } from 'react-i18next';
+
+const DEFAULT_FEATURE_FLAGS = {
+  qr_code: true,
+  nfc: false,
+  ble: false,
+};
+
+const IntegrationStep = ({ data, onChange }) => {
+  const { t } = useTranslation('console');
+  const webhooks = data.webhooks || { url: '', events: [] };
+  const featureFlags = { ...DEFAULT_FEATURE_FLAGS, ...(data.feature_flags || {}) };
+  const environmentConfig = data.environment_config || { theme: 'light', language: 'en-US' };
+
+  const handleWebhookChange = (key, value) => {
+    onChange({ webhooks: { ...webhooks, [key]: value } });
+  };
+
+  const handleFeatureFlagChange = (key, value) => {
+    onChange({ feature_flags: { ...featureFlags, [key]: value } });
+  };
+
+  const handleEnvironmentConfigChange = (key, value) => {
+    onChange({ environment_config: { ...environmentConfig, [key]: value } });
+  };
+
+  const WEBHOOK_EVENTS = [
+    'credential.issued',
+    'credential.verified',
+    'credential.revoked',
+    'verification.failed',
+  ];
+
+  return (
+    <Box>
+      <Typography variant="h6" gutterBottom>
+        {t('wizards.deploymentProfile.integrationStep.title')}
+      </Typography>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
+        {t('wizards.deploymentProfile.integrationStep.description')}
+      </Typography>
+
+      <Alert severity="info" icon={<InfoIcon />} sx={{ mb: 3 }}>
+        {t('wizards.deploymentProfile.integrationStep.defaultsInfo')}
+      </Alert>
+
+      {/* Webhooks */}
+      <Typography variant="subtitle2" gutterBottom>
+        {t('wizards.deploymentProfile.integrationStep.sections.webhooks')}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
+        {t('wizards.deploymentProfile.integrationStep.helpers.webhooks')}
+      </Typography>
+
+      <TextField
+        fullWidth
+        label={t('wizards.deploymentProfile.integrationStep.fields.webhookUrl')}
+        placeholder={t('wizards.deploymentProfile.integrationStep.placeholders.webhookUrl')}
+        value={webhooks.url || ''}
+        onChange={(e) => handleWebhookChange('url', e.target.value)}
+        sx={{ mb: 2 }}
+        helperText={t('wizards.deploymentProfile.integrationStep.helpers.webhookUrl')}
+      />
+
+      {webhooks.url && (
+        <FormGroup sx={{ mb: 3 }}>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            {t('wizards.deploymentProfile.integrationStep.helpers.webhookEvents')}
+          </Typography>
+          {WEBHOOK_EVENTS.map((event) => (
+            <FormControlLabel
+              key={event}
+              control={
+                <Checkbox
+                  checked={(webhooks.events || []).includes(event)}
+                  onChange={(e) => {
+                    const events = webhooks.events || [];
+                    const updated = e.target.checked
+                      ? [...events, event]
+                      : events.filter((ev) => ev !== event);
+                    handleWebhookChange('events', updated);
+                  }}
+                />
+              }
+              label={event}
+            />
+          ))}
+        </FormGroup>
+      )}
+
+      <Divider sx={{ my: 3 }} />
+
+      {/* Feature Flags */}
+      <Typography variant="subtitle2" gutterBottom>
+        {t('wizards.deploymentProfile.integrationStep.sections.featureFlags')}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
+        {t('wizards.deploymentProfile.integrationStep.helpers.featureFlags')}
+      </Typography>
+
+      <FormGroup sx={{ mb: 3 }}>
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={featureFlags.qr_code !== false}
+              onChange={(e) => handleFeatureFlagChange('qr_code', e.target.checked)}
+            />
+          }
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.qrCode')}
+        />
+        <FormHelperText sx={{ ml: 4, mt: -1, mb: 2 }}>
+          {t('wizards.deploymentProfile.integrationStep.helpers.qrCode')}
+        </FormHelperText>
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={featureFlags.nfc || false}
+              onChange={(e) => handleFeatureFlagChange('nfc', e.target.checked)}
+            />
+          }
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.nfc')}
+        />
+        <FormHelperText sx={{ ml: 4, mt: -1, mb: 2 }}>
+          {t('wizards.deploymentProfile.integrationStep.helpers.nfc')}
+        </FormHelperText>
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={featureFlags.ble || false}
+              onChange={(e) => handleFeatureFlagChange('ble', e.target.checked)}
+            />
+          }
+          label={t('wizards.deploymentProfile.integrationStep.featureFlags.ble')}
+        />
+        <FormHelperText sx={{ ml: 4, mt: -1 }}>
+          {t('wizards.deploymentProfile.integrationStep.helpers.ble')}
+        </FormHelperText>
+      </FormGroup>
+
+      {/* UX Configuration */}
+      <Typography variant="subtitle2" gutterBottom>
+        {t('wizards.deploymentProfile.integrationStep.sections.userExperience')}
+      </Typography>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
+        {t('wizards.deploymentProfile.integrationStep.helpers.ux')}
+      </Typography>
+
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <FormControl fullWidth>
+            <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.theme')}</InputLabel>
+            <Select
+              value={environmentConfig.theme || 'light'}
+              onChange={(e) => handleEnvironmentConfigChange('theme', e.target.value)}
+              label={t('wizards.deploymentProfile.integrationStep.fields.theme')}
+            >
+              <MenuItem value="light">{t('wizards.deploymentProfile.integrationStep.themes.light')}</MenuItem>
+              <MenuItem value="dark">{t('wizards.deploymentProfile.integrationStep.themes.dark')}</MenuItem>
+              <MenuItem value="high_contrast">{t('wizards.deploymentProfile.integrationStep.themes.highContrast')}</MenuItem>
+            </Select>
+            <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.theme')}</FormHelperText>
+          </FormControl>
+        </Grid>
+
+        <Grid size={{ xs: 12, md: 6 }}>
+          <FormControl fullWidth>
+            <InputLabel>{t('wizards.deploymentProfile.integrationStep.fields.language')}</InputLabel>
+            <Select
+              value={environmentConfig.language || 'en-US'}
+              onChange={(e) => handleEnvironmentConfigChange('language', e.target.value)}
+              label={t('wizards.deploymentProfile.integrationStep.fields.language')}
+            >
+              <MenuItem value="en-US">{t('wizards.deploymentProfile.integrationStep.languages.en')}</MenuItem>
+              <MenuItem value="es-ES">{t('wizards.deploymentProfile.integrationStep.languages.es')}</MenuItem>
+              <MenuItem value="fr-FR">{t('wizards.deploymentProfile.integrationStep.languages.fr')}</MenuItem>
+              <MenuItem value="de-DE">{t('wizards.deploymentProfile.integrationStep.languages.de')}</MenuItem>
+            </Select>
+            <FormHelperText>{t('wizards.deploymentProfile.integrationStep.helpers.language')}</FormHelperText>
+          </FormControl>
+        </Grid>
+      </Grid>
+    </Box>
+  );
+};
+
+export default IntegrationStep;

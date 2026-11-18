@@ -1,0 +1,477 @@
+# Windows candidate credential renewal adapter
+
+`scripts/selfhost_windows_renewal.py` implements an isolated candidate transaction
+using the existing Compose, rootless-migration, readiness and secret-mount owners.
+The POSIX activator's platform/project checks are unchanged. This is a library;
+there is no operator CLI, unattended task, production admission or reboot claim.
+Signed release verification and publication/cutover approvals remain separate.
+
+The managed candidate must have the complete declared service closure. Both KMS
+initializers remain absent and opt-in. Managed OpenBao, its unseal helper and the
+successful completed TLS initializer remain unchanged. Only roles that mount
+generation secrets are recreated, with `--no-deps --no-build --pull never`.
+Images must be digest pinned, published ports must be loopback only, and active
+tunnel connectors, host networking and privileged roles are refused. Writable
+storage overlap with any other Compose consumer, including read-only consumers,
+is refused. Known Docker/WSL Windows-drive spellings are resolved through real
+Windows identities (including junction targets and ancestor identities). Only
+default-root local Docker volumes without driver options have a native volume
+identity, including legacy inspect records whose Source is the volume name. A bind
+of the exact volume root shares that identity. Native bind subpaths require fresh
+kernel mount metadata from a trusted network-disabled helper sharing the existing
+container's verified private/default PID namespace. It reads only filtered declared
+destinations and their mount ancestors from `/proc/1/mountinfo`, with no data
+volumes mounted and no added capabilities. Exact container/start identity, unique
+destinations, visible parent chains without ancestor overmounts, decoded normalized roots, a pinned Docker Desktop VM root prefix,
+ext4 filesystem type and a device number anchored by an ordinary named-volume
+mount are required. Whole-volume classification is conservative. A same-project
+zero-exit historical job with the exact same Source may reuse that live witness
+as a metadata inference; this never authorizes restarting it. Unknown evidence,
+inaccessible metadata, other filesystems or ambiguous mounts remain refused.
+
+The caller supplies a private configuration with the exact retained Compose hash,
+current/renewed env and generation paths, local Docker pipe/engine identity and
+the already release-verified Linux operator identity. The transport rechecks its
+digest and embedded source/tag identity while holding the NTFS binary and CA.
+The scoped renewal control volume is mounted read-only. Native authority,
+generation, orphan token, certificate/key/chain and lifetime checks are mandatory.
+Both native mirrors must match the held Windows bytes exactly. Native checks then
+use private mode0700/0600 snapshots materialized from those held bytes in isolated
+tmpfs, so later changes to shared staging mirrors cannot change the checked data.
+
+`selfhost_windows_renewal_native.export_generation(config, mirror)` provides the
+read-only byte transport needed by the recurring producer/export path. The caller
+holds the existing selected-generation lease and supplies its retained transaction
+configuration and a normalized generation-directory URI below `/control`.
+The adapter holds and hashes the Compose model and derives the exact inventory
+from its secret declarations. It checks the existing project control volume,
+then uses the pinned helper with network disabled and the volume mounted read-only.
+Its Docker log driver is disabled so private chunks are not retained as daemon logs.
+It neither mounts the Bao/database volumes nor exports enrollment/session files.
+
+The helper checks private root/file modes, root ownership, regular single-link
+files, no-follow opens and stable file identities. Data must be bounded UTF-8,
+with empty files preserved. Held no-follow ancestor directory descriptors anchor
+all relative file opens; all files stay open through the final identity and
+namespace rechecks. Its manifest and each 12,000-byte chunk bind the same
+whole-payload hash. Responses stay below the existing owned runner's bounded
+output tail; the Windows caller checks exact indices, lengths, inventory and the
+final payload hash before returning any byte map. The limit is 512 files of at
+most64KiB each and8MiB for the complete encoded payload. A ten-minute fetch budget
+is checked again after final decoding and held-input exit. Engine inspection and
+the owned runner's separate bounded cleanup remain existing dependencies; this
+is not a newly qualified hard whole-call or unattended timing guarantee. Failed
+owned-process failures become fresh fixed-message uncertainty exceptions carrying
+only the process-cleanup flag and empty tails; their original private chunk frames
+and exception chains do not propagate. Parser/UTF-8 failures likewise become a
+fixed refusal without retaining private exception payloads.
+
+Export returns private bytes to its caller, never host stdout. It writes no
+Windows files, mints no credentials, selects no generation and grants no native
+admission. A producer must retain its durable attempt evidence, materialize the
+result under the existing private Windows input owner, and pass the unchanged
+native generation/token/certificate checks before registered activation. This
+transport alone does not implement producer scheduling or expired-leaf recovery.
+
+The private project lock and output files must already exist. The lock is named
+`.<project>.renewal.lock` beside the generation directories. `intent`, `result`,
+`new_log` and `rollback_log` must be distinct empty private files in one separate
+output directory. The transaction does not create files, weaken ACLs, overwrite
+a prior receipt or modify either generation/env file. Existing intent makes an
+ambiguous or interrupted transaction an operator recovery case, not a blind retry.
+
+The adapter holds the lock, retained Compose/env files and both complete secret
+generations through native checks, durable intent, recreation and mount/readiness
+verification. Writable Windows data-source names are also held while their normal
+application writes remain permitted. Data mounts and image identities must remain
+unchanged. Running roles must match retained Compose config hashes; the preserved
+zero-exit historical TLS initializer requires an exact container/image/hash receipt.
+Ancestor names cannot be replaced while held. Protected candidate container
+identities, state, restarts and mounts must remain unchanged. The complete
+candidate role closure, data mounts and image identities remain fixed; before
+intent, every candidate observation must still match the initial census.
+
+Independent Docker projects may create, remove or restart containers during
+activation. Immediately before intent, before each new or rollback layer, and
+during final verification, the Windows adapter collects the entire container and
+volume inventory, refreshes native kernel mount witnesses and Windows path
+identities, and proves writable candidate storage disjoint from all foreign
+mounts, including read-only consumers and containers without Compose labels.
+A surviving foreign ID cannot change its creation identity, image, complete mount
+metadata or project/service identity. A closing volume inventory and container
+census must match the proof inputs; candidate drift is never retried. Foreign
+inventory drift allows at most three read-only attempts within one fixed
+three-minute acceptance budget. Full Windows/WSL mount witnesses and NTFS identity
+passes can legitimately exceed one minute on shared engines. Opening and closing
+inventories, fresh witnesses, identity checks and late-result rejection remain
+mandatory; no proof is cached across writes. Container inspections use batches of
+at most256 validated hexadecimal IDs, keeping even full-ID Windows commands below
+17KiB. The independent ten-minute activation-phase budget remains unchanged.
+These are acceptance deadlines, not a hard process wall-time guarantee. No
+workload mutation is retried by this check.
+
+Accepted context changes add proof hashes, counts and bounded ID samples to the
+private activation result. Recent proof samples have an aggregate eight-KiB bound;
+the total count and hash chain cover all accepted changes without exhausting the
+existing result size limit. Unknown storage, missing witnesses, overlap, candidate
+drift or exhausted observation budget forbids further writes, including automatic
+rollback. Diagnostic-write failure preserves that classification. Docker has no
+cross-client transaction lock: this qualification cannot prevent another client
+from changing the engine after its closing census.
+
+Selected-generation native admission, read-only configuration checks, staging and
+materialized-stage reconciliation use the same context proof with no changing
+candidate roles. Every candidate observation must therefore stay fixed across
+those operations. Staging rechecks before allocating its operation and before
+credential production. Finalization still requires all producer helper IDs,
+names and cycle labels absent, including helpers appearing during native proof;
+a disjoint helper is not treated as unrelated activity. Existing phase receipts,
+guard transfer, held-input exits and atomic publication remain mandatory.
+Existing-ID start/recovery, model repair and journal continuation retain their
+strict census policy. These changes do not qualify unattended recovery or
+periodic renewal without actual runtime tests.
+
+An ordinary failure in a freshly qualified context
+recreates the prior generation and verifies it. Failure of rollback, held-input
+exit checks or final receipt writing preserves the intent and requires recovery.
+An activation result is written only after the held-input exit checks pass.
+
+Qualification must include real NTFS locking and sharing, native preflights,
+isolated Docker activation/rollback, then the owned application's authentication
+and KMS journeys. A successful return establishes candidate readiness and mounts;
+it does not establish production release admission, credential retirement,
+continuous availability or automatic engine/logon/host recovery.
+
+Returned Compose invocations that leave a role in `created`, paused or another
+nonprogressing state fail promptly rather than polling for a first start that
+Docker will not perform. A mutating CLI timeout is an uncertain outcome: preserve
+its bounded diagnostics and intent, and do not launch automatic rollback. The
+Windows mutation runner uses an unnamed noninheritable kill-on-close Job Object
+with no breakaway flags. Its isolated Python helper waits for an input gate before
+launching Docker; job assignment precedes every command byte. Output drains into
+bounded tails. Normal completion requires zero active job processes and bounded
+reader completion. Timeout, surviving descendants or containment failure preserve
+uncertainty even after owned-process termination. Synthetic Windows tests cover
+nonzero exits, large output, gate-assignment failure, timeouts and surviving
+grandchildren. Dependency-layer and real Docker containment qualification remain
+blockers to exposing a CLI or unattended lifecycle. Job termination does not prove
+Docker daemon operation quiescence. See [Microsoft Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+Before intent, the entire active dependency graph is validated for normalized
+conditions, required closure, health/completion contracts and cycles. Selected
+roles are recreated in dependency layers. Each role appears in one invocation;
+the preserved foundation and completed layers must be ready before advancing.
+Ordering is projected from the full active graph, preserving paths through
+unchanged roles. Dependency restart cascades are refused before intent.
+A transient health failure therefore cannot leave all downstream layers created
+by an earlier bulk invocation. Readiness/completion is refused after the600-second
+phase deadline, including when a status read or receipt flush crosses it. The
+shared read-only Compose status transport has its separate60-second inspection
+timeout; this is not a hard600-second process wall-clock guarantee.
+
+The caller must preallocate `step_receipts`, one object per computed layer, with
+exact keys `new_started`, `new_completed`, `rollback_started`, `rollback_completed`.
+Each value names a distinct existing empty private file beside the four main
+outputs. The durable intent retains the layer plan and receipt paths. A started
+receipt is flushed before each mutating invocation, and a completed receipt only
+after readiness. Rollback uses the same validated ordering with the old env.
+Never replay an interrupted layer from these records without reconciliation.
+
+The generation-selection owner can call `preflight_current` for a read-only
+current-custody and minimum-one-hour lifetime check. It verifies both native
+mirrors against held bytes, materializes private snapshots and delegates scoped
+authority, orphan-token and certificate/key/chain/lifetime decisions to the signed
+native operator. This separate entry point does not verify a changing-generation
+transition. `preflight` still requires distinct mirrors and changed renewable
+inputs, including the native generation verifier.
+
+Native requests now use the existing owned Win32 job runner's bounded binary
+stdin pipe. Private payloads are absent from command arguments. Command arguments,
+private input, encoded gate request and output tails each have separate bounds;
+every owned command inherits a private pipe or DEVNULL rather than the gate stdin.
+Durable selection/reconciliation and recovery integration remain separate work.
+
+`selfhost_windows_selection.py` adds a candidate selection journal beside its
+generations, at `.<project>.generation-selection`. It uses the same existing
+exclusive project lock, private NTFS proofs and immutable model/engine/operator
+binding. Records are append-only, sequence/parent-linked and bounded; secret
+values are never stored in them. Original transaction configs, intents and results
+remain unchanged.
+
+The library exposes these bounded operations:
+
+- `adopt(config_path)` proves an existing successful activation, then selects its
+  renewed inputs. Interrupted initial metadata adoption can resume after proof.
+- `prepare(next_config_path)` proves the selected current inputs and writes the
+  pending intent before activation. An initialized owner makes unregistered or
+  changed activation requests fail before mutation.
+- `complete(config_path)` verifies the durable activation/rollback result and
+  current runtime before appending selection. `reconcile=True` never replays
+  Docker: an empty original intent permits only the unchanged old selection;
+  otherwise the terminal phase needs every durable started/completed boundary.
+  A distinct pre-command case permits only the old selection when the full
+  retained intent/model/layer/path closure is valid, every phase receipt is empty,
+  the rollback log is empty, and the new log is exactly the empty-tail diagnostic
+  header. The writer flushes each started receipt before invoking Docker, so this
+  case cannot have reached a workload command. Original container IDs, images and
+  data mounts must still match the intent both before and after fresh native,
+  readiness and data proof. The project lock excludes a concurrent writer and all
+  original records stay held and unchanged. A single nonempty started/completed
+  marker uses the existing terminal-phase rules; no partial layer is replayed.
+  Incomplete or uncertain commands remain operator recovery cases even when a
+  snapshot looks healthy. Original empty result files stay empty.
+- `status(config_path)` reports journal state, not live readiness. Pending,
+  malformed, partial or extra records never silently fall back to older inputs.
+- `selected_inputs(config_path)` holds the project lock, selected metadata,
+  model/env and complete generations for a recovery consumer. Its immutable lease
+  exposes paths and a current-proof callback, no secret bytes; the callback refuses
+  use after the context closes.
+
+Read-only proofs may use a fresh scoped authority token file without rewriting
+historical configs. Native authority/lifetime decisions remain mandatory. Existing
+Linux generation owners and Windows Compose/native validators are reused; this
+library starts no services and installs no task. PowerShell startup integration,
+producer scheduling, expired-credential recovery and engine/logon/host-reboot
+qualification remain required before unattended operation. Process-interruption
+controls do not claim power-loss durability qualification.
+
+The legacy Windows recovery wrapper refuses a default-active `openbao-tls-init`
+in either its product or OpenBao Compose inventory before any service mutation,
+including in check-only mode. Combined `up` and dependency traversal can replay
+that completed job. A retained managed candidate therefore needs the selected-
+generation recovery integration; passing paths to the legacy wrapper is unsafe.
+Existing standalone shapes without that initializer retain their recovery path.
+
+The selected-input lease now offers `recover_existing(output_dir, authority_file)`
+as a library callback. It holds the same project lock, original receipts and
+complete generations throughout recovery. The output directory must already be
+empty/private and named `windows-recovery-*` beside the generations. Missing,
+paused, invalid or failed completed jobs refuse before mutation. Only existing
+IDs may start; completed migrations and the TLS initializer never start again.
+Bao and its unseal helper start as a foundation group, then the native owner must
+admit the selected credentials before application roles start in dependency order.
+The full final readiness, storage, identity and native proof remains mandatory.
+
+A shared recovery marker blocks renewal, selection changes and new recovery after
+an interrupted/uncertain attempt. No failure path clears it or rolls back daemon
+operations. Preserve the marker, attempt receipts and generations for operator
+reconciliation. The callback returns a provisional result; only a clean exit from
+the entire selected-input context publishes success and clears the exact marker.
+Receipt tampering, a caller exception or a failed held-input exit leaves the marker.
+The marker remains authoritative even if a result file was written before a final
+publication-lock exit failure. Never interpret that result independently. Admission
+uses no-follow namespace checks: dangling marker/selection links and metadata errors
+must not fall back to an installation without an owner.
+The existing PowerShell wrapper can dispatch the managed CLI with an explicitly
+supplied trusted interpreter; see [managed configuration](windows-compose-recovery.md#retained-managed-openbao-candidate).
+It installs no scheduled task and never automatically removes an uncertain marker.
+Producer scheduling and broader interruption recovery remain required before
+unattended recovery is qualified.
+
+An explicitly coordinated planned stop may retain a separate
+`.<project>.recovery-preparation.json` marker. It blocks every new admission just
+like the recovery marker, including dangling entries. Only the already-held lease
+can call `recover_existing(..., preparation_sha256=...)` to hand it off. The
+private completion receipt must bind the exact preparation hash, returned stop
+CLI, all stopped IDs and retained completed-job IDs. Model/engine/selection/data
+identity, actual stopped state and protected observations are rechecked. Unknown,
+incomplete, mismatched or changed stop records never authorize startup.
+
+The owner flushes the normal recovery intent and marker before unlinking the
+preparation marker. Both exist during transfer; interruption leaves at least one
+authoritative marker. The original preparation and completion evidence remains
+linked by hashes in the recovery intent. This supports controlled planned-stop
+handoff; it does not automatically reconcile an uncertain stop or interrupted start.
+
+`reconcile_existing(config_path, authority_file=...)` is a separate read-only
+terminal operation. Use it only after verifying the original recovery owner has
+finished. It requires the exact guarded intent, registered selection, model-derived
+layers, current IDs, all matching started/completed command boundaries, and fresh
+native readiness/custody/lifetime proof. Missing or uncertain boundaries refuse
+even when containers appear healthy. A preparation marker also refuses this path.
+No workload command is issued. Original result bytes remain unchanged, including
+an empty original result; a separate deterministic `reconciliation.json` records
+the current proof. All original receipts and directory membership are rechecked
+before the marker clears, after lease and publication-lock exit checks. A prior
+valid reconciliation record can be retained during a fresh proof after publication
+interruption. This does not resume an unfinished start, prepared stop or expired
+generation, and it is not automatic logon recovery.
+
+`renew_once(config_path, logical_project)` performs one explicit online candidate
+renewal through the existing selected-input lease, scoped AppRole authority,
+signed native producers, private export, activation and selection journal. The
+logical TLS namespace must match the existing enrollment. This API requires an
+already healthy, unexpired generation; it does not install a timer, qualify
+expired-credential recovery or admit images for production.
+
+Before minting, the owner reserves a private `windows-renewal-<uuid>` operation
+directory, separate generation directory, exact next configuration and durable
+`.<project>.renewal-staging.json` guard. Phase receipts bind named helper IDs,
+images and the cycle. Helpers have logging disabled; only confirmed successful
+helpers are removed, without volumes or force. Unknown helpers and failed phases
+remain recorded. Keycloak responses, including partial timeout output, are
+flushed to the private control volume before interpreting success or refusal.
+
+All held-input and publication checks must finish before a final Windows
+no-overwrite rename creates `publication.json`. A result file without this seal
+is provisional and cannot authorize activation. Admission rechecks the seal,
+all phase/helper relationships, exact inventory, native proof and current data.
+The staging guard remains until a durable pending activation intent takes over;
+an interrupted transfer therefore retains at least one admission blocker. Neither
+another renewal nor recovery automatically clears an uncertain operation. Keep
+its configuration, receipts, helper identities and old generations for operator
+reconciliation. Known completed rollback is recorded through the existing
+selection owner; unknown activation is never replayed.
+
+## Explicit signed product transition
+
+Image adoption is distinct from credential rotation. From accepted trusted
+tooling that includes the product journal reader, run one explicit attempt:
+
+```powershell
+python scripts/selfhost_windows_product_deploy.py `
+  --config C:/Marty/private/activation/config.private.json `
+  --assets C:/Marty/private/verified-composition `
+  --gh C:/Marty/private/tools/gh.exe `
+  --cosign C:/Marty/private/tools/cosign.exe `
+  --registry-config C:/Marty/private/registry/config.json
+```
+
+The assets directory must contain the original six composition subjects. The
+existing composition verifier authenticates outer and embedded subjects and OCI
+evidence again. Images must already be cached by their exact digest, on
+linux/amd64. This command never pulls images or changes registry credentials.
+PostgreSQL and Redis image pins stay fixed; new implicit volume targets refuse.
+All writable storage and credentials remain bound to the selected installation.
+Only the four recognized read-only local UI code mounts may be replaced by the
+authenticated application image. Other ports, networks and configuration stay
+unchanged. Initializers and the historical TLS initialization container never run.
+
+The existing Windows process owner recreates only changed roles in dependency
+order. Complete intent/guard records precede fresh scoped AppRole authority and
+Compose writes. Native custody is proved before/after; schema/ledger and provider
+observations must remain equal. This narrow path does not admit a database-format
+upgrade, changed migration ledger or reversible database rollback. An error or
+uncertain outcome leaves the guard and receipts; never retry the deployment to
+repair it. A returned callback result is provisional until the entire selected
+lease exits and the new product selection is published.
+
+If execution completed but metadata publication was interrupted, an operator may
+use `--config ... --reconcile --authority-file /control/recovery-session-<uuid>/token`
+with existing valid scoped authority. This validates every retained phase and
+fresh native/schema/provider/runtime proof before completing derived metadata.
+It never repeats authentication, Compose, migrations or credential minting.
+Missing completion boundaries, expired authority, unexpected files and live
+drift refuse. Preserve incomplete attempts for explicit operator recovery.
+
+The product successor retains the credential identity and cumulative credential
+generation; later ordinary renewal and recovery resolve its new model binding.
+Install the accepted product-aware operator source in every recovery consumer
+before adoption. Older operator code cannot read the product records. No task,
+logon hook, release publication, public route or reboot is installed or performed
+by this command. Installed-runtime/recovery and end-to-end application acceptance
+remain separate requirements.
+
+## Expired current proof before credential production
+
+The existing Python recovery owner exposes explicit `--expired-current` phases
+for one narrow stopped renewal: authority completed, current proof started but
+not completed, every producer/activation receipt empty. Inspection preserves the
+failed attempt and its guard. It does not admit retry, expired TLS, or rollback.
+
+Use `scripts/selfhost_windows_recovery.py --configuration <managed.json>` with:
+
+| Phase | Additional arguments | Effect |
+| --- | --- | --- |
+| `--expired-current inspect` | none | Read-only failed-attempt evidence |
+| `--expired-current stage` | `--attempt-directory <empty-private-windows-renewal-uuid> --logical-project <marty-selfhost-name>` | Guarded fresh credentials through existing producers |
+| `--expired-current reconcile-stage` | `--attempt-directory <retained-attempt>` | One explicit cap-only continuation for the exact stopped assembler boundary described below |
+| `--expired-current retire-unused-stage` | `--attempt-directory <retained-attempt>` | Retire an unused failed assembler and archive only its unused recovery guard; preserve failed-current guard and all credential material |
+| `--expired-current publish` | `--attempt-directory <attempt>` | Fresh candidate proof and metadata publication |
+| `--expired-current activate` | `--attempt-directory <attempt>` | Recreate the existing owned dependency layers once; no expired rollback |
+| `--expired-current select` | `--attempt-directory <attempt> --source-journal <predecessor>` | Fresh running-generation proof, sealed successor selection; guards retained |
+| `--expired-current retire-helpers` | `--attempt-directory <attempt> --source-journal <predecessor>` | After sealed selection, retire exactly the two stopped reconciliation helper records; preserve volumes and guards |
+| `--expired-current finalize` | `--attempt-directory <attempt> --source-journal <predecessor>` | Repeat complete-chain/operator/current proof, archive exact guards without deleting evidence |
+
+These explicit phases cannot be combined with ordinary renewal, check-only or
+engine-wait arguments. They do not install a task or alter public routing.
+The pinned operator must implement `operator recovery-contract`. When a separately
+published successor is needed, supply `--operator-successor-file <private.json>`
+on each mutation phase. That file identifies `assets`, `expected` (source SHA,
+release tag, run ID/attempt, binary SHA256), `gh`, `cosign`, and trusted
+`verifier_sha256` pins. The owner repeats release/run, signature/provenance,
+binary identity and capability verification; local metadata is insufficient.
+Historical runtime, model, images, CA and storage bindings stay unchanged.
+
+`reconcile-stage` handles only a completed prepare/TLS stage followed by an
+exited, non-OOM Keycloak assembler with exit status 1. Keycloak completion,
+export, Windows materialization, candidate admission and activation must not
+have started. The owner verifies the original helper's image, command, mounts,
+network, resource/security settings and terminal identity. Both original guards
+and every failed phase receipt remain immutable.
+
+Before creating any new leaf, the continuation requires the signed operator's
+generation, retained-certificate, scope and new-certificate proofs to pass. Its
+recovery proof must refuse specifically because the existing 21 orphan service
+leaves have `explicit_max_ttl=0`. A separately recorded, exclusively created
+`cap-reconciliation.intent.json` then permits one helper to mint replacements
+for those same policies with an explicit eight-hour maximum. No policy, key, CA,
+certificate, account, database, or application setting is replaced. Response
+bytes are bounded, saved privately and fsynced before JSON validation. Environment
+proxies are disabled, redirects are refused, and only HTTP 200 from the fixed
+HTTPS origin can succeed. The original unbounded control-volume generation is
+retained as `generation-unbounded-retained`.
+
+The helper rechecks the complete recovery candidate before and after publishing
+the repaired control-volume mirror. Export, Windows materialization and fresh
+native admission have separate `cap-reconciliation.*` receipts. Publication,
+activation and successor-history replay bind both the original failed receipts
+and this complete continuation evidence. The two terminal helper records are
+retained and freshly checked before activation. Missing, partial, rebound, or
+uncertain continuation evidence forbids another invocation. An interrupted
+rename is preserved for inspection; it is never rolled back or blindly retried.
+
+Retained helpers do not carry Compose service ownership. Their exact stopped
+identity and guard-bound configuration permit only their read-only public CA
+mount at `/input/ca.crt` to overlap the project's CA directory. The full helper
+proof is repeated against the same opening and closing container censuses.
+Its NTFS object and ancestor identities remain in the storage witness; no
+other reader, writable bind, control volume, or operator mount is exempted.
+
+If the unused failed assembler can no longer be reconciled, use the explicit
+`retire-unused-stage` alternative before creating a new staging nonce. Windows
+materialization, cap reconciliation, publication, activation and selection must
+not have begun. Under project coordination the owner records private inspection
+evidence and intent, removes only the exact exited helper with `docker rm <id>`
+(no force or volume deletion), then rechecks all held inputs. Only then does it
+archive the exact unused recovery guard without overwriting an archive. It
+preserves the original failed-current guard, all original receipts, empty
+Windows candidate directory, and control-volume material. Retirement does not
+revoke credentials or claim that any token has expired. The old attempt is never
+replayed; a new explicit `stage` uses a new empty directory and nonce.
+
+After a reconciled candidate is activated and its successor is sealed, run
+`retire-helpers` before finalization. It replays the selected chain, operator
+admission and live native/storage proofs, binds both stopped helper inspections
+to the sealed cap receipts, and removes only those two records. Both guards
+remain until normal finalization. Retirement metadata lives beside the attempt,
+so the selected attempt evidence is never rewritten. A missing terminal result
+or uncertain removal/guard archival blocks common managed selection sessions,
+new staging and finalization. Preserve that private metadata and obtain explicit
+operator reconciliation of the saved inspections, exact IDs and archive outcome;
+these phases never automatically retry a partial removal or mint.
+
+The next ordinary renewal uses a newly staged configuration with the selected
+operator. Resolution replays the complete stored-owner chain before admitting
+that caller identity. Older entrypoints must match a recorded historical
+configuration; newly staged transactions must match the selected owner. Neither
+an uncommitted recovery marker nor a stale operator grants mutation authority.
+
+Never replay an interrupted producer or activation. Preserve its receipts for
+operator reconciliation. Selection can complete missing or exactly empty target
+seed files after fresh proof; partial/empty source intent or decision files
+remain refused. Finalization can resume after one guard was archived, repeating
+all proofs and checking the exact archived bytes. A failed check after a rename
+is an uncertain outcome, not an undone rename. Normal later operations still
+perform their own native current admission. Local tests or a signed binary alone
+do not replace protected source integration and release/deployment approval.

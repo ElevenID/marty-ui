@@ -1,0 +1,225 @@
+{
+  "protocol": {
+    "heroTitle": "Built around an Open Draft Protocol",
+    "heroSubtitle": "The Marty Identity Protocol (MIP) is a vendor-neutral, open specification for cryptographically verifiable digital identity management.",
+    "sectionPrimitives": "Five Core Primitives",
+    "primitivesSubtitle": "MIP defines the minimum automatable set of primitives for issuing, holding, presenting, and verifying digital credentials.",
+    "sectionStandards": "Standards Alignment",
+    "standardsSubtitle": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
+    "sectionGovernance": "Open Governance",
+    "governanceSubtitle": "No single organization controls the protocol. All decisions are made publicly on GitHub.",
+    "governanceModel": "Vendor-neutral, community-governed",
+    "governanceContributions": "Developer Certificate of Origin (DCO) — no CLA required",
+    "governanceDecisions": "All decisions made publicly on GitHub — no private steering committees",
+    "governanceCopyright": "Copyright held by The MIP Authors",
+    "sectionComponents": "What's in the Repo",
+    "componentsSubtitle": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
+    "ctaTitle": "Get Involved",
+    "ctaDescription": "MIP is Apache 2.0 licensed and open to contributions. Read the spec, file issues, or submit a PR.",
+    "ctaGitHub": "View on GitHub",
+    "ctaSpec": "Read the Specification",
+    "badge": "Open Draft Protocol",
+    "version": "v{{version}} — {{status}}",
+    "license": "Apache 2.0"
+  },
+  "valueProposition": {
+    "headline": "Marty: identity workflows you operate.",
+    "subheadline": "Build trust around your workflow.",
+    "extendedSubheadline": "Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.",
+    "primaryCTA": "Start Verifying",
+    "secondaryCTA": "View Verification API",
+    "supporting": "Portable credentials, applicant and document verification, and Travel Trust."
+  },
+  "idvComparison": {
+    "title": "Plan the Trust Exchange",
+    "takeaway": "Start with the questions your workflow must answer, then evaluate the selected implementation.",
+    "traditional": {
+      "title": "Questions to Resolve",
+      "oneTimeChecks": "Which claim must be checked?",
+      "vendorControlled": "Who operates the data and keys?",
+      "biometric": "How is the presenter bound to the credential?",
+      "closedAPIs": "Which interfaces and profiles are required?",
+      "manualTrust": "Which issuers and rules are trusted?",
+      "reVerification": "When can a credential be reused?"
+    },
+    "elevenid": {
+      "title": "Marty Evaluation",
+      "reusable": "Defined credential and document inputs",
+      "holderControlled": "Customer or selected-partner operations",
+      "cryptographic": "Profile-specific holder-binding tests",
+      "openStandards": "Documented interfaces and tested combinations",
+      "governedTrust": "Explicit issuer trust and policy configuration",
+      "reuseAcross": "Reuse evaluated within an agreed workflow"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "Explore Wallet and Credential Interoperability",
+    "verifyCredentials": "Define the credential format and presentation profile you need.",
+    "trustIssuers": "Identify trusted issuers and acceptance rules.",
+    "walletFirst": "Test the chosen wallets and release together.",
+    "quote": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence."
+  },
+  "organizationOutcomes": {
+    "title": "What You Can Evaluate",
+    "reduceKYC": "Explore credential reuse across an agreed workflow",
+    "eudiReady": "Evaluate travel-document trust and journey rules",
+    "avoidLockIn": "Make applicant and document checks explicit",
+    "supportBadges": "Customer or partner operated"
+  },
+  "audienceRouting": {
+    "title": "Choose Your Path",
+    "subtitle": "Explore Marty directly or through a partner or OEM integration.",
+    "enterprise": {
+      "title": "Enterprise",
+      "description": "Define a useful credential or document workflow and the team that will operate it.",
+      "cta": "Explore Enterprise"
+    },
+    "government": {
+      "title": "Government",
+      "description": "Review trust sources, required credential profiles, and deployment constraints.",
+      "cta": "Explore Government"
+    },
+    "developers": {
+      "title": "Developers",
+      "description": "Inspect APIs, source, and integration requirements for the selected workflow.",
+      "cta": "Read Docs"
+    }
+  },
+  "proofStrip": {
+    "title": "A Defined Product and Operating Model",
+    "interoperability": "Scope",
+    "offlineVerification": "Evaluation",
+    "deployment": "Operations",
+    "keySecurity": "Key Security",
+    "compliance": "Evidence"
+  },
+  "infrastructure": {
+    "title": "Start with a Useful Workflow",
+    "commodity": "Agree the inputs, trust sources, and expected result",
+    "orchestration": "Customer or partner operated",
+    "reusable": "Synthetic evaluation first",
+    "preventLockIn": "Expand scope when evidence supports it"
+  },
+  "landingPage": {
+    "loading": "Loading...",
+    "checkingAccount": "Checking your account...",
+    "features": {
+      "issuance": {
+        "title": "Issuance",
+        "description": "Define the credential format and presentation profile you need."
+      },
+      "verification": {
+        "title": "Verification",
+        "description": "Identify trusted issuers and acceptance rules."
+      },
+      "governance": {
+        "title": "Governance",
+        "description": "Explicit trust and key configuration"
+      }
+    },
+    "identityProblem": {
+      "title": "The Identity Problem",
+      "description": "Most organizations face fragmented systems, unclear trust, and growing compliance pressure.",
+      "items": {
+        "fragmented": "Fragmented identity systems that don't interoperate",
+        "unclearTrust": "Unclear issuer trust across partners and jurisdictions",
+        "privacyPressure": "Privacy compliance pressure (data minimization + selective disclosure)",
+        "pkiComplexity": "PKI + revocation complexity at scale"
+      }
+    },
+    "solvesIt": {
+      "title": "How ElevenID LLC Solves It",
+      "intro": "Agree the inputs, trust sources, and expected result",
+      "subheading": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence."
+    },
+    "howItWorks": {
+      "title": "How It Works",
+      "description": "Digital identity is a governed exchange between four actors.",
+      "cta": "See the Full Flow"
+    },
+    "standards": {
+      "title": "Standards-Based Architecture",
+      "subtitle": "Standards guide the design. Tests establish compatibility.",
+      "description": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
+      "cta": "Explore Standards"
+    },
+    "startFirst": {
+      "title": "What are you doing first?",
+      "description": "Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.",
+      "cards": {
+        "verify": {
+          "title": "Verify credentials",
+          "description": "Define the credential format and presentation profile you need."
+        },
+        "issue": {
+          "title": "Issue credentials",
+          "description": "Issue workforce, education, or government credentials."
+        },
+        "offline": {
+          "title": "Offline / facility",
+          "description": "Offline and headless profiles need validation"
+        },
+        "wallet": {
+          "title": "Wallet experience",
+          "description": "Test the chosen wallets and release together."
+        }
+      },
+      "notSure": "Not sure?",
+      "startWithVerificationApi": "Start with Verification API"
+    },
+    "products": {
+      "title": "Marty Components",
+      "description": "Components of one Marty product. Availability and included scope depend on the selected release and agreement.",
+      "viewDetails": "View Details",
+      "viewAll": "Explore Marty Components"
+    },
+    "trustSignals": {
+      "title": "Security and Deployment Review",
+      "security": {
+        "title": "Security",
+        "item1": "Explicit trust and key configuration",
+        "item2": "Test signature, expiry, and failure handling",
+        "item3": "Review key storage for the selected deployment"
+      },
+      "infrastructure": {
+        "title": "Infrastructure",
+        "item1": "Customer or partner operated",
+        "item2": "Release-specific installation requirements",
+        "item3": "Offline and headless profiles need validation",
+        "item4": "No included managed production or uptime SLA",
+        "item5": "Use documented issue and vulnerability reporting channels"
+      },
+      "compliance": {
+        "title": "Acceptance requirements",
+        "item1": "Define the credential format and presentation profile you need.",
+        "item2": "Release-specific evidence",
+        "item3": "Approve real-data handling separately",
+        "item4": "Confirm acceptance requirements with the responsible organization"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "One Marty product, three use cases",
+        "offlineCache": "Synthetic evaluation first",
+        "deployment": "Customer or partner operated",
+        "keySecurity": "Explicit trust and key configuration",
+        "auditLogs": "Release-specific evidence"
+      }
+    },
+    "portals": {
+      "emphasis": "Built-in portals",
+      "message": "for applicants, vendors, and admins—manage API keys, trust policies, and operations in one place.",
+      "learnMore": "Learn more"
+    },
+    "footer": {
+      "title": "Ready to get started?",
+      "description": "Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs.",
+      "viewPricing": "Review Commercial Scope",
+      "descriptionComingSoon": "Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs."
+    },
+    "orientation": {
+      "title": "New to verifiable identity?",
+      "cta": "How It Works"
+    }
+  }
+}

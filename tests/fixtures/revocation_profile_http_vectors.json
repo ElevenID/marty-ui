@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "create_offline_grace_profile",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Canonical revocation profile",
+        "revocation_mechanism": ["OCSP", "BITSTRING_STATUS_LIST"],
+        "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
+        "check_mode": "OFFLINE_GRACE",
+        "offline_grace_seconds": 7200,
+        "issuer_config": {
+          "auto_allocate_index": true,
+          "batch_update_interval_seconds": 600,
+          "list_size": 131072,
+          "uri_template": "https://status.example.com/tenant-a"
+        }
+      },
+      "expected_status": 200,
+      "expected_body_subset": {
+        "organization_id": "org-1",
+        "name": "Canonical revocation profile",
+        "status": "DRAFT",
+        "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
+        "check_mode": "OFFLINE_GRACE",
+        "offline_grace_seconds": 7200,
+        "issuer_config": {
+          "auto_allocate_index": true,
+          "batch_update_interval_seconds": 600,
+          "list_size": 131072,
+          "uri_template": "https://status.example.com/tenant-a"
+        },
+        "status_list_url": "https://status.example.com/tenant-a/v1/organizations/org-1/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}"
+      },
+      "expected_absent_fields": ["description", "verifier_config", "automation_config", "supported_formats"]
+    },
+    {
+      "id": "missing_user_context",
+      "authorization": "allow",
+      "method": "GET",
+      "path": "/v1/revocation-profiles?organization_id=org-1",
+      "headers": {},
+      "expected_status": 401,
+      "expected_body_subset": {"detail": "Authentication required - missing user context"}
+    },
+    {
+      "id": "denied_membership",
+      "authorization": "deny",
+      "method": "GET",
+      "path": "/v1/revocation-profiles?organization_id=org-1",
+      "headers": {"x-user-id": "user-1"},
+      "expected_status": 403
+    },
+    {
+      "id": "empty_mechanism_set",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Invalid profile",
+        "revocation_mechanism": []
+      },
+      "expected_status": 422,
+      "expected_body_subset": {"detail": "revocation_mechanism must contain at least one mechanism"}
+    },
+    {
+      "id": "cached_requires_ttl",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Invalid cached profile",
+        "check_mode": "CACHED"
+      },
+      "expected_status": 422,
+      "expected_body_subset": {"detail": "cache_ttl_seconds is required when timing_mode is CACHED"}
+    },
+    {
+      "id": "offline_grace_requires_window",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Invalid offline profile",
+        "check_mode": "OFFLINE_GRACE"
+      },
+      "expected_status": 422,
+      "expected_body_subset": {"detail": "offline_grace_seconds is required when timing_mode is OFFLINE_GRACE"}
+    },
+    {
+      "id": "status_url_requires_https",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Invalid URL profile",
+        "status_list_url": "http://status.example.com"
+      },
+      "expected_status": 422,
+      "expected_body_subset": {"detail": "status_list_url must be an absolute HTTPS URI, got: http://status.example.com"}
+    },
+    {
+      "id": "legacy_mechanism_spelling_is_rejected",
+      "authorization": "allow",
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "headers": {"x-user-id": "user-1"},
+      "body": {
+        "organization_id": "org-1",
+        "name": "Invalid legacy profile",
+        "revocation_mechanism": ["StatusList2021"],
+        "check_mode": "ALWAYS"
+      },
+      "expected_status": 422
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "flow_type": "siop_v2",
+  "accepted_states": ["awaiting_wallet", "in_progress"],
+  "cryptographic_authority": "marty_oid4vci_siop_jwk_thumbprint_verifier",
+  "signing_algorithms": ["ES256", "EdDSA"],
+  "subject_syntax": "urn:ietf:params:oauth:jwk-thumbprint",
+  "issuer_subject_binding": "iss_equals_sub",
+  "audience_binding": "exact_string_or_exact_array_member",
+  "nonce_binding": "exact_constant_time",
+  "required_times": ["iat", "exp"],
+  "clock_skew_seconds": 60,
+  "transaction_time_binding": "iat_not_before_started_at_minus_skew",
+  "terminal_result": "completed_allow_self_attested",
+  "sensitive_retention": "submission_digest_only_no_id_token",
+  "replay": "same_digest_returns_terminal_response_different_digest_conflicts",
+  "expiry_boundary": "expires_at_is_exclusive",
+  "finalization": "nonce_subject_terminal_record_atomic_compare_and_set",
+  "callback": "none"
+}

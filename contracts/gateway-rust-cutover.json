@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "service": "gateway",
+  "runtime_owner": "rust/services/gateway",
+  "python_runtime_removed": "services/gateway",
+  "route_contract": "contracts/gateway-routes.json",
+  "authorization_contract": "contracts/gateway-authorization-behavior.json",
+  "middleware_contract": "contracts/gateway-middleware-behavior.json",
+  "runtime_contract": "contracts/gateway-runtime-authorization.json",
+  "required_binary": "marty-gateway",
+  "required_ci_target": "gateway",
+  "production_requires_redis": true,
+  "python_runtime_fallback": false
+}

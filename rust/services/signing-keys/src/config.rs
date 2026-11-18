@@ -1,0 +1,809 @@
+use marty_service_runtime::config;
+use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
+
+const DEFAULT_HTTP_PORT: u16 = 8017;
+const DEFAULT_INTEGRATION_SECRET_TLS_PORT: u16 = 8018;
+const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
+const DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY: &str = "dev-signing-keys-service-sign-gateway-key";
+const DEVELOPMENT_ISSUER_SIGN_KEY: &str = "dev-signing-keys-issuer-did-sign-key";
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct IntegrationSecretTls {
+    pub addr: SocketAddr,
+    pub identity: marty_service_runtime::RemoteTlsIdentityFiles,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Config {
+    pub http_addr: SocketAddr,
+    pub integration_secret_tls: Option<IntegrationSecretTls>,
+    pub release_version: String,
+    pub build_revision: String,
+    pub internal_api_key: String,
+    pub service_sign_gateway_key: String,
+    pub issuer_sign_key: String,
+    pub integration_secret_key: Option<String>,
+    pub holder_device_key: Option<String>,
+    pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
+    pub beta_csca_issuance_enabled: bool,
+    pub mdoc_certificates: crate::mdoc_certificate::MdocCertificateOptions,
+    pub registry_redis_url: String,
+    pub bao_addr: Option<String>,
+    pub bao_token: Option<String>,
+    pub haip_kms_token_file: Option<PathBuf>,
+    pub sign_grant_verify_token_file: Option<PathBuf>,
+    pub public_domain: Option<String>,
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_values(&env::vars().collect())
+    }
+
+    fn from_values(values: &HashMap<String, String>) -> Result<Self, String> {
+        let port = match value(values, "SIGNING_KEYS_SERVICE_PORT") {
+            Some(value) => value
+                .parse::<u16>()
+                .map_err(|_| "SIGNING_KEYS_SERVICE_PORT has an invalid value".to_string())?,
+            None => DEFAULT_HTTP_PORT,
+        };
+        if port == 0 {
+            return Err("SIGNING_KEYS_SERVICE_PORT must be greater than zero".into());
+        }
+        let identity = marty_service_runtime::RemoteTlsIdentityFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            marty_service_runtime::TlsIdentityNames::files("SIGNING_KEYS_INTEGRATION_SECRET_TLS"),
+            std::time::Duration::from_secs(3),
+            32,
+        )?;
+        let tls_port = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT");
+        let integration_secret_tls = match (identity, tls_port) {
+            (None, None) => None,
+            (Some(identity), tls_port) => {
+                let tls_port = tls_port
+                    .map(|value| value.parse::<u16>())
+                    .transpose()
+                    .map_err(|_| "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT is invalid")?
+                    .unwrap_or(DEFAULT_INTEGRATION_SECRET_TLS_PORT);
+                if tls_port == 0 || tls_port == port {
+                    return Err("integration-secret TLS port must differ from the HTTP port".into());
+                }
+                Some(IntegrationSecretTls {
+                    addr: SocketAddr::from(([0, 0, 0, 0], tls_port)),
+                    identity,
+                })
+            }
+            (None, Some(_)) => {
+                return Err("integration-secret TLS requires a public certificate and complete remote KMS identity".into())
+            }
+        };
+        let release_version =
+            value(values, "MARTY_RELEASE_VERSION").unwrap_or_else(|| "development".into());
+        let internal_api_key = secret_value(values, "SIGNING_KEYS_INTERNAL_API_KEY")?
+            .unwrap_or_else(|| DEVELOPMENT_INTERNAL_API_KEY.to_string());
+        if release_version != "development"
+            && (internal_api_key == DEVELOPMENT_INTERNAL_API_KEY || internal_api_key.len() < 16)
+        {
+            return Err(
+                "SIGNING_KEYS_INTERNAL_API_KEY must be configured with at least 16 characters"
+                    .to_string(),
+            );
+        }
+        let dsc_issue_gateway_key = secret_value(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY").is_some()
+            && value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must use one secret source".into());
+        }
+        let service_sign_gateway_key =
+            secret_value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
+                .unwrap_or_else(|| DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY.to_string());
+        if value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY").is_some()
+            && value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_ISSUER_SIGN_KEY must use one secret source".into());
+        }
+        let issuer_sign_key = secret_value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?
+            .unwrap_or_else(|| DEVELOPMENT_ISSUER_SIGN_KEY.to_string());
+        let environment = value(values, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+        let nondevelopment_environment = !matches!(
+            environment.to_ascii_lowercase().as_str(),
+            "development" | "dev" | "local" | "test"
+        );
+        if service_sign_gateway_key.len() < 32
+            || service_sign_gateway_key == internal_api_key
+            || ((release_version != "development" || nondevelopment_environment)
+                && service_sign_gateway_key == DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY)
+        {
+            return Err(
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
+        if issuer_sign_key.len() < 32
+            || issuer_sign_key == internal_api_key
+            || issuer_sign_key == service_sign_gateway_key
+            || ((release_version != "development" || nondevelopment_environment)
+                && issuer_sign_key == DEVELOPMENT_ISSUER_SIGN_KEY)
+        {
+            return Err(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters".into(),
+            );
+        }
+        let holder_device_key = secret_value(values, "DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
+        if holder_device_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+        }) {
+            return Err(
+                "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
+        if dsc_issue_gateway_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
+        }) {
+            return Err(
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
+        let beta_csca_issuance_enabled =
+            match value(values, "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                Some(_) => {
+                    return Err(
+                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED must be true or false".into(),
+                    )
+                }
+            };
+        if value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY").is_some()
+            && value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE").is_some()
+        {
+            return Err("CSCA certificate ceremony key must use one secret source".into());
+        }
+        let csca_issue_gateway_key = secret_value(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
+        if (beta_csca_issuance_enabled || csca_issue_gateway_key.is_some())
+            && value(values, "ENVIRONMENT").as_deref() != Some("beta")
+        {
+            return Err("CSCA certificate ceremony is available only in ENVIRONMENT=beta".into());
+        }
+        if beta_csca_issuance_enabled != csca_issue_gateway_key.is_some() {
+            return Err("beta CSCA certificate ceremony requires its dedicated Gateway key".into());
+        }
+        if csca_issue_gateway_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+                || holder_device_key.as_ref() == Some(key)
+        }) {
+            return Err(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
+        let bao_addr = value(values, "BAO_ADDR");
+        let bao_token =
+            secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        if value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY").is_some()
+            && value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_INTEGRATION_SECRET_KEY must use one secret source".into());
+        }
+        let integration_secret_key = secret_value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY")?;
+        if integration_secret_tls.is_some() && integration_secret_key.is_none() {
+            return Err("integration-secret TLS requires its dedicated API key".into());
+        }
+        if integration_secret_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
+                || holder_device_key.as_ref() == Some(key)
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+                || csca_issue_gateway_key.as_ref() == Some(key)
+                || bao_token.as_ref() == Some(key)
+                || values.iter().any(|(name, value)| {
+                    name != "SIGNING_KEYS_INTEGRATION_SECRET_KEY"
+                        && name != "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"
+                        && value.contains(key)
+                })
+        }) {
+            return Err(
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
+        if holder_device_key.as_deref() == bao_token.as_deref() && holder_device_key.is_some() {
+            return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
+        }
+        let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
+        let sign_grant_verify_token_file =
+            value(values, "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE").map(PathBuf::from);
+        if values.iter().any(|(name, value)| {
+            name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+                && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
+                && value.contains(&service_sign_gateway_key)
+        }) || bao_token.as_deref() == Some(service_sign_gateway_key.as_str())
+        {
+            return Err("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must not be reused by another configuration value".into());
+        }
+        if values.iter().any(|(name, value)| {
+            name != "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                && name != "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                && value.contains(&issuer_sign_key)
+        }) || bao_token.as_deref() == Some(issuer_sign_key.as_str())
+        {
+            return Err(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must not be reused by another configuration value"
+                    .into(),
+            );
+        }
+        if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(dsc_key)
+            });
+            if reused_in_environment || bao_token.as_deref() == Some(dsc_key) {
+                return Err(
+                    "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must not be reused by another configuration value"
+                        .into(),
+                );
+            }
+        }
+        if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
+            if values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(csca_key)
+            }) || bao_token.as_deref() == Some(csca_key)
+            {
+                return Err("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must not be reused by another configuration value".into());
+            }
+        }
+        if bao_addr.is_some() != bao_token.is_some() {
+            return Err(
+                "BAO_ADDR and BAO_TOKEN (or OPENBAO_SERVICE_TOKEN) must be configured together"
+                    .into(),
+            );
+        }
+        if haip_kms_token_file.is_some() && bao_addr.is_none() {
+            return Err("HAIP_KMS_TOKEN_FILE requires BAO_ADDR".into());
+        }
+        if sign_grant_verify_token_file.is_some() && bao_addr.is_none() {
+            return Err("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE requires BAO_ADDR".into());
+        }
+        let mdoc_iaca_key = secret_value(values, "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY")?;
+        let mdoc_dsc_key = secret_value(values, "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY")?;
+        for (name, key) in [
+            (
+                "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY",
+                mdoc_iaca_key.as_deref(),
+            ),
+            (
+                "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY",
+                mdoc_dsc_key.as_deref(),
+            ),
+        ] {
+            if value(values, name).is_some() && value(values, &format!("{name}_FILE")).is_some() {
+                return Err(format!("{name} requires exactly one secret source"));
+            }
+            if let Some(key) = key {
+                if key.len() < 32
+                    || [
+                        Some(internal_api_key.as_str()),
+                        Some(service_sign_gateway_key.as_str()),
+                        Some(issuer_sign_key.as_str()),
+                        dsc_issue_gateway_key.as_deref(),
+                        csca_issue_gateway_key.as_deref(),
+                        integration_secret_key.as_deref(),
+                        holder_device_key.as_deref(),
+                        bao_token.as_deref(),
+                    ]
+                    .contains(&Some(key))
+                    || values.iter().any(|(other, value)| {
+                        other != name && other != &format!("{name}_FILE") && value.contains(key)
+                    })
+                {
+                    return Err(format!(
+                        "{name} must be distinct and at least 32 characters"
+                    ));
+                }
+            }
+        }
+        if mdoc_iaca_key.is_some() && mdoc_iaca_key == mdoc_dsc_key {
+            return Err(
+                "MDOC authority and document-signer operator credentials must differ".into(),
+            );
+        }
+        let mdoc_authorities = crate::mdoc_certificate::MdocCertificateOptions::parse_authorities(
+            value(values, "SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON").as_deref(),
+        )?;
+        let mdoc_certificates = crate::mdoc_certificate::MdocCertificateOptions {
+            iaca_gateway_key: mdoc_iaca_key,
+            dsc_gateway_key: mdoc_dsc_key,
+            authorities: mdoc_authorities,
+        };
+        Ok(Self {
+            http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
+            integration_secret_tls,
+            release_version,
+            build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
+            internal_api_key,
+            service_sign_gateway_key,
+            issuer_sign_key,
+            integration_secret_key,
+            holder_device_key,
+            dsc_issue_gateway_key,
+            csca_issue_gateway_key,
+            beta_csca_issuance_enabled,
+            mdoc_certificates,
+            registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
+                .unwrap_or_else(|| "redis://localhost:6379/2".into()),
+            bao_addr,
+            bao_token,
+            haip_kms_token_file,
+            sign_grant_verify_token_file,
+            public_domain: value(values, "PUBLIC_DOMAIN"),
+        })
+    }
+}
+
+fn secret_value(values: &HashMap<String, String>, name: &str) -> Result<Option<String>, String> {
+    if let Some(value) = value(values, name) {
+        return Ok(Some(value));
+    }
+    let Some(path) = value(values, &format!("{name}_FILE")) else {
+        return Ok(None);
+    };
+    let secret = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {name}_FILE '{path}': {error}"))?;
+    let secret = secret.trim().to_string();
+    if secret.is_empty() {
+        return Err(format!("{name}_FILE '{path}' is empty"));
+    }
+    Ok(Some(secret))
+}
+
+fn value(values: &HashMap<String, String>, name: &str) -> Option<String> {
+    config::trimmed_nonempty(values.get(name).map(String::as_str)).map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integration_secret_tls_accepts_aws_and_keeps_separate_listener_policy() {
+        let mut values = HashMap::from([
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE".into(),
+                "public.pem".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_PROVIDER".into(),
+                "aws-kms".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_REGION".into(),
+                "us-east-1".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
+        let config = Config::from_values(&values).unwrap();
+        let tls = config.integration_secret_tls.unwrap();
+        assert_eq!(tls.addr.port(), DEFAULT_INTEGRATION_SECRET_TLS_PORT);
+        let marty_service_runtime::RemoteTlsIdentityFiles::AwsKms(identity) = tls.identity else {
+            panic!("configured AWS identity must reach the HTTPS listener");
+        };
+        assert_eq!(
+            identity.kms.request_timeout,
+            std::time::Duration::from_secs(3)
+        );
+        assert_eq!(identity.max_concurrent_signs, 32);
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE".into(),
+            "old-token".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE");
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
+            DEFAULT_HTTP_PORT.to_string(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn defaults_match_the_existing_service_contract() {
+        let config = Config::from_values(&HashMap::new()).unwrap();
+        assert_eq!(config.http_addr, SocketAddr::from(([0, 0, 0, 0], 8017)));
+        assert!(config.integration_secret_tls.is_none());
+        assert_eq!(config.release_version, "development");
+        assert_eq!(config.build_revision, "unknown");
+        assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
+        assert_eq!(config.dsc_issue_gateway_key, None);
+        assert_eq!(config.csca_issue_gateway_key, None);
+        assert!(!config.beta_csca_issuance_enabled);
+        assert_eq!(config.registry_redis_url, "redis://localhost:6379/2");
+        assert_eq!(config.bao_addr, None);
+        assert_eq!(config.bao_token, None);
+        assert_eq!(config.public_domain, None);
+    }
+
+    #[test]
+    fn rejects_invalid_or_zero_ports() {
+        for port in ["invalid", "0", "65536"] {
+            let values = HashMap::from([("SIGNING_KEYS_SERVICE_PORT".into(), port.into())]);
+            assert!(Config::from_values(&values).is_err());
+        }
+    }
+
+    #[test]
+    fn integration_secret_tls_requires_a_complete_separate_listener() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE".into(),
+            "/run/secrets/signing-keys.crt".into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE".into(),
+            "/run/secrets/signing-keys.key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
+        for (name, value) in [
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR",
+                "https://openbao.internal:8200",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+                "/run/secrets/openbao-ca.crt",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+                "/run/secrets/tls-signer-token",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
+                "signing-keys-tls",
+            ),
+            ("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
+        let config = Config::from_values(&values).unwrap();
+        assert_eq!(
+            config.integration_secret_tls.unwrap().addr.port(),
+            DEFAULT_INTEGRATION_SECRET_TLS_PORT
+        );
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE".into(),
+            "/run/secrets/signing-keys.key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
+            DEFAULT_HTTP_PORT.to_string(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn integration_secret_key_rejects_shared_authority_and_duplicate_sources() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            DEVELOPMENT_INTERNAL_API_KEY.into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE".into(),
+            "/run/secrets/integration-secret-key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn nondevelopment_releases_require_a_nondefault_internal_key() {
+        let release_only = HashMap::from([("MARTY_RELEASE_VERSION".into(), "beta".into())]);
+        assert!(Config::from_values(&release_only).is_err());
+
+        let configured = HashMap::from([
+            ("MARTY_RELEASE_VERSION".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "a-production-strength-secret".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-production-service-sign-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-production-issuer-sign-key-000001".into(),
+            ),
+        ]);
+        assert_eq!(
+            Config::from_values(&configured).unwrap().internal_api_key,
+            "a-production-strength-secret"
+        );
+    }
+
+    #[test]
+    fn service_sign_gateway_key_cannot_reuse_shared_internal_credential() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "dev-signing-keys-internal-api-key".into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "dedicated-service-sign-gateway-key-000001".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE".into(),
+            "/run/secrets/service-sign-gateway-key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE");
+        values.insert(
+            "OTHER_SERVICE_SECRET".into(),
+            "dedicated-service-sign-gateway-key-000001".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_SECRET");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        values.remove("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY");
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn issuer_sign_key_is_required_for_release_and_cannot_reuse_other_authority() {
+        let mut values = HashMap::from([
+            ("MARTY_RELEASE_VERSION".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "shared-internal-signing-key-32-chars".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-key-32-chars".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "shared-internal-signing-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "dedicated-issuer-sign-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "OTHER_SERVICE_SECRET".into(),
+            "dedicated-issuer-sign-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn openbao_envelope_provider_requires_address_and_secret_together() {
+        for values in [
+            HashMap::from([("BAO_ADDR".into(), "http://bao:8200".into())]),
+            HashMap::from([("BAO_TOKEN".into(), "secret".into())]),
+        ] {
+            assert!(Config::from_values(&values).is_err());
+        }
+        let values = HashMap::from([
+            ("BAO_ADDR".into(), "http://bao:8200".into()),
+            ("OPENBAO_SERVICE_TOKEN".into(), "secret".into()),
+        ]);
+        let config = Config::from_values(&values).expect("OpenBao config");
+        assert_eq!(config.bao_addr.as_deref(), Some("http://bao:8200"));
+        assert_eq!(config.bao_token.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn dsc_gateway_key_is_optional_but_must_be_distinct_and_strong_when_enabled() {
+        let mut values = HashMap::new();
+        values.insert(
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "shared-internal-key-32-characters-long".into(),
+        );
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "shared-internal-key-32-characters-long".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "short".into());
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "separate-dsc-operator-key-32-characters".into(),
+        );
+        values.insert("BAO_ADDR".into(), "http://bao:8200".into());
+        values.insert(
+            "BAO_TOKEN".into(),
+            "separate-dsc-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert("BAO_TOKEN".into(), "independent-bao-token".into());
+        values.insert(
+            "OTHER_SERVICE_URL".into(),
+            "redis://user:separate-dsc-operator-key-32-characters@redis:6379/2".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_URL");
+        assert!(Config::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn device_registration_authority_is_distinct_even_without_holder_capability() {
+        let mut values = HashMap::from([
+            ("BAO_ADDR".into(), "http://bao:8200".into()),
+            (
+                "BAO_TOKEN".into(),
+                "scoped-openbao-token-32-characters".into(),
+            ),
+            (
+                "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+                "dedicated-device-registration-key-32-chars".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "scoped-openbao-token-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "dedicated-device-registration-key-32-chars".into(),
+        );
+        values.remove("BAO_ADDR");
+        values.remove("BAO_TOKEN");
+        assert!(Config::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn csca_ceremony_is_beta_only_and_has_a_distinct_operator_key() {
+        let mut values = HashMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "internal-signing-key-32-characters-long".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-gateway-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-issuer-sign-key-000001".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "internal-signing-key-32-characters-long".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "distinct-csca-operator-key-32-characters".into(),
+        );
+        assert!(
+            Config::from_values(&values)
+                .unwrap()
+                .beta_csca_issuance_enabled
+        );
+        values.insert(
+            "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+            "distinct-csca-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "OTHER_URL".into(),
+            "redis://user:distinct-csca-operator-key-32-characters@redis".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_URL");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(Config::from_values(&values).is_err());
+        values.insert("ENVIRONMENT".into(), "beta".into());
+        values.insert(
+            "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+            "false".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            "C:/not-a-key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn csca_ceremony_accepts_only_one_private_file_secret_source() {
+        let path =
+            std::env::temp_dir().join(format!("marty-signing-csca-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "file-backed-csca-operator-key-32-characters\n").unwrap();
+        let mut values = HashMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED".into(),
+                "true".into(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "independent-internal-key-32-characters".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-gateway-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-issuer-sign-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+                path.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let config = Config::from_values(&values).expect("file-backed CSCA ceremony key");
+        assert_eq!(
+            config.csca_issue_gateway_key.as_deref(),
+            Some("file-backed-csca-operator-key-32-characters")
+        );
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(),
+            "another-operator-key-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(Config::from_values(&values).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+}

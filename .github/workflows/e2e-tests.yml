@@ -1,0 +1,475 @@
+name: MIP 0.4 Beta Credential Lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      beta_origin:
+        description: Beta origin under test
+        required: true
+        default: https://beta.elevenidllc.com
+      audit_org_id:
+        description: Organization with the seeded lifecycle fixtures
+        required: true
+      release_version:
+        description: Release version published by the successful stack release
+        required: true
+      stack_release_run_id:
+        description: Successful Stack release run that built the deployed release
+        required: true
+      marty_ui_release_sha:
+        description: Exact 40-character Marty UI commit used by the stack release
+        required: true
+      beta_source_id:
+        description: Exact coordinated source-snapshot ID reported by beta
+        required: true
+      marty_protocol_sha:
+        description: Exact Marty Protocol commit used to validate deployed discovery
+        required: true
+      demo_qualification_run_id:
+        description: Completed successful private demo release qualification run
+        required: true
+      demo_recorder_sha:
+        description: Exact reviewed recorder main revision used by qualification
+        required: true
+      demo_review_record_id:
+        description: Numeric server-side maintainer review comment ID used by qualification
+        required: true
+      demo_deployment_manifest_sha256:
+        description: SHA-256 of the original verified deployment receipt
+        required: true
+  repository_dispatch:
+    types: [beta-deployed]
+
+concurrency:
+  group: mip-03-beta-credential-lifecycle
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+jobs:
+  release-environment-preflight:
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: beta-lifecycle
+
+  full-stack-credential-lifecycle:
+    needs: release-environment-preflight
+    name: Real Beta Issuance, Verification, And Contract Gate
+    runs-on: ubuntu-latest
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      BETA_ORIGIN: ${{ inputs.beta_origin || vars.BETA_ORIGIN || 'https://beta.elevenidllc.com' }}
+      BETA_AUDIT_ORG_ID: ${{ inputs.audit_org_id || vars.BETA_AUDIT_ORG_ID }}
+      TEST_APPLICANT_EMAIL: ${{ secrets.TEST_APPLICANT_EMAIL }}
+      TEST_APPLICANT_PASSWORD: ${{ secrets.TEST_APPLICANT_PASSWORD }}
+      TEST_VENDOR_EMAIL: ${{ secrets.TEST_VENDOR_EMAIL }}
+      TEST_VENDOR_PASSWORD: ${{ secrets.TEST_VENDOR_PASSWORD }}
+      MARTY_TEST_WALLET_ORIGIN: http://127.0.0.1:8787
+      RELEASE_VERSION: ${{ inputs.release_version || github.event.client_payload.release_version }}
+      STACK_RELEASE_RUN_ID: ${{ inputs.stack_release_run_id || github.event.client_payload.stack_release_run_id }}
+      MARTY_UI_RELEASE_SHA: ${{ inputs.marty_ui_release_sha || github.event.client_payload.marty_ui_release_sha }}
+      BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
+      MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
+      DEMO_QUALIFICATION_RUN_ID: ${{ inputs.demo_qualification_run_id || github.event.client_payload.demo_qualification_run_id }}
+      DEMO_RECORDER_SHA: ${{ inputs.demo_recorder_sha || github.event.client_payload.demo_recorder_sha }}
+      DEMO_REVIEW_RECORD_ID: ${{ inputs.demo_review_record_id || github.event.client_payload.demo_review_record_id }}
+      DEMO_DEPLOYMENT_MANIFEST_SHA256: ${{ inputs.demo_deployment_manifest_sha256 || github.event.client_payload.demo_deployment_manifest_sha256 }}
+      EVIDENCE_TOOLING_SHA: ${{ github.sha }}
+      GH_TOKEN: ${{ github.token }}
+      CI: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Fetch current release evidence dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+
+      - name: Bind lifecycle to the successful stack release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$MARTY_UI_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_UI_RELEASE_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$EVIDENCE_TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "EVIDENCE_TOOLING_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"
+          git fetch --no-tags --depth=1 origin "$MARTY_UI_RELEASE_SHA"
+          git cat-file -e "$MARTY_UI_RELEASE_SHA^{commit}"
+
+          [[ "$STACK_RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RELEASE_RUN_ID")"
+          verified_release_sha="$(cargo run --locked --quiet --manifest-path rust/Cargo.toml \
+            -p marty-release-evidence --bin validate-stack-release-run -- \
+            "$STACK_RELEASE_RUN_ID" "$RELEASE_VERSION" "$MARTY_UI_RELEASE_SHA" <<<"$run")"
+          test "$verified_release_sha" = "$MARTY_UI_RELEASE_SHA"
+
+          mkdir -p tests/artifacts/build-evidence
+          gh release download "v$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern stack-manifest.json \
+            --pattern SHA256SUMS \
+            --dir tests/artifacts/build-evidence
+          (
+            cd tests/artifacts/build-evidence
+            sha256sum --check --ignore-missing SHA256SUMS
+          )
+          gh attestation verify tests/artifacts/build-evidence/stack-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+          stack_manifest_sha256="$(sha256sum tests/artifacts/build-evidence/stack-manifest.json | awk '{print $1}')"
+          if [[ ! "$stack_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "stack_manifest_sha256 must be a lowercase SHA-256." >&2
+            exit 1
+          fi
+
+          manifest=tests/artifacts/build-evidence/stack-manifest.json
+          jq -e \
+            --arg release "marty-ui@$RELEASE_VERSION" \
+            --arg version "$RELEASE_VERSION" \
+            --arg sha "$MARTY_UI_RELEASE_SHA" \
+            '.schema == "marty.stack/v1" and
+             .release == $release and
+             any(.components[];
+               .name == "marty-ui" and
+               .repository == "ElevenID/marty-ui" and
+               .version == $version and
+               .commit == $sha) and
+             ([.components[] |
+                select(.repository == "ElevenID/marty-core") |
+                .commit] | unique | length == 1)' \
+            "$manifest" >/dev/null
+
+          core_ref="$(jq -er '[.components[] | select(.repository == "ElevenID/marty-core") | .commit] | unique | .[0]' "$manifest")"
+          if [[ ! "$core_ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "core_ref must resolve to a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$MARTY_PROTOCOL_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_PROTOCOL_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          echo "core=$core_ref" >> "$GITHUB_OUTPUT"
+          echo "protocol=$MARTY_PROTOCOL_SHA" >> "$GITHUB_OUTPUT"
+          echo "stack_manifest_sha256=$stack_manifest_sha256" >> "$GITHUB_OUTPUT"
+          echo "MARTY_CORE_REF=$core_ref" >> "$GITHUB_ENV"
+          echo "MARTY_PROTOCOL_REF=$MARTY_PROTOCOL_SHA" >> "$GITHUB_ENV"
+          echo "STACK_MANIFEST_SHA256=$stack_manifest_sha256" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          token: ${{ github.token }}
+          ref: ${{ steps.release.outputs.core }}
+          path: marty-core
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Marty-Protocol/Marty-Protocol
+          ref: ${{ steps.release.outputs.protocol }}
+          path: marty-protocol
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml" --manifest-path "marty-core/Cargo.toml"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
+        with:
+          workspaces: marty-core
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Require the full-stack fixture manifest
+        shell: bash
+        run: |
+          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD RELEASE_VERSION STACK_RELEASE_RUN_ID MARTY_UI_RELEASE_SHA BETA_SOURCE_ID MARTY_CORE_REF MARTY_PROTOCOL_REF STACK_MANIFEST_SHA256; do
+            if [[ -z "${!name}" ]]; then
+              echo "$name is required by the beta-lifecycle environment." >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$STACK_RELEASE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "STACK_RELEASE_RUN_ID must be numeric." >&2
+            exit 1
+          fi
+          if [[ ! "$BETA_SOURCE_ID" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "BETA_SOURCE_ID must be a full 40-character source-snapshot ID." >&2
+            exit 1
+          fi
+
+      - name: Require the selected release to be running on beta
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --header 'Cache-Control: no-cache' \
+            "$BETA_ORIGIN/.well-known/marty-release" \
+            --output tests/artifacts/services-release.json
+          curl --fail --silent --show-error --header 'Cache-Control: no-cache' \
+            "$BETA_ORIGIN/marty-ui-release.json" \
+            --output tests/artifacts/ui-release.json
+          for report in tests/artifacts/services-release.json tests/artifacts/ui-release.json; do
+            component="$(basename "$report" -release.json)"
+            jq -e \
+              --arg release "$RELEASE_VERSION" \
+              --arg source_id "$BETA_SOURCE_ID" \
+              --arg component "$component" \
+              '.component == $component and .release_version == $release and .marty_ui_sha == $source_id' \
+              "$report" >/dev/null
+          done
+
+      # Intake is initiated privately with the original deployment bundle before
+      # this workflow. Never put that bundle in a public event or artifact.
+      - name: Require completed private demo qualification
+        env:
+          GH_TOKEN: ${{ secrets.DEMO_RECORDER_DISPATCH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "DEMO_RECORDER_DISPATCH_TOKEN is required by the beta-lifecycle environment." >&2
+            exit 1
+          fi
+          [[ "$DEMO_QUALIFICATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DEMO_RECORDER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEMO_REVIEW_RECORD_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$DEMO_DEPLOYMENT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          private_evidence="$(mktemp -d "$RUNNER_TEMP/demo-qualification.XXXXXX")"
+          gh run download "$DEMO_QUALIFICATION_RUN_ID" \
+            --repo ElevenID/marty-demo-recorder \
+            --name "demo-release-qualification-$RELEASE_VERSION" \
+            --dir "$private_evidence/report"
+          gh api "repos/ElevenID/marty-demo-recorder/actions/runs/$DEMO_QUALIFICATION_RUN_ID" \
+            > "$private_evidence/run.json"
+          gh api "repos/ElevenID/marty-demo-recorder/issues/comments/$DEMO_REVIEW_RECORD_ID" \
+            > "$private_evidence/review-comment.json"
+          review_author="$(jq -er '.user.login | select(type == "string")' \
+            "$private_evidence/review-comment.json")"
+          [[ "$review_author" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]
+          gh api "repos/ElevenID/marty-demo-recorder/collaborators/$review_author/permission" \
+            > "$private_evidence/review-permission.json"
+          cargo run --locked --quiet --manifest-path rust/Cargo.toml \
+            -p marty-release-evidence --bin validate-demo-qualification -- \
+            "$private_evidence/run.json" "$private_evidence/report/release-qualification.json" \
+            "$private_evidence/review-comment.json" "$private_evidence/review-permission.json" \
+            "$DEMO_QUALIFICATION_RUN_ID" "$DEMO_RECORDER_SHA" "$DEMO_REVIEW_RECORD_ID" "$RELEASE_VERSION" \
+            "$BETA_ORIGIN" "$MARTY_UI_RELEASE_SHA" "$BETA_SOURCE_ID" \
+            "$DEMO_DEPLOYMENT_MANIFEST_SHA256" "$STACK_MANIFEST_SHA256" \
+            > tests/artifacts/demo-qualification.json
+
+      - name: Install browser test dependencies
+        working-directory: tests
+        run: npm ci
+
+      - name: Cache Chromium
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}-python-1.56.0
+
+      - name: Install Chromium
+        working-directory: tests
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Chromium system dependencies
+        working-directory: tests
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Test beta evidence and recording contracts
+        working-directory: tests
+        run: node --test scripts/*.test.js
+
+      - name: Require release-bound public demos on beta
+        working-directory: tests
+        env:
+          BASE_URL: ${{ env.BETA_ORIGIN }}
+          REQUIRE_LIVE_DEMO_BINDING: "1"
+          EXPECTED_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          EXPECTED_BETA_SOURCE_ID: ${{ env.BETA_SOURCE_ID }}
+          EXPECTED_MARTY_UI_REVISION: ${{ env.MARTY_UI_RELEASE_SHA }}
+        run: npm run test:demo-platform
+
+      - name: Install beta gate Python dependencies and browser
+        run: |
+          python -m pip install --disable-pip-version-check playwright==1.56.0 'jsonschema[format]>=4.23' 'referencing>=0.35'
+          python -m playwright install chromium
+
+      - name: Require reproducible Marty browser wallet sources
+        shell: bash
+        run: |
+          test -f marty-core/Cargo.lock
+          test -f marty-core/marty-test-wallet/Cargo.toml
+          cargo metadata --locked --no-deps --format-version 1 \
+            --manifest-path marty-core/Cargo.toml >/dev/null
+
+      - name: Start final-spec Marty browser test wallet
+        shell: bash
+        run: |
+          cargo build --locked --manifest-path marty-core/Cargo.toml -p marty-test-wallet
+          RUST_LOG=marty_test_wallet=info \
+            marty-core/target/debug/marty-test-wallet \
+            >marty-test-wallet.log 2>&1 &
+          echo $! >marty-test-wallet.pid
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:8787/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat marty-test-wallet.log >&2
+          echo "Marty browser test wallet did not become ready." >&2
+          exit 1
+
+      - name: Require deployed MIP 0.5.0 contract
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const origin = process.env.BETA_ORIGIN.replace(/\/$/, '');
+          const response = await fetch(`${origin}/.well-known/mip-configuration`);
+          const body = await response.json().catch(() => null);
+          const header = response.headers.get('x-mip-version');
+          const forbidden = ['api_base_url', 'supported_issuance_protocols', 'endpoints', 'wallet_facing_endpoints', 'authorization'];
+          const canonical = body?.issuer === origin
+            && body?.mip_configuration_endpoint === `${origin}/.well-known/mip-configuration`
+            && JSON.stringify(body?.supported_versions) === JSON.stringify(['0.5.0'])
+            && Array.isArray(body?.implementation_classes)
+            && Array.isArray(body?.supported_compliance_profiles)
+            && Array.isArray(body?.active_compliance_profiles)
+            && forbidden.every((field) => !(field in body));
+          if (!response.ok || body?.mip_version !== '0.5.0' || header !== '0.5.0' || !canonical) {
+            throw new Error(`Expected deployed MIP 0.5.0; status=${response.status}, body=${body?.mip_version}, header=${header}`);
+          }
+          const { mkdirSync, writeFileSync } = await import('node:fs');
+          mkdirSync('tests/artifacts', { recursive: true });
+          writeFileSync('tests/artifacts/mip-configuration.json', `${JSON.stringify(body, null, 2)}\n`);
+          NODE
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          protocol_root = Path("marty-protocol").resolve()
+          sys.path.insert(0, str(protocol_root))
+          from tests.helpers import SCHEMAS_DIR, validate_instance
+
+          document = json.loads(Path("tests/artifacts/mip-configuration.json").read_text(encoding="utf-8"))
+          validate_instance(SCHEMAS_DIR / "mip-configuration.json", document)
+          PY
+
+      - name: Require SpruceKit-compatible issuer metadata
+        shell: bash
+        run: |
+          cargo run --locked --quiet --manifest-path rust/Cargo.toml \
+            -p marty-spruce-metadata-probe -- --base "$BETA_ORIGIN" \
+            --output tests/artifacts/spruce-metadata.json
+
+      - name: Record immutable beta lifecycle context
+        shell: bash
+        run: |
+          mkdir -p tests/artifacts
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg stack_release_run_id "$STACK_RELEASE_RUN_ID" \
+            --arg release_version "$RELEASE_VERSION" \
+            --arg marty_ui_release_sha "$MARTY_UI_RELEASE_SHA" \
+            --arg stack_manifest_sha256 "$STACK_MANIFEST_SHA256" \
+            --arg beta_source_id "$BETA_SOURCE_ID" \
+            --arg marty_core_sha "$MARTY_CORE_REF" \
+            --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
+            --arg evidence_tooling_sha "$EVIDENCE_TOOLING_SHA" \
+            --arg beta_origin "$BETA_ORIGIN" \
+            --arg mip_version "0.5.0" \
+            --arg demo_qualification_run_id "$DEMO_QUALIFICATION_RUN_ID" \
+            --arg demo_recorder_sha "$DEMO_RECORDER_SHA" \
+            --arg demo_review_record_id "$DEMO_REVIEW_RECORD_ID" \
+            --arg demo_deployment_manifest_sha256 "$DEMO_DEPLOYMENT_MANIFEST_SHA256" \
+            '{
+              run_id: $run_id,
+              stack_release_run_id: $stack_release_run_id,
+              release_version: $release_version,
+              marty_ui_release_sha: $marty_ui_release_sha,
+              stack_manifest_sha256: $stack_manifest_sha256,
+              beta_source_id: $beta_source_id,
+              marty_core_sha: $marty_core_sha,
+              marty_protocol_sha: $marty_protocol_sha,
+              evidence_tooling_sha: $evidence_tooling_sha,
+              beta_origin: $beta_origin,
+              mip_version: $mip_version,
+              demo_qualification_run_id: $demo_qualification_run_id,
+              demo_recorder_sha: $demo_recorder_sha,
+              demo_review_record_id: $demo_review_record_id,
+              demo_deployment_manifest_sha256: $demo_deployment_manifest_sha256
+            }' > tests/artifacts/release-context.json
+
+      - name: Create and activate every organization credential primitive
+        run: >-
+          python scripts/beta_org_console_audit.py
+          --base-url "$BETA_ORIGIN"
+          --github-env "$GITHUB_ENV"
+
+      - name: Probe canonical and removed applicant contracts
+        run: node tests/scripts/probe-beta-membership-badge.js
+
+      - name: Receive membership badge, log out, and sign back in with it
+        run: node tests/scripts/verify-beta-credential-login.js
+
+      - name: Receive membership badge, create template, and verify with browser wallet
+        run: node tests/scripts/audit-beta-org-credential-paths.js
+
+      - name: Renew and enforce credential lifecycle with browser wallet
+        run: node tests/scripts/audit-beta-credential-lifecycle.js
+
+      - name: Upload lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mip-03-beta-credential-lifecycle
+          path: tests/artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Collect wallet logs
+        if: failure()
+        run: |
+          cat marty-test-wallet.log || true
+
+      - name: Stop browser wallet
+        if: always()
+        run: |
+          if [[ -f marty-test-wallet.pid ]]; then
+            kill "$(cat marty-test-wallet.pid)" || true
+          fi

@@ -1,0 +1,57 @@
+   Compiling marty-applicant v0.1.0 (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/rust/services/applicant)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/application_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/application_behavior-6808ddfa64016bca)
+
+running 5 tests
+
+thread 'completed_claim_is_not_overwritten_by_a_late_no_flow_error' (676) panicked at services/applicant/tests/application_behavior.rs:215:5:
+assertion `left == right` failed
+  left: StoreDocument { schema_version: None, applicants: [Applicant { id: "60218796-e0c9-4e0c-88ae-29660c92e167", organization_id: "holder-org", flow_id: "", email: "ada@example.com", given_name: Some("Ada"), family_name: Some("Lovelace"), phone: None, oidc_subject: Some("user-1"), user_id: Some("user-1"), external_id: None, credential_template_id: None, status: Credentialed, vetting_data: Object {}, verification_results: [], reviewer_notes: None, rejection_reason: None, created_at: 2026-08-21T12:00:00Z, updated_at: 2026-08-21T12:00:03Z }], applications: [Application { id: "9e36de35-0e7c-4a85-a0e2-5218ab9e20c8", applicant_id: "60218796-e0c9-4e0c-88ae-29660c92e167", organization_id: "issuer-org", reference_number: Some("APP-20260821-B0AD86"), application_template_id: "application-template-1", credential_template_id: "credential-template-1", status: Credentialed, form_data: {"email": String("ada@example.com")}, integration_context: {}, system_data: {"credential_display_name": String("Member credential"), "approval_strategy": String("MANUAL"), "application_validity_days": Number(30), "last_issuance_attempt_id": String("abaf43e3-5dee-4aa6-a0b4-77f9f6632d62"), "issuance_transaction_id": String("transaction-1"), "credential_offer_uri": String("openid-credential-offer://offer-1"), "offer_expires_at": String("2026-08-21T12:05:00Z"), "credential_offer_uris": Object {}, "credential_offer_labels": Object {}, "offer_generated_at": String("2026-08-21T12:00:01+00:00"), "issuance_status": String("issued"), "flow_instance_id": String("flow-instance-1"), "flow_definition_id": String("flow-1"), "issuance_source": String("flow")}, required_checks: [Object {"check_type": String("identity_verification"), "custom_name": Null, "is_required": Bool(true), "order": Number(1), "config": Object {}, "external_provider": Null, "webhook_url": Null}], evidence_requirements: [], claim_state: Blocked, claim_blocker: Some(Object {"code": String("NO_ACTIVE_ISSUANCE_FLOW"), "owner": String("ISSUER"), "message": String("The issuer is still preparing this credential.")}), created_at: 2026-08-21T12:00:00Z, updated_at: 2026-08-21T12:00:02Z, submitted_at: None, reviewed_at: None, issued_at: Some(2026-08-21T12:00:03Z) }], biometrics: {}, checks: [], evidence: [], pending_application_events: [] }
+ right: StoreDocument { schema_version: None, applicants: [Applicant { id: "60218796-e0c9-4e0c-88ae-29660c92e167", organization_id: "holder-org", flow_id: "", email: "ada@example.com", given_name: Some("Ada"), family_name: Some("Lovelace"), phone: None, oidc_subject: Some("user-1"), user_id: Some("user-1"), external_id: None, credential_template_id: None, status: Credentialed, vetting_data: Object {}, verification_results: [], reviewer_notes: None, rejection_reason: None, created_at: 2026-08-21T12:00:00Z, updated_at: 2026-08-21T12:00:03Z }], applications: [Application { id: "9e36de35-0e7c-4a85-a0e2-5218ab9e20c8", applicant_id: "60218796-e0c9-4e0c-88ae-29660c92e167", organization_id: "issuer-org", reference_number: Some("APP-20260821-B0AD86"), application_template_id: "application-template-1", credential_template_id: "credential-template-1", status: Credentialed, form_data: {"email": String("ada@example.com")}, integration_context: {}, system_data: {"credential_display_name": String("Member credential"), "approval_strategy": String("MANUAL"), "application_validity_days": Number(30), "last_issuance_attempt_id": String("abaf43e3-5dee-4aa6-a0b4-77f9f6632d62"), "issuance_transaction_id": String("transaction-1"), "credential_offer_uri": String("openid-credential-offer://offer-1"), "offer_expires_at": String("2026-08-21T12:05:00Z"), "credential_offer_uris": Object {}, "credential_offer_labels": Object {}, "offer_generated_at": String("2026-08-21T12:00:01+00:00"), "issuance_status": String("issued"), "flow_instance_id": String("flow-instance-1"), "flow_definition_id": String("flow-1"), "issuance_source": String("flow")}, required_checks: [Object {"check_type": String("identity_verification"), "custom_name": Null, "is_required": Bool(true), "order": Number(1), "config": Object {}, "external_provider": Null, "webhook_url": Null}], evidence_requirements: [], claim_state: Claimed, claim_blocker: None, created_at: 2026-08-21T12:00:00Z, updated_at: 2026-08-21T12:00:03Z, submitted_at: None, reviewed_at: None, issued_at: Some(2026-08-21T12:00:03Z) }], biometrics: {}, checks: [], evidence: [], pending_application_events: [] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test completed_claim_is_not_overwritten_by_a_late_no_flow_error ... FAILED
+
+thread 'completed_claim_reply_preserves_reconciled_success_and_expiry_without_writes' (677) panicked at services/applicant/tests/application_behavior.rs:151:47:
+called `Result::unwrap()` on an `Err` value: Issuance(AttemptChanged)
+test uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot ... ok
+test completed_claim_reply_preserves_reconciled_success_and_expiry_without_writes ... FAILED
+test completed_claim_reply_refuses_malformed_markers_and_a_new_active_attempt ... ok
+test completed_claim_reply_rejects_changed_offer_transaction_and_flow_identity ... ok
+
+failures:
+
+failures:
+    completed_claim_is_not_overwritten_by_a_late_no_flow_error
+    completed_claim_reply_preserves_reconciled_success_and_expiry_without_writes
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p marty-applicant --test application_behavior`
+     Running tests/http_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/http_behavior-9ce2c0fa19389313)
+
+running 3 tests
+
+thread 'claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities' (684) panicked at services/applicant/tests/http_behavior.rs:185:71:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities ... FAILED
+
+thread 'claim_rejects_unsupported_options_and_malformed_json_before_mutation' (683) panicked at services/applicant/tests/http_behavior.rs:147:9:
+assertion `left == right` failed: {"canvas_credentials_consent":true}
+  left: 409
+ right: 422
+test claim_rejects_unsupported_options_and_malformed_json_before_mutation ... FAILED
+test claim_checks_holder_ownership_before_reporting_body_errors ... ok
+
+failures:
+
+failures:
+    claim_rejects_unsupported_options_and_malformed_json_before_mutation
+    claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `-p marty-applicant --test http_behavior`
+error: 2 targets failed:
+    `-p marty-applicant --test application_behavior`
+    `-p marty-applicant --test http_behavior`

@@ -1,0 +1,23 @@
+✔ accepts only a fresh full portability pass with exact stock-Canvas boundaries (2.791875ms)
+✔ fails closed on readiness-only, modified Canvas, shortcuts, stale runs, or missing cases (2.050868ms)
+✔ rejects sensitive or non-canonical fields in the portability artifact (0.306131ms)
+✔ loads an attestation by path but returns only hash-bound sanitized prerequisite evidence (1.231755ms)
+✔ requires fixed origins and non-parameterized demo URLs (0.342746ms)
+✔ accepts only transient storage state or explicitly synthetic credentials (1.219246ms)
+✔ Canvas prepare is fail-closed for recording and keeps auth/path out of prerequisite evidence (1.789735ms)
+✔ dry-run config inspection does not pretend a portability run passed (0.15306ms)
+✔ Marty UI assertions require both a passed case and a preflighted stable test id (0.747676ms)
+✔ Canvas attested cases validate prerequisites without recording a current-run assertion (3.609576ms)
+✔ D-07 and D-08 reject imported prerequisite cases as current-run outcomes (0.694486ms)
+✔ Canvas recording preflight blocks incomplete assertion producers before requesting runtime inputs (0.500484ms)
+✔ Receipt-shaped action or runtime JSON cannot promote imported Canvas prerequisites (0.300753ms)
+✔ Canvas scenario has no fallback start URL, fake success, or browser-state artifact action (0.525671ms)
+✔ D-08 reuses the Canvas gate for the exact external-evidence contract (0.23245ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 23.311934

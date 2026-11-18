@@ -1,0 +1,29 @@
+{
+  "schema": "elevenid.stack-tag-preparation/v1",
+  "required_workflows": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "event": "merge_group"
+    },
+    {
+      "path": ".github/workflows/open-source-policy.yml",
+      "event": "merge_group"
+    },
+    {
+      "path": ".github/workflows/organization-quality.yml",
+      "event": "merge_group"
+    },
+    {
+      "path": ".github/workflows/codeql-rust.yml",
+      "event": "merge_group"
+    },
+    {
+      "path": ".github/workflows/codeql-actions.yml",
+      "event": "merge_group"
+    }
+  ],
+  "required_full_qualification": {
+    "path": ".github/workflows/ci.yml",
+    "events": ["schedule", "workflow_dispatch"]
+  }
+}

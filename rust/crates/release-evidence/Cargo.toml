@@ -1,0 +1,60 @@
+[package]
+name = "marty-release-evidence"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+flate2.workspace = true
+marty-crypto = { workspace = true, features = ["jwk"] }
+marty-oid4vp-contract = { path = "../oid4vp-contract" }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+prost.workspace = true
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+tempfile.workspace = true
+
+[[bin]]
+name = "beta-evidence-bundle"
+path = "src/bundle_cli.rs"
+
+[[bin]]
+name = "validate-stack-release-run"
+path = "src/main.rs"
+
+[[bin]]
+name = "validate-demo-qualification"
+path = "src/demo_cli.rs"
+
+[[bin]]
+name = "kubernetes-native-issuance"
+path = "src/kubernetes_native_cli.rs"
+
+[[bin]]
+name = "render-envoy-native-issuance"
+path = "src/envoy_cli.rs"
+
+[[bin]]
+name = "public-kms-jwk"
+path = "src/public_kms_jwk.rs"
+
+[[bin]]
+name = "validate-signing-capability"
+path = "src/signing_capability_cli.rs"
+
+[[bin]]
+name = "validate-age-proof-demo"
+path = "src/age_proof_cli.rs"
+
+[[bin]]
+name = "validate-official-suite"
+path = "src/official_cli.rs"

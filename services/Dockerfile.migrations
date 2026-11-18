@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.7
+# Public database migration image. Build context: marty-ui repository root.
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS rust-migration-builder
+
+ARG PRIVATE_FORKS_ENABLED=false
+# The reader is never a build argument or image environment variable.
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
+WORKDIR /build/rust
+COPY rust /build/rust
+COPY proto /build/proto
+COPY contracts/python-text-semantics.json /build/contracts/python-text-semantics.json
+COPY contracts/demo-seed-reference-v1.json /build/contracts/demo-seed-reference-v1.json
+COPY contracts/issuer-identity-capabilities-response.json /build/contracts/issuer-identity-capabilities-response.json
+COPY contracts/issuer-identity-inspection-response.json /build/contracts/issuer-identity-inspection-response.json
+# Keep source authentication separate from every Rust compilation step.
+RUN --mount=type=secret,id=private_forks_read_token \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      CARGO_HOME=/opt/private-cargo python3 /usr/local/lib/marty-private-forks.py \
+        fetch --container --token-file /run/secrets/private_forks_read_token; \
+    fi
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true; \
+      unset RUSTC_WRAPPER; \
+    fi; \
+    cargo build --locked --release -p marty-notification --bin marty-notification \
+    && cargo build --locked --release -p marty-signing-keys --bin marty-migration-bootstrap \
+    && cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed
+
+FROM docker:29-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00 AS docker-cli
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY rust/services/issuance/migrations /app/passport-native-migrations/issuance
+COPY rust/services/flow/migrations /app/passport-native-migrations/flow
+COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
+COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
+COPY --from=rust-migration-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
+COPY --from=rust-migration-builder /build/rust/target/release/marty-migration-bootstrap /usr/local/bin/marty-migration-bootstrap
+COPY --from=rust-migration-builder /build/rust/target/release/marty-demo-vendor-seed /usr/local/bin/marty-demo-vendor-seed
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+RUN chmod +x /app/load-secrets-env.sh /app/run-migrations-with-secrets.sh \
+    && useradd --create-home --shell /usr/sbin/nologin appuser
+
+USER appuser
+CMD ["/app/run-migrations-with-secrets.sh"]

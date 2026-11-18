@@ -1,0 +1,217 @@
+use marty_service_runtime::{keyless_incoming, shutdown_signal, wait_for_shutdown};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc};
+
+use marty_flow::{
+    flow_proto::flow_service_server::FlowServiceServer, flow_read_router, run_callback_dispatcher,
+    run_public_verification_retention, CallbackDeliveryConfig, FlowBackendConnections,
+    FlowDependency, FlowGrpcApplicationApprovalOptions, FlowGrpcSecurity, FlowGrpcService,
+    FlowHttpApplicationApprovalOptions, FlowHttpState, FlowHttpVerificationOptions, FlowRuntime,
+    FlowServiceConfig,
+};
+use tokio::{net::TcpListener, sync::watch};
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::Server;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+
+mod schema_command;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    if let Some(command) = schema_command::parse(std::env::args().skip(1))? {
+        schema_command::run(command).await?;
+        return Ok(());
+    }
+
+    let config = FlowServiceConfig::from_env().map_err(|error| {
+        error!(%error, "invalid Flow configuration");
+        error
+    })?;
+    let runtime = FlowRuntime::new(&config)?;
+    let connections = FlowBackendConnections::connect(&config, &runtime).await?;
+    // Fail startup on missing retention schema/permissions before admitting
+    // public traffic; continue cleanup after the manifest is disabled.
+    connections
+        .repository
+        .sweep_public_verification_retention(100)
+        .await?;
+    let grpc_security = Arc::new(FlowGrpcSecurity::from_config(&config)?);
+    let callback_config = CallbackDeliveryConfig::from_env()?;
+    let http_application =
+        FlowHttpApplicationApprovalOptions::from_config(&config, connections.nonce_store.clone())?;
+    let grpc_application =
+        FlowGrpcApplicationApprovalOptions::from_config(&config, connections.nonce_store.clone())?;
+    let mut verification = FlowHttpVerificationOptions::from_config(&config);
+    verification.callback_retention_seconds = callback_config.retention_seconds;
+    verification.callback_max_attempts = callback_config.max_attempts;
+
+    let http_state = FlowHttpState {
+        service_authenticator: config
+            .service_token
+            .clone()
+            .map(|token| {
+                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
+            })
+            .transpose()?,
+        repository: connections.repository.clone(),
+        providers: Arc::clone(&connections.providers),
+        public_base_url: config.public_base_url.clone(),
+        verification,
+        application_approval: http_application,
+    };
+    let grpc_service = FlowGrpcService::new(
+        connections.repository.clone(),
+        Arc::clone(&connections.providers),
+        Arc::clone(&grpc_security),
+        config.public_base_url.clone(),
+        config.callback_destinations.clone(),
+        config.verification_start_options(),
+        grpc_application,
+    );
+
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_flow::flow_wallet_authority_router(http_state.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+
+    let http_listener = TcpListener::bind(config.http_addr).await?;
+    runtime.mark_healthy(FlowDependency::HttpListener)?;
+    let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
+    runtime.mark_healthy(FlowDependency::GrpcListener)?;
+
+    let callback_secret = config.webhook_secret.clone();
+    let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+    let retention_worker = tokio::spawn(run_public_verification_retention(
+        connections.repository.clone(),
+        worker_shutdown_rx.clone(),
+    ));
+    let callback_worker = callback_secret.map(|secret| {
+        tokio::spawn(run_callback_dispatcher(
+            connections.repository.clone(),
+            config.callback_destinations.clone(),
+            secret,
+            callback_config,
+            worker_shutdown_rx,
+        ))
+    });
+    runtime.mark_healthy(FlowDependency::CallbackDelivery)?;
+
+    let http = axum::serve(
+        http_listener,
+        runtime
+            .operational_router()
+            .merge(flow_read_router(http_state)),
+    );
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let flow_server = FlowServiceServer::new(grpc_service);
+    let tls_acceptor = grpc_security.server_tls_acceptor().await?;
+    let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
+    let authority = marty_service_runtime::https::serve_optional(
+        authority_server,
+        listener_shutdown_rx.clone(),
+    );
+    let mut http_shutdown = listener_shutdown_rx.clone();
+    let mut grpc_shutdown = listener_shutdown_rx;
+    let http = http.with_graceful_shutdown(async move {
+        wait_for_shutdown(&mut http_shutdown).await;
+    });
+    let router = Server::builder()
+        .add_service(health_service)
+        .add_service(flow_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = keyless_incoming(grpc_listener, acceptor);
+            Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
+                wait_for_shutdown(&mut grpc_shutdown).await;
+            }))
+        } else {
+            Box::pin(
+                router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
+
+    runtime.activate()?;
+    health_reporter
+        .set_serving::<FlowServiceServer<FlowGrpcService>>()
+        .await;
+    info!(
+        http_address = %config.http_addr,
+        grpc_address = %config.grpc_addr,
+        release_version = %config.release_version,
+        build_revision = %config.build_revision,
+        "native Rust Flow service active"
+    );
+
+    let servers = async {
+        tokio::try_join!(
+            async {
+                authority
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+            async {
+                http.await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+            async {
+                grpc.await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+        )
+        .map(|_| ())
+    };
+    tokio::pin!(servers);
+    let (result, already_draining) = tokio::select! {
+        result = &mut servers => (result, false),
+        () = shutdown_signal() => {
+            info!("Flow shutdown requested");
+            runtime.drain()?;
+            health_reporter
+                .set_not_serving::<FlowServiceServer<FlowGrpcService>>()
+                .await;
+            let _ = listener_shutdown_tx.send(true);
+            (servers.await, true)
+        }
+    };
+
+    if !already_draining {
+        runtime.drain()?;
+    }
+    health_reporter
+        .set_not_serving::<FlowServiceServer<FlowGrpcService>>()
+        .await;
+    let _ = listener_shutdown_tx.send(true);
+    let _ = worker_shutdown_tx.send(true);
+    if let Some(worker) = callback_worker {
+        match worker.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => error!(%error, "Flow callback dispatcher stopped with an error"),
+            Err(error) => error!(%error, "Flow callback dispatcher task failed"),
+        }
+    }
+    match retention_worker.await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => error!("Flow public verification retention worker stopped with an error"),
+        Err(_) => error!("Flow public verification retention task failed"),
+    }
+    runtime.stop()?;
+    result?;
+    Ok(())
+}

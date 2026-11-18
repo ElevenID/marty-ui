@@ -1,0 +1,454 @@
+{
+  "output": "/tmp/synthetic-native-guided-8Izddy/synthetic-native-guided.mp4",
+  "sha256": "a1b1b915dc8dd25bfbc85ba4c8fa382a9c7aed0563f5b782107800789995f06e",
+  "durationSeconds": 7.04,
+  "chapters": 2,
+  "sourceQuality": {
+    "codec": "h264",
+    "profile": "Constrained Baseline",
+    "width": 1920,
+    "height": 1080,
+    "pixelFormat": "yuv420p",
+    "frameRate": 25,
+    "bitrate": 56464,
+    "colorPrimaries": null,
+    "colorTransfer": null,
+    "colorSpace": null,
+    "fieldOrder": "progressive",
+    "duration": 1,
+    "audioStreams": []
+  },
+  "sourceRecording": {
+    "filename": "synthetic-browser.mp4",
+    "sha256": "74ca792b5fdfccb6ecd68b1bd441cfb8235992bc8bc71d3c414bf2e1c0563759",
+    "quality": {
+      "codec": "h264",
+      "profile": "Constrained Baseline",
+      "width": 1920,
+      "height": 1080,
+      "pixelFormat": "yuv420p",
+      "frameRate": 25,
+      "bitrate": 56464,
+      "colorPrimaries": null,
+      "colorTransfer": null,
+      "colorSpace": null,
+      "fieldOrder": "progressive",
+      "duration": 1,
+      "audioStreams": []
+    }
+  },
+  "chapterMap": {
+    "filename": "chapters.json",
+    "sha256": "fd2334613c1a44dfc61a4fc6184f8d931784a182dfe422e930a741d827f9720c",
+    "chapterCount": 2
+  },
+  "secondaryQuality": {
+    "codec": "h264",
+    "profile": "Constrained Baseline",
+    "width": 1080,
+    "height": 1920,
+    "pixelFormat": "yuv420p",
+    "frameRate": 25,
+    "bitrate": 50904,
+    "colorPrimaries": null,
+    "colorTransfer": null,
+    "colorSpace": null,
+    "fieldOrder": "progressive",
+    "duration": 2,
+    "audioStreams": []
+  },
+  "deviceQualities": [
+    {
+      "codec": "h264",
+      "profile": "Constrained Baseline",
+      "width": 1080,
+      "height": 1920,
+      "pixelFormat": "yuv420p",
+      "frameRate": 25,
+      "bitrate": 50904,
+      "colorPrimaries": null,
+      "colorTransfer": null,
+      "colorSpace": null,
+      "fieldOrder": "progressive",
+      "duration": 2,
+      "audioStreams": []
+    }
+  ],
+  "deviceSources": [
+    {
+      "filename": "synthetic-native.mp4",
+      "sha256": "d452ef22c1cf499b80f91c74b20b543e669f2215b53846a45a04a673be997f1f",
+      "quality": {
+        "codec": "h264",
+        "profile": "Constrained Baseline",
+        "width": 1080,
+        "height": 1920,
+        "pixelFormat": "yuv420p",
+        "frameRate": 25,
+        "bitrate": 50904,
+        "colorPrimaries": null,
+        "colorTransfer": null,
+        "colorSpace": null,
+        "fieldOrder": "progressive",
+        "duration": 2,
+        "audioStreams": []
+      }
+    }
+  ],
+  "masterQuality": {
+    "codec": "h264",
+    "profile": "High",
+    "width": 2560,
+    "height": 1440,
+    "pixelFormat": "yuv420p",
+    "frameRate": 25,
+    "bitrate": 454117,
+    "colorPrimaries": "bt709",
+    "colorTransfer": "bt709",
+    "colorSpace": "bt709",
+    "fieldOrder": "progressive",
+    "duration": 7.04,
+    "audioStreams": [
+      {
+        "codec": "aac",
+        "channels": 1,
+        "sampleRate": 48000,
+        "duration": 7.1
+      }
+    ]
+  },
+  "spokenCaptions": {
+    "scriptSha256": "72402a47f9f2d43e8490dafbe84ad4daf76fe6c51153abfbccb0e87f65a8c2f0",
+    "provenanceSha256": "19ae5ca240896adc87ff5e8f0edfb9e8967dbc91f00433cce113e99c3697020b",
+    "timingBasis": "Cue synthesis start and rendered audio duration rounded to milliseconds; not inferred from source video",
+    "layout": {
+      "fontPixels": 72,
+      "maxLines": 3,
+      "maxCharactersPerLine": 52,
+      "captionBand": {
+        "x": 0,
+        "y": 1160,
+        "width": 2560,
+        "height": 280
+      },
+      "contentFit": {
+        "width": 2062,
+        "height": 1160,
+        "preserveAspectRatio": true
+      },
+      "appliedAfterSourceCameraAndPointer": true
+    },
+    "cues": [
+      {
+        "start": 4.5,
+        "end": 6.1,
+        "text": "Synthetic caption remains readable.",
+        "textSha256": "122b9d8b09d3f0bc08b5b73af780bb39d990976288d0ea8ee53c57188890f54c"
+      }
+    ]
+  },
+  "presentationProfile": {
+    "id": "lifecycle-v1",
+    "version": 1,
+    "status": "DRAFT_AWAITING_EXACT_MASTER_REVIEW",
+    "voice": {
+      "profile": "marty-neutral-1",
+      "id": "af_heart",
+      "status": "PROVISIONAL"
+    },
+    "qualification": "NOT_EVALUATED_BY_COMPOSITION",
+    "roadmapStages": 1,
+    "scenarioCount": 1,
+    "cursorClassification": "EDITORIAL_RECONSTRUCTION_NOT_RAW_MOUSE_CAPTURE",
+    "captionPlacement": "RESERVED_BAND_OUTSIDE_PRODUCT_CROP",
+    "durationSeconds": 7.04,
+    "sourceBinding": {
+      "filename": "edit-source.json",
+      "sha256": "bf0e671c82d129ec24f9c44d4dcdd996dc14ab055096a83f6af08c7a0bc5f722",
+      "sourceSha256": "74ca792b5fdfccb6ecd68b1bd441cfb8235992bc8bc71d3c414bf2e1c0563759",
+      "runReport": {
+        "filename": "run-report.json",
+        "sha256": "7fd3ef304d77f7eec8450cc50833943b74e9f8911a950810c7514095a2659a5d"
+      },
+      "deviceSources": [
+        {
+          "filename": "synthetic-native.mp4",
+          "sha256": "d452ef22c1cf499b80f91c74b20b543e669f2215b53846a45a04a673be997f1f"
+        }
+      ]
+    }
+  },
+  "disclosureMode": "metadata-only",
+  "narration": {
+    "filename": "synthetic-tone.wav",
+    "sha256": "b0aea91edf266af1fa4fbf0921deb522272b85613c2ad3ce42d70e8fab7a9d9e",
+    "durationSeconds": 7.04,
+    "provenance": {
+      "filename": "synthetic-narration.provenance.json",
+      "sha256": "19ae5ca240896adc87ff5e8f0edfb9e8967dbc91f00433cce113e99c3697020b",
+      "kind": "MARTY_LOCAL_NARRATION_PROVENANCE",
+      "generatedLocally": true,
+      "externalSynthesisServiceUsed": false,
+      "voiceCloningUsed": false,
+      "profile": "marty-neutral-1",
+      "provider": "SYNTHETIC_TONE_TEST_ONLY",
+      "model": {
+        "license": "Apache-2.0"
+      },
+      "voice": {
+        "id": "af_heart",
+        "license": "Apache-2.0"
+      },
+      "engine": {
+        "license": "Apache-2.0"
+      },
+      "licenseReview": {
+        "status": "APPROVED_FOR_INTERNAL_AND_PUBLIC_DEMO_USE_WITH_NOTICES",
+        "notLegalAdvice": true
+      },
+      "render": {
+        "captions": "captions.en.vtt",
+        "captionsSha256": "72402a47f9f2d43e8490dafbe84ad4daf76fe6c51153abfbccb0e87f65a8c2f0",
+        "outputSha256": "b0aea91edf266af1fa4fbf0921deb522272b85613c2ad3ce42d70e8fab7a9d9e",
+        "captionCeilingWpm": 160,
+        "maximumCaptionWpm": 100,
+        "cueCount": 1
+      }
+    },
+    "mastering": {
+      "integratedLufsTarget": -16,
+      "truePeakDbTarget": -1.5,
+      "loudnessRangeTarget": 11,
+      "outputSampleRate": 48000
+    }
+  },
+  "derivativeEdits": {
+    "layout": "sequential",
+    "outputFrameRate": 25,
+    "outputFrames": 176,
+    "durationRounding": "SEGMENTS_AND_SLATES_NEAREST_FRAME_TIMELINE_MINIMUM_CEILING",
+    "requestedOpeningSlateSeconds": 3,
+    "requestedClosingSlateSeconds": 1,
+    "sourceAudio": "OMITTED_INDEPENDENT_EDIT_TIMELINE",
+    "playbackRate": null,
+    "startTrimSeconds": null,
+    "segmentMap": {
+      "filename": "segments.json",
+      "sha256": "ee07c6fb8d166a4daa94ec0bdfea126db22e3363a0710a7786c7a66084b3f92a",
+      "segments": [
+        {
+          "label": "Synthetic browser context",
+          "sourceStart": 0,
+          "sourceEnd": 1,
+          "outputDuration": 1,
+          "source": "primary",
+          "requestedOutputDuration": 1,
+          "outputFrames": 25,
+          "outputStart": 3,
+          "outputEnd": 4
+        },
+        {
+          "label": "Synthetic native action",
+          "sourceStart": 0,
+          "sourceEnd": 2,
+          "outputDuration": 2.04,
+          "source": "device",
+          "requestedOutputDuration": 2.02,
+          "outputFrames": 51,
+          "crop": {
+            "x": 200,
+            "y": 1000,
+            "width": 700,
+            "height": 440
+          },
+          "camera": {
+            "easing": "smoothstep",
+            "canvas": {
+              "width": 3424,
+              "height": 1926
+            },
+            "offset": {
+              "x": 1172,
+              "y": 2
+            },
+            "full": {
+              "x": 0,
+              "y": 0,
+              "width": 3424,
+              "height": 1926
+            },
+            "from": {
+              "x": 0,
+              "y": 0,
+              "width": 3424,
+              "height": 1926
+            },
+            "to": {
+              "x": 1330.888888888889,
+              "y": 1002,
+              "width": 782.2222222222222,
+              "height": 440
+            },
+            "transitionFrames": 10,
+            "contextFrames": 3,
+            "pullbackFrames": 0
+          },
+          "scenario": {
+            "number": 1,
+            "title": "Generated control",
+            "reason": "Exercise native source pixels",
+            "before": "Synthetic rectangle",
+            "after": "Synthetic response marker",
+            "durationSeconds": 2.04,
+            "layout": "RESERVED_TOP_BAND_FULL_SEGMENT"
+          },
+          "pointer": {
+            "disclosure": "EDITORIAL_RECONSTRUCTION",
+            "coordinateSpace": "SOURCE_PIXELS",
+            "timingBasis": "VISUAL_RESPONSE_BRACKET_OS_CLICK_UNKNOWN",
+            "settleSeconds": 0.25,
+            "size": 36,
+            "events": [
+              {
+                "sourceStart": 0.1,
+                "sourceClick": 0.8,
+                "sourceEnd": 1.4,
+                "from": {
+                  "x": 250,
+                  "y": 1050
+                },
+                "target": {
+                  "x": 500,
+                  "y": 1180
+                },
+                "responseBracket": {
+                  "start": 0.76,
+                  "end": 0.8
+                },
+                "controlWindow": {
+                  "sourceStart": 0,
+                  "sourceEnd": 2,
+                  "bounds": {
+                    "x": 300,
+                    "y": 1100,
+                    "width": 400,
+                    "height": 160
+                  }
+                },
+                "evidence": {
+                  "path": "native-measurements.json",
+                  "sha256": "c0a80a03c4cf63224f99d79c6ec345e6c6f91548bb6b7eb9efe62af48d34c906",
+                  "eventId": "synthetic-native-response"
+                },
+                "appearFrame": 3,
+                "clickFrame": 21,
+                "endFrame": 36,
+                "settleFrame": 14,
+                "pulseEndFrame": 27
+              }
+            ]
+          },
+          "outputStart": 4,
+          "outputEnd": 6.04
+        }
+      ],
+      "omittedSourceRanges": [],
+      "synchronization": "NOT_ESTABLISHED_INDEPENDENT_SOURCE_CLOCKS",
+      "sources": {
+        "primary": {
+          "filename": "synthetic-browser.mp4",
+          "sha256": "74ca792b5fdfccb6ecd68b1bd441cfb8235992bc8bc71d3c414bf2e1c0563759",
+          "quality": {
+            "codec": "h264",
+            "profile": "Constrained Baseline",
+            "width": 1920,
+            "height": 1080,
+            "pixelFormat": "yuv420p",
+            "frameRate": 25,
+            "bitrate": 56464,
+            "colorPrimaries": null,
+            "colorTransfer": null,
+            "colorSpace": null,
+            "fieldOrder": "progressive",
+            "duration": 1,
+            "audioStreams": []
+          }
+        },
+        "device": {
+          "filename": "synthetic-native.mp4",
+          "sha256": "d452ef22c1cf499b80f91c74b20b543e669f2215b53846a45a04a673be997f1f",
+          "quality": {
+            "codec": "h264",
+            "profile": "Constrained Baseline",
+            "width": 1080,
+            "height": 1920,
+            "pixelFormat": "yuv420p",
+            "frameRate": 25,
+            "bitrate": 50904,
+            "colorPrimaries": null,
+            "colorTransfer": null,
+            "colorSpace": null,
+            "fieldOrder": "progressive",
+            "duration": 2,
+            "audioStreams": []
+          }
+        }
+      },
+      "omittedSourceRangesBySource": {
+        "primary": [],
+        "device": []
+      }
+    },
+    "openingSlateSeconds": 3,
+    "closingSlateSeconds": 1,
+    "slatesExtendTimeline": true,
+    "typographyProfile": "readable-slates-v1",
+    "persistentMarkerPosition": "RESERVED_BOTTOM_80PX",
+    "editorialPointer": {
+      "classification": "EDITORIAL_RECONSTRUCTION_NOT_RAW_MOUSE_CAPTURE",
+      "evidence": [
+        {
+          "source": "device",
+          "path": "native-measurements.json",
+          "sha256": "c0a80a03c4cf63224f99d79c6ec345e6c6f91548bb6b7eb9efe62af48d34c906",
+          "eventId": "synthetic-native-response",
+          "measurementSchemaVersion": 1,
+          "sourceRecording": {
+            "filename": "synthetic-native.mp4",
+            "sha256": "d452ef22c1cf499b80f91c74b20b543e669f2215b53846a45a04a673be997f1f",
+            "width": 1080,
+            "height": 1920
+          },
+          "verification": "SOURCE_AND_MEASUREMENT_IDENTITY_ONLY",
+          "observation": "Synthetic green rectangle; generated white response marker appears at 0.8 seconds. No product execution."
+        }
+      ]
+    },
+    "markerText": "Guided replay - Added cursor",
+    "openingRoadmap": {
+      "eyebrow": "FEATURE DEMONSTRATION",
+      "headline": "A generated native fixture.",
+      "stages": [
+        "1 Control / Response"
+      ],
+      "lines": [
+        "A generated native",
+        "fixture."
+      ]
+    },
+    "openingSlate": {
+      "campaignLabel": null
+    },
+    "closingSlate": {
+      "title": "Generated media fixture",
+      "summary": "Source pixels and frame timing",
+      "boundary": "No wallet or production feature was exercised",
+      "nextStep": "Inspect the test result"
+    },
+    "visualDisclosure": "Added cursor",
+    "disclosureFont": {
+      "filename": "DejaVuSans.ttf",
+      "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280"
+    }
+  }
+}

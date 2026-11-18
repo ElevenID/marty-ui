@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-20T04:21:41.722184+00:00",
+  "scope": "Retained first-party-browser-wallet implementation and local controlled-response/data verification only",
+  "result": "PASS",
+  "scenarioRevision": 2,
+  "recordingClassification": "FIRST_PARTY_CONTROL",
+  "liveBetaRun": "NOT_RUN",
+  "nativeWalletRun": "NOT_RUN",
+  "recordedDemo": "NOT_RUN",
+  "guidedComposition": "UNBOUND",
+  "humanVoiceReview": "NOT_RUN",
+  "publicationQualification": "NOT_EVALUATED",
+  "implementedContract": {
+    "driverMode": "Shared verify-beta-credential-login main({retainedFirstParty:true}) through a fixed audit entrypoint; default D05 remains unchanged",
+    "assertions": [
+      "governed_claim",
+      "expected_credential_received_and_stored",
+      "presentation_authenticated",
+      "closed_wallet_session_rejected"
+    ],
+    "credentialFormats": "The native receipt must identify its actual supported jwt_vc_json or dc+sd-jwt format; this scenario declares only OpenID4VCI, OpenID4VP and DCQL.",
+    "negativeBoundary": "Confirmed exact owned session closure followed by run-bound GET /api/credentials returning HTTP 410. This is closed-session rejection, not TTL expiry or public-device isolation.",
+    "nativeImplementation": "marty-core/marty-test-wallet",
+    "publicWalletProduct": false,
+    "freshEvidence": [
+      "report.json",
+      "open-badge-holder-and-login.webm",
+      "open-badge-browser-wallet.webm"
+    ],
+    "sourceBinding": "Existing externalQualification.driverSource validates exact clean driver Git revision, fixed tracked entrypoint SHA-256 and deployed-source ancestry before and after capture."
+  },
+  "repositories": {
+    "marty-ui": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "headAtCheck": "201df5a70942f333a11787b263932addd591da37",
+      "scope": "Current owned working-tree bytes under review; no deployed-build claim",
+      "sourceSha256": {
+        "tests/scripts/audit-beta-first-party-browser-wallet.js": "0d36cdd94e0bf8165d091b17a5b60cfa5af6cf08587a2cdf510ab8aa94d75e97",
+        "tests/scripts/verify-beta-credential-login.js": "e0a300d3ac410f20654e8dab8dce31cc42887d11c049c76603a52a786acfab24",
+        "ui/public/demos/manifests/2026.08.0.json": "68e78b9e66d712aefa1b8cd3e673f3c89729d006cda2148dd8e642cba748b0d1"
+      }
+    },
+    "marty-demo-recorder": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "headAtCheck": "5ea1935d687f4be7c1090b780e173f3025f851b3",
+      "scope": "Current owned working-tree bytes under review; no capture claim",
+      "sourceSha256": {
+        "demos/first-party-browser-wallet.json": "97884a5f9fe09b915a339e87c754ddd70411c3e45bd90032df7da6b029a2c3b2",
+        "demos/transcripts/first-party-browser-wallet.en.vtt": "f3b97e99612201b46a2bdc630e28ccde8fd1e56f05a6dd073f81fee29c5f95f1",
+        "docs/first-party-browser-wallet.md": "514f020fb2bafaf2eb57d749db22b64508b05eed5892ca9906e128fc209153b1",
+        "test/firstPartyBrowserWallet.test.js": "99d0ea0cd9c7b6a6ce7311e5f801db8a20f9a72d5acc72a5c475e09342739eee"
+      },
+      "alignmentEntry": {
+        "path": "demos/lifecycle-alignment.json",
+        "slug": "first-party-browser-wallet",
+        "canonicalJsonEncoding": "UTF-8, sorted keys, compact separators, ensure_ascii=false",
+        "sha256": "8a7dfc41e3d6c15a812a582c418bc819223f6379fd7a511d4f9210fd348f304a",
+        "scope": "Only this retained entry was edited; D06 is independently being updated by its owner."
+      }
+    }
+  },
+  "dependencySourceReview": {
+    "marty-ui": {
+      "headAtCheck": "201df5a70942f333a11787b263932addd591da37",
+      "sourceSha256": {
+        "tests/scripts/demo-wallet-session.js": "97486b4056e2f5497cd711cb743c392bccc510fea30c192fcfe0828b3ad69a21",
+        "tests/scripts/beta-credential-contract.js": "2f59be937e3ed8a154883eaf323a1f2f95728b3f9ec5fa3a5f8d1a6c6222186c",
+        "tests/scripts/verify-beta-waltid-acceptance.js": "0543995dc531ecc7ecb8aa477b4c174a8abf5f7ba074cd2506e04a31c36fcbc4"
+      }
+    },
+    "marty-core": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation",
+      "headAtCheck": "adbc29d2511dead6082618b1b05e7d91e089feb1",
+      "sourceSha256": {
+        "marty-test-wallet/src/main.rs": "6d85865cb2b7c2aa2f2a6454732f993af0d6b28572c3fb1756ad0f3b659c61aa",
+        "marty-test-wallet/src/wallet_sessions.rs": "0dc0f8644a1c3e24f4e88fe2e37b59720d61d4945bffc4fda921ff06e8a69980"
+      },
+      "scope": "Read-only review of existing session/receipt/presentation routes; no Rust changes or Rust test reruns in this retained task."
+    },
+    "marty-demo-recorder": {
+      "headAtCheck": "5ea1935d687f4be7c1090b780e173f3025f851b3",
+      "sourceSha256": {
+        "src/externalQualification.js": "473c2f9fd02afbbd603ff6232649869dc0961d22b4b6099ab5c93d1d6371014d",
+        "src/releaseBinding.js": "799c990b1860d9b7f197c12374fb80420243960a68d8e634434687731b8a15b7",
+        "src/config.js": "e1296db9e0dff8372d4ce1543a0818f2add2bcbb463059fb083ac841380b5430",
+        "docs/lifecycle-presentation-profile.md": "20b5c9171eacbae2f5971854cd8040417c999a93e9014b464acb00f5cd78574c"
+      }
+    }
+  },
+  "checks": [
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "command": "MARTY_UI_REPOSITORY=/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps node test/firstPartyBrowserWallet.test.js",
+      "exitCode": 0,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Config/draft binding, fixed entrypoint hash, two-video requirements and functional-only refusal; exact receipt/authentication scope; refusal to promote D05/public-wallet summaries; owned closure and HTTP410 transport; lost/unconfirmed/wrong-run response failures. Controlled responses only, no browser or network."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "node tests/scripts/beta-credential-contract.test.js",
+      "exitCode": 0,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Existing canonical credential/login/verification contract checks including the default D05 three-assertion mapping. Does not replace a full D05 browser regression."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "python3 scripts/validate_demo_manifests.py",
+      "exitCode": 0,
+      "validatedManifests": 2,
+      "notes": "Both manifests validate; latest approved remains none."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "git diff --check",
+      "exitCode": 0
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "totalNamedTestsPassed": 16,
+  "dataChecks": {
+    "draftCaptionCues": [
+      {
+        "cue": 1,
+        "seconds": 10,
+        "words": 19,
+        "wordsPerMinute": 114
+      },
+      {
+        "cue": 2,
+        "seconds": 12,
+        "words": 19,
+        "wordsPerMinute": 95
+      },
+      {
+        "cue": 3,
+        "seconds": 16,
+        "words": 23,
+        "wordsPerMinute": 86.25
+      },
+      {
+        "cue": 4,
+        "seconds": 14,
+        "words": 21,
+        "wordsPerMinute": 90
+      }
+    ],
+    "captionCeilingWordsPerMinute": 160,
+    "captionTimings": "DRAFT_UNBOUND_NOT_RENDER_REVIEWED",
+    "openingRoadmap": "Existing validateOpeningRoadmap accepted four numbered stages and a two-line headline. A test duration of 3 seconds checks copy only; captureBinding.openingSeconds remains null.",
+    "existingSourceLocators": 9,
+    "currentCatalog": "DRAFT / NOT_RUN",
+    "captureBinding": "UNBOUND",
+    "scopePreservation": "Edits to manifest and alignment were restricted to the first-party retained entry. Independent retained entry and other scenarios were not edited by this task."
+  },
+  "independentRetainedScenario": {
+    "slug": "independent-wallet-interoperability",
+    "state": "OPEN_PRODUCT_PATH_REQUIRED",
+    "dedicatedConfigCreated": false,
+    "existingPaths": [
+      "marty-ui:tests/scripts/verify-beta-waltid-acceptance.js",
+      "marty-demo-recorder:src/androidReleaseGateway.js",
+      "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device.example.json",
+      "marty-demo-recorder:src/privateAgeProofGateway.js"
+    ],
+    "gap": "The walt.id helper proves issuance acceptance with inline offer compatibility changes, without signed DCQL presentation, relying-party authentication or a negative boundary. Existing D03/D05 native evidence is bound to those scenario slugs.",
+    "smallestHonestRepair": "A separately bound fresh pinned independent-wallet run through canonical claim/receipt, unchanged signed DCQL, native consent and return, exact verifier/auth result and a negative denial/no-session path. Reusable native adapters are available, but another config alone would relabel D03/D05 proof."
+  },
+  "limitations": [
+    "No live beta call, wallet execution, capture, deployment, publication or guided render was performed.",
+    "An approved synthetic membership application eligible for a fresh claim, active issuer/trust/login configuration, dedicated applicant credentials, loopback Rust wallet with isolated_sessions:1, and authenticated deployed HTTPS are still required.",
+    "This is an internal first-party control of an existing governed membership and credential-login product path, not a newly implemented public wallet product.",
+    "The existing session API closes the owned internal wallet session. Server credential revocation, expiry measurement and public-device isolation are outside this proof.",
+    "The fixed driver revision must be committed and clean before actual recording. Its report and both videos must come from the same new retained invocation; old D03/D05 evidence cannot qualify it.",
+    "Source frames, crops, pointer evidence, exact spoken-caption/narration timing, human voice review, privacy review and lifecycle-v1 composition remain unbound.",
+    "The six retained tests use controlled responses and source/config fixtures. The ten existing contract tests validate pure contract behavior; no full D05 browser regression was run."
+  ],
+  "testRunnerNote": "Direct node commands report named cases on this host; node --test can report only a file-level aggregate."
+}

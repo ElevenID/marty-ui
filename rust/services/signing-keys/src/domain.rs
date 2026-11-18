@@ -1,0 +1,428 @@
+use serde::Serialize;
+
+/// Direct JWT-VC issuance is opt-in even where historical capabilities use a wildcard.
+pub(crate) fn explicit_format_allowed(
+    formats: Option<&serde_json::Value>,
+    requested: &str,
+) -> bool {
+    crate::profiles::protocol_wire_format(requested).as_deref() != Some("application/vc+jwt")
+        || formats
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| {
+                values
+                    .iter()
+                    .any(|value| value.as_str() == Some("application/vc+jwt"))
+            })
+}
+
+/// The explicit profile must be usable by Core's signing and authentication path.
+/// Historical profiles retain their existing algorithm admission rules.
+pub(crate) fn explicit_algorithm_allowed(format: &str, algorithm: &str) -> bool {
+    crate::profiles::protocol_wire_format(format).as_deref() != Some("application/vc+jwt")
+        || PURPOSE_ALL_ALGORITHMS
+            .iter()
+            .any(|supported| supported.eq_ignore_ascii_case(algorithm.trim()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ServiceType {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub provider: &'static str,
+    pub protocol: &'static str,
+    pub category: &'static str,
+    pub auth_modes: &'static [&'static str],
+    pub connection_fields: &'static [&'static str],
+    pub key_reference_label: &'static str,
+    pub supports_inventory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KeyPurpose {
+    pub id: &'static str,
+    pub allowed_algorithms: &'static [&'static str],
+    pub credential_formats: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderCapabilities {
+    pub supported_algorithms: &'static [&'static str],
+    pub signature_encoding: &'static str,
+    pub public_key_export: bool,
+    pub hardware_attestation: bool,
+    pub key_import: bool,
+    pub key_create: bool,
+    pub key_delete: bool,
+    pub key_list: bool,
+    pub rotation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceCapability {
+    pub service_type_id: &'static str,
+    pub label: &'static str,
+    pub capabilities: ProviderCapabilities,
+}
+
+const PURPOSE_ALL_ALGORITHMS: &[&str] = &["ES256", "ES384", "EdDSA", "RS256"];
+const CSCA_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "EdDSA", "RS256"];
+const P521_PROVIDER_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
+const GCP_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const CUSTOM_TRANSIT_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const EC_AND_EDDSA: &[&str] = &["ES256", "ES384", "EdDSA"];
+const ES256_AND_EDDSA: &[&str] = &["ES256", "EdDSA"];
+const CLOUD_RSA_EC: &[&str] = &["ES256", "ES384", "ES512", "RS256"];
+const ALGORITHM_DEPENDENT_SIGNATURE_ENCODING: &str = "algorithm-dependent";
+
+const SERVICE_TYPES: &[ServiceType] = &[
+    ServiceType {
+        id: "openbao-transit",
+        label: "OpenBao Transit",
+        description: "Register an OpenBao transit service that exposes signing keys remotely.",
+        provider: "openbao",
+        protocol: "vault-transit",
+        category: "service-hsm",
+        auth_modes: &["token"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Transit key name",
+        supports_inventory: true,
+    },
+    ServiceType {
+        id: "hashicorp-vault-transit",
+        label: "HashiCorp Vault Transit",
+        description: "Use Vault Transit as the signing backend for issuance keys.",
+        provider: "hashicorp-vault",
+        protocol: "vault-transit",
+        category: "service-hsm",
+        auth_modes: &["token"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Transit key name",
+        supports_inventory: true,
+    },
+    ServiceType {
+        id: "aws-kms",
+        label: "AWS KMS",
+        description: "Register a customer-managed AWS KMS key for remote signing.",
+        provider: "aws",
+        protocol: "aws-kms",
+        category: "cloud-kms",
+        auth_modes: &["iam_role", "access_key", "assume_role"],
+        connection_fields: &["region"],
+        key_reference_label: "Key ARN",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "azure-key-vault",
+        label: "Azure Key Vault",
+        description: "Register an Azure Key Vault key as a signing source.",
+        provider: "azure",
+        protocol: "azure-key-vault",
+        category: "cloud-kms",
+        auth_modes: &["managed_identity", "client_secret"],
+        connection_fields: &["endpoint"],
+        key_reference_label: "Key identifier",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "gcp-cloud-kms",
+        label: "Google Cloud KMS",
+        description: "Register a Google Cloud KMS crypto key version.",
+        provider: "gcp",
+        protocol: "gcp-kms",
+        category: "cloud-kms",
+        auth_modes: &["workload_identity", "service_account"],
+        connection_fields: &["region"],
+        key_reference_label: "Crypto key resource",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "custom-transit-compatible",
+        label: "Custom Transit-Compatible Service",
+        description:
+            "Any service that implements the transit-compatible signing protocol Marty supports.",
+        provider: "custom",
+        protocol: "vault-transit-compatible",
+        category: "custom",
+        auth_modes: &["token"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Key reference",
+        supports_inventory: false,
+    },
+];
+
+pub fn service_types() -> &'static [ServiceType] {
+    SERVICE_TYPES
+}
+
+pub fn service_type(id: &str) -> ServiceType {
+    SERVICE_TYPES
+        .iter()
+        .copied()
+        .find(|service_type| service_type.id == id)
+        .unwrap_or_else(|| {
+            SERVICE_TYPES
+                .iter()
+                .copied()
+                .find(|service_type| service_type.id == "custom-transit-compatible")
+                .expect("custom service type")
+        })
+}
+
+pub fn key_purposes() -> Vec<KeyPurpose> {
+    vec![
+        KeyPurpose {
+            id: "vc_jwt_issuer",
+            allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
+            credential_formats: &["jwt_vc_json", "application/vc+jwt", "dc+sd-jwt", "ldp_vc"],
+        },
+        KeyPurpose {
+            id: "mdoc_iaca",
+            allowed_algorithms: &["ES256"],
+            credential_formats: &["mso_mdoc"],
+        },
+        KeyPurpose {
+            id: "mdoc_dsc",
+            allowed_algorithms: EC_AND_EDDSA,
+            credential_formats: &["mso_mdoc", "zk_mdoc"],
+        },
+        KeyPurpose {
+            id: "x509_doc_signer",
+            allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
+            credential_formats: &["mso_mdoc", "zk_mdoc", "icao_emrtd"],
+        },
+        KeyPurpose {
+            id: "holder_binding",
+            allowed_algorithms: ES256_AND_EDDSA,
+            credential_formats: &["mso_mdoc", "zk_mdoc", "dc+sd-jwt"],
+        },
+        KeyPurpose {
+            id: "presentation_signing",
+            allowed_algorithms: ES256_AND_EDDSA,
+            credential_formats: &["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"],
+        },
+        KeyPurpose {
+            id: "demo_holder_binding",
+            allowed_algorithms: &["ES256"],
+            credential_formats: &["dc+sd-jwt"],
+        },
+        KeyPurpose {
+            id: "oid4vp_request_signing",
+            allowed_algorithms: &["ES256"],
+            credential_formats: &["oauth-authz-req+jwt"],
+        },
+        KeyPurpose {
+            id: "vdsnc_signing",
+            allowed_algorithms: EC_AND_EDDSA,
+            credential_formats: &["mso_mdoc"],
+        },
+        KeyPurpose {
+            id: "csca",
+            allowed_algorithms: CSCA_ALGORITHMS,
+            credential_formats: &["mso_mdoc", "zk_mdoc", "icao_emrtd"],
+        },
+        KeyPurpose {
+            id: "jwks_signing",
+            allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
+            credential_formats: &["jwt_vc_json", "dc+sd-jwt"],
+        },
+        KeyPurpose {
+            id: "lti_tool_signing",
+            allowed_algorithms: &["RS256"],
+            credential_formats: &["lti_tool_jwt"],
+        },
+    ]
+}
+
+pub use marty_managed_key_reference::MANAGED_KEY_PREFIXES;
+
+pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
+    marty_managed_key_reference::managed_key_prefix_for_purpose(purpose)
+}
+
+pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
+    if reference.starts_with("demo-holder-") {
+        &["demo_holder_binding"]
+    } else if reference.starts_with("oid4vp-verifier-") {
+        &["oid4vp_request_signing"]
+    } else if reference.starts_with("cred-holder-") {
+        &["holder_binding"]
+    } else if reference.starts_with("cred-presenter-") {
+        &["presentation_signing"]
+    } else if reference.starts_with("lti-tool-") {
+        &["lti_tool_signing"]
+    } else if reference.starts_with("cred-dsc-") {
+        &[
+            "mdoc_iaca",
+            "mdoc_dsc",
+            "x509_doc_signer",
+            "vdsnc_signing",
+            "csca",
+        ]
+    } else if reference.starts_with("cred-issuer-") {
+        &["vc_jwt_issuer", "jwks_signing"]
+    } else {
+        &[]
+    }
+}
+
+fn capabilities(
+    algorithms: &'static [&'static str],
+    signature_encoding: &'static str,
+    key_create: bool,
+    key_list: bool,
+    rotation: bool,
+) -> ProviderCapabilities {
+    // These describe operations implemented by Marty, not every feature sold
+    // by the upstream provider. Key custody/import and attestation evidence are
+    // not implied by successful provider registration.
+    ProviderCapabilities {
+        supported_algorithms: algorithms,
+        signature_encoding,
+        public_key_export: true,
+        hardware_attestation: false,
+        key_import: false,
+        key_create,
+        key_delete: false,
+        key_list,
+        rotation,
+    }
+}
+
+pub fn service_capabilities() -> Vec<ServiceCapability> {
+    vec![
+        ServiceCapability {
+            service_type_id: "openbao-transit",
+            label: "OpenBao Transit",
+            capabilities: capabilities(
+                P521_PROVIDER_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                true,
+                true,
+                true,
+            ),
+        },
+        ServiceCapability {
+            service_type_id: "hashicorp-vault-transit",
+            label: "HashiCorp Vault Transit",
+            capabilities: capabilities(
+                P521_PROVIDER_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                true,
+                true,
+            ),
+        },
+        ServiceCapability {
+            service_type_id: "aws-kms",
+            label: "AWS KMS",
+            capabilities: capabilities(
+                CLOUD_RSA_EC,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                false,
+                false,
+            ),
+        },
+        ServiceCapability {
+            service_type_id: "azure-key-vault",
+            label: "Azure Key Vault",
+            capabilities: capabilities(
+                CLOUD_RSA_EC,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                false,
+                false,
+            ),
+        },
+        ServiceCapability {
+            service_type_id: "gcp-cloud-kms",
+            label: "Google Cloud KMS",
+            capabilities: capabilities(
+                GCP_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                false,
+                false,
+            ),
+        },
+        ServiceCapability {
+            service_type_id: "custom-transit-compatible",
+            label: "Custom Transit-Compatible Service",
+            capabilities: ProviderCapabilities {
+                supported_algorithms: CUSTOM_TRANSIT_ALGORITHMS,
+                signature_encoding: ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                public_key_export: false,
+                hardware_attestation: false,
+                key_import: false,
+                key_create: false,
+                key_delete: false,
+                key_list: false,
+                rotation: false,
+            },
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_purpose_and_provider_is_unique() {
+        let purposes = key_purposes();
+        let mut purpose_ids = purposes.iter().map(|value| value.id).collect::<Vec<_>>();
+        purpose_ids.sort_unstable();
+        purpose_ids.dedup();
+        assert_eq!(purpose_ids.len(), purposes.len());
+
+        let providers = service_capabilities();
+        let mut provider_ids = providers
+            .iter()
+            .map(|value| value.service_type_id)
+            .collect::<Vec<_>>();
+        provider_ids.sort_unstable();
+        provider_ids.dedup();
+        assert_eq!(provider_ids.len(), providers.len());
+    }
+
+    #[test]
+    fn provider_signature_encoding_is_selected_per_algorithm() {
+        for provider in service_capabilities() {
+            assert_eq!(
+                provider.capabilities.signature_encoding,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_registration_does_not_advertise_unimplemented_key_lifecycle() {
+        for provider in service_capabilities().into_iter().filter(|provider| {
+            matches!(
+                provider.service_type_id,
+                "aws-kms" | "azure-key-vault" | "gcp-cloud-kms"
+            )
+        }) {
+            let capabilities = provider.capabilities;
+            assert!(capabilities.public_key_export);
+            assert!(!capabilities.key_create);
+            assert!(!capabilities.key_import);
+            assert!(!capabilities.key_delete);
+            assert!(!capabilities.key_list);
+            assert!(!capabilities.rotation);
+            assert!(!capabilities.hardware_attestation);
+        }
+    }
+
+    #[test]
+    fn passport_document_signer_and_csca_purposes_advertise_icao_format() {
+        for purpose in ["x509_doc_signer", "csca"] {
+            let definition = key_purposes()
+                .into_iter()
+                .find(|definition| definition.id == purpose)
+                .unwrap();
+            assert!(definition.credential_formats.contains(&"icao_emrtd"));
+        }
+    }
+}

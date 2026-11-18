@@ -1,0 +1,84 @@
+name: CodeQL Actions
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "41 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze-actions:
+    name: Analyze Actions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CODEQL_ADVANCED_ENABLED: ${{ vars.CODEQL_ADVANCED_ENABLED }}
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+      security-events: write
+    steps:
+      - name: Require the completed advanced CodeQL cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CODEQL_ADVANCED_ENABLED" = "true"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate the complete source-bound analysis diff
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 scripts/ci/codeql_scope.py
+      - name: Classify Actions analysis scope
+        id: scope
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { readFileSync } = require('node:fs');
+            const scope = JSON.parse(readFileSync(process.env.CODEQL_SCOPE_FILE, 'utf8'));
+            if (scope.event !== context.eventName) throw new Error('CodeQL event mismatch');
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('analyze', String(!(context.eventName === 'merge_group' && scope.website_only)));
+              return;
+            }
+            const files = scope.files;
+            const analyze = files.some(({ filename }) =>
+              filename.startsWith('.github/') || filename.startsWith('scripts/ci/') ||
+              filename === 'contracts/website-source-ownership.json'
+            );
+            core.info(analyze
+              ? 'GitHub Actions changes require CodeQL analysis.'
+              : 'No GitHub Actions changes; satisfying the required check without analysis.');
+            core.setOutput('analyze', String(analyze));
+      - name: Record scoped analysis skip
+        if: steps.scope.outputs.analyze != 'true'
+        run: echo "Actions CodeQL is not affected by this pull request."
+      - name: Initialize Actions analysis
+        if: steps.scope.outputs.analyze == 'true'
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: actions
+      - name: Analyze Actions
+        if: steps.scope.outputs.analyze == 'true'
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          category: /language:actions

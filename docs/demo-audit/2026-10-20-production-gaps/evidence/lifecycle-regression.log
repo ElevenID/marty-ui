@@ -1,0 +1,44 @@
+✔ recording flow dismisses lifecycle feedback before presenting verifier evidence (1.818713ms)
+✔ recording flow fails closed when lifecycle feedback is missing (0.491608ms)
+✔ credential row selection uses the exact record id and its stable display reference (0.537636ms)
+✔ local UI candidate is exact, committed, and never intercepts API routes (1.502785ms)
+✔ verification issuer identity is bound to the issued credential unless explicitly overridden (0.261207ms)
+✔ renewal waits for the one successor linked to the exact predecessor (0.257501ms)
+✔ each lifecycle run creates and names its own template instead of reusing shared fixtures (6.665751ms)
+✔ failed template patch or activation still cleans only the draft created by this run (6.702675ms)
+✔ template setup rejects collisions and returned pre-existing IDs before claiming ownership (1.932662ms)
+✔ issuance retains the canonical public id for exact transaction correlation (2.483548ms)
+✔ lost or malformed template creation responses leave cleanup incomplete without guessing ownership (9.275249ms)
+✔ read-only setup failures do not imply a resource mutation (1.174008ms)
+✔ lost or malformed issuance responses preserve uncertainty while retiring only the known template (7.178199ms)
+✔ renewal uncertainty clears only after its exact transaction ID is recorded (0.514262ms)
+✔ issued-record selection ignores newer concurrent records and rejects transaction ambiguity (0.254337ms)
+✔ renewal requires the exact transaction and predecessor, and failed inventory is not success (1.833024ms)
+✔ cleanup revokes only this run including a receipt that failed before recording its credential ID (2.861878ms)
+✔ cleanup validates every ownership link and organization before any mutation (4.765607ms)
+✔ an unreadable unclaimed transaction stays incomplete without touching a concurrent credential (2.209532ms)
+✔ cleanup cancels an exact owned unclaimed offer and confirms public state after a lost response (3.543517ms)
+✔ unconfirmed transaction cancellation prevents lifecycle cleanup success (3.645308ms)
+✔ cleanup records revoke failures and still attempts to retire only the owned template (3.906095ms)
+✔ COMPLETE follows cleanup, browser close and report writing; finalization failures still close evidence (0.711724ms)
+✔ cleanup uncertainty invalidates live completion even when the journey was previously ready (0.220627ms)
+✔ a wallet without an acquired run session cannot navigate, reset or receive a credential (0.373073ms)
+✔ lifecycle status authority is read-only and must be active, tenant-owned and unambiguous (6.101215ms)
+✔ acknowledged and sealed fixture values become actual issuance claims while retaining transaction ownership (2.155272ms)
+✔ fixture ACK rejection or changed input cannot seal, and prior attempt inputs are not overwritten (2.343711ms)
+✔ lifecycle landmarks use monotonic observation time; disabled recording still requires visible real controls (1.075172ms)
+✔ lifecycle reasons are entered in the real dialog before confirmation and the resulting status is shown (0.947152ms)
+✔ renewal presents its real direct button and preserves ownership before dispatch without inventing a dialog (0.253085ms)
+✔ a missing renewal control fails before claiming that a mutation was dispatched even without recording (0.167297ms)
+✔ initial access requires actual successful session, wallet presentation and allowed verifier evidence (0.131815ms)
+✔ renewal shows exact predecessor and successor UI rows and rejects a missing revoked state or lineage link (1.090715ms)
+✔ shared lifecycle cues identify the current scenario and use its configured or actual dialog reason (0.420372ms)
+✔ each lifecycle stage requires its action, current state and completed verifier decision before success narration (0.865972ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 88.825254

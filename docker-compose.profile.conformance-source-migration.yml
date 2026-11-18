@@ -1,0 +1,10 @@
+# Local developer feedback only. The normal production issuance migrator runs
+# the exact source-built binary before the native service starts. This overlay
+# is selected only after the runner validates its digest and owned-volume path.
+services:
+  issuance-migrations:
+    volumes:
+      - type: bind
+        source: ${MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY:?set exact source-built issuance migrator}
+        target: /usr/local/bin/marty-issuance-service
+        read_only: true

@@ -1,0 +1,187 @@
+use marty_service_runtime::shutdown_signal_best_effort as shutdown_signal;
+use std::{error::Error, sync::Arc, time::Duration};
+
+use marty_trust_profile::{
+    bootstrap_system_catalog, run_migrations, trust_profile_router, HttpScopedIssuerKeyResolver,
+    MartyBootstrapConfig, NativeIssuerKeyResolver, NativeTrustProfileControlPlane,
+    NativeTrustRegistrySynchronizer, PostgresTrustProfileRepository, TrustProfileApplication,
+    TrustProfileDependency, TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime,
+    TrustProfileServiceConfig, TrustRegistryScheduler,
+};
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
+use mmf_security::ServiceTokenAuthenticator;
+use sqlx::postgres::PgPoolOptions;
+use tokio::{net::TcpListener, sync::watch};
+use tower_http::trace::TraceLayer;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+    let config = TrustProfileServiceConfig::from_env().map_err(|error| {
+        error!(%error, "invalid Trust Profile configuration");
+        error
+    })?;
+    let runtime = TrustProfileRuntime::new(&config)?;
+    let pool = PgPoolOptions::new()
+        .max_connections(config.database_max_connections)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&config.database_url)
+        .await?;
+    runtime.mark_healthy(TrustProfileDependency::Database)?;
+    run_migrations(&pool).await?;
+    runtime.mark_healthy(TrustProfileDependency::Schema)?;
+
+    let store = Arc::new(PostgresTrustProfileRepository::new(pool));
+    bootstrap_system_catalog(
+        store.as_ref(),
+        &MartyBootstrapConfig {
+            organization_id: config.marty_organization_id.to_string(),
+            issuer_did: config.marty_issuer_did.clone(),
+            issuer_url: config.marty_issuer_url.clone(),
+        },
+        chrono::Utc::now(),
+    )
+    .await?;
+    runtime.mark_healthy(TrustProfileDependency::SystemCatalog)?;
+
+    let control = if let Some(ca_cert) = &config.organization_grpc_ca_cert {
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: config.organization_grpc_target.clone(),
+                security: GrpcTransportSecurity::ServerTls,
+                trust: GrpcTrustMode::CustomCa,
+                connect_timeout_ms: config.dependency_timeout.as_millis() as u64,
+                request_timeout_ms: config.dependency_timeout.as_millis() as u64,
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::from_ca_pem_file(Some(ca_cert))?,
+        )?
+        .connect()
+        .await?;
+        let control = NativeTrustProfileControlPlane::from_channel(
+            channel,
+            config.service_token.as_deref(),
+            config.dependency_timeout,
+        )?;
+        control.check_health().await?;
+        Arc::new(control)
+    } else {
+        Arc::new(NativeTrustProfileControlPlane::connect_lazy(
+            &config.organization_grpc_target,
+            config.service_token.as_deref(),
+            config.dependency_timeout,
+        )?)
+    };
+    runtime.mark_healthy(TrustProfileDependency::ControlPlane)?;
+    let repository: Arc<dyn TrustProfileRepository> = store;
+    let issuer_key_resolver = Arc::new(NativeIssuerKeyResolver::new(
+        config.did_resolution_base_urls.clone(),
+        config.did_web_allowed_hosts.clone(),
+    ));
+    runtime.mark_healthy(TrustProfileDependency::NativeDidResolver)?;
+    let mut application = TrustProfileApplication::new(Arc::clone(&repository), control)
+        .with_issuer_key_resolver(issuer_key_resolver);
+    if let Some(api_key) = config.internal_api_key.as_deref() {
+        application = application.with_scoped_issuer_key_resolver(Arc::new(
+            HttpScopedIssuerKeyResolver::new(
+                &config.signing_keys_service_url,
+                api_key,
+                config.dependency_timeout,
+            )?,
+        ));
+    }
+    let application = Arc::new(application);
+    let registry_synchronizer = Arc::new(NativeTrustRegistrySynchronizer::new(
+        Arc::clone(&repository),
+        config.dependency_timeout,
+        config.registry_private_hosts.clone(),
+        config.registry_ca_bundle.as_deref(),
+    )?);
+    runtime.mark_healthy(TrustProfileDependency::NativeRegistryKernel)?;
+    let service_authenticator = Arc::new(ServiceTokenAuthenticator::new(
+        config.service_token.clone(),
+        config.service_authentication_required(),
+    )?);
+    let scheduler_repository = Arc::clone(&repository);
+    let state = TrustProfileHttpState {
+        flow_owner: config
+            .flow_owner
+            .as_ref()
+            .map(|owner| {
+                marty_trust_profile::managed_flow_verifier::transport::FlowOwnerClient::new(
+                    &owner.producer_id,
+                    &owner.origin,
+                    config.service_token.as_deref().unwrap_or_default(),
+                    owner.ca_bundle.as_deref(),
+                )
+                .map(Arc::new)
+            })
+            .transpose()?,
+        application,
+        repository,
+        service_authenticator,
+        internal_api_key: config.internal_api_key.clone().map(Arc::from),
+        registry_synchronizer: registry_synchronizer.clone(),
+    };
+
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_trust_profile::trust_credential_authority_router(state.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let listener = TcpListener::bind(config.http_addr).await?;
+    runtime.mark_healthy(TrustProfileDependency::HttpListener)?;
+    let app = runtime
+        .operational_router()
+        .merge(trust_profile_router(state))
+        .layer(TraceLayer::new_for_http());
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let authority =
+        marty_service_runtime::https::serve_optional(authority_server, shutdown_rx.clone());
+    let scheduler = TrustRegistryScheduler::new(
+        scheduler_repository,
+        registry_synchronizer,
+        config.registry_sync_poll_interval,
+    );
+    let scheduler_task = tokio::spawn(scheduler.run(shutdown_rx.clone()));
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+        while !*shutdown_rx.borrow() && shutdown_rx.changed().await.is_ok() {}
+    });
+    runtime.activate()?;
+    info!(
+        http_address = %config.http_addr,
+        release_version = %config.release_version,
+        build_revision = %config.build_revision,
+        "native Rust Trust Profile service active"
+    );
+    let servers = async { tokio::try_join!(server, authority).map(|_| ()) };
+    tokio::pin!(servers);
+    let result = tokio::select! {
+        result = &mut servers => result,
+        () = shutdown_signal() => {
+            runtime.drain()?;
+            let _ = shutdown_tx.send(true);
+            servers.await
+        }
+    };
+    let _ = shutdown_tx.send(true);
+    let _ = scheduler_task.await;
+    runtime.stop()?;
+    result?;
+    Ok(())
+}

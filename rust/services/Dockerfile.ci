@@ -1,0 +1,427 @@
+# syntax=docker/dockerfile:1.7
+# CI-only multi-target image build. All service binaries retain release settings.
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
+
+ARG PRIVATE_FORKS_ENABLED=false
+# The reader is never a build argument or image environment variable.
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends mold \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo install cargo-chef --locked --version 0.1.78
+
+WORKDIR /build/rust
+
+FROM chef AS planner
+
+COPY rust /build/rust
+COPY proto /build/proto
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS compiler_cache
+
+ADD --checksum=sha256:aec995a83ad3dff3d14b6314e08858b7b73d35ca85a5bcf3d3a9ec07dee35588 https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-x86_64-unknown-linux-musl.tar.gz /tmp/sccache.tar.gz
+RUN tar -xzf /tmp/sccache.tar.gz -C /tmp \
+    && install /tmp/sccache-v0.16.0-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache \
+    && rm /tmp/sccache.tar.gz
+
+# Validate the pinned backend early, independently of expensive dependency cooking.
+RUN --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    if [ -s /run/secrets/sccache_token ]; then \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
+        ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
+        ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
+        SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
+      sccache --start-server && sccache --stop-server; \
+    fi
+
+# This independent target is run by the trusted warmer. A per-run nonce must
+# never invalidate the actual dependency or service build layers.
+FROM compiler_cache AS cache_probe
+ARG CACHE_PROBE_NONCE
+COPY scripts/ci/verify-release-cache.sh /usr/local/bin/verify-release-cache.sh
+RUN --mount=type=secret,id=sccache_token,required=true \
+    --mount=type=secret,id=sccache_url,required=true \
+    --mount=type=secret,id=sccache_mode,required=true \
+    sh /usr/local/bin/verify-release-cache.sh "$CACHE_PROBE_NONCE"
+
+FROM compiler_cache AS builder
+
+COPY --from=planner /build/rust/recipe.json recipe.json
+# Excluded vendored path dependencies are not reconstructed by the chef recipe.
+COPY rust/vendor /build/rust/vendor
+COPY proto /build/proto
+# Materialize manifests without compiling or running package build scripts.
+# This is the only instruction with access to the private source-reader mount.
+RUN --mount=type=secret,id=private_forks_read_token \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      cargo chef cook --no-build --recipe-path recipe.json \
+      && CARGO_HOME=/opt/private-cargo python3 /usr/local/lib/marty-private-forks.py \
+        fetch --container --token-file /run/secrets/private_forks_read_token; \
+    fi
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    if [ -s /run/secrets/sccache_token ]; then \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
+        ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
+        ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
+        SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
+    fi; \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true SCCACHE_GHA_ENABLED=false; \
+      unset RUSTC_WRAPPER; \
+    else \
+      export RUSTC_WRAPPER=sccache; \
+    fi; \
+    cargo chef cook --locked --release --workspace --recipe-path recipe.json \
+    && if [ "$PRIVATE_FORKS_ENABLED" != true ]; then sccache --stop-server; fi
+
+COPY contracts /build/contracts
+COPY rust /build/rust
+COPY proto /build/proto
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_token \
+    --mount=type=secret,id=sccache_url \
+    --mount=type=secret,id=sccache_mode \
+    if [ -s /run/secrets/sccache_token ]; then \
+      export SCCACHE_GHA_ENABLED=true ACTIONS_CACHE_SERVICE_V2=true \
+        ACTIONS_RUNTIME_TOKEN="$(cat /run/secrets/sccache_token)" \
+        ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
+        SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
+    fi; \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true SCCACHE_GHA_ENABLED=false; \
+      unset RUSTC_WRAPPER; \
+    else \
+      export RUSTC_WRAPPER=sccache; \
+    fi; \
+    cargo build --locked --release \
+    -p marty-event-stream --bin marty-event-stream \
+    -p marty-gateway --bin marty-gateway \
+    -p marty-revocation-profile --bin marty-revocation-profile \
+    -p marty-notification --bin marty-notification \
+    -p marty-signing-keys --bin marty-signing-keys --bin marty-passport-callback-signer --bin marty-passport-callback-signer-supported \
+    -p marty-flow --bin marty-flow \
+    -p marty-organization --bin marty-organization \
+    -p marty-credential-template --bin marty-credential-template \
+    -p marty-presentation-policy --bin marty-presentation-policy \
+    -p marty-trust-profile --bin marty-trust-profile \
+    -p marty-applicant --bin marty-applicant \
+    -p marty-device-registration --bin marty-device-registration \
+    -p marty-verification-service --bin marty-verification-service \
+    -p marty-issuance-service --bin marty-issuance-service --bin marty-passport-beta-bureau --bin marty-passport-provider-ingress \
+    -p marty-deployment-profile --bin marty-deployment-profile \
+    -p marty-compliance-profile --bin marty-compliance-profile \
+    && if [ "$PRIVATE_FORKS_ENABLED" != true ]; then sccache --stop-server; fi
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin marty
+
+USER 10001:10001
+
+FROM runtime AS event_stream
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-event-stream /usr/local/bin/marty-event-stream
+ENV EVENT_STREAM_SERVICE_PORT=8015 \
+    EVENT_STREAM_GRPC_ENABLED=true \
+    EVENT_STREAM_GRPC_PORT=9015 \
+    RUST_LOG=info
+EXPOSE 8015 9015
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8015/health"]
+ENTRYPOINT ["/usr/local/bin/marty-event-stream"]
+
+FROM runtime AS issuance
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
+COPY --from=builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
+COPY --from=builder /build/rust/target/release/marty-passport-provider-ingress /usr/local/bin/marty-passport-provider-ingress
+COPY --chmod=755 services/entrypoint.sh /app/services/entrypoint.sh
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV SERVICE_NAME=issuance_native \
+    ISSUANCE_SERVICE_PORT=8005 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA}
+EXPOSE 8005 9005
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8005/health"]
+ENTRYPOINT ["/app/services/entrypoint.sh"]
+
+FROM runtime AS gateway
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
+ENV GATEWAY_PORT=8000 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8000
+HEALTHCHECK --interval=10s --timeout=3s --start-period=3s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8000/health"]
+ENTRYPOINT ["/usr/local/bin/marty-gateway"]
+
+FROM runtime AS revocation_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV REVOCATION_PROFILE_SERVICE_PORT=8013 \
+    RP_GRPC_ENABLED=true \
+    RP_GRPC_PORT=9013 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8013 9013
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8013/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-revocation-profile"]
+
+FROM runtime AS signing_keys
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+COPY --from=builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
+COPY --from=builder /build/rust/target/release/marty-passport-callback-signer-supported /usr/local/bin/marty-passport-callback-signer-supported
+ENV SIGNING_KEYS_SERVICE_PORT=8017 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8017
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8017/health"]
+ENTRYPOINT ["/usr/local/bin/marty-signing-keys"]
+
+FROM runtime AS notification
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV NOTIFICATION_SERVICE_PORT=8007 \
+    NOTIF_GRPC_ENABLED=true \
+    NOTIF_GRPC_PORT=9007 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8007 9007
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8007/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-notification"]
+
+FROM runtime AS flow
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV FLOW_SERVICE_PORT=8011 \
+    FLOW_GRPC_PORT=9011 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8011 9011
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8011/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-flow"]
+
+FROM runtime AS organization
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV ORGANIZATION_SERVICE_PORT=8002 \
+    ORG_GRPC_PORT=9002 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8002 9002
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8002/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-organization"]
+
+FROM runtime AS credential_template
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV CREDENTIAL_TEMPLATE_SERVICE_PORT=8003 \
+    CT_GRPC_PORT=9003 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8003 9003
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8003/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-credential-template"]
+
+FROM runtime AS presentation_policy
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV PRESENTATION_POLICY_SERVICE_PORT=8009 \
+    PP_GRPC_PORT=9009 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8009 9009
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8009/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-presentation-policy"]
+
+FROM runtime AS trust_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-trust-profile /usr/local/bin/marty-trust-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV TRUST_PROFILE_SERVICE_PORT=8004 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8004
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8004/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-trust-profile"]
+
+FROM runtime AS applicant
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-applicant /usr/local/bin/marty-applicant
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+USER root
+RUN install -d -o marty -g marty -m 0700 /app/data
+USER 10001:10001
+ENV APPLICANT_SERVICE_PORT=8006 \
+    APPLICANT_DATA_FILE=/app/data/applicant_store.json \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8006
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8006/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-applicant"]
+
+FROM runtime AS device_registration
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-device-registration /usr/local/bin/marty-device-registration
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV DEVICE_REGISTRATION_SERVICE_PORT=8014 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8014
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8014/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-device-registration"]
+
+FROM runtime AS verification
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV VERIFICATION_SERVICE_PORT=8012 \
+    VERIF_GRPC_PORT=9017 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8012 9017
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8012/ready"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-verification-service \"$@\"", "--"]
+
+FROM runtime AS deployment_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV DEPLOYMENT_PROFILE_SERVICE_PORT=8010 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8010
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8010/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-deployment-profile"]
+
+FROM runtime AS compliance_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV COMPLIANCE_PROFILE_SERVICE_PORT=8008 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8008
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8008/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-compliance-profile"]

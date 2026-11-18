@@ -1,0 +1,20 @@
+{
+  "schema": "marty.didcomm-direct-state-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_commit": "87eae30788924921a42848425d315e2f33f7ae41",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_blob": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a",
+    "function": "didcomm_deliver",
+    "capture_command": "python scripts/capture_didcomm_direct_state_reference.py <credentials-checkout>",
+    "capture": "Executed unchanged async route under Python 3.12 with real request/entity models and Starlette request headers; controlled same-tenant repository and a delivery trap. Script verifies the reference source blob before importing it.",
+    "scope": "Five ineligible transaction states before new delivery only. Authentication, real database, cryptography, transport and KMS are separate gates. Existing durable native replay/recovery and uncertain/busy/binding outcomes take precedence over initial eligibility; this corpus must not disable them."
+  },
+  "cases": [
+    {"state": "issued", "status": 409, "body": {"detail": "Credential already issued"}, "lookup_calls": 1, "delivery_calls": 0},
+    {"state": "signing", "status": 400, "body": {"detail": "Transaction in signing state"}, "lookup_calls": 1, "delivery_calls": 0},
+    {"state": "failed", "status": 400, "body": {"detail": "Transaction in failed state"}, "lookup_calls": 1, "delivery_calls": 0},
+    {"state": "expired", "status": 400, "body": {"detail": "Transaction in expired state"}, "lookup_calls": 1, "delivery_calls": 0},
+    {"state": "revoked", "status": 400, "body": {"detail": "Transaction in revoked state"}, "lookup_calls": 1, "delivery_calls": 0}
+  ]
+}

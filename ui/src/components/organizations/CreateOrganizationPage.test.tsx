@@ -1,0 +1,245 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@test/utils';
+
+import CreateOrganizationPage from './CreateOrganizationPage';
+
+const {
+  mockNavigate,
+  mockSearchParams,
+  mockCreateOrganization,
+  mockRefreshMemberships,
+  mockSetActiveOrgId,
+  mockReloadConsoleState,
+  mockUseConsole,
+} = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+  mockSearchParams: vi.fn(),
+  mockCreateOrganization: vi.fn(),
+  mockRefreshMemberships: vi.fn(),
+  mockSetActiveOrgId: vi.fn(),
+  mockReloadConsoleState: vi.fn(),
+  mockUseConsole: vi.fn(),
+}));
+
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useSearchParams: () => [mockSearchParams()],
+  };
+});
+
+vi.mock('../../contexts/ConsoleContext', () => ({
+  useConsole: () => mockUseConsole(),
+}));
+
+vi.mock('../../services/organizationsApi', () => ({
+  createOrganization: (...args: unknown[]) => mockCreateOrganization(...args),
+}));
+
+describe('CreateOrganizationPage', () => {
+  beforeEach(() => {
+    delete (window as any).__MARTY_RUNTIME_CONFIG__;
+    vi.clearAllMocks();
+    mockSearchParams.mockReturnValue(new URLSearchParams(''));
+    mockCreateOrganization.mockResolvedValue({ id: 'org-new' });
+    mockRefreshMemberships.mockResolvedValue([{ id: 'org-new' }]);
+    mockSetActiveOrgId.mockResolvedValue(undefined);
+    mockUseConsole.mockReturnValue({
+      refreshMemberships: mockRefreshMemberships,
+      setActiveOrgId: mockSetActiveOrgId,
+      membershipLoadError: null,
+      isOrgBootstrapRequired: false,
+      isLoading: false,
+      reloadConsoleState: mockReloadConsoleState,
+    });
+  });
+
+  it('uses the deployment setting to disable organization creation', () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: false };
+    render(<CreateOrganizationPage />);
+    expect(screen.getByText('Organization creation is disabled')).toBeVisible();
+    expect(screen.queryByLabelText('Organization Slug')).not.toBeInTheDocument();
+    expect(mockCreateOrganization).not.toHaveBeenCalled();
+  });
+
+  it('creates an organization with discovery and membership settings', async () => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
+    await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
+    await user.type(screen.getByLabelText('Description'), 'Trusted travel credentials');
+    await user.type(screen.getByLabelText('Contact Email'), 'ops@example.com');
+    expect(screen.getByLabelText('Discoverable')).not.toBeChecked();
+    await user.click(screen.getByLabelText(/Open/));
+    expect(screen.getByLabelText('Discoverable')).toBeChecked();
+    expect(screen.getByLabelText('Discoverable')).toBeDisabled();
+    expect(screen.getByLabelText('Discoverable')).toHaveAccessibleDescription(
+      'Organizations with open or approval-based membership are always discoverable in public organization search.',
+    );
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'acme-travel',
+        display_name: 'Acme Travel',
+        description: 'Trusted travel credentials',
+        contact_email: 'ops@example.com',
+        org_type: 'enterprise',
+        visibility: 'PUBLIC',
+        join_mechanism: 'open',
+        requires_approval: false,
+      }));
+      expect(mockRefreshMemberships).toHaveBeenCalled();
+      expect(mockSetActiveOrgId).toHaveBeenCalledWith('org-new', [{ id: 'org-new' }], { navigate: false });
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org');
+    });
+  });
+
+  it('maps approval admission to the canonical public organization contract', async () => {
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'approval-org');
+    await user.type(screen.getByLabelText('Display Name'), 'Approval Org');
+    await user.click(screen.getByLabelText(/Approval Required/));
+    expect(screen.getByLabelText('Discoverable')).toBeChecked();
+    expect(screen.getByLabelText('Discoverable')).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({
+        visibility: 'PUBLIC',
+        join_mechanism: 'open',
+        requires_approval: true,
+      }));
+    });
+  });
+
+  it.each([false, true])('preserves the invite-only discovery preference (%s) after open and approval membership', async (isDiscoverable) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { organizationCreationEnabled: true };
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'invite-org');
+    await user.type(screen.getByLabelText('Display Name'), 'Invite Org');
+    if (isDiscoverable) {
+      await user.click(screen.getByLabelText('Discoverable'));
+    }
+
+    for (const membershipLabel of [/Open/, /Approval Required/]) {
+      await user.click(screen.getByLabelText(membershipLabel));
+      expect(screen.getByLabelText('Discoverable')).toBeChecked();
+      expect(screen.getByLabelText('Discoverable')).toBeDisabled();
+      await user.click(screen.getByLabelText(/Invite Only/));
+      expect(screen.getByLabelText('Discoverable')).toBeEnabled();
+      expect(screen.getByLabelText('Discoverable')).toHaveProperty('checked', isDiscoverable);
+    }
+
+    expect(screen.getByLabelText('Discoverable')).toHaveAccessibleDescription(isDiscoverable
+      ? 'This organization can appear in public organization search.'
+      : 'This organization does not appear in public organization search.');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({
+        visibility: isDiscoverable ? 'PUBLIC' : 'PRIVATE',
+        join_mechanism: 'invite',
+        requires_approval: false,
+      }));
+    });
+  });
+
+  it('honors returnTo after creation', async () => {
+    mockSearchParams.mockReturnValue(new URLSearchParams('returnTo=/console/org/settings'));
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
+    await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org/settings');
+    });
+  });
+
+  it('activates the created organization even when the membership refresh is stale', async () => {
+    mockCreateOrganization.mockResolvedValueOnce({
+      organization: {
+        id: 'org-new',
+        name: 'acme-travel',
+        display_name: 'Acme Travel',
+      },
+      membership: {
+        roles: [{ name: 'owner' }],
+        has_org_console_access: true,
+      },
+    });
+    mockRefreshMemberships.mockResolvedValueOnce([{ id: 'marty-org', name: 'Marty' }]);
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
+    await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockSetActiveOrgId).toHaveBeenCalledWith('org-new', [
+        { id: 'marty-org', name: 'Marty' },
+        {
+          id: 'org-new',
+          name: 'acme-travel',
+          display_name: 'Acme Travel',
+          membership: {
+            roles: [{ name: 'owner' }],
+            has_org_console_access: true,
+          },
+        },
+      ], { navigate: false });
+      expect(mockNavigate).toHaveBeenCalledWith('/console/org');
+    });
+  });
+
+  it('shows configuration-disabled errors returned by the backend', async () => {
+    const backendError = new Error('Forbidden') as Error & {
+      status?: number;
+      response?: { error_description?: string; message_id?: string };
+      requestId?: string;
+    };
+    backendError.status = 403;
+    backendError.response = {
+      error_description: 'Organization creation is disabled for this deployment',
+      message_id: 'msg-disabled',
+    };
+    mockCreateOrganization.mockRejectedValueOnce(backendError);
+
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
+    await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    expect(await screen.findByText(/Organization creation is disabled by this deployment configuration/)).toBeInTheDocument();
+    expect(screen.getByText(/Message ID: msg-disabled/)).toBeInTheDocument();
+  });
+
+  it('shows the organization-service unavailable state instead of the create form when org bootstrap fails', () => {
+    mockUseConsole.mockReturnValue({
+      refreshMemberships: mockRefreshMemberships,
+      setActiveOrgId: mockSetActiveOrgId,
+      membershipLoadError: {
+        message: 'Organization service unavailable',
+        messageId: 'msg-503',
+      },
+      isOrgBootstrapRequired: true,
+      isLoading: false,
+      reloadConsoleState: mockReloadConsoleState,
+    });
+
+    render(<CreateOrganizationPage />);
+
+    expect(screen.getByText('Organization console unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Organization service unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Message ID: msg-503')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Organization' })).not.toBeInTheDocument();
+  });
+});

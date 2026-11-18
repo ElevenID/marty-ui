@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "organization_id": "00000000-0000-0000-0000-000000000001",
+  "definitions": [
+    {"id":"71000000-0000-0000-0000-000000000001","effective_type":"oid4vp_presentation","trigger_type":"API_CALL","event_type":"CREDENTIAL_LOGIN","template_id":"50000000-0000-0000-0000-000000000040"},
+    {"id":"72000000-0000-0000-0000-000000000010","effective_type":"oid4vci_pre_authorized","trigger_type":"WEBHOOK","event_type":"APPLICATION_APPROVED","template_id":"50000000-0000-0000-0000-000000000010"},
+    {"id":"72000000-0000-0000-0000-000000000040","effective_type":"oid4vci_pre_authorized","trigger_type":"WEBHOOK","event_type":"APPLICATION_APPROVED","template_id":"50000000-0000-0000-0000-000000000040"}
+  ],
+  "bootstrap_instance_id": "71000000-0000-0000-0000-000000000101",
+  "deployment_profile_id": "70000000-0000-0000-0000-000000000001",
+  "conflict_behavior": "preserve_existing",
+  "cross_schema_link_behavior": "best_effort_when_table_exists"
+}

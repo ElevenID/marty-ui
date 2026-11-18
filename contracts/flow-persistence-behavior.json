@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "definition_fields": [
+    "id", "organization_id", "name", "description", "status", "flow_type",
+    "steps", "transitions", "start_step_id", "credential_template_id",
+    "application_template_id", "presentation_policy_id",
+    "delivery_destination_profile_id", "deployment_profile_id",
+    "deployment_profile_ids", "trust_profile_id", "approval_strategy", "hooks",
+    "trigger", "extension", "preconditions", "default_timeout_seconds",
+    "max_retries", "retry_cooldown_minutes", "enable_resume", "version",
+    "created_at", "updated_at"
+  ],
+  "instance_fields": [
+    "id", "flow_definition_id", "organization_id", "status", "current_step_id",
+    "context", "step_history", "state_history", "subject_id", "subject_type",
+    "external_reference", "application_flow_key_hash", "started_at",
+    "completed_at", "expires_at", "result", "error", "created_at", "updated_at"
+  ],
+  "artifact_fields": [
+    "id", "flow_instance_id", "issuance_transaction_id", "credential_offer_uri",
+    "credential_offer_uris", "credential_offer_labels", "pre_authorized_code",
+    "issuance_status", "qr_payload", "expires_at", "scanned_at", "status",
+    "state", "wallet_metadata", "attempt_number", "created_at", "updated_at"
+  ],
+  "state_history_storage": "dedicated_json_column",
+  "unknown_enum_behavior": "fail_closed",
+  "malformed_json_behavior": "fail_closed",
+  "terminal_update_behavior": "immutable"
+}

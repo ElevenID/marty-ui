@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "UI_WALLET_HANDOFF_COMPONENT_TEST_EVIDENCE",
+  "startedAt": "2026-10-20T07:45:54.235830+00:00",
+  "finishedAt": "2026-10-20T07:45:58.062594+00:00",
+  "startedFromRevision": "e67364c367a09d184246f7c7af83317beb9f4d1e",
+  "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/ui",
+  "argv": [
+    "node",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "src/components/issuance/OID4VCIInviteDisplay.test.tsx",
+    "--maxWorkers=2"
+  ],
+  "exitCode": 0,
+  "log": {
+    "path": "/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/ui-wallet-open-child-final.log",
+    "sha256": "0dc5309eaba13901e33c8b53d61676c308810e093e2aead65f06f9b48e75c993"
+  },
+  "sourceHashesBefore": {
+    "ui/src/hooks/useWalletOpenLink.js": "3a556999ca80dade5adb6b365f095c094bb944f8acceb399377f65a3bf086293",
+    "ui/src/components/issuance/OID4VCIInviteDisplay.jsx": "ad55f6af1490d1e2b19e713a0550eed198ca2b94735a6163e3036fb5c1497add",
+    "ui/src/components/issuance/OID4VCIInviteDisplay.test.tsx": "146165ecb582316b775006eb65775554513b90e5388f82799152eb37b56a19df",
+    "ui/src/components/issuance/QRCodeDisplay.jsx": "49c77ffb4368b5ec96f575d13cfd3b3723e118048416a42a5e15c7bff1369bbf",
+    "ui/src/services/walletRegistryApi.js": "7377e7afab42c0c84a62c068cf6114aaa876cbe75a97534a2c419d42d023980d",
+    "ui/src/services/walletTransportService.js": "8f72efe49f6ad19900b4a48f8b3d5b415253256074c200529dc9c12de21e74f7",
+    "ui/src/test/utils.tsx": "91a3354db98932bc9a1bd13eee59d889f1030f0ec1645d984b26376cf73f1dcf",
+    "ui/src/test/setup.ts": "3cd2ecd5414e29a8943e899737c97f3ec69f906554bbb35f891dd69244eeb6d9",
+    "ui/vitest.config.ts": "38ad2a9e54b253a2ad1b838f0c2aa517a76bac3636bdf2e2a8edd07039521544",
+    "ui/package.json": "9bd8bdbbf29794f44abbf47608989185f1e19d79bf5e337960517b240f246ef7",
+    "ui/package-lock.json": "5973a90ad505aa490a993113254aa64964304025a39bbb0d240d4a3a007fce76"
+  },
+  "sourceHashesAfter": {
+    "ui/src/hooks/useWalletOpenLink.js": "3a556999ca80dade5adb6b365f095c094bb944f8acceb399377f65a3bf086293",
+    "ui/src/components/issuance/OID4VCIInviteDisplay.jsx": "ad55f6af1490d1e2b19e713a0550eed198ca2b94735a6163e3036fb5c1497add",
+    "ui/src/components/issuance/OID4VCIInviteDisplay.test.tsx": "146165ecb582316b775006eb65775554513b90e5388f82799152eb37b56a19df",
+    "ui/src/components/issuance/QRCodeDisplay.jsx": "49c77ffb4368b5ec96f575d13cfd3b3723e118048416a42a5e15c7bff1369bbf",
+    "ui/src/services/walletRegistryApi.js": "7377e7afab42c0c84a62c068cf6114aaa876cbe75a97534a2c419d42d023980d",
+    "ui/src/services/walletTransportService.js": "8f72efe49f6ad19900b4a48f8b3d5b415253256074c200529dc9c12de21e74f7",
+    "ui/src/test/utils.tsx": "91a3354db98932bc9a1bd13eee59d889f1030f0ec1645d984b26376cf73f1dcf",
+    "ui/src/test/setup.ts": "3cd2ecd5414e29a8943e899737c97f3ec69f906554bbb35f891dd69244eeb6d9",
+    "ui/vitest.config.ts": "38ad2a9e54b253a2ad1b838f0c2aa517a76bac3636bdf2e2a8edd07039521544",
+    "ui/package.json": "9bd8bdbbf29794f44abbf47608989185f1e19d79bf5e337960517b240f246ef7",
+    "ui/package-lock.json": "5973a90ad505aa490a993113254aa64964304025a39bbb0d240d4a3a007fce76"
+  },
+  "sourcesStableDuringRun": true,
+  "observedTestSummary": [
+    "12",
+    "12"
+  ],
+  "scope": "Real OID4VCIInviteDisplay and QRCodeDisplay with mocked registry API and window.location. Exercises stale results, stale fallback rejection, direct generic transport, exact existing wallet fallback selection, and pending-click suppression.",
+  "limitations": [
+    "No external navigation or wallet application opened.",
+    "No live issuer, device, or production capture qualification.",
+    "ClaimCredentialDialog parent integration is verified separately by its owner."
+  ]
+}

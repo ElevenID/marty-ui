@@ -1,0 +1,8 @@
+{
+  "schema": "marty.selfhost-migration-disposable-openbao/v1",
+  "scope": "disposable-selfhost-migration-probe-only",
+  "platform": "linux/amd64",
+  "reference": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878",
+  "version": "2.5.2",
+  "source_revision": "932fcf892eba8d646a9bfc58a59ea3b2475b17fa"
+}

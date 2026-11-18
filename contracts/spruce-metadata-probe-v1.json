@@ -1,0 +1,630 @@
+{
+  "schema": "marty.spruce-metadata-probe/v1",
+  "source_sha256": "d8511ea35452e98e0df8e30a429d9cbe98f74acbfbd44ac3a72eea2288fff201",
+  "base": "https://beta.elevenidllc.com",
+  "organization_id": "00000000-0000-0000-0000-000000000001",
+  "cases": [
+    {
+      "name": "issuer_valid",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "summary": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "issuer_display_name": "ElevenID LLC",
+        "configuration_count": 3,
+        "member_configuration": "MemberCredential#sd-jwt",
+        "member_vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge"
+      }
+    },
+    {
+      "name": "issuer_mismatch",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://other.example",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "OID4VCI credential_issuer mismatch"
+    },
+    {
+      "name": "issuer_display_missing",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "OID4VCI issuer display name mismatch"
+    },
+    {
+      "name": "configurations_empty",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {}
+      },
+      "error": "credential_configurations_supported is empty or malformed"
+    },
+    {
+      "name": "member_missing",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "MemberCredential configuration is missing"
+    },
+    {
+      "name": "legacy_vct",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://marty.example/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "OID4VCI metadata exposes legacy VCTs: ['https://marty.example/credentials/EmployeeBadge']"
+    },
+    {
+      "name": "malformed_display",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": []
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "Malformed credential configurations: ['EmployeeBadge#sd-jwt']"
+    },
+    {
+      "name": "mdoc_doctype_mismatch",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "wrong",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "Malformed credential configurations: ['org.iso.18013.5.1.mDL#mdoc']"
+    },
+    {
+      "name": "member_vct_mismatch",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://wrong.example",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "MemberCredential VCT mismatch"
+    },
+    {
+      "name": "member_vct_valid",
+      "kind": "member_vct",
+      "input": {
+        "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+        "name": "Marty Verified Member Badge",
+        "display": [
+          {
+            "name": "Marty Verified Member Badge"
+          }
+        ]
+      },
+      "summary": {
+        "member_badge_name": "Marty Verified Member Badge"
+      }
+    },
+    {
+      "name": "member_vct_display_missing",
+      "kind": "member_vct",
+      "input": {
+        "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+        "name": "Marty Verified Member Badge",
+        "display": []
+      },
+      "error": "MemberCredential VCT display is missing the badge name"
+    },
+    {
+      "name": "member_vct_mismatch",
+      "kind": "member_vct",
+      "input": {
+        "vct": "https://wrong.example",
+        "name": "Marty Verified Member Badge",
+        "display": [
+          {
+            "name": "Marty Verified Member Badge"
+          }
+        ]
+      },
+      "error": "MemberCredential public VCT mismatch"
+    },
+    {
+      "name": "malformed_configuration_id_with_newline",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Employee Badge"
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          },
+          "bad\nid": null
+        }
+      },
+      "error": "Malformed credential configurations: ['bad\\nid']"
+    },
+    {
+      "name": "numeric_zero_configuration_display",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": 0.0
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "Malformed credential configurations: ['EmployeeBadge#sd-jwt']"
+    }
+  ],
+  "probe_success": {
+    "issuer_metadata": {
+      "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+      "display": [
+        {
+          "name": "ElevenID LLC",
+          "locale": "en"
+        }
+      ],
+      "credential_configurations_supported": {
+        "MemberCredential#sd-jwt": {
+          "format": "dc+sd-jwt",
+          "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Marty Verified Member Badge"
+              }
+            ]
+          }
+        },
+        "EmployeeBadge#sd-jwt": {
+          "format": "dc+sd-jwt",
+          "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Employee Badge"
+              }
+            ]
+          }
+        },
+        "org.iso.18013.5.1.mDL#mdoc": {
+          "format": "mso_mdoc",
+          "doctype": "org.iso.18013.5.1.mDL",
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Mobile Driving Licence (mDL)"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "member_vct_metadata": {
+      "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+      "name": "Marty Verified Member Badge",
+      "display": [
+        {
+          "name": "Marty Verified Member Badge"
+        }
+      ]
+    },
+    "requested_urls": [
+      "https://beta.elevenidllc.com/.well-known/openid-credential-issuer/org/00000000-0000-0000-0000-000000000001",
+      "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001/.well-known/openid-credential-issuer",
+      "https://beta.elevenidllc.com/credentials/marty-verified-member-badge"
+    ],
+    "summary": {
+      "base": "https://beta.elevenidllc.com",
+      "organization_id": "00000000-0000-0000-0000-000000000001",
+      "paths": {
+        "canonical": "/.well-known/openid-credential-issuer/org/00000000-0000-0000-0000-000000000001",
+        "appended": "/org/00000000-0000-0000-0000-000000000001/.well-known/openid-credential-issuer",
+        "member_vct": "/credentials/marty-verified-member-badge"
+      },
+      "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+      "issuer_display_name": "ElevenID LLC",
+      "configuration_count": 3,
+      "member_configuration": "MemberCredential#sd-jwt",
+      "member_vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+      "member_badge_name": "Marty Verified Member Badge"
+    }
+  },
+  "http_observations": {
+    "accept": "application/json",
+    "user_agent": "Marty-MIP-Conformance/0.5.0",
+    "required_status": 200,
+    "content_type_contains": "application/json",
+    "timeout_seconds": 20,
+    "errors": [
+      "returned HTTP {status}",
+      "is not JSON",
+      "contains invalid JSON",
+      "must contain a JSON object",
+      "Canonical and appended metadata differ",
+      "Beta origin must be an absolute HTTPS URL"
+    ]
+  }
+}

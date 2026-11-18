@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "scope": "Canvas applicant evidence and claim status refresh on dialog close or browser return",
+  "source_repository": "https://github.com/ElevenID/marty-ui.git",
+  "base_revision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+  "implementation_revision": "c971c40f8e0fddb33a7a2ad772bfbb7105f7024a",
+  "source_files": [
+    {
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "sha256": "445755b3975a387ce793a60bc846f711ff8db842f435f74f5832c3bb5dfbdb44"
+    },
+    {
+      "path": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "sha256": "6e763f8e12c24415dc5ba75319063d884cbd566ce0c6b6badd85051679d80933"
+    }
+  ],
+  "regression_baseline_source": {
+    "path": "ui/src/components/applicant/ApplicationForm.jsx",
+    "revision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+    "sha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0"
+  },
+  "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ApplicationForm.test.tsx --maxWorkers=1",
+  "working_directory": "marty-ui-runtime-integrity/ui",
+  "verification": [
+    {
+      "phase": "before",
+      "source": "unchanged base implementation with the six new regression cases",
+      "exit_code": 1,
+      "passed": 9,
+      "failed": 6,
+      "skipped": 0,
+      "log": "canvas-claim-return-before.log",
+      "log_bytes": 62395,
+      "log_sha256": "78e96a2d4c6836a184c4051e33b4224b782c389a52e1b12b24bd40aed58c994d"
+    },
+    {
+      "phase": "after",
+      "source": "implementation_revision",
+      "exit_code": 0,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "log": "canvas-claim-return-after.log",
+      "log_bytes": 240,
+      "log_sha256": "2d69da2143a0c5d1eca5700326e2010677666e31a009274ab20f5b3b0e1daffd"
+    }
+  ],
+  "new_cases": [
+    "refreshes Canvas claim status after closing the dialog without issuing again",
+    "refreshes the current Canvas claim on browser focus return",
+    "refreshes the current Canvas claim on browser visibilitychange return",
+    "does not treat closing a canceled wallet claim as successful issuance",
+    "clears stale Canvas claim availability when the return status read fails",
+    "discards a late claim read after leaving the Canvas application and removes return listeners"
+  ],
+  "behavior": [
+    "Close invalidates the existing read-only evidence-status projection; no evidence sync job or credential offer is created.",
+    "Visible-page focus and visibility return read the server projection, with one read in progress and a coalesced follow-up if needed.",
+    "Read failure drops stale claim/evidence state and displays the existing error surface.",
+    "Unmount/application effect replacement removes return listeners and polling timers and ignores older responses."
+  ],
+  "boundaries": [
+    "The ClaimCredentialDialog is mocked in these parent-component tests; its implementation has separate verification.",
+    "No Canvas provider, actual wallet, KMS signing, beta deployment, or fresh capture was exercised.",
+    "Closing or returning is not treated as proof of issuance; claimed is displayed only from a successful server status read.",
+    "D07/D08 generic recording hooks still require a real LTI Continue, approval, and wallet integration; imported attestation cases remain insufficient as current-run visible outcomes."
+  ]
+}

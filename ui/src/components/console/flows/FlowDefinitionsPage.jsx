@@ -1,0 +1,40 @@
+/**
+ * Flow Definitions Page
+ * 
+ * Manages flow definitions - reusable verification and issuance workflows.
+ * Embeds the existing FlowManager component with console layout.
+ */
+
+import { useTranslation } from 'react-i18next';
+import FlowManager from '../../vendor/FlowManager';
+import { ResourcePage } from '../../common';
+
+const getFlowsTabs = (t) => [
+  { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
+  { label: t('flows.flowInstances'), path: '/console/org/operate/flow-instances' },
+];
+
+const getBreadcrumbs = (t) => [
+  { label: t('flows.breadcrumbs.console'), path: '/console' },
+  { label: t('flows.breadcrumbs.flows'), path: '/console/org/flows' },
+  { label: t('flows.breadcrumbs.flowDefinitions'), path: '/console/org/flows/definitions' },
+];
+
+function FlowDefinitionsPage() {
+  const { t } = useTranslation('console');
+  
+  return (
+    <ResourcePage
+      title={t('flows.flowDefinitions')}
+      description={t('flows.flowDefinitionsDescription')}
+      tabs={getFlowsTabs(t)}
+      breadcrumbs={getBreadcrumbs(t)}
+      buildPath="/console/org/flows/definitions/new"
+      resourceName={t('flows.flowDefinition')}
+    >
+      <FlowManager hideHeader />
+    </ResourcePage>
+  );
+}
+
+export default FlowDefinitionsPage;

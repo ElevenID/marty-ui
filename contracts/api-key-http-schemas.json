@@ -1,0 +1,34 @@
+{
+  "runtime__api_key_create_request": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["name"],
+    "properties": {
+      "name": {"type": "string", "pattern": "\\S"},
+      "description": {"type": ["string", "null"]},
+      "scopes": {"type": ["array", "null"], "items": {"type": "string"}, "description": "Explicit organization API-key scopes. Omitted or null uses credentials:read and credentials:issue. Unsupported scopes are rejected."},
+      "expires_at": {"type": ["string", "null"], "format": "date-time", "description": "Must be in the future when supplied."},
+      "is_test": {"type": "boolean", "default": false}
+    }
+  },
+  "runtime__api_key_response": {
+    "type": "object",
+    "required": ["id", "organization_id", "name", "key_prefix", "scope_type", "scopes", "enabled", "created_at"],
+    "properties": {
+      "id": {"type": "string", "format": "uuid"},
+      "organization_id": {"type": "string", "format": "uuid"},
+      "name": {"type": "string"},
+      "description": {"type": "string"},
+      "key_prefix": {"type": "string"},
+      "scope_type": {"type": "string"},
+      "deployment_profile_id": {"type": "string", "format": "uuid"},
+      "scopes": {"type": "array", "items": {"type": "string"}},
+      "enabled": {"type": "boolean"},
+      "expires_at": {"type": "string", "format": "date-time"},
+      "last_used_at": {"type": "string", "format": "date-time"},
+      "created_at": {"type": "string", "format": "date-time"},
+      "updated_at": {"type": "string", "format": "date-time"},
+      "key": {"type": "string", "readOnly": true, "description": "Returned once on creation; omitted from list responses. Store privately and never log this field."}
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "team": {
+    "title": "Team",
+    "description": "Verwalten Sie Teammitglieder, Einladungen, API-Schlüssel und Webhooks.",
+    "tabs": {
+      "members": "Mitglieder",
+      "invitations": "Einladungen",
+      "apiKeys": "API-Schlüssel",
+      "webhooks": "Webhooks"
+    },
+    "members": {
+      "emptyTitle": "Noch keine Teammitglieder",
+      "emptyDescription": "Laden Sie Teammitglieder zur Zusammenarbeit ein.",
+      "inviteButton": "Teammitglied einladen"
+    }
+  },
+  "issuance": {
+    "title": "Ausstellung",
+    "description": "Konfigurieren Sie Vorlagen und verwalten Sie Ausstellungsvorgänge.",
+    "tabs": {
+      "templates": "Vorlagen",
+      "history": "Verlauf",
+      "settings": "Einstellungen"
+    }
+  },
+  "verification": {
+    "title": "Verifizierung",
+    "description": "Definieren Sie Präsentationsrichtlinien zur Prüfung von Nachweisen.",
+    "empty": {
+      "title": "Noch keine Präsentationsrichtlinien",
+      "createButton": "Richtlinie erstellen"
+    }
+  },
+  "organizationSettings": {
+    "title": "Organisationseinstellungen",
+    "description": "Verwalten Sie Ihr Organisationsprofil und Abo-Details",
+    "updateSuccess": "Organisationseinstellungen erfolgreich aktualisiert",
+    "details": {
+      "title": "Organisationsdetails",
+      "nameLabel": "Organisationsname",
+      "saveButton": "Änderungen speichern",
+      "saving": "Speichern..."
+    },
+    "subscription": {
+      "title": "Abonnement",
+      "currentPlan": "Aktueller Plan",
+      "status": "Status"
+    }
+  }
+}

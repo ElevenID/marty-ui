@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "scope": "LOCAL_RUST_WALLET_SESSION_AND_BROWSER_ADAPTER_VERIFICATION",
+  "result": "PASS",
+  "source": {
+    "repository": "https://github.com/ElevenID/marty-core.git",
+    "base": "f0819fa0a7783eaebc2efaa105908809244c75a4",
+    "head": "adbc29d2511dead6082618b1b05e7d91e089feb1",
+    "sha256": {
+      "marty-test-wallet/src/wallet_sessions.rs": "0dc0f8644a1c3e24f4e88fe2e37b59720d61d4945bffc4fda921ff06e8a69980",
+      "marty-test-wallet/src/main.rs": "6d85865cb2b7c2aa2f2a6454732f993af0d6b28572c3fb1756ad0f3b659c61aa",
+      "marty-test-wallet/src/lib.rs": "c5a97ed1d6d40c00f379368b80c03c15743d525b7b233c28184f30b2454f4fa8",
+      "marty-test-wallet/static/index.html": "8b90916b02aa020324cc3108a685f9841bcbc8bebf4ffaa775f223d280fa7b1f",
+      "marty-test-wallet/README.md": "3ebf87f5fbfb1b056002f4d50352d0ba0322497a764b4fbf410811d2824dd5dc"
+    }
+  },
+  "environment": {
+    "rust": "1.95.0",
+    "chrome": "155.0.8059.84",
+    "dependencies": "Pinned Cargo.lock; public dependency downloads completed; no source/version changes"
+  },
+  "checks": [
+    {
+      "command": "cargo test --locked --offline -j2 -p marty-test-wallet --lib wallet_sessions",
+      "cwd": "marty-core",
+      "passed": 5,
+      "failed": 0,
+      "filteredOut": 9,
+      "log": "core-wallet-unit.log"
+    },
+    {
+      "command": "cargo test --locked --offline -j2 -p marty-test-wallet --bin marty-test-wallet wallet_sessions_http",
+      "cwd": "marty-core",
+      "passed": 1,
+      "failed": 0,
+      "filteredOut": 5,
+      "log": "core-wallet-http.log",
+      "transport": "Actual owned loopback HTTP server; synthetic in-memory inventory"
+    },
+    {
+      "command": "cargo build --locked --offline -j2 -p marty-test-wallet --bin marty-test-wallet",
+      "cwd": "marty-core",
+      "result": "PASS",
+      "log": "core-wallet-build.log"
+    },
+    {
+      "command": "node production-gap-evidence/wallet-browser-wire.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd",
+      "result": "PASS",
+      "integrationProbes": 1,
+      "assertedChecks": 5,
+      "evidence": "wallet-browser-wire.json",
+      "transport": "Actual Chrome plus newly compiled Rust wallet; two empty isolated cookie jars"
+    },
+    {
+      "command": "node tests/scripts/demo-wallet-session.test.js",
+      "cwd": "marty-ui",
+      "passed": 5,
+      "failed": 0,
+      "log": "wallet-browser-unit.log"
+    },
+    {
+      "command": "node tests/scripts/audit-beta-credential-lifecycle.test.js",
+      "cwd": "marty-ui",
+      "passed": 36,
+      "failed": 0,
+      "log": "lifecycle-regression.log"
+    }
+  ],
+  "boundaries": [
+    "No credential issuance, remote KMS signing, native independent wallet or deployed production workflow was executed.",
+    "The no-cookie interactive wallet is an internal compatibility path. Demo requests always bind a run header and cookie.",
+    "A session close waits for in-flight Rust operation leases; timeout or unconfirmed cleanup must not qualify success.",
+    "Existing unused SSI patch warnings and two pre-existing signer IPC unused-mut warnings were not treated as test failures."
+  ],
+  "initialAttemptNotes": [
+    "Initial direct cargo call had no rustc PATH; reran with explicit toolchain/cache environment.",
+    "Offline dependency lookup found missing pinned SSI metadata; authorized public fetch completed, subsequent HTTP and binary builds used offline mode."
+  ]
+}

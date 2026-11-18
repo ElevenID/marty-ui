@@ -1,0 +1,32 @@
+{
+  "kind": "REPO_LOCAL_DRIVER_PIN_INPUTS",
+  "revision": "b5d08219b900f38ad01217db8f1eab60e054a401",
+  "entrypoint": "tests/scripts/audit-beta-membership-support.js",
+  "driverSha256": "034d82f7cb5d5474bad95c53f47f69fb277aca2c3650bc1a6dc4b0b7a4709160",
+  "checks": [
+    {
+      "lane": "expired-offer",
+      "path": "demos/membership-badge-login-expired-offer.json",
+      "sha256": "b6f72cd4326a523dd1de7ae442232a369c4476c1ab1a29c8c7066c53ae25d9f7",
+      "historicalRevision": "ed60078",
+      "historicalSha256": "655cf220a793dea6cd68a7d8da3a3b94f97ed67c95bcd5ca435c4a98ae820385",
+      "preservedFields": [
+        "scenarioRevision",
+        "recordingClassification",
+        "assertions"
+      ]
+    },
+    {
+      "lane": "untrusted-issuer",
+      "path": "demos/membership-badge-login-untrusted-issuer.json",
+      "sha256": "682e43e730a4a00c6b993747eebe4d69c952bec7da9556fb67d4ac75ae72b733",
+      "historicalRevision": "ed60078",
+      "historicalSha256": "b72af313c2cf860c218ba3bf4d08552e577f43e499576eada40279308c273c72",
+      "preservedFields": [
+        "scenarioRevision",
+        "recordingClassification",
+        "assertions"
+      ]
+    }
+  ]
+}

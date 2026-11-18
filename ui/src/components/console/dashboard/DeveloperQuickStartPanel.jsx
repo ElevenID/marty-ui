@@ -1,0 +1,312 @@
+/**
+ * Developer Quick Start Panel
+ * 
+ * Shows org-scoped integration information for developers:
+ * - Organization Reference (with copy button)
+ * - Base API URL
+ * - Example API request
+ * - Links to API keys and docs
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Paper,
+  Typography,
+  Box,
+  Button,
+  Collapse,
+  TextField,
+  IconButton,
+  Tooltip,
+  Alert,
+  AlertTitle,
+  CircularProgress,
+} from '@mui/material';
+import { useTranslation } from 'react-i18next';
+import { Link as RouterLink } from 'react-router';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import CodeIcon from '@mui/icons-material/Code';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
+
+import { useAuth } from '../../../hooks/useAuth';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import { getOrganizationIntegrationInfo } from '../../../services/dashboardApi';
+import { getErrorMessage } from '../../../services/api';
+import { formatOfficialReference } from '../../../utils/officialReferences';
+
+function getDashboardMessageId(error) {
+  return error?.response?.message_id
+    || error?.response?.request_id
+    || error?.requestId
+    || null;
+}
+
+/**
+ * Developer Quick Start Panel Component
+ */
+export function DeveloperQuickStartPanel({ canViewApiKeys = false }) {
+  const { t } = useTranslation('console');
+  const { organizationId: authOrganizationId } = useAuth();
+  const { activeOrgId } = useConsole();
+  const organizationId = activeOrgId;
+
+  const [integrationInfo, setIntegrationInfo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(null);
+  const [showTechnicalId, setShowTechnicalId] = useState(false);
+
+  const loadIntegrationInfo = useCallback(async () => {
+    if (!organizationId) {
+      setIntegrationInfo(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      setIntegrationInfo(await getOrganizationIntegrationInfo(organizationId));
+    } catch (err) {
+      setIntegrationInfo(null);
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    loadIntegrationInfo();
+  }, [loadIntegrationInfo]);
+
+  const handleCopy = (text, label) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const organizationReference = formatOfficialReference(integrationInfo?.orgId || organizationId, 'organization');
+
+  const exampleRequest = integrationInfo?.exampleRequest || '';
+  const sanitizedExampleRequest = useMemo(() => {
+    const identifiers = [integrationInfo?.orgId, organizationId].filter(Boolean);
+    return identifiers.reduce(
+      (output, identifier) => output.replaceAll(identifier, '<organization-id>'),
+      exampleRequest,
+    );
+  }, [exampleRequest, integrationInfo?.orgId, organizationId]);
+
+  if (loading) {
+    return (
+      <Paper sx={{ p: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={20} />
+          <Typography variant="body2" color="text.secondary">
+            {t('dashboard.developerQuickStart.loading', { defaultValue: 'Loading integration metadata...' })}
+          </Typography>
+        </Box>
+      </Paper>
+    );
+  }
+
+  if (error) {
+    const messageId = getDashboardMessageId(error);
+    return (
+      <Paper sx={{ p: 3 }}>
+        <Alert
+          severity="warning"
+          action={(
+            <Button color="inherit" size="small" onClick={loadIntegrationInfo}>
+              {t('dashboard.retry', { defaultValue: 'Retry' })}
+            </Button>
+          )}
+        >
+          <AlertTitle>
+            {t('dashboard.developerQuickStart.unavailableTitle', { defaultValue: 'Integration metadata unavailable' })}
+          </AlertTitle>
+          {getErrorMessage(error) || t('dashboard.developerQuickStart.unavailable')}
+          {messageId ? (
+            <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+              Message ID: {messageId}
+            </Typography>
+          ) : null}
+        </Alert>
+      </Paper>
+    );
+  }
+
+  if (!integrationInfo) {
+    return (
+      <Paper sx={{ p: 3 }}>
+        <Alert severity="info">
+          {t('dashboard.developerQuickStart.unavailable')}
+        </Alert>
+      </Paper>
+    );
+  }
+
+  return (
+    <Paper sx={{ p: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+        <CodeIcon color="primary" />
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          {t('dashboard.developerQuickStart.title')}
+        </Typography>
+      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {t('dashboard.developerQuickStart.description')}
+      </Typography>
+      {/* Organization Reference */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
+          Organization Reference
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <TextField
+            value={organizationReference}
+            fullWidth
+            size="small"
+            slotProps={{
+              input: {
+                readOnly: true,
+                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              }
+            }}
+          />
+          <Tooltip title={copied === 'orgRef' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+            <IconButton 
+              size="small" 
+              onClick={() => handleCopy(organizationReference, 'orgRef')}
+              color={copied === 'orgRef' ? 'success' : 'default'}
+            >
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        <Button
+          size="small"
+          sx={{ mt: 1, px: 0 }}
+          onClick={() => setShowTechnicalId((previous) => !previous)}
+        >
+          {showTechnicalId ? 'Hide technical organization ID' : 'Show technical organization ID'}
+        </Button>
+
+        <Collapse in={showTechnicalId}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+            <TextField
+              value={integrationInfo.orgId}
+              fullWidth
+              size="small"
+              slotProps={{
+                input: {
+                  readOnly: true,
+                  sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+                }
+              }}
+            />
+            <Tooltip title={copied === 'orgId' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+              <IconButton 
+                size="small" 
+                onClick={() => handleCopy(integrationInfo.orgId, 'orgId')}
+                color={copied === 'orgId' ? 'success' : 'default'}
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Collapse>
+      </Box>
+      {/* Base API URL */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
+          {t('dashboard.developerQuickStart.baseApiUrl')}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <TextField
+            value={integrationInfo.baseUrl}
+            fullWidth
+            size="small"
+            slotProps={{
+              input: {
+                readOnly: true,
+                sx: { fontFamily: 'monospace', fontSize: '0.875rem' },
+              }
+            }}
+          />
+          <Tooltip title={copied === 'baseUrl' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+            <IconButton 
+              size="small" 
+              onClick={() => handleCopy(integrationInfo.baseUrl, 'baseUrl')}
+              color={copied === 'baseUrl' ? 'success' : 'default'}
+            >
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </Box>
+      {/* Example Request */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
+          {t('dashboard.developerQuickStart.exampleRequest')}
+        </Typography>
+        <Box 
+          sx={{ 
+            position: 'relative',
+            bgcolor: 'grey.900', 
+            color: 'grey.100',
+            p: 2, 
+            borderRadius: 1,
+            fontFamily: 'monospace',
+            fontSize: '0.75rem',
+            overflow: 'auto',
+          }}
+        >
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {sanitizedExampleRequest}
+          </pre>
+          <Tooltip title={copied === 'example' ? t('dashboard.developerQuickStart.copied') : t('dashboard.developerQuickStart.copyToClipboard')}>
+            <IconButton
+              size="small"
+              onClick={() => handleCopy(sanitizedExampleRequest, 'example')}
+              sx={{ 
+                position: 'absolute', 
+                top: 8, 
+                right: 8,
+                color: 'grey.100',
+                '&:hover': { bgcolor: 'grey.800' },
+              }}
+              color={copied === 'example' ? 'success' : 'default'}
+            >
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </Box>
+      {/* Action Buttons */}
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        {canViewApiKeys && <Button
+          variant="outlined"
+          component={RouterLink}
+          to="/console/org/deploy/api-keys"
+          startIcon={<VpnKeyIcon />}
+          size="small"
+        >
+          {t('dashboard.developerQuickStart.manageApiKeys')}
+        </Button>}
+        <Button
+          variant="outlined"
+          component={RouterLink}
+          to="/docs"
+          endIcon={<OpenInNewIcon />}
+          size="small"
+        >
+          {t('dashboard.developerQuickStart.apiDocumentation')}
+        </Button>
+      </Box>
+    </Paper>
+  );
+}
+
+export default DeveloperQuickStartPanel;

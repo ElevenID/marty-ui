@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "kind": "native-claim-organization-propagation-verification",
+  "verifiedAt": "2026-10-20T04:58:11.722841+00:00",
+  "status": "PASS",
+  "repository": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+  "baseRevision": "45b31c944b2cb8079c36718611345425dc1860fc",
+  "observedRepositoryHead": "45b31c944b2cb8079c36718611345425dc1860fc",
+  "scope": "Pass the existing resolved applicationOrganizationId to both ApplicationForm ClaimCredentialDialog call sites so wallet-registry and destination lookup share the application organization.",
+  "changedSources": [
+    {
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "baseSha256": "1cb52cd1ea437b0b827db111192d9a849ee69994fe02ce28f9ae173d3d542eac",
+      "sha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0"
+    },
+    {
+      "path": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "baseSha256": "7b019297fb4e7767d0261104f1dd8f8a3a2f1b4f20a667b03f496080b7fc2586",
+      "sha256": "f5bea24478d1bbef4c09c3d675ee016dffac9f68805937ff8bacb79048f32086"
+    }
+  ],
+  "productionDiffCheck": "Component bytes equal the baseline plus one organizationId prop addition and one organizationId value replacement; the existing credential-claim-action identifier is preserved exactly.",
+  "commands": [
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ApplicationForm.test.tsx --reporter=verbose --maxWorkers=2 -t organization > /workspace/scratch/d8b5d3d3b0dd/production-gap-evidence/native-claim-organization-regression-before.log 2>&1",
+      "phase": "New regression cases against unchanged baseline component",
+      "exitCode": 1,
+      "passed": 1,
+      "failed": 2,
+      "skippedByNameFilter": 6,
+      "log": "native-claim-organization-regression-before.log",
+      "logSha256": "89bc57e84d08a90947a99bc9be28f26542484cdc69b4951e6d8979a41485e7a5"
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ApplicationForm.test.tsx --reporter=verbose --maxWorkers=2 > /workspace/scratch/d8b5d3d3b0dd/production-gap-evidence/native-claim-organization-after.log 2>&1",
+      "phase": "Complete existing ApplicationForm test file after the two prop edits",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "log": "native-claim-organization-after.log",
+      "logSha256": "d183756b3a001808e066de977457326d5a8ea5d22785d8ada645397dd63b8e91"
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "git diff --check -- ui/src/components/applicant/ApplicationForm.jsx ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "exitCode": 0
+    }
+  ],
+  "reproducedFailures": [
+    "queues a learner refresh and opens a server-authorized claim in the authenticated organization fallback",
+    "keeps one-click membership wallet selection in the application organization before an offer exists"
+  ],
+  "passingCases": [
+    "explains Canvas-only credential applications with launch context and completion checks",
+    "renders only server-verified Canvas evidence and a real unsigned pending claim",
+    "queues a learner refresh and opens a server-authorized claim in the Canvas issuer organization",
+    "queues a learner refresh and opens a server-authorized claim in the authenticated organization fallback",
+    "does not load org-scoped templates for Canvas LTI learners",
+    "runs the one-click credential issuance flow for member credentials",
+    "submits the application but waits for wallet selection before generating an offer",
+    "keeps one-click membership wallet selection in the application organization before an offer exists",
+    "uploads required evidence through the same public API before browser submission"
+  ],
+  "regressionCoverage": [
+    "One-click Open Badge application in an organization distinct from the default fixture, before any offer exists or a wallet has been selected.",
+    "Canvas issuer organization remains authoritative when present and differs from the authenticated organization.",
+    "Canvas claim uses the same authenticated-organization fallback already used by the application when no issuer organization is present."
+  ],
+  "uiBoundary": "Component interaction tests use the existing mocked ClaimCredentialDialog to observe organization propagation. They do not exercise the live wallet registry, delivery destinations, native wallet handoff, deployment or release qualification.",
+  "knownTestWarning": "The existing MUI item non-boolean DOM attribute warning appears before and after the fix; it is not a failing assertion.",
+  "focusTrapSuiteRun": false,
+  "productionBuildOrTypecheckRerun": false,
+  "liveServicesAccessed": false,
+  "newMediaProduced": false,
+  "committed": false
+}

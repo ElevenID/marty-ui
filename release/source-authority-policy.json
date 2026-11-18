@@ -1,0 +1,7 @@
+{
+  "schema": "marty.immutable-source-authority/v2",
+  "repository": "ElevenID/marty-ui",
+  "scope": "release-program-and-policy/v2-additive-ci-tests",
+  "additive_ci_test_leaf": ".github/workflows/kubernetes-chart.yml",
+  "history_limit": 128
+}

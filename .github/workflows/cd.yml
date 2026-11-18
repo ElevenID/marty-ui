@@ -1,0 +1,3110 @@
+name: Stack release
+
+on:
+  workflow_dispatch:
+    inputs:
+      claim_run_id:
+        description: Successful Prepare stack release claim workflow run
+        required: true
+        type: string
+      resume_run_id:
+        description: Historical input; bounded publication rejects resume dispatches
+        required: false
+        type: string
+      resume_artifact:
+        description: Historical input; leave empty for a fresh original-attempt release
+        required: false
+        type: string
+      publication_contract:
+        description: v1 retains the existing publisher; choose v2 explicitly for an approved rollout of independent publication retry
+        required: false
+        default: v1
+        type: choice
+        options: [v1, v2]
+      selfhost_public_profile:
+        description: Customer application profile (both exclude production marketing pages)
+        required: false
+        default: tester
+        type: choice
+        options: [tester, full]
+      publish_cloudflare_addon:
+        description: Include the optional signed Cloudflare connector in the immutable release
+        required: false
+        type: boolean
+        default: false
+      selfhost_external_images_json:
+        description: Required exact service-to-digest JSON for independent infrastructure images
+        required: true
+        type: string
+
+concurrency:
+  group: stack-release-claim-${{ inputs.claim_run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The legacy marty-ui/* packages predate this repository and are not linked
+  # to it, so their package ACL rejects this workflow's GITHUB_TOKEN. Keep the
+  # public OSS release images in a repository-owned namespace instead.
+  IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
+  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
+  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
+  OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
+  KEYCLOAK_IMAGE: ghcr.io/elevenid/marty-ui-oss/keycloak
+  SELFHOST_UI_IMAGE: ghcr.io/elevenid/marty-ui-oss/ui-selfhost
+
+jobs:
+  resolve-transaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      claim_run_id: ${{ steps.identity.outputs.claim_run_id }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      state: ${{ steps.identity.outputs.state }}
+      tag: ${{ steps.identity.outputs.tag }}
+      transaction_id: ${{ steps.identity.outputs.transaction_id }}
+      version: ${{ steps.identity.outputs.version }}
+      ui_digest: ${{ steps.identity.outputs.ui_digest }}
+      services_digest: ${{ steps.identity.outputs.services_digest }}
+      migrations_digest: ${{ steps.identity.outputs.migrations_digest }}
+      openbao_didcomm_digest: ${{ steps.identity.outputs.openbao_didcomm_digest }}
+      keycloak_digest: ${{ steps.identity.outputs.keycloak_digest }}
+    steps:
+      - name: Require a fresh bounded original release attempt
+        env:
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          PUBLICATION_CONTRACT: ${{ inputs.publication_contract }}
+          PUBLISH_CLOUDFLARE_ADDON: ${{ inputs.publish_cloudflare_addon }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          case "$PUBLICATION_CONTRACT" in v1|v2) ;; *) exit 1 ;; esac
+          if [ "$PUBLICATION_CONTRACT" = v2 ] && [ "$PUBLISH_CLOUDFLARE_ADDON" = true ]; then
+            echo '::error::The optional Cloudflare producer requires publication_contract=v1; v2 core publication has a closed asset inventory.'
+            exit 1
+          fi
+          if [ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]; then
+            echo '::error::The bounded release path requires one fresh original attempt. Expired or failed candidates need a new reviewed source and unused claim; resume is not supported.'
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Wait for the admitted original claim before downloading it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+        run: python scripts/wait_release_dependency.py stable-claim --run-id "$CLAIM_RUN_ID"
+
+      - name: Download the exact claim or resume checkpoint
+        env:
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CLAIM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          if { [ -n "$RESUME_RUN_ID" ] && [ -z "$RESUME_ARTIFACT" ]; } || \
+             { [ -z "$RESUME_RUN_ID" ] && [ -n "$RESUME_ARTIFACT" ]; }; then
+            echo "::error::resume_run_id and resume_artifact must be supplied together"
+            exit 1
+          fi
+          if [ -n "$RESUME_RUN_ID" ]; then
+            [[ "$RESUME_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            source_run="$RESUME_RUN_ID"
+            artifact="$RESUME_ARTIFACT"
+          else
+            source_run="$CLAIM_RUN_ID"
+            artifacts="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$source_run/artifacts?per_page=100")"
+            artifact="$(jq -er '
+              [.artifacts[] | select(.expired == false and (.name | startswith("stack-release-claim-v")))]
+              | if length == 1 then .[0].name else error("exactly one release claim artifact is required") end
+            ' <<<"$artifacts")"
+          fi
+          case "$artifact" in
+            stack-release-claim-v*|stack-release-digests-*|stack-release-qualified-*|stack-release-promotion-*) ;;
+            *) echo "::error::resume artifact is outside the release transaction allowlist"; exit 1 ;;
+          esac
+          input="$RUNNER_TEMP/release-transaction-input"
+          mkdir "$input"
+          gh run download "$source_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact" \
+            --dir "$input"
+          mapfile -t entries < <(find "$input" -mindepth 1 -maxdepth 1 -printf '%f:%y\n' | LC_ALL=C sort)
+          if [[ "$artifact" == stack-release-claim-v* ]]; then
+            expected=("release-transaction.json:f" "stack-tag-evidence.json:f")
+          else
+            expected=("release-transaction.json:f")
+          fi
+          test "${#entries[@]}" -eq "${#expected[@]}"
+          test "${entries[*]}" = "${expected[*]}"
+
+      - name: Parse bounded transaction identity for exact-source checkout
+        id: untrusted
+        env:
+          EXPECTED_CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/release-transaction-input/release-transaction.json"
+          test "$(wc -c < "$input")" -le 65536
+          source_sha="$(jq -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$input")"
+          claim_run_id="$(jq -er '.claim_run_id | select(test("^[1-9][0-9]*$"))' "$input")"
+          test "$claim_run_id" = "$EXPECTED_CLAIM_RUN_ID"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate the exact durable transaction
+        id: identity
+        env:
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+          SOURCE_SHA: ${{ steps.untrusted.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          python scripts/release_transaction.py validate \
+            --input "$RUNNER_TEMP/release-transaction-input/release-transaction.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$CLAIM_RUN_ID" \
+            --output release-transaction.json
+          state="$(jq -er .state release-transaction.json)"
+          case "$state" in
+            claimed|digests_recorded|qualified|promoting|promoted) ;;
+            *) echo "::error::transaction is terminal or cannot be resumed"; exit 1 ;;
+          esac
+          {
+            echo "claim_run_id=$CLAIM_RUN_ID"
+            echo "source_sha=$SOURCE_SHA"
+            echo "state=$state"
+            echo "tag=$(jq -er .tag release-transaction.json)"
+            echo "transaction_id=$(jq -er .transaction_id release-transaction.json)"
+            echo "version=$(jq -er .version release-transaction.json)"
+            echo "ui_digest=$(jq -r '.images.ui.digest // ""' release-transaction.json)"
+            echo "services_digest=$(jq -r '.images.services.digest // ""' release-transaction.json)"
+            echo "migrations_digest=$(jq -r '.images.migrations.digest // ""' release-transaction.json)"
+            echo "openbao_didcomm_digest=$(jq -r '.images.openbao_didcomm.digest // ""' release-transaction.json)"
+            echo "keycloak_digest=$(jq -r '.images.keycloak.digest // ""' release-transaction.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage the authenticated transaction for this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-resolved-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-environment-preflight:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: stack-release
+
+  validate-stack:
+    needs: [release-environment-preflight, resolve-transaction]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      attestations: read
+    outputs:
+      version: ${{ steps.components.outputs.version }}
+      api_core_version: ${{ steps.components.outputs.api_core }}
+      api_core_uri: ${{ steps.components.outputs.api_core_uri }}
+      api_core_digest: ${{ steps.components.outputs.api_core_digest }}
+      blog_version: ${{ steps.components.outputs.blog }}
+      blog_uri: ${{ steps.components.outputs.blog_uri }}
+      blog_digest: ${{ steps.components.outputs.blog_digest }}
+      marty_rs_version: ${{ steps.components.outputs.marty_rs }}
+      marty_rs_uri: ${{ steps.components.outputs.marty_rs_uri }}
+      marty_rs_digest: ${{ steps.components.outputs.marty_rs_digest }}
+      marty_verification_version: ${{ steps.components.outputs.marty_verification }}
+      marty_verification_uri: ${{ steps.components.outputs.marty_verification_uri }}
+      marty_verification_digest: ${{ steps.components.outputs.marty_verification_digest }}
+      marty_iso18013_version: ${{ steps.components.outputs.marty_iso18013 }}
+      marty_iso18013_uri: ${{ steps.components.outputs.marty_iso18013_uri }}
+      marty_iso18013_digest: ${{ steps.components.outputs.marty_iso18013_digest }}
+      cli_version: ${{ steps.components.outputs.cli }}
+      cli_uri: ${{ steps.components.outputs.cli_uri }}
+      cli_digest: ${{ steps.components.outputs.cli_digest }}
+      integration_version: ${{ steps.components.outputs.integration_version }}
+      integration_commit: ${{ steps.components.outputs.integration_commit }}
+      integration_digest: ${{ steps.components.outputs.integration_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Require the exact claimed protected-main source
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          main_commit="$(git rev-parse refs/remotes/origin/main)"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$main_commit"
+      - id: components
+        env:
+          EXPECTED_VERSION: ${{ needs.resolve-transaction.outputs.version }}
+          LOCK_FILE: release/stack-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$LOCK_FILE"
+          python scripts/build_stack_manifest.py --lock "$LOCK_FILE" --verify-http
+          release="$(jq -r .release "$LOCK_FILE")"
+          version="${release#marty-ui@}"
+          test "$release" = "marty-ui@$version"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$version" = "$EXPECTED_VERSION"
+          {
+            echo "version=$version"
+            echo "api_core=$(jq -er '.components[] | select(.name == "marty-api-core") | .version' "$LOCK_FILE")"
+            echo "api_core_uri=$(jq -er '.components[] | select(.name == "marty-api-core") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "api_core_digest=$(jq -er '.components[] | select(.name == "marty-api-core") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "blog=$(jq -er '.components[] | select(.name == "marty-blog") | .version' "$LOCK_FILE")"
+            echo "blog_uri=$(jq -er '.components[] | select(.name == "marty-blog") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "blog_digest=$(jq -er '.components[] | select(.name == "marty-blog") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "marty_rs=$(jq -er '.components[] | select(.name == "marty-core-python") | .version' "$LOCK_FILE")"
+            echo "marty_rs_uri=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_rs_digest=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "marty_verification=$(jq -er '.components[] | select(.name == "marty-verification-python") | .version' "$LOCK_FILE")"
+            echo "marty_verification_uri=$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_verification_digest=$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "marty_iso18013=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .version' "$LOCK_FILE")"
+            echo "marty_iso18013_uri=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_iso18013_digest=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "cli=$(jq -er '.components[] | select(.name == "marty-cli") | .version' "$LOCK_FILE")"
+            echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
+            echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
+            echo "integration_version=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .version' "$LOCK_FILE")"
+            echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
+            echo "integration_digest=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
+          } >> "$GITHUB_OUTPUT"
+      - name: Reject invalid self-host image inputs before release builds
+        env:
+          EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
+          VERSION: ${{ steps.components.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          printf '%s' "$EXTERNAL_IMAGES_JSON" > external-services.json
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="$VERSION"
+          # Source-shape preflight runs before the digest build. The prepared
+          # lock later binds the real image to the qualified transaction.
+          MARTY_KEYCLOAK_KMS_IMAGE="$KEYCLOAK_IMAGE@sha256:$(printf '0%.0s' {1..64})"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml \
+            -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > selfhost-preflight-compose.json
+          python scripts/check_selfhost_external_images.py \
+            --compose-model selfhost-preflight-compose.json \
+            --external-services external-services.json \
+            --base-compose docker-compose.selfhost.prod.yml \
+            --override-compose docker-compose.selfhost.bundle.override.yml
+      - name: Verify release artifact provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_FILE: release/stack-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir=$(mktemp -d)
+          trap 'rm -rf "$artifact_dir"' EXIT
+          index=0
+          jq -r '.components[] as $component | $component.artifacts[] | select(.type != "oci") | [$component.repository, .uri, .digest] | @tsv' "$LOCK_FILE" |
+          while IFS=$'\t' read -r repository uri digest; do
+            index=$((index + 1))
+            artifact="$artifact_dir/$index-$(basename "$uri")"
+            curl --fail --location --retry 3 --silent --show-error "$uri" --output "$artifact"
+            printf '%s  %s\n' "${digest#sha256:}" "$artifact" | sha256sum --check --strict
+            gh attestation verify "$artifact" --repo "$repository"
+          done
+      - name: Admit exact signed client packages and inventory identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/admit_client_packages.py --lock release/stack-lock.json
+          --output "$RUNNER_TEMP/client-packages"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-client-packages-${{ github.run_id }}
+          path: ${{ runner.temp }}/client-packages/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Reject retired Credentials image from the Rust-only stack
+        env:
+          LOCK_FILE: release/stack-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            [.components[] | select(.name == "marty-credentials-issuance")] | length == 0
+          ' "$LOCK_FILE" >/dev/null
+          jq -e '
+            [.components[].artifacts[] | select(.type == "oci")] | length == 0
+          ' "$LOCK_FILE" >/dev/null
+      - name: Stage the exact verified integration harness source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCK_FILE: release/stack-lock.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .repository' "$LOCK_FILE")"
+          version="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .version' "$LOCK_FILE")"
+          commit="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
+          uri="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .uri' "$LOCK_FILE")"
+          digest="$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          source_ref="refs/tags/v${version}"
+          curl --fail --location --retry 3 --silent --show-error "$uri" \
+            --output integration-source.tar.gz
+          printf '%s  %s\n' "${digest#sha256:}" integration-source.tar.gz | \
+            sha256sum --check --strict
+          gh attestation verify integration-source.tar.gz \
+            --repo "$repository" --source-digest "$commit" \
+            --source-ref "$source_ref" --deny-self-hosted-runners
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: integration-source.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+
+  build-ui:
+    needs: [validate-stack, resolve-transaction]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        if: needs.resolve-transaction.outputs.ui_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: docker/ui.Dockerfile
+          target: selfhost
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            UI_VARIANT=selfhost
+            SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}
+            NGINX_CONFIG=nginx.spa.conf
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+            MARTY_API_CORE_VERSION=${{ needs.validate-stack.outputs.api_core_version }}
+            MARTY_API_CORE_URI=${{ needs.validate-stack.outputs.api_core_uri }}
+            MARTY_API_CORE_DIGEST=${{ needs.validate-stack.outputs.api_core_digest }}
+            MARTY_BLOG_VERSION=${{ needs.validate-stack.outputs.blog_version }}
+            MARTY_BLOG_URI=${{ needs.validate-stack.outputs.blog_uri }}
+            MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
+          provenance: mode=max
+          sbom: true
+      - id: digest
+        name: Bind the new or previously recorded UI digest
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          RECORDED_DIGEST: ${{ needs.resolve-transaction.outputs.ui_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${RECORDED_DIGEST:-$BUILT_DIGEST}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: needs.resolve-transaction.outputs.ui_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - if: needs.resolve-transaction.outputs.ui_digest == ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - name: Verify a resumed UI digest
+        if: needs.resolve-transaction.outputs.ui_digest != ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: >-
+          gh attestation verify
+          "oci://$IMAGE@$DIGEST"
+          --repo "$GITHUB_REPOSITORY"
+          --source-digest "$SOURCE_SHA"
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
+
+  build-services:
+    needs: [validate-stack, resolve-transaction]
+    runs-on: ubuntu-latest
+    outputs:
+      services_digest: ${{ steps.digests.outputs.services_digest }}
+      migrations_digest: ${{ steps.digests.outputs.migrations_digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Expose public image compiler cache credentials
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (needs.resolve-transaction.outputs.services_digest == '')
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
+      - id: services
+        if: needs.resolve-transaction.outputs.services_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
+        with:
+          context: .
+          file: services/Dockerfile
+          outputs: type=image,name=${{ env.SERVICES_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            SERVICE_NAME=gateway
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
+          provenance: mode=max
+          sbom: true
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
+      - id: migrations
+        if: needs.resolve-transaction.outputs.migrations_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
+        with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
+          context: .
+          file: services/Dockerfile.migrations
+          outputs: type=image,name=${{ env.MIGRATIONS_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ github.sha }}
+            MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
+            MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
+            MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
+            MARTY_VERIFICATION_VERSION=${{ needs.validate-stack.outputs.marty_verification_version }}
+            MARTY_VERIFICATION_URI=${{ needs.validate-stack.outputs.marty_verification_uri }}
+            MARTY_VERIFICATION_DIGEST=${{ needs.validate-stack.outputs.marty_verification_digest }}
+            MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
+            MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
+            MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
+          provenance: mode=max
+          sbom: true
+      - id: digests
+        name: Bind the new or previously recorded service digests
+        env:
+          BUILT_MIGRATIONS_DIGEST: ${{ steps.migrations.outputs.digest }}
+          BUILT_SERVICES_DIGEST: ${{ steps.services.outputs.digest }}
+          RECORDED_MIGRATIONS_DIGEST: ${{ needs.resolve-transaction.outputs.migrations_digest }}
+          RECORDED_SERVICES_DIGEST: ${{ needs.resolve-transaction.outputs.services_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          services_digest="${RECORDED_SERVICES_DIGEST:-$BUILT_SERVICES_DIGEST}"
+          migrations_digest="${RECORDED_MIGRATIONS_DIGEST:-$BUILT_MIGRATIONS_DIGEST}"
+          [[ "$services_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$migrations_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "services_digest=$services_digest"
+            echo "migrations_digest=$migrations_digest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Smoke-test the published shared services verification artifact
+        env:
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
+        shell: bash
+        run: >-
+          bash scripts/smoke-verification-image.sh
+          "$SERVICES_IMAGE@$SERVICES_DIGEST"
+          shared
+      - if: needs.resolve-transaction.outputs.services_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.SERVICES_IMAGE }}
+          subject-digest: ${{ steps.digests.outputs.services_digest }}
+          push-to-registry: true
+      - if: needs.resolve-transaction.outputs.migrations_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.MIGRATIONS_IMAGE }}
+          subject-digest: ${{ steps.digests.outputs.migrations_digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - name: Sign images by digest
+        if: needs.resolve-transaction.outputs.services_digest == ''
+        env:
+          MIGRATIONS_DIGEST: ${{ steps.digests.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
+        run: |
+          cosign sign --yes "$SERVICES_IMAGE@$SERVICES_DIGEST"
+          cosign sign --yes "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST"
+      - name: Verify resumed service digests
+        if: needs.resolve-transaction.outputs.services_digest != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIGRATIONS_DIGEST: ${{ steps.digests.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ steps.digests.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://$SERVICES_IMAGE@$SERVICES_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          gh attestation verify \
+            "oci://$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+
+  build-openbao-didcomm:
+    needs: [validate-stack, resolve-transaction]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: openbao/didcomm-authcrypt/Dockerfile
+          outputs: type=image,name=${{ env.OPENBAO_DIDCOMM_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+      - id: digest
+        name: Bind the new or previously recorded OpenBao DIDComm digest
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          RECORDED_DIGEST: ${{ needs.resolve-transaction.outputs.openbao_didcomm_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${RECORDED_DIGEST:-$BUILT_DIGEST}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.OPENBAO_DIDCOMM_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+      - name: Verify a resumed OpenBao DIDComm digest
+        if: needs.resolve-transaction.outputs.openbao_didcomm_digest != ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: >-
+          gh attestation verify
+          "oci://$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+          --repo "$GITHUB_REPOSITORY"
+          --source-digest "$SOURCE_SHA"
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
+
+  build-keycloak:
+    needs: [validate-stack, resolve-transaction]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        if: needs.resolve-transaction.outputs.keycloak_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: keycloak/openbao-provider/Dockerfile
+          outputs: type=image,name=${{ env.KEYCLOAK_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+      - id: digest
+        name: Bind the new or previously recorded Keycloak digest
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          RECORDED_DIGEST: ${{ needs.resolve-transaction.outputs.keycloak_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${RECORDED_DIGEST:-$BUILT_DIGEST}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: needs.resolve-transaction.outputs.keycloak_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.KEYCLOAK_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - if: needs.resolve-transaction.outputs.keycloak_digest == ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "$KEYCLOAK_IMAGE@$DIGEST"
+      - name: Verify a resumed Keycloak digest
+        if: needs.resolve-transaction.outputs.keycloak_digest != ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: >-
+          gh attestation verify
+          "oci://$KEYCLOAK_IMAGE@$DIGEST"
+          --repo "$GITHUB_REPOSITORY"
+          --source-digest "$SOURCE_SHA"
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
+
+  record-digests:
+    needs: [resolve-transaction, build-ui, build-services, build-openbao-didcomm, build-keycloak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-resolved-${{ github.run_id }}
+          path: transaction
+      - name: Persist the exact digest checkpoint
+        env:
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+        shell: bash
+        run: >-
+          python scripts/release_transaction.py record-digests
+          --input transaction/release-transaction.json
+          --digest "ui=$UI_DIGEST"
+          --digest "services=$SERVICES_DIGEST"
+          --digest "migrations=$MIGRATIONS_DIGEST"
+          --digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"
+          --digest "keycloak=$KEYCLOAK_DIGEST"
+          --build-run-id "$GITHUB_RUN_ID"
+          --output release-transaction.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+
+  prepare-official-candidate:
+    needs: [resolve-transaction, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      manifest_sha256: ${{ steps.manifest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: transaction
+      - name: Build exact pre-publication manifest
+        id: manifest
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"
+          python scripts/build_product_stack_manifest.py \
+            --lock release/stack-lock.json --transaction transaction/release-transaction.json \
+            --generated-at "$manifest_timestamp" --output stack-manifest.json
+          echo "sha256=sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: stack-manifest.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: stack-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+  official-interoperability:
+    name: Collect seven official candidate lanes
+    needs: [resolve-transaction, prepare-official-candidate, build-operator-catalog]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      attestations: read
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@693bbc8dbe3e3a006658b0753ae03c0c682eaffc
+    with:
+      lane: all
+      collect_only: true
+      candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
+      candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
+      candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
+      harness_revision: 693bbc8dbe3e3a006658b0753ae03c0c682eaffc
+
+  official-gate-evidence:
+    timeout-minutes: 30
+    needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      HARNESS_SHA: 693bbc8dbe3e3a006658b0753ae03c0c682eaffc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: candidate
+      - name: Build the shared official evidence validator
+        shell: bash
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml -p marty-release-evidence
+          --bin validate-official-suite --target-dir official-gate-tools
+      - name: Freeze or revalidate the complete same-run official evidence
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py snapshot
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Preserve the immutable automated assessment inputs
+        if: steps.freeze.outputs.frozen_new == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: official-evidence-input-${{ github.run_id }}
+          path: official-evidence-input/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Qualify raw suite results and deterministic verifier assertions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py qualify
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: |
+            official-interoperability.json
+            official-evidence-input/
+          if-no-files-found: error
+          retention-days: 90
+
+  public-stack-smoke:
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, record-digests]
+    runs-on: ubuntu-latest
+    env:
+      # This deletion candidate must exercise the canonical Rust revocation
+      # and native issuance owners. The released integration adapter keeps this
+      # overlay opt-in while Python retains its unmigrated routes.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-ui
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: harness-input
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Extract the verified integration harness without trusting archive paths
+        env:
+          INTEGRATION_DIGEST: ${{ needs.validate-stack.outputs.integration_digest }}
+          INTEGRATION_VERSION: ${{ needs.validate-stack.outputs.integration_version }}
+        shell: bash
+        run: >-
+          python marty-ui/scripts/extract_verified_source.py
+          --archive harness-input/integration-source.tar.gz
+          --destination integration-tests
+          --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
+          --expected-sha256 "$INTEGRATION_DIGEST"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-client-packages-${{ github.run_id }}
+          path: ${{ runner.temp }}/client-packages
+      - name: Build candidate stack manifest
+        env:
+          LOCK_FILE: release/stack-lock.json
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        working-directory: marty-ui
+        shell: bash
+        run: |
+          jq \
+            --arg sha "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            --arg ui_digest "$UI_DIGEST" \
+            --arg services_digest "$SERVICES_DIGEST" \
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
+            --arg keycloak_digest "$KEYCLOAK_DIGEST" '
+            .components += [{
+              name: "marty-ui",
+              repository: "ElevenID/marty-ui",
+              version: $version,
+              commit: $sha,
+              artifacts: [
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/ui", digest: $ui_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/services", digest: $services_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/keycloak", digest: $keycloak_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"}
+              ]
+            }]
+          ' "$LOCK_FILE" > release/candidate-stack-lock.json
+          python scripts/build_stack_manifest.py \
+            --lock release/candidate-stack-lock.json \
+            --output ../integration-tests/stack-manifest.json
+      - name: Pull immutable release images
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json |
+          while IFS= read -r image; do
+            docker pull "$image"
+          done
+      - name: Reject commerce configuration
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r image; do
+            if docker inspect "$image" | grep -Eqi 'square|subscription|product[_-]?catalog|billing'; then
+              echo "::error::Forbidden commerce marker in $image"
+              exit 1
+            fi
+          done < <(jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json)
+      - name: Smoke-test UI image
+        working-directory: marty-ui
+        env:
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$(mktemp)"
+          trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$metadata"' EXIT
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$metadata"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" --image-metadata "$metadata"
+          docker run --rm -d --name marty-ui-smoke -e UI_ENABLED_SECTIONS=none \
+            -p 127.0.0.1:18080:80 "$IMAGE@$UI_DIGEST"
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-all-errors --retry-delay 1 \
+            http://127.0.0.1:18080/healthz
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/)" = 404
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/console/)" = 404
+      - name: Install the released test interface
+        working-directory: integration-tests
+        env:
+          CLIENT_VERSION: ${{ needs.validate-stack.outputs.cli_version }}
+        # Same-run admitted archives include the launcher and its native package.
+        # A fresh offline cache prevents hidden registry or preinstalled inputs.
+        run: | # zizmor: ignore[adhoc-packages]
+          set -euo pipefail
+          python -m pip install .
+          test ! -e "$RUNNER_TEMP/client-install"
+          test ! -e "$RUNNER_TEMP/client-npm-cache"
+          npm install --prefix "$RUNNER_TEMP/client-install" --cache "$RUNNER_TEMP/client-npm-cache" \
+            --offline --ignore-scripts --omit=dev --no-audit --no-fund \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-api-core-$CLIENT_VERSION.tgz" \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-cli-$CLIENT_VERSION.tgz" \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-cli-linux-x64-$CLIENT_VERSION.tgz"
+          client_bin="$RUNNER_TEMP/client-install/node_modules/.bin"
+          test "$("$client_bin/marty" --version)" = "$CLIENT_VERSION"
+          "$client_bin/marty" api-keys create --help
+          echo "$client_bin" >> "$GITHUB_PATH"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { createRequire } from 'node:module';
+          const requireInstalled = createRequire(process.env.RUNNER_TEMP + '/client-install/package.json');
+          const sdk = await import(requireInstalled.resolve('@elevenid/marty-api-core'));
+          assert.equal(typeof sdk.createApiClient, 'function');
+          assert.equal(sdk.MIP_VERSION, '0.5.0');
+          JS
+      - name: Render the exact Rust-only public stack images
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/render_stack_env.py \
+            --manifest stack-manifest.json --output .env.stack --pull
+          docker compose --env-file .env.stack config --quiet
+      - name: Run the artifact-only public integration suite
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker compose --env-file .env.stack logs --no-color | tee public-stack.log || true
+            docker compose --env-file .env.stack down -v || true
+          }
+          trap cleanup EXIT
+          docker compose --env-file .env.stack up -d
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:28000/health >/dev/null && break
+            if [ "$attempt" = 60 ]; then exit 1; fi
+            sleep 2
+          done
+          # The gateway becomes reachable before every downstream service has
+          # accepted connections. Wait for the same public health contract the
+          # artifact-only suite asserts, rather than racing the first test.
+          python ../marty-ui/scripts/wait_for_public_services.py \
+            --url http://127.0.0.1:28000/health/services --timeout 120
+          exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
+          for service in $exited_services; do
+            case "$service" in
+              migrations|issuance-migrations|revocation-profile-migrations|\
+              openbao-tls-init|openbao-ca-export|openbao-plugin-bootstrap|\
+              openbao-grant-bootstrap|signing-integration-tls-bootstrap)
+                container_id="$(docker compose --env-file .env.stack ps --all -q "$service")"
+                if [ -z "$container_id" ] || [ "$(docker inspect --format '{{.State.ExitCode}}' "$container_id")" != 0 ]; then
+                  echo "Public-stack setup service failed: $service"
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Public-stack service exited unexpectedly: $service"
+                exit 1
+                ;;
+            esac
+          done
+          pytest tests/oss_stack -v
+      - name: Record exact-digest public-stack evidence
+        working-directory: integration-tests
+        env:
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/release-evidence
+          jq -n \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg ui_digest "$UI_DIGEST" \
+            --arg services_digest "$SERVICES_DIGEST" \
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
+            --arg keycloak_digest "$KEYCLOAK_DIGEST" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            '{schema:"elevenid.stack-release-public-gate/v1",status:"passed",
+              source_sha:$source_sha,run_id:$run_id,
+              images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
+                      openbao_didcomm:$openbao_didcomm_digest,keycloak:$keycloak_digest}}' \
+            > work/release-evidence/public-stack.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-public-gate-${{ github.run_id }}
+          path: integration-tests/work/release-evidence/public-stack.json
+          if-no-files-found: error
+          retention-days: 90
+
+  verifier-differential:
+    needs: [resolve-transaction, validate-stack, build-services, record-digests]
+    runs-on: ubuntu-24.04
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+      packages: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-ui
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 "marty-ui/.github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 "marty-ui/.github/scripts/private-forks.py" fetch --manifest-path "marty-ui/rust/Cargo.toml"
+      - name: Build the Rust public-key fixture converter
+        working-directory: marty-ui/rust
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$(uname -m)" = x86_64
+          cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-integration-source-${{ github.run_id }}
+          path: harness-input
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Fetch the exact upstream harness history
+        env:
+          INTEGRATION_COMMIT: ${{ needs.validate-stack.outputs.integration_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$INTEGRATION_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # Fetch objects and construct an index, but never check out source.
+          # All executed harness files still come from the attested archive.
+          git init --quiet integration-history
+          git -C integration-history config core.autocrlf false
+          git -C integration-history -c transfer.fsckObjects=true fetch --no-tags \
+            https://github.com/ElevenID/marty-integration-tests.git "$INTEGRATION_COMMIT"
+          test "$(git -C integration-history rev-parse FETCH_HEAD)" = "$INTEGRATION_COMMIT"
+          git -C integration-history update-ref HEAD "$INTEGRATION_COMMIT"
+          git -C integration-history read-tree "$INTEGRATION_COMMIT"
+      - name: Extract the verified integration harness without trusting archive paths
+        env:
+          INTEGRATION_COMMIT: ${{ needs.validate-stack.outputs.integration_commit }}
+          INTEGRATION_DIGEST: ${{ needs.validate-stack.outputs.integration_digest }}
+          INTEGRATION_VERSION: ${{ needs.validate-stack.outputs.integration_version }}
+        shell: bash
+        run: >-
+          python marty-ui/scripts/extract_verified_source.py
+          --archive harness-input/integration-source.tar.gz
+          --destination integration-tests
+          --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
+          --expected-sha256 "$INTEGRATION_DIGEST"
+          --history integration-history
+          --expected-commit "$INTEGRATION_COMMIT"
+      - name: Install the hash-locked verifier harness
+        working-directory: integration-tests
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --require-hashes --only-binary=:all:
+          --requirement requirements/official-py312.lock
+      - name: Prepare the exact attested Core KMS verifier source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=integration-tests/config/credentials-verifier-positive-producer.json
+          jq -e '.schema == "elevenid.credentials-verifier-positive-producer/v1"
+            and .repository == "ElevenID/marty-core"
+            and (.release_tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            and (.commit | test("^[0-9a-f]{40}$"))
+            and (.source_asset | test("^marty-core-workspace-[0-9]+\\.[0-9]+\\.[0-9]+\\.tar\\.gz$"))
+            and (.source_digest | test("^sha256:[0-9a-f]{64}$"))' "$pin" >/dev/null
+          tag="$(jq -r '.release_tag' "$pin")"
+          commit="$(jq -r '.commit' "$pin")"
+          asset="$(jq -r '.source_asset' "$pin")"
+          digest="$(jq -r '.source_digest' "$pin")"
+          version="${tag#v}"
+          test "$asset" = "marty-core-workspace-${version}.tar.gz"
+          jq -e --arg commit "$commit" --arg version "$version" \
+            '[.components[] | select(.repository == "ElevenID/marty-core") | [.commit, .version]]
+              | length > 0 and all(.[]; . == [$commit, $version])' \
+            marty-ui/release/stack-lock.json >/dev/null
+          mkdir core-input
+          gh release download "$tag" --repo ElevenID/marty-core --pattern "$asset" --dir core-input
+          gh attestation verify "core-input/$asset" --repo ElevenID/marty-core \
+            --source-ref "refs/tags/$tag" --source-digest "$commit" --deny-self-hosted-runners
+          git init --quiet core-history
+          git -C core-history config core.autocrlf false
+          git -C core-history -c transfer.fsckObjects=true fetch --no-tags \
+            https://github.com/ElevenID/marty-core.git "$commit"
+          test "$(git -C core-history rev-parse FETCH_HEAD)" = "$commit"
+          git -C core-history update-ref HEAD "$commit"
+          git -C core-history read-tree "$commit"
+          python marty-ui/scripts/extract_verified_source.py \
+            --archive "core-input/$asset" --destination core-source \
+            --expected-root "marty-core-${version}" --expected-sha256 "$digest" \
+            --history core-history --expected-commit "$commit"
+          rustup toolchain install 1.97.1 --profile minimal
+      - name: Fetch the attested Core private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml
+      - name: Build the exact attested Core KMS verifier producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 build --locked --manifest-path core-source/Cargo.toml \
+            -p marty-test-wallet --bin marty-kms-positive-verifier-input \
+            --bin marty-test-signer-agent
+      - name: Prepare bounded verifier evidence workspace
+        run: mkdir -p integration-tests/work
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
+          format: cyclonedx-json@1.6
+          output-file: integration-tests/work/transaction-services-sbom.cdx.json
+      - name: Verify and exercise the exact services digest against the immutable oracle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        working-directory: integration-tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/evidence work/oracle
+          gh attestation verify "oci://ghcr.io/elevenid/marty-ui-oss/services@$SERVICES_DIGEST" \
+            --repo ElevenID/marty-ui --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          python scripts/credentials_verifier_artifact.py create-transaction-pin \
+            --transaction-id "$TRANSACTION_ID" \
+            --version "$VERSION" \
+            --commit "$SOURCE_SHA" \
+            --image-digest "$SERVICES_DIGEST" \
+            --sbom work/transaction-services-sbom.cdx.json \
+            --pin work/transaction-pin.json
+          gh release download v0.1.71 --repo ElevenID/marty-credentials \
+            --pattern marty-credentials-verification.spdx.json --dir work/oracle
+          python scripts/credentials_verifier_artifact.py validate-sbom \
+            --pin config/credentials-verifier-oracle.json --state ready \
+            --sbom work/oracle/marty-credentials-verification.spdx.json
+          python scripts/credentials_verifier_artifact.py run \
+            --pin config/credentials-verifier-oracle.json --provenance-verified \
+            --evidence work/evidence/oracle.json
+          infra=../marty-ui/deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python ../marty-ui/scripts/with_disposable_verifier_kms.py \
+            --openbao-image "$openbao_image" \
+            --producer "$GITHUB_WORKSPACE/core-source/target/debug/marty-kms-positive-verifier-input" \
+            --agent "$GITHUB_WORKSPACE/core-source/target/debug/marty-test-signer-agent" \
+            --jwk-tool "$GITHUB_WORKSPACE/marty-ui/rust/target/release/public-kms-jwk" \
+            --evidence-output work/evidence/verifier-kms-fixture.json \
+            -- python scripts/credentials_verifier_artifact.py run-transaction \
+              --pin work/transaction-pin.json --provenance-verified \
+              --evidence work/evidence/transaction.json
+          python scripts/credentials_verifier_artifact.py compare-transaction-evidence \
+            --oracle work/evidence/oracle.json \
+            --transaction work/evidence/transaction.json \
+            --oracle-pin config/credentials-verifier-oracle.json \
+            --transaction-pin work/transaction-pin.json \
+            --evidence work/evidence/verifier-differential.json
+          jq -e '
+            .status == "matched"
+            and .release_clearance == "eligible"
+            and (.blockers | length) == 0
+          ' work/evidence/verifier-differential.json >/dev/null
+      - name: Record the exercised self-host public-key helper
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0755 marty-ui/rust/target/release/public-kms-jwk public-kms-jwk
+          cmp marty-ui/rust/target/release/public-kms-jwk public-kms-jwk
+          python marty-ui/scripts/record_selfhost_public_kms_helper.py \
+            --binary public-kms-jwk \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
+            --output selfhost-public-kms-jwk.json
+      - id: attest-public-kms-binary
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: public-kms-jwk
+      - id: attest-public-kms-receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: selfhost-public-kms-jwk.json
+      - name: Preserve exact public-key helper SLSA bundles
+        env:
+          BINARY_BUNDLE: ${{ steps.attest-public-kms-binary.outputs.bundle-path }}
+          RECEIPT_BUNDLE: ${{ steps.attest-public-kms-receipt.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BINARY_BUNDLE"
+          test -s "$RECEIPT_BUNDLE"
+          cp -- "$BINARY_BUNDLE" public-kms-jwk.slsa-bundle.json
+          cp -- "$RECEIPT_BUNDLE" selfhost-public-kms-jwk.slsa-bundle.json
+      - name: Verify the just-attested helper source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python marty-ui/scripts/verify_selfhost_public_kms_helper.py \
+            --producer-attestations --directory . \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
+          path: |
+            public-kms-jwk
+            selfhost-public-kms-jwk.json
+            public-kms-jwk.slsa-bundle.json
+            selfhost-public-kms-jwk.slsa-bundle.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-verifier-gate-${{ github.run_id }}
+          path: |
+            integration-tests/work/evidence/verifier-differential.json
+            integration-tests/work/evidence/verifier-kms-fixture.json
+          if-no-files-found: error
+          retention-days: 90
+
+  native-schema-image-qualification:
+    needs: [resolve-transaction, build-services, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify and qualify exact released Rust schema images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SERVICES_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$MIGRATIONS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          services_image="$SERVICES_IMAGE@$SERVICES_DIGEST"
+          migrations_image="$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST"
+          for image in "$services_image" "$migrations_image"; do
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+          done
+          infra=deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          postgres_image="$(jq -er '.images.postgres.reference' "$infra")"
+          redis_image="$(jq -er '.images.redis.reference' "$infra")"
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python scripts/qualify_selfhost_migrations.py \
+            --migrations-image "$migrations_image" \
+            --services-image "$services_image" \
+            --postgres-image "$postgres_image" \
+            --redis-image "$redis_image" \
+            --openbao-image "$openbao_image" > native-schema.json
+          # The tester install reuses this exact services image for keyless
+          # workload TLS setup. Preview .2 lacked the binary despite a later
+          # Dockerfile source contract, so prove it on the pulled digest.
+          docker run --rm --pull=never --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint /bin/sh "$services_image" \
+            -ec 'test -x /usr/local/bin/marty-passport-tls-bootstrap'
+          jq -e --arg migrations "$migrations_image" --arg services "$services_image" '
+            .schema == "marty.selfhost-migrations-qualification/v3" and
+            .migrations_image == $migrations and .services_image == $services and
+            .native_schemas == "verified" and .private_key_storage == "absent" and
+            .verify_only_database == "reachable-unreachable-malformed-read-only" and
+            .profile == "selfhost-production" and .runs == "2"
+          ' native-schema.json >/dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: native-schema.json
+          if-no-files-found: error
+          retention-days: 90
+
+  didcomm-plugin-image-qualification:
+    needs: [resolve-transaction, build-openbao-didcomm, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - name: Prepare source-matched Rust KMS operator for image qualification
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
+      - name: Verify and exercise the exact published OpenBao DIDComm image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$OPENBAO_DIDCOMM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="$OPENBAO_DIDCOMM_IMAGE@$OPENBAO_DIDCOMM_DIGEST"
+          gh attestation verify "oci://$image" \
+            --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          docker pull "$image"
+          docker run --rm --entrypoint /bin/sh "$image" -ec \
+            'test -x /plugins/openbao-didcomm-authcrypt && test -x /usr/local/bin/selfhost-tls-init && test -x /usr/local/bin/selfhost-unseal'
+          export MARTY_OPENBAO_PROBE_IMAGE="$image"
+          python scripts/probe_didcomm_issuance_token.py
+          python scripts/probe_didcomm_openbao_ha.py
+          python scripts/probe_selfhost_openbao_raft_bootstrap.py
+          jq -n --arg image "$image" --arg source "$SOURCE_SHA" \
+            '{schema:"marty.stack-didcomm-plugin-qualification/v1",image:$image,
+              source_sha:$source,scoped_token:"passed",raft_failover:"passed",
+              raft_snapshot_recovery:"passed"}' > didcomm-plugin.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
+          path: didcomm-plugin.json
+          if-no-files-found: error
+          retention-days: 90
+
+  keycloak-kms-image-qualification:
+    needs: [resolve-transaction, build-keycloak, build-openbao-didcomm, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify and exercise exact Keycloak and OpenBao image digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$KEYCLOAK_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$OPENBAO_DIDCOMM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          keycloak="$KEYCLOAK_IMAGE@$KEYCLOAK_DIGEST"
+          openbao="$OPENBAO_DIDCOMM_IMAGE@$OPENBAO_DIDCOMM_DIGEST"
+          for image in "$keycloak" "$openbao"; do
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+            docker pull "$image"
+          done
+          python3 -m pip install --disable-pip-version-check cryptography==44.0.3
+          python3 scripts/probe_keycloak_remote_rs256.py --require-browser \
+            --keycloak-image "$keycloak" --openbao-image "$openbao"
+          jq -n --arg keycloak "$keycloak" --arg openbao "$openbao" \
+            --arg source "$SOURCE_SHA" \
+            '{schema:"marty.stack-keycloak-kms-qualification/v1",
+              keycloak_image:$keycloak,openbao_image:$openbao,source_sha:$source,
+              browser_pkce:"passed",ciba:"passed",rotation:"passed",
+              kms_loss:"denied",private_key_database:"absent"}' > keycloak-kms.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-keycloak-kms-gate-${{ github.run_id }}
+          path: keycloak-kms.json
+          if-no-files-found: error
+          retention-days: 90
+
+  qualify-release:
+    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential, native-schema-image-qualification, didcomm-plugin-image-qualification, keycloak-kms-image-qualification, official-gate-evidence]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: transaction
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-public-gate-${{ github.run_id }}
+          path: gates/public
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-verifier-gate-${{ github.run_id }}
+          path: gates/verifier
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: gates/native
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
+          path: gates/didcomm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-keycloak-kms-gate-${{ github.run_id }}
+          path: gates/keycloak
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: gates/official
+      - name: Persist exact gate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if jq -e '.gates | length > 0' transaction/release-transaction.json >/dev/null; then
+            cp transaction/release-transaction.json release-transaction.json
+          else
+            public_digest="sha256:$(sha256sum gates/public/public-stack.json | cut -d' ' -f1)"
+            verifier_digest="sha256:$(sha256sum gates/verifier/verifier-differential.json | cut -d' ' -f1)"
+            native_digest="sha256:$(sha256sum gates/native/native-schema.json | cut -d' ' -f1)"
+            didcomm_digest="sha256:$(sha256sum gates/didcomm/didcomm-plugin.json | cut -d' ' -f1)"
+            keycloak_digest="sha256:$(sha256sum gates/keycloak/keycloak-kms.json | cut -d' ' -f1)"
+            official_digest="sha256:$(sha256sum gates/official/official-interoperability.json | cut -d' ' -f1)"
+            python scripts/release_transaction.py qualify \
+              --input transaction/release-transaction.json \
+              --gate "public_stack=$GITHUB_RUN_ID:$public_digest" \
+              --gate "verifier_differential=$GITHUB_RUN_ID:$verifier_digest" \
+              --gate "native_schema=$GITHUB_RUN_ID:$native_digest" \
+              --gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest" \
+              --gate "keycloak_kms=$GITHUB_RUN_ID:$keycloak_digest" \
+              --gate "official_interoperability=$GITHUB_RUN_ID:$official_digest" \
+              --output release-transaction.json
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+
+  build-selfhost-lock-roles:
+    # Mandatory official-release input preparation. These digest-only artifacts
+    # cannot be promoted or included in the five-role stack publication.
+    needs: [resolve-transaction, validate-stack, qualify-release, build-keycloak]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      ui_digest: ${{ steps.digests.outputs.ui_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact qualified protected-main source
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+      - name: Reject incomplete independent image inputs before building
+        env:
+          EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
+          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
+            if type == "object" and length > 0
+               and (has("issuance") | not)
+               and (has("issuance-migrations") | not)
+               and all(.[]; type == "string" and
+                 test("^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")) then .
+            else error("explicit independent service digests are required") end
+          ' > external-services.json
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="$VERSION"
+          export MARTY_KEYCLOAK_KMS_IMAGE="$KEYCLOAK_IMAGE@$KEYCLOAK_DIGEST"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml \
+            -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > compose-model.json
+          jq -e --slurpfile external external-services.json '
+            (.services | to_entries | map(select(
+              ((.value.image | startswith("ghcr.io/elevenid/marty-ui/")) | not)
+              and (.key != "keycloak" and .key != "keycloak-configurator")
+            ) | .key) | sort) == ($external[0] | keys | sort)
+          ' compose-model.json >/dev/null
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: ui
+        name: Build the distinct self-host UI by digest only
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: docker/ui.Dockerfile
+          target: selfhost
+          outputs: type=image,name=${{ env.SELFHOST_UI_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            UI_VARIANT=selfhost
+            SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}
+            NGINX_CONFIG=nginx.spa.conf
+            MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
+            MARTY_UI_SHA=${{ needs.resolve-transaction.outputs.source_sha }}
+            MARTY_API_CORE_VERSION=${{ needs.validate-stack.outputs.api_core_version }}
+            MARTY_API_CORE_URI=${{ needs.validate-stack.outputs.api_core_uri }}
+            MARTY_API_CORE_DIGEST=${{ needs.validate-stack.outputs.api_core_digest }}
+            MARTY_BLOG_VERSION=${{ needs.validate-stack.outputs.blog_version }}
+            MARTY_BLOG_URI=${{ needs.validate-stack.outputs.blog_uri }}
+            MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
+          provenance: mode=max
+          sbom: true
+      - id: digests
+        env:
+          UI_DIGEST: ${{ steps.ui.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$UI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$SELFHOST_UI_IMAGE@$UI_DIGEST"
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$SELFHOST_UI_IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$RUNNER_TEMP/ui-metadata.json"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" \
+            --image-metadata "$RUNNER_TEMP/ui-metadata.json"
+          echo "ui_digest=$UI_DIGEST" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.SELFHOST_UI_IMAGE }}
+          subject-digest: ${{ steps.digests.outputs.ui_digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - name: Sign only the exact produced digests
+        env:
+          UI_DIGEST: ${{ steps.digests.outputs.ui_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$SELFHOST_UI_IMAGE@$UI_DIGEST"
+
+  prepare-selfhost-image-lock:
+    # Produces mandatory build inputs, still unqualified and never implicitly
+    # an accepted installer release asset. The next protected gate must anonymously
+    # install this exact extracted ZIP with disposable external state and prove
+    # migrations, readiness, login, and an issuer/credential journey.
+    needs: [resolve-transaction, validate-stack, build-services, build-keycloak, qualify-release, build-selfhost-lock-roles]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      attestations: write
+      id-token: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Install the exact offline source parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: transaction
+      - name: Check exact source, explicit independent refs, and render Compose
+        env:
+          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+          EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          python scripts/release_transaction.py validate --require-qualified \
+            --input transaction/release-transaction.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
+            --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
+            --output validated-transaction.json
+
+          printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
+            if type == "object" and length > 0
+               and (has("issuance") | not)
+               and (has("issuance-migrations") | not)
+               and all(.[]; type == "string" and
+                 test("^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")) then .
+            else error("explicit independent service digests are required") end
+          ' > external-services.json
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="$VERSION"
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.images.keycloak | .uri + "@" + .digest' validated-transaction.json)"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml \
+            -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > compose-model.json
+          jq -e '.services | type == "object" and length > 0' compose-model.json >/dev/null
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Verify exact Marty image attestations and generate the lock
+        env:
+          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          UI_DIGEST: ${{ needs.build-selfhost-lock-roles.outputs.ui_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg ui "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
+            '{"ui-selfhost":$ui}' \
+            > selfhost-images.json
+          for image in \
+            "$SERVICES_IMAGE@$SERVICES_DIGEST" \
+            "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
+            "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
+            "$(jq -er '.images.openbao_didcomm | .uri + "@" + .digest' validated-transaction.json)" \
+            "$(jq -er '.images.keycloak | .uri + "@" + .digest' validated-transaction.json)"; do
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+          done
+          python scripts/build_selfhost_image_lock.py \
+            --compose-model compose-model.json \
+            --base-compose docker-compose.selfhost.prod.yml \
+            --override-compose docker-compose.selfhost.bundle.override.yml \
+            --transaction validated-transaction.json \
+            --stack-lock release/stack-lock.json --source-repo . \
+            --source-sha "$SOURCE_SHA" --claim-run-id "$CLAIM_RUN_ID" \
+            --selfhost-images selfhost-images.json \
+            --external-services external-services.json \
+            --output prepared-selfhost-images.json
+      - name: Require anonymous pulls of every exact locked image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          jq -r '.services[], .openbao_didcomm_image' prepared-selfhost-images.json | LC_ALL=C sort -u |
+          while IFS= read -r image; do
+            docker pull "$image" >/dev/null
+          done
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - name: Package and record the unqualified exact-lock ZIP
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --manifest-path rust/Cargo.toml \
+            -p marty-selfhost-bundle --bin package-selfhost-bundle
+          rust/target/debug/package-selfhost-bundle \
+            --repo-root . --output-dir "$RUNNER_TEMP/selfhost-prepared" \
+            --archive "$RUNNER_TEMP/selfhost-prepared" \
+            --image-lock prepared-selfhost-images.json
+          python scripts/record_selfhost_bundle_preparation.py \
+            --archive "$RUNNER_TEMP/selfhost-prepared.zip" \
+            --image-lock prepared-selfhost-images.json \
+            --transaction validated-transaction.json \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
+            --output prepared-selfhost-bundle.json
+          python scripts/produce_selfhost_product_descriptor.py \
+            --archive "$RUNNER_TEMP/selfhost-prepared.zip" \
+            --image-lock prepared-selfhost-images.json \
+            --transaction validated-transaction.json \
+            --receipt prepared-selfhost-bundle.json \
+            --output prepared-selfhost-product-descriptor.json
+          mkdir "$RUNNER_TEMP/selfhost-fresh-install"
+          unzip -q "$RUNNER_TEMP/selfhost-prepared.zip" \
+            -d "$RUNNER_TEMP/selfhost-fresh-install"
+          (
+            cd "$RUNNER_TEMP/selfhost-fresh-install/selfhost-prepared"
+            docker compose --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --no-interpolate --format json \
+              > "$RUNNER_TEMP/selfhost-extracted-compose.json"
+          )
+          jq -e '.services | type == "object" and length > 0' \
+            "$RUNNER_TEMP/selfhost-extracted-compose.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-prepared.zip" prepared-selfhost-bundle.zip
+      - id: installer_prepared_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-images.json
+            prepared-selfhost-bundle.json
+            prepared-selfhost-product-descriptor.json
+      - name: Preserve exact prepared-input producer attestation
+        env:
+          BUNDLE: ${{ steps.installer_prepared_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE"
+          cp -- "$BUNDLE" installer-prepared.provenance.jsonl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: installer-prepared-provenance-${{ github.run_id }}
+          path: installer-prepared.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
+          path: |
+            prepared-selfhost-images.json
+            prepared-selfhost-bundle.json
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-product-descriptor.json
+          if-no-files-found: error
+          retention-days: 30
+
+  preflight-selfhost-prepared-consumer:
+    # A separate artifact consumer, not a release or installed-runtime gate.
+    needs: [prepare-selfhost-image-lock]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Install the exact offline source parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
+          path: prepared
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: transaction
+      - name: Verify downloaded exact ZIP and extracted Compose model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          python scripts/release_transaction.py validate --require-qualified \
+            --input transaction/release-transaction.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$(jq -r .claim_run_id transaction/release-transaction.json)" \
+            --output "$RUNNER_TEMP/selfhost-consumer-transaction.json"
+
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --verify-archive-only
+          mkdir "$RUNNER_TEMP/selfhost-consumer"
+          unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-consumer"
+          # Render with fresh per-run roots, never operator or source-checkout state.
+          mkdir "$RUNNER_TEMP/selfhost-consumer-state" "$RUNNER_TEMP/selfhost-consumer-secrets"
+          export SELFHOST_STATE_DIR="$RUNNER_TEMP/selfhost-consumer-state"
+          export SELFHOST_SECRET_DIR="$RUNNER_TEMP/selfhost-consumer-secrets"
+          (
+            cd "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared"
+            docker compose --profile '*' --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --format json \
+              > "$RUNNER_TEMP/selfhost-consumer-compose.json"
+          )
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --compose-model "$RUNNER_TEMP/selfhost-consumer-compose.json" \
+            --source-checkout "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared" \
+            --state-root "$SELFHOST_STATE_DIR" \
+            --secret-root "$SELFHOST_SECRET_DIR" \
+            --output "$RUNNER_TEMP/selfhost-consumer-preflight.json"
+      - name: Require anonymous exact-digest pulls from the downloaded lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/selfhost-anonymous-docker-config"
+          mkdir "$DOCKER_CONFIG"
+          python scripts/check_selfhost_locked_image_platform.py \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --output "$RUNNER_TEMP/selfhost-image-platform-preflight.json"
+
+  build-operator-catalog:
+    needs: [resolve-transaction, validate-stack]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            elf_machine: 'Advanced Micro Devices X86-64'
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            elf_machine: AArch64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - name: Require the exact qualified protected-main source
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - name: Prepare source-matched Rust execution policy
+        run: bash scripts/ci/prepare-native-ci-execution.sh
+      - name: Build and test the native operator binary
+        env:
+          MARTY_DEPLOY_SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          MARTY_DEPLOY_RELEASE_TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
+          source scripts/ci/rust_contract_execution.sh
+          run_timed deployment_catalog_release cargo test --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
+            -p marty-deployment-catalog --bin marty-deploy
+          asset="marty-deploy-linux-$ARCH"
+          cp "rust/target/$TARGET/release/marty-deploy" "$asset"
+          chmod 755 "$asset"
+          test "$(readelf -h "$asset" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" = "$ELF_MACHINE"
+          if readelf -l "$asset" | grep -q INTERP; then
+            echo "Operator binary unexpectedly requires a dynamic loader" >&2
+            exit 1
+          fi
+          test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"
+          ./"$asset" --repo-root . validate
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/ci/rust_contract_execution.sh
+          run_timed installer_compose_model bash scripts/ci/qualify-installer-compose-model.sh "$GITHUB_WORKSPACE/rust/target"
+      - id: installer_operator_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: marty-deploy-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: operator-catalog-${{ matrix.arch }}-${{ github.run_id }}
+          path: marty-deploy-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Preserve exact operator producer attestation separately
+        env:
+          BUNDLE: ${{ steps.installer_operator_provenance.outputs.bundle-path }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE"
+          cp -- "$BUNDLE" "marty-deploy-linux-$ARCH.provenance.jsonl"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: operator-installer-provenance-${{ matrix.arch }}-${{ github.run_id }}
+          path: marty-deploy-linux-${{ matrix.arch }}.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-installer-inputs:
+    # Mandatory build prerequisite only: no acceptance, admission, channel, or
+    # installer release assets are created by this job. Old producer attempts
+    # cannot be relabelled on a rerun-failed attempt. The bounded original run
+    # completes qualification or fails closed; preserve its immutable artifacts.
+    needs: [resolve-transaction, validate-stack, qualify-release, build-operator-catalog, prepare-selfhost-image-lock, preflight-selfhost-prepared-consumer, verifier-differential]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
+      CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Install exact input-contract parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-transaction
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-prepared
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: installer-prepared-provenance-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-prepared-proof
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-operator
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-installer-provenance-amd64-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-operator-proof
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-public-kms
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Verify exact source, transaction, and current-attempt producer proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          python scripts/release_transaction.py validate --require-qualified \
+            --input "$RUNNER_TEMP/installer-transaction/release-transaction.json" \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
+            --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
+            --output "$RUNNER_TEMP/installer-validated-transaction.json"
+          jq -e --arg tag "$TAG" '.tag == $tag' \
+            "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
+          for directory in installer-prepared installer-prepared-proof installer-operator installer-operator-proof installer-public-kms; do
+            chmod 700 "$RUNNER_TEMP/$directory"
+          done
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.verify_installer_provenance import verify_subject
+          root = Path(os.environ["RUNNER_TEMP"])
+          gh = root / "installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          subjects = [(root / "installer-operator/marty-deploy-linux-amd64",
+                       root / "installer-operator-proof/marty-deploy-linux-amd64.provenance.jsonl")]
+          subjects += [(root / "installer-prepared" / name,
+                        root / "installer-prepared-proof/installer-prepared.provenance.jsonl")
+                       for name in ("prepared-selfhost-bundle.zip", "prepared-selfhost-images.json",
+                                    "prepared-selfhost-bundle.json", "prepared-selfhost-product-descriptor.json")]
+          subjects += [(root / "installer-public-kms" / name,
+                        root / "installer-public-kms" / bundle)
+                       for name, bundle in (("public-kms-jwk", "public-kms-jwk.slsa-bundle.json"),
+                                            ("selfhost-public-kms-jwk.json", "selfhost-public-kms-jwk.slsa-bundle.json"))]
+          for subject, bundle in subjects:
+              verify_subject(subject, bundle, gh=gh, workflow=".github/workflows/cd.yml",
+                             source_sha=os.environ["SOURCE_SHA"], run_id=int(os.environ["GITHUB_RUN_ID"]),
+                             run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+          PY
+          operator="$RUNNER_TEMP/installer-operator/marty-deploy-linux-amd64"
+          chmod 700 "$operator"
+          test "$("$operator" --build-identity)" = "$SOURCE_SHA:$TAG"
+          test "$(readelf -h "$operator" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" = 'Advanced Micro Devices X86-64'
+          if readelf -l "$operator" | grep -q INTERP; then exit 1; fi
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.zip" \
+            --image-lock "$RUNNER_TEMP/installer-prepared/prepared-selfhost-images.json" \
+            --transaction "$RUNNER_TEMP/installer-validated-transaction.json" \
+            --receipt "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.json" \
+            --descriptor "$RUNNER_TEMP/installer-prepared/prepared-selfhost-product-descriptor.json" \
+            --expected-source-sha "$SOURCE_SHA" --expected-run-id "$GITHUB_RUN_ID" \
+            --verify-archive-only
+      - name: Produce exact unqualified installer input inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          inputs="$RUNNER_TEMP/installer-inputs"
+          output="$RUNNER_TEMP/installer-unqualified"
+          mkdir "$inputs" "$output"
+          cp install.sh "$inputs/install.sh"
+          cp "$RUNNER_TEMP/installer-operator/marty-deploy-linux-amd64" "$inputs/"
+          cp "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.zip" "$inputs/"
+          cp "$RUNNER_TEMP/installer-prepared/prepared-selfhost-images.json" "$inputs/"
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="${TAG#v}"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.services.keycloak' "$inputs/prepared-selfhost-images.json")"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > "$RUNNER_TEMP/installer-source-compose.json"
+          python scripts/installer_release.py inventory --artifacts "$inputs" \
+            --compose-model "$RUNNER_TEMP/installer-source-compose.json" \
+            --source-sha "$SOURCE_SHA" --release-tag "$TAG" \
+            --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$output/installer-inventory.json"
+          cp "$inputs/"* "$output/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-unqualified/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-manifest:
+    concurrency:
+      group: stable-release-coordinate-${{ needs.resolve-transaction.outputs.tag }}
+      cancel-in-progress: false
+    timeout-minutes: 90
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs, publish-cloudflare-addon]
+    if: >-
+      ${{ !cancelled() && needs.resolve-transaction.result == 'success' &&
+          needs.validate-stack.result == 'success' && needs.build-ui.result == 'success' &&
+          needs.build-services.result == 'success' && needs.build-openbao-didcomm.result == 'success' &&
+          needs.build-keycloak.result == 'success' && needs.qualify-release.result == 'success' &&
+          needs.build-operator-catalog.result == 'success' && needs.prepare-official-candidate.result == 'success' &&
+          needs.prepare-installer-inputs.result == 'success' &&
+          ((inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'success') ||
+           (!inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    environment: stack-release
+    env:
+      CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
+    permissions:
+      actions: write
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: transaction
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: gates/official
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: .
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: operator-catalog-arm64-${{ github.run_id }}
+          path: .
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-installer-inputs
+      - name: Revalidate exact installer inputs before any publication signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          inputs="$RUNNER_TEMP/stable-installer-inputs"
+          chmod 700 "$inputs"
+          python scripts/stable_installer_assets.py --phase verify-inputs --assets "$inputs" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          cmp install.sh "$inputs/install.sh"
+          cmp marty-deploy-linux-amd64 "$inputs/marty-deploy-linux-amd64"
+          for asset in installer-inventory.json prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
+            test ! -e "$asset"
+            cp "$inputs/$asset" "$asset"
+          done
+      - name: Prepare the installer-pinned publication verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Verify exact operator binary provenance before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          RELEASE_TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            asset="marty-deploy-linux-$arch"
+            test -f "$asset"
+            chmod 755 "$asset"
+            # Rust may place adjacent string constants in one ELF string, so
+            # search the binary bytes rather than requiring an exact strings line.
+            # The publisher is amd64; inspect the arm64 ELF without executing it.
+            grep -aFq -- "$SOURCE_SHA:$RELEASE_TAG" "$asset"
+            if [ "$arch" = amd64 ]; then
+              test "$(./"$asset" --build-identity)" = "$SOURCE_SHA:$RELEASE_TAG"
+            fi
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$SOURCE_SHA" --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+          done
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Promote the UI version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-ui.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role ui)"
+          test "$DIGEST" = "$(jq -er '.images.ui.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("ui") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role ui --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-promotion-ui-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Promote the services version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role services)"
+          test "$DIGEST" = "$(jq -er '.images.services.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("services") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$SERVICES_IMAGE:$VERSION" "$SERVICES_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$SERVICES_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role services --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-promotion-services-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Promote the migrations version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role migrations)"
+          test "$DIGEST" = "$(jq -er '.images.migrations.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("migrations") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$MIGRATIONS_IMAGE:$VERSION" "$MIGRATIONS_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$MIGRATIONS_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role migrations --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - name: Promote the OpenBao DIDComm version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role openbao_didcomm)"
+          test "$DIGEST" = "$(jq -er '.images.openbao_didcomm.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("openbao_didcomm") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$OPENBAO_DIDCOMM_IMAGE:$VERSION" "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$OPENBAO_DIDCOMM_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role openbao_didcomm --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - name: Promote the Keycloak version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-keycloak.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role keycloak)"
+          test "$DIGEST" = "$(jq -er '.images.keycloak.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("keycloak") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$KEYCLOAK_IMAGE:$VERSION" "$KEYCLOAK_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$KEYCLOAK_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role keycloak --digest "$DIGEST" \
+            --output transaction/release-transaction.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-promotion-complete-${{ github.run_id }}
+          path: transaction/release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-sbom.cdx.json
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-services-sbom.cdx.json
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-migrations-sbom.cdx.json
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-openbao-didcomm-sbom.cdx.json
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-keycloak-sbom.cdx.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: official-candidate
+      - name: Add immutable UI evidence
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="sha256:$(sha256sum official-candidate/stack-manifest.json | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_MANIFEST_SHA256"
+          cp official-candidate/stack-manifest.json stack-manifest.json
+          cp transaction/release-transaction.json release-transaction.json
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - name: Sign and checksum manifest evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/operator-release-assets.sh
+          for file in "${OPERATOR_SIGNED_INPUTS[@]}"; do
+            signed=false
+            for attempt in 1 2 3 4; do
+              rm -f "${file}.sigstore.json"
+              if cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"; then
+                signed=true
+                break
+              fi
+              if [ "$attempt" -lt 4 ]; then
+                sleep "$((attempt * 5))"
+              fi
+            done
+            if [ "$signed" != true ]; then
+              echo "Failed to sign $file after 4 attempts"
+              exit 1
+            fi
+          done
+          sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS
+          operator_release_require_pre_provenance_assets
+      - id: stable_installer_publication_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            stack-manifest.json
+            release-transaction.json
+            marty-ui-sbom.cdx.json
+            marty-ui-services-sbom.cdx.json
+            marty-ui-migrations-sbom.cdx.json
+            marty-deploy-linux-amd64
+            marty-deploy-linux-arm64
+            marty-ui-openbao-didcomm-sbom.cdx.json
+            marty-ui-keycloak-sbom.cdx.json
+            install.sh
+            installer-inventory.json
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-images.json
+            stack-manifest.json.sigstore.json
+            release-transaction.json.sigstore.json
+            marty-ui-sbom.cdx.json.sigstore.json
+            marty-ui-services-sbom.cdx.json.sigstore.json
+            marty-ui-migrations-sbom.cdx.json.sigstore.json
+            marty-deploy-linux-amd64.sigstore.json
+            marty-deploy-linux-arm64.sigstore.json
+            marty-ui-openbao-didcomm-sbom.cdx.json.sigstore.json
+            marty-ui-keycloak-sbom.cdx.json.sigstore.json
+            install.sh.sigstore.json
+            installer-inventory.json.sigstore.json
+            prepared-selfhost-bundle.zip.sigstore.json
+            prepared-selfhost-images.json.sigstore.json
+            SHA256SUMS
+      - name: Export and verify offline stable installer proofs
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.stable_installer_publication_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          source scripts/operator-release-assets.sh
+          operator_release_require_pre_provenance_assets
+          assets="$RUNNER_TEMP/stable-installer-publication"
+          mkdir "$assets"
+          for asset in "${OPERATOR_CHECKSUM_INPUTS[@]}" SHA256SUMS; do
+            cp "$asset" "$assets/$asset"
+          done
+          python scripts/stable_installer_assets.py --phase export-provenance --assets "$assets" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh" \
+            --provenance-bundle "$PROVENANCE_BUNDLE"
+          python scripts/stable_installer_assets.py --phase verify-published --assets "$assets" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          for asset in "${OPERATOR_PROVENANCE_INPUTS[@]}"; do
+            test ! -e "$asset"
+            cp "$assets/$asset" "$asset"
+          done
+          operator_release_require_local_assets
+      - name: Seal all signed publication bytes for the bounded tag handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          source scripts/operator-release-assets.sh
+          operator_release_verify_published_assets "$GITHUB_WORKSPACE" "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+            "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+            "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          python scripts/stable_publication_checkpoint.py prepare \
+            --assets "$GITHUB_WORKSPACE" --transaction transaction/release-transaction.json \
+            --official-gate gates/official/official-interoperability.json \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" --claim-run-id "$CLAIM_RUN_ID" \
+            --output "$RUNNER_TEMP/stable-publication-checkpoint"
+      - id: publication_handoff
+        name: Preserve the exact publication checkpoint before the tag wait
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-publication-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-publication-checkpoint/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Wait for the exact operator tag handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_ARTIFACT_ID: ${{ steps.publication_handoff.outputs.artifact-id }}
+          PUBLICATION_ARTIFACT_DIGEST: ${{ steps.publication_handoff.outputs.artifact-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/release_tag_handoff.py wait \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --artifact-id "$PUBLICATION_ARTIFACT_ID" \
+            --artifact-digest "$PUBLICATION_ARTIFACT_DIGEST" \
+            --dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json" \
+            --output "$RUNNER_TEMP/stable-tag-handoff.json"
+      - name: Preserve the automatic tag dispatch outcome
+        if: always() && steps.publication_handoff.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-tag-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-dispatch.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preserve the authenticated operator handoff admission
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-tag-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-handoff.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Seal the immutable v2 publication candidate
+        if: inputs.publication_contract == 'v2'
+        run: |
+          set -euo pipefail
+          umask 077
+          python scripts/stable_publication_candidate.py seal \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --tag-admission "$RUNNER_TEMP/stable-tag-handoff.json" \
+            --output "$RUNNER_TEMP/stable-publication-candidate-v2"
+      - name: Preserve candidate for a separate successful-run publisher
+        if: inputs.publication_contract == 'v2'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stable-publication-candidate-v2-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.resolve-transaction.outputs.tag }}
+          path: ${{ runner.temp }}/stable-publication-candidate-v2/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record the independent publication handoff
+        if: inputs.publication_contract == 'v2'
+        run: |
+          printf '%s\n' 'The immutable v2 candidate is sealed. Publish stable candidate starts only after this original Stack release run completes successfully. Retry publication by a fresh manual publisher dispatch naming this original run; never rerun original CD.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Require the release coordinate to remain absent
+        if: inputs.publication_contract == 'v1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output release-response.json \
+            --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          case "$status" in
+            404)
+              test "$(jq -er .message release-response.json)" = 'Not Found'
+              ;;
+            200)
+              echo '::error::An immutable release already owns this first-attempt coordinate'
+              exit 1
+              ;;
+            *)
+              echo "::error::GitHub release lookup failed with HTTP $status"
+              exit 1
+              ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.publish_cloudflare_addon
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon
+      - id: release
+        name: Publish the qualified GitHub release and exact assets
+        if: inputs.publication_contract == 'v1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          CLOUDFLARE_ADDON_SELECTED: ${{ inputs.publish_cloudflare_addon }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          source scripts/operator-release-assets.sh
+          operator_release_require_local_assets
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"
+          done
+          optional_assets=()
+          case "$CLOUDFLARE_ADDON_SELECTED" in
+            true)
+              chmod 700 "$RUNNER_TEMP/cloudflare-addon"
+              python scripts/publish_hosting_addon.py --phase verify-prepared \
+                --assets "$RUNNER_TEMP/cloudflare-addon" \
+                --core-assets "$RUNNER_TEMP/stable-installer-publication" \
+                --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+              while IFS= read -r asset; do
+                optional_assets+=("$RUNNER_TEMP/cloudflare-addon/$asset")
+              done < <(hosting_addon_release_assets)
+              ;;
+            false) test ! -e "$RUNNER_TEMP/cloudflare-addon" ;;
+            *) exit 1 ;;
+          esac
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          # Registry/API reads may outlast the original checkpoint deadline.
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
+          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}" "${optional_assets[@]}"
+          release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
+          operator_release_require_remote_allowlist published-release.json
+          operator_release_require_publication_assets published-release.json "$CLOUDFLARE_ADDON_SELECTED"
+          mkdir -m 700 published-release-assets
+          core_download=()
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do core_download+=(--pattern "$asset"); done
+          gh release download "$TAG" --dir published-release-assets "${core_download[@]}"
+          operator_release_verify_published_assets published-release-assets "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+            "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+            "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"
+          done
+          if [[ "$CLOUDFLARE_ADDON_SELECTED" = true ]]; then
+            python scripts/publish_hosting_addon.py --phase verify-published \
+              --assets "$RUNNER_TEMP/cloudflare-addon" \
+              --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          fi
+          echo "id=$release_id" >> "$GITHUB_OUTPUT"
+      - name: Seal the published terminal transaction
+        if: inputs.publication_contract == 'v1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$RELEASE_ID"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          manifest_digest="sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)"
+          python scripts/release_transaction.py publish \
+            --input release-transaction.json \
+            --release-id "$release_id" \
+            --manifest-sha256 "$manifest_digest" \
+            --publication-run-id "$GITHUB_RUN_ID" \
+            --output published-release-transaction.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: inputs.publication_contract == 'v1'
+        with:
+          name: stack-release-published-${{ github.run_id }}
+          path: published-release-transaction.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record required stable installer qualification
+        if: inputs.publication_contract == 'v1'
+        env:
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '### Installer release qualification pending\n\n'
+            printf 'Published version `%s` from `%s`, publication/verification run `%s` attempt `%s`.\n\n' \
+              "$TAG" "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'Before this version can become the stable one-line installer channel, run the main-only staged installed-journey acceptance, replay the published version anonymously on a clean host, run the installer admission gate with both signed reports, publish its separate immutable admission metadata, and promote a signed stable channel generation with a compare-and-swap pointer update.\n'
+            printf 'The version release itself does not authorize channel promotion.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-cloudflare-addon:
+    # Prepare the explicitly selected closure before immutable publication.
+    if: ${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}
+    needs: [resolve-transaction]
+    env:
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Read the exact optional image recipe
+        id: addon
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          python - <<'PY_ADDON'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from hosting_addon import build_workflow, policy
+          item = policy(Path.cwd())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('image=' + item['image'] + '\n')
+              output.write('dockerfile=' + item['dockerfile'] + '\n')
+              output.write('workflow=' + build_workflow(os.environ['TAG']) + '\n')
+          PY_ADDON
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ steps.addon.outputs.dockerfile }}
+          platforms: linux/amd64
+          outputs: type=image,name=${{ steps.addon.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.addon.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ steps.addon.outputs.image }}@${{ steps.image.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/cloudflared_wrapper.sbom.cdx.json
+          upload-artifact: false
+      - name: Authenticate image and package the selected connector
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.addon.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          WORKFLOW: ${{ steps.addon.outputs.workflow }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/$WORKFLOW@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main \
+            --signer-workflow "$GITHUB_REPOSITORY/$WORKFLOW" \
+            --deny-self-hosted-runners
+          mkdir "$RUNNER_TEMP/addon-anonymous-docker"
+          DOCKER_CONFIG="$RUNNER_TEMP/addon-anonymous-docker" python - <<'PY_PROBE'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from check_selfhost_locked_image_platform import probe_images
+          probe_images({os.environ['IMAGE'] + '@' + os.environ['DIGEST']})
+          PY_PROBE
+          docker run --rm --network none --read-only --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /bin/sh \
+            "$IMAGE@$DIGEST" -ec 'command -v wget >/dev/null; wget --help >/dev/null 2>&1; cloudflared --version'
+          python scripts/hosting_addon.py --source "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/cloudflare-addon" --source-sha "$GITHUB_SHA" \
+            --release-tag "$TAG" --build-run-id "$GITHUB_RUN_ID" \
+            --build-run-attempt "$GITHUB_RUN_ATTEMPT" --image "$IMAGE@$DIGEST" \
+            --sbom "$RUNNER_TEMP/cloudflared_wrapper.sbom.cdx.json"
+          python scripts/publish_hosting_addon.py --phase sign --assets "$RUNNER_TEMP/cloudflare-addon"
+      - id: addon_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/cloudflare-addon/*
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Export evidence for the selected immutable publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.addon_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/publish_hosting_addon.py --phase export-provenance \
+            --assets "$RUNNER_TEMP/cloudflare-addon" --provenance-bundle "$PROVENANCE_BUNDLE" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon/
+          if-no-files-found: error
+          retention-days: 30

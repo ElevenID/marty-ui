@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "scenario": "D-09",
+  "generated_at": "2026-10-20T03:34:57Z",
+  "qualification": "LOCAL_CONTRACTS_PASSED",
+  "source": {
+    "ui_base_head": "ba34fcd5af792cf53fe290abb807b6f09ccac2e7",
+    "recorder_base_head": "d9e41aefdfd9b5fee5109b4d7d186929fa7106dc",
+    "tested_state": "Working-tree changes, not yet committed",
+    "native_base_head": "29e35854d0a34bcd0cc943453ea5d426246b383b",
+    "native_worktree": "/workspace/scratch/d8b5d3d3b0dd/marty-verifier-production-gaps"
+  },
+  "boundary": {
+    "production_deployment": "NOT_RUN",
+    "live_native_D09": "NOT_RUN",
+    "release_video": "NOT_RUN",
+    "network_tests": "Owned loopback PostgreSQL only; recorder HTTP responses injected in unit tests",
+    "native_source": "ElevenID/marty-verifier@29e35854d0a34bcd0cc943453ea5d426246b383b"
+  },
+  "postgres": {
+    "version": "16.15",
+    "metadata": "/tmp/marty-gap-postgres-apt/connection.json",
+    "host": "127.0.0.1",
+    "port": 56535,
+    "database": "marty_offline_audit_test",
+    "isolated": true,
+    "credentials": "Temporary local nobody role, no password",
+    "loopback_sandbox_escalation_required": true
+  },
+  "checks": [
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test -j2 --offline -p marty-organization --lib offline_audit",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/rust",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test -j2 --offline -p marty-organization --test offline_audit_http --test permission_catalog",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/rust",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "targets": {
+        "offline_audit_http": 3,
+        "permission_catalog": 2
+      }
+    },
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target OFFLINE_AUDIT_POSTGRES_TEST_URL=postgres://nobody@127.0.0.1:56535/marty_offline_audit_test cargo test -j2 --offline -p marty-organization --test offline_audit_postgres -- --ignored",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/rust",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "test_names": [
+        "offline_audit_commits_receipts_survives_reconnect_and_deduplicates_concurrent_replay",
+        "offline_audit_conflicting_event_or_verification_ids_roll_back_the_entire_batch",
+        "offline_audit_rechecks_key_scope_expiry_revocation_profile_and_read_ownership"
+      ],
+      "exercised": [
+        "real migrations twice",
+        "commit and reconnect receipt readback",
+        "same-producer concurrent exact replay",
+        "whole-batch rollback on payload/event/verification conflict",
+        "other-producer receipt not found",
+        "cross-key event and verification reuse conflicts",
+        "concurrent cross-key reuse yields one receipt",
+        "read-only, tenant, expiry, disabled, revoked, profile authorization"
+      ]
+    },
+    {
+      "command": "node test/offlineAuditClient.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "count_basis": "Named node:test cases from direct execution"
+    },
+    {
+      "command": "node test/offlineFacilityVerification.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "count_basis": "Named node:test cases from direct execution"
+    },
+    {
+      "command": "node test/offlineInstanceIsolation.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "count_basis": "Named node:test cases from direct execution"
+    },
+    {
+      "command": "node test/nativeFixtureRetention.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "count_basis": "Named node:test cases from direct execution",
+      "coverage_added": "Reject old native uploader and missing durable-policy persistence before D09 actions"
+    },
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test -j2 --offline -p marty-gateway --lib offline_audit",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/rust",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "test_names": [
+        "contract::tests::offline_audit_routes_require_authenticated_organization_ingestion_scope"
+      ]
+    },
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target CARGO_NET_RETRY=0 cargo test -j2 --locked -p marty-reporting --lib",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-verifier-production-gaps",
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "configuration": "default api+batch features",
+      "sandbox_escalated": true,
+      "boundary": "Pinned public dependency download; real owned local secure-storage queue and loopback HTTP fixtures, no deployed service",
+      "new_test_names": [
+        "durable_ack::tests::native_digest_matches_the_frozen_organization_receiver_contract",
+        "durable_ack::tests::durable_policy_is_explicit_and_the_known_endpoint_cannot_downgrade",
+        "durable_ack::tests::durable_ack_requires_every_exact_event_and_an_authenticated_receipt",
+        "durable_ack::tests::durable_transport_keeps_the_real_queue_on_missing_invalid_or_oversized_acknowledgement",
+        "durable_ack::tests::durable_duplicate_receipt_deletes_only_the_submitted_batch_after_a_lost_response"
+      ]
+    },
+    {
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test -j2 --locked --offline -p marty-reporting --lib --no-default-features",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-verifier-production-gaps",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "configuration": "feature-disabled compatibility and remote failure retention"
+    }
+  ],
+  "pending": [],
+  "totals": {
+    "test_executions_passed": 68,
+    "unique_named_cases": 61,
+    "failed": 0,
+    "skipped_or_ignored": 0,
+    "count_basis": "15 Organization/gateway + 29 Node + 16 API-enabled native + 8 feature-disabled native; 7 native names run under both feature configurations"
+  },
+  "limitations": [
+    "Producer identity is an authenticated API-key UUID, not physical-device attestation or independent credential verification.",
+    "Generic native API and presigned PUT destinations retain their explicit HTTP-status contract; D09 selects and verifies durable v1 and cannot use that fallback.",
+    "D09 requires the changed native binary, gateway, Organization service, and a fresh matching scenario/release manifest. No deployed/native GUI/video qualification was executed."
+  ],
+  "cross_repository_contract": {
+    "fixture": "contracts/offline-verification-ingest.json and crates/marty-reporting/tests/fixtures/offline-verification-ingest.json",
+    "canonical_event_sha256": "9ba68c00fdda57e68e46098d4732c9c112bbaa20b4cbbd3ad1a0b3fc01d3a4a8",
+    "asserted_by": "Organization and native Rust unit tests"
+  }
+}

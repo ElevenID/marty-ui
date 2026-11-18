@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "service": "deployment-profile",
+  "routes": [
+    {"method":"POST","path":"/v1/deployment-profiles","permission":"deployment-profile:create"},
+    {"method":"GET","path":"/v1/deployment-profiles","permission":"deployment-profile:view"},
+    {"method":"GET","path":"/v1/deployment-profiles/{profile_id}","permission":"deployment-profile:view"},
+    {"method":"PATCH","path":"/v1/deployment-profiles/{profile_id}","permission":"deployment-profile:edit"},
+    {"method":"POST","path":"/v1/deployment-profiles/{profile_id}/activate","permission":"deployment-profile:activate"},
+    {"method":"POST","path":"/v1/deployment-profiles/{profile_id}/suspend","permission":"deployment-profile:suspend"},
+    {"method":"POST","path":"/v1/deployment-profiles/{profile_id}/generate-api-key","permission":"api-key:create"},
+    {"method":"DELETE","path":"/v1/deployment-profiles/{profile_id}","permission":"deployment-profile:delete"},
+    {"method":"POST","path":"/v1/deployment-profiles/{profile_id}/lanes","permission":"deployment-profile:edit"},
+    {"method":"GET","path":"/v1/deployment-profiles/{profile_id}/lanes","permission":"deployment-profile:view"},
+    {"method":"GET","path":"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}","permission":"deployment-profile:view"},
+    {"method":"PUT","path":"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}","permission":"deployment-profile:edit"},
+    {"method":"DELETE","path":"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}","permission":"deployment-profile:edit"},
+    {"method":"POST","path":"/v1/deployment-profiles/{profile_id}/lanes/{lane_id}/devices","permission":"deployment-profile:edit"}
+  ],
+  "profile_statuses": ["draft", "active", "suspended", "archived"],
+  "environments": ["development", "staging", "production", "sandbox"],
+  "auth_methods": ["api_key", "oauth2", "mtls", "jwt"],
+  "network_modes": ["ONLINE", "OFFLINE", "HYBRID"],
+  "key_access_modes": ["KEY_VAULT", "HSM", "DEVICE_KEYSTORE"],
+  "configuration_sections": ["callbacks", "api_auth", "rate_limits", "feature_flags", "branding"],
+  "canvas_flags": ["enable_canvas_evidence", "enable_canvas_lti", "enable_canvas_mirror_publish", "enable_canvas_mirror_ops", "enable_canvas_deep_linking", "enable_canvas_ags", "enable_canvas_nrps"],
+  "invariants": [
+    "trust_profile_id and at least one presentation policy are required",
+    "default_policy_id must be included in presentation_policy_ids",
+    "identifier lists are stable-order deduplicated",
+    "environment configuration retains caller values and derives offline cache seconds only when absent",
+    "update policy channel always equals update_channel",
+    "callbacks, API authentication including mTLS, rate limits, feature flags, branding and QR customization round trip through persistence",
+    "the full deployment API key is returned only at generation time and never appears in profile responses",
+    "active profiles cannot be deleted and profiles with lanes must be emptied first",
+    "a lane with assigned devices cannot be deleted",
+    "one device identifier can belong to at most one lane in a deployment profile",
+    "lane assignment is idempotent and transactionally serialized per deployment profile",
+    "all profile and lane operations require exact active tenant membership permissions",
+    "removed compatibility fields remain rejected and mixed biometric aliases fail closed",
+    "PostgreSQL schema and the Marty login seed are owned by the Rust migration"
+  ]
+}

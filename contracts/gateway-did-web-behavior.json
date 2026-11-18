@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "authority_cases": [
+    {"input": "Beta.ElevenIDLLC.com", "expected": "beta.elevenidllc.com"},
+    {"input": "issuer.example:8443", "expected": "issuer.example%3A8443"},
+    {"input": "issuer.example%3A443", "expected": "issuer.example%3A443"},
+    {"input": "issuer.example.", "expected": "issuer.example"},
+    {"input": "https://issuer.example", "expected": null},
+    {"input": "issuer.example/path", "expected": null},
+    {"input": "issuer.example:0", "expected": null},
+    {"input": "issuer.example:65536", "expected": null},
+    {"input": " bad.example", "expected": null},
+    {"input": "-bad.example", "expected": null}
+  ],
+  "slug_cases": [
+    {"input": "Acme-Corp", "expected": "acme-corp"},
+    {"input": " official_suite ", "expected": "official_suite"},
+    {"input": "a.b", "expected": "a.b"},
+    {"input": "../../etc/passwd", "expected": null},
+    {"input": "", "expected": null},
+    {"input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "expected": null}
+  ],
+  "retarget_cases": [
+    {
+      "target": "did:web:issuer.example%3A8443:orgs:acme",
+      "input": {
+        "id": "did:web:internal.example:orgs:source",
+        "controller": "did:web:internal.example:orgs:source",
+        "verificationMethod": [
+          {"id": "did:web:internal.example:orgs:source#key-1", "type": "JsonWebKey2020", "controller": "did:web:internal.example:orgs:source", "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}},
+          "invalid-method"
+        ],
+        "assertionMethod": ["did:web:internal.example:orgs:source#key-1", "did:key:external#1"],
+        "authentication": [{"id": "did:web:internal.example:orgs:source#auth-1", "controller": "did:web:internal.example:orgs:source"}],
+        "keyAgreement": [7],
+        "service": [{"id": "did:web:internal.example:orgs:source#inbox", "serviceEndpoint": "https://internal.example/inbox"}]
+      },
+      "expected": {
+        "id": "did:web:issuer.example%3A8443:orgs:acme",
+        "controller": "did:web:issuer.example%3A8443:orgs:acme",
+        "verificationMethod": [
+          {"id": "did:web:issuer.example%3A8443:orgs:acme#key-1", "type": "JsonWebKey2020", "controller": "did:web:issuer.example%3A8443:orgs:acme", "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}}
+        ],
+        "assertionMethod": ["did:web:issuer.example%3A8443:orgs:acme#key-1", "did:key:external#1"],
+        "authentication": [{"id": "did:web:issuer.example%3A8443:orgs:acme#auth-1", "controller": "did:web:issuer.example%3A8443:orgs:acme"}],
+        "keyAgreement": [7],
+        "service": [{"id": "did:web:internal.example:orgs:source#inbox", "serviceEndpoint": "https://internal.example/inbox"}]
+      }
+    },
+    {
+      "target": "did:web:issuer.example",
+      "input": {"id": "did:web:issuer.example", "controller": "did:web:issuer.example", "verificationMethod": [], "assertionMethod": []},
+      "expected": {"id": "did:web:issuer.example", "controller": "did:web:issuer.example", "verificationMethod": [], "assertionMethod": []}
+    }
+  ]
+}

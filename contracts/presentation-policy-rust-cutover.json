@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "service": "presentation-policy",
+  "runtime_owner": "rust/services/presentation-policy",
+  "migration_owner": "rust/services/presentation-policy/migrations/0001_presentation_policy.sql",
+  "catalog_owner": "rust/services/presentation-policy/src/catalog.rs",
+  "python_runtime_removed": "services/presentation_policy",
+  "surface_contract": "contracts/presentation-policy-service-behavior.json",
+  "migration_history_contract": "contracts/presentation-policy-migration-history.json",
+  "required_binary": "marty-presentation-policy",
+  "required_ci_target": "presentation_policy",
+  "python_runtime_fallback": false
+}

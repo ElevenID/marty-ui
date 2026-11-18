@@ -1,0 +1,28 @@
+{
+  "scope": "READ_ONLY_PREREQUISITE_INSPECTION_NO_CANVAS_MUTATION",
+  "observations": {
+    "beta": {
+      "status": 200,
+      "sha256": "868a543147753feec969b49f1ee612ab923184643fb5da67aa78caaa41f1f3c1",
+      "deployment_release_marker": "beta-v259-vc-di-fe5ec5fd0751",
+      "marty_ui_sha": "fe5ec5fd0751c10b13c27e2c40e6f6ffa87cdf27"
+    },
+    "canvas": {
+      "error_type": "HTTPError",
+      "status": 502
+    },
+    "image/canvas-oss-image-manifest.json": {
+      "present": false
+    },
+    "bootstrap-audit.json": {
+      "present": false
+    },
+    "runtime-context.json": {
+      "present": false
+    }
+  },
+  "containers": [
+    "elevenid-beta-canvas-sync-worker-1",
+    "marty-selfhost-prod-canvas-sync-worker-1"
+  ]
+}

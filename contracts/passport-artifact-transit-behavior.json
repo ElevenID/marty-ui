@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "chunk_schema": "marty.passport-artifact-chunk/v1",
+  "transit_key_id": "passport-artifact-marty-aes256",
+  "maximum_chunk_bytes": 524288,
+  "maximum_chunks": 4096,
+  "encrypted_binding_fields": ["organization_id", "artifact_id", "chunk_index", "chunk_count"],
+  "key_custody": "A non-exportable OpenBao Transit key performs every encrypt and decrypt operation; neither the signing service nor issuance receives key material.",
+  "internal_routes": {
+    "encrypt": "/internal/signing-keys/passport-artifacts/encrypt",
+    "decrypt": "/internal/signing-keys/passport-artifacts/decrypt"
+  },
+  "status": {
+    "unauthorized": 401,
+    "invalid_chunk": 422,
+    "binding_mismatch": 409,
+    "provider_unavailable": 503
+  }
+}

@@ -1,0 +1,15 @@
+✔ exact source and identified measurement bind the pointer with an explicit visual-review boundary (40.573716ms)
+✔ an arbitrary hash-matching JSON file or legacy unversioned mapping is not pointer evidence (5.713749ms)
+✔ substituted recording bytes, filename, dimensions or source role cannot reuse a pointer document (8.627561ms)
+✔ event IDs are resolved and duplicates cannot select an ambiguous measurement (5.612692ms)
+✔ measurement records reject unknown nested fields and non-numeric coordinates (2.700065ms)
+✔ source times, target, approach, response bracket and control window must match the measured event (13.044562ms)
+✔ changed evidence bytes and symlinked or escaping references remain rejected (3.098396ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 91.420657

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "scope": "beta-only, operator-governed self-signed CSCA certificate ceremony using an existing active KMS-backed issuer profile",
+  "public_route": {
+    "method": "POST",
+    "path": "/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
+    "required_permission": "passport-certificate:issue-csca",
+    "operator_claim_source": "Gateway injects SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY and trusted x-user-id only after authenticating an operator for the tenant; Signing Keys requires that distinct key and SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED=true in ENVIRONMENT=beta",
+    "request_fields": ["organization_id", "issuer_did", "certificate_id", "credential_format", "country", "organization", "common_name", "validity_days"],
+    "response_fields": ["certificate_id", "certificate_pem", "chain_pem", "issuer_did", "subject", "serial", "not_before", "not_after", "status"],
+    "reject_unknown_fields": true
+  },
+  "authority": "Resolve exactly one active tenant issuer profile with purpose csca, format ICAO_EMRTD, and algorithm ES256. Derive its signing key reference and current public key from the profile and KMS. The caller cannot supply a KMS locator, CSR, certificate, signature, or private key.",
+  "certificate": {
+    "csr": "Sign a server-built bounded C/O/CN CSR through the profile-scoped KMS method; verify proof of possession and require its SPKI to match the current KMS public key.",
+    "serial": "fresh positive unpredictable 16-byte value for every new ceremony",
+    "extensions": "X.509 v3 with critical CA basic constraints, pathLen=0, and keyCertSign usage",
+    "validity": "1 to 3650 whole days from server time, without silent truncation",
+    "signature": "Sign DER TBS through the same profile-scoped KMS method and verify the self-signature against the current KMS public key before lifecycle enrollment",
+    "chain": "empty for this self-signed CSCA",
+    "private_key_custody": "KMS only; no private key generation, import, export, serialization, or response field"
+  },
+  "concurrency": {
+    "retry": "certificate_id is a tenant-scoped idempotency key; a full-request digest in the immutable lifecycle record returns the same historical public result on an identical retry, including after a lost response or later profile rotation; changed input conflicts",
+    "rotation": "Hold the tenant signing lease, re-read the active profile and current KMS public key after signing, then use the lifecycle revision CAS for enrollment; reject changed identity or key without publication",
+    "failure": "Any failed authorization, validation, KMS, signature, or fence check leaves the lifecycle unchanged"
+  },
+  "cases": [
+    {"name": "valid_beta_csca", "result": "issue and enroll one self-signed KMS-backed CSCA"},
+    {"name": "same_certificate_id_retry", "result": "return identical historical public certificate without signing"},
+    {"name": "same_certificate_id_changed_request", "result": "conflict without mutation"},
+    {"name": "wrong_tenant_purpose_format_or_operator", "result": "reject before signing"},
+    {"name": "profile_or_kms_rotation", "result": "reject before lifecycle mutation"},
+    {"name": "invalid_csr_or_kms_signature", "result": "reject without enrollment"},
+    {"name": "non_beta_environment_or_disabled_flag", "result": "fail closed"}
+  ]
+}

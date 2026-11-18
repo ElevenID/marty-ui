@@ -1,0 +1,299 @@
+//! Installer-only nginx origin wiring. Caller authenticates the shipped source
+//! and persists this generated configuration before starting the owned edge.
+//! Mount readonly at /etc/nginx/conf.d/default.conf.template: the shipped
+//! entrypoint's explicit envsubst allowlist leaves this resolved file unchanged,
+//! writes default.conf, and runs nginx -t. Do not readonly-mount default.conf
+//! while retaining that entrypoint, which unconditionally writes that path.
+#![cfg(target_os = "linux")]
+use marty_selfhost_identity::origin::PublicOrigin;
+
+pub type Result<T> = std::result::Result<T, String>;
+const TEMPLATE: &str = include_str!("../../../../docker/nginx-selfhost.prod.conf.template");
+const REFUSED: &str = "installer ingress template or origin differs from the reviewed contract";
+
+fn normalized(text: &str) -> Result<String> {
+    if text.len() > 128 * 1024 || text.contains('\0') {
+        return Err(REFUSED.into());
+    }
+    let text = text.replace("\r\n", "\n");
+    if text.contains('\r') {
+        return Err(REFUSED.into());
+    }
+    Ok(text)
+}
+
+/// Preserve the exact released routing contract; only pin the installer public
+/// authority and resolve the fixed container DNS upstreams. Unknown source drift
+/// is refused rather than rewritten heuristically. This does not provision TLS.
+pub fn render(template: &str, origin: &str) -> Result<String> {
+    render_selected(template, origin, true)
+}
+
+pub(crate) fn render_selected(
+    template: &str,
+    origin: &str,
+    managed_keycloak: bool,
+) -> Result<String> {
+    let text = normalized(template)?;
+    if text != normalized(TEMPLATE)? {
+        return Err(REFUSED.into());
+    }
+    let origin = PublicOrigin::parse(origin).map_err(|_| REFUSED)?;
+    let port_text = origin.port().to_string();
+    let authority = origin.authority();
+    let server_name = match origin.ip_address() {
+        Some(std::net::IpAddr::V6(address)) => format!("[{address}]"),
+        _ => origin.host().to_owned(),
+    };
+    let mut output = String::new();
+    let mut hosts = 0;
+    let mut proxies = 0;
+    let mut skipped_keycloak_routes = 0;
+    let mut skipping_keycloak_route = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
+        if !managed_keycloak {
+            // The exact authenticated template above has two flat provider
+            // routes. Remove only those blocks, leaving application assets and
+            // all API/callback routes intact; fail closed if that contract drifts.
+            if matches!(trimmed, "location /realms/ {" | "location ~ ^/resources/ {") {
+                skipping_keycloak_route = true;
+                skipped_keycloak_routes += 1;
+            }
+            if skipping_keycloak_route {
+                if trimmed == "}" {
+                    skipping_keycloak_route = false;
+                }
+                continue;
+            }
+            if trimmed == "# Keep exact /resources in the UI; only descendants belong to Keycloak."
+            {
+                continue;
+            }
+        }
+        if trimmed.starts_with("proxy_pass ") {
+            proxies += 1;
+        }
+        match trimmed {
+            "listen 80;" => {
+                output.push_str(line);
+                output.push('\n');
+                // Nginx sees clear HTTP internally. Keep automatic trailing-
+                // slash redirects relative to the browser's actual HTTPS origin.
+                output.push_str(&format!("{indent}absolute_redirect off;\n"));
+            }
+            "server_name ${PUBLIC_DOMAIN};" => {
+                output.push_str(&format!("{indent}server_name {server_name};\n"))
+            }
+            "proxy_set_header Host $host;" => {
+                hosts += 1;
+                for (name, value) in [
+                    ("Host", authority),
+                    ("X-Forwarded-Host", authority),
+                    ("X-Forwarded-Proto", "https"),
+                    ("X-Forwarded-Port", port_text.as_str()),
+                    ("X-Forwarded-For", "\"\""),
+                    ("X-Real-IP", "\"\""),
+                    ("Forwarded", "\"\""),
+                ] {
+                    output.push_str(&format!("{indent}proxy_set_header {name} {value};\n"));
+                }
+            }
+            "proxy_set_header X-Forwarded-Host $host;"
+            | "proxy_set_header X-Forwarded-Proto $scheme;"
+            | "proxy_set_header X-Forwarded-Proto https;"
+            | "proxy_set_header X-Forwarded-Port 443;"
+            | "proxy_set_header X-Real-IP $remote_addr;"
+            | "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" => {}
+            _ => {
+                // Exact-source matching above closes this finite substitution
+                // table. Runtime nginx variables ($1, $host, etc.) are untouched.
+                let resolved = line
+                    // This installer profile still includes the console. A
+                    // console-free installer needs separate profile admission.
+                    .replace("${CONSOLE_DISABLED}", "0")
+                    .replace("${UI_UPSTREAM}", "ui:80")
+                    .replace("${GATEWAY_UPSTREAM}", "gateway:8000")
+                    .replace("${FLOW_UPSTREAM}", "flow:8011")
+                    .replace("${KEYCLOAK_UPSTREAM}", "keycloak:8080");
+                output.push_str(&resolved);
+                output.push('\n');
+            }
+        }
+    }
+    if proxies == 0
+        || hosts != proxies
+        || output.contains("${")
+        || (!managed_keycloak
+            && (skipping_keycloak_route
+                || skipped_keycloak_routes != 2
+                || output.contains("$keycloak")
+                || output.contains("keycloak:8080")))
+    {
+        return Err(REFUSED.into());
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn route_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("location ")
+                    || line.starts_with("proxy_pass ")
+                    || line.starts_with("rewrite ")
+                    || line.starts_with("return ")
+                    || line.starts_with("proxy_redirect ")
+            })
+            .collect()
+    }
+    #[test]
+    fn actual_routing_is_preserved_and_every_proxy_has_exact_origin_headers() {
+        let output = render(TEMPLATE, "https://localhost:18443").unwrap();
+        assert_eq!(route_lines(TEMPLATE), route_lines(&output));
+        assert!(output.contains("server_name localhost;"));
+        assert!(output.contains("set $console_disabled 0;"));
+        assert!(output.contains("listen 80;\n    absolute_redirect off;\n"));
+        assert!(!output.contains("${"));
+        assert!(!output.contains("proxy_set_header Host $host;"));
+        assert!(!output.contains("proxy_set_header X-Forwarded-Proto $scheme;"));
+        assert!(!output.contains("proxy_set_header X-Forwarded-Port 443;"));
+        assert!(!output.contains("proxy_set_header X-Real-IP $remote_addr;"));
+        assert!(!output.contains("$proxy_add_x_forwarded_for"));
+        let mut proxy = false;
+        let mut headers = Vec::new();
+        for line in output.lines().map(str::trim) {
+            if line.starts_with("location ") {
+                proxy = false;
+                headers.clear();
+            }
+            if line.starts_with("proxy_pass ") {
+                proxy = true;
+            }
+            if line.starts_with("proxy_set_header Host ")
+                || line.starts_with("proxy_set_header X-Forwarded-Host ")
+                || line.starts_with("proxy_set_header X-Forwarded-Proto ")
+                || line.starts_with("proxy_set_header X-Forwarded-Port ")
+                || line.starts_with("proxy_set_header X-Forwarded-For ")
+                || line.starts_with("proxy_set_header X-Real-IP ")
+                || line.starts_with("proxy_set_header Forwarded ")
+            {
+                headers.push(line);
+            }
+            if line == "}" && proxy {
+                assert_eq!(
+                    headers,
+                    [
+                        "proxy_set_header Host localhost:18443;",
+                        "proxy_set_header X-Forwarded-Host localhost:18443;",
+                        "proxy_set_header X-Forwarded-Proto https;",
+                        "proxy_set_header X-Forwarded-Port 18443;",
+                        "proxy_set_header X-Forwarded-For \"\";",
+                        "proxy_set_header X-Real-IP \"\";",
+                        "proxy_set_header Forwarded \"\";"
+                    ]
+                );
+                proxy = false;
+            }
+        }
+        for upstream in ["ui:80", "gateway:8000", "flow:8011", "keycloak:8080"] {
+            assert!(output.contains(upstream));
+        }
+    }
+    #[test]
+    fn external_login_removes_only_managed_provider_routes() {
+        let managed = render(TEMPLATE, "https://beta.example.test").unwrap();
+        let external = render_selected(TEMPLATE, "https://beta.example.test", false).unwrap();
+        let expected: Vec<_> = route_lines(&managed)
+            .into_iter()
+            .filter(|line| {
+                !matches!(
+                    *line,
+                    "location /realms/ {"
+                        | "location ~ ^/resources/ {"
+                        | "proxy_pass http://$keycloak;"
+                )
+            })
+            .collect();
+        assert_eq!(route_lines(&external), expected);
+        assert!(!external.contains("keycloak"));
+        assert!(external.contains("gateway:8000"));
+        assert!(external.contains("ui:80"));
+        assert!(external.contains("flow:8011"));
+        assert!(render_selected(
+            &format!("{TEMPLATE}\n# drift"),
+            "https://beta.example.test",
+            false
+        )
+        .is_err());
+    }
+    #[test]
+    fn refuses_origin_injection_and_template_drift() {
+        for origin in [
+            "http://localhost:18443",
+            "https://localhost:443",
+            "https://localhost:0",
+            "https://localhost:65536",
+            "https://localhost:018443",
+            "https://localhost:+18443",
+            "https://localhost:18443/",
+            "https://localhost:18443;",
+            "https://localhost:18443\ninclude /etc/other;",
+            "https://localhost:18443?x",
+        ] {
+            assert!(render(TEMPLATE, origin).is_err(), "accepted {origin:?}");
+        }
+        for drift in [
+            format!("{TEMPLATE}\n# unknown\n"),
+            TEMPLATE.replace("proxy_pass http://$keycloak;", "proxy_pass http://foreign;"),
+            TEMPLATE.replace("Host $host;", "Host $http_host;"),
+            TEMPLATE.replace("listen 80;", "listen 443 ssl;"),
+            TEMPLATE.replace("${UI_UPSTREAM}", "${UNREVIEWED_UPSTREAM}"),
+        ] {
+            assert!(render(&drift, "https://localhost:18443").is_err());
+        }
+    }
+    #[test]
+    fn advertised_authority_is_independent_of_the_private_listener() {
+        for (origin, authority, host, port) in [
+            (
+                "https://marty.example.com",
+                "marty.example.com",
+                "marty.example.com",
+                "443",
+            ),
+            (
+                "https://203.0.113.10:8443",
+                "203.0.113.10:8443",
+                "203.0.113.10",
+                "8443",
+            ),
+            (
+                "https://[2001:db8::10]",
+                "[2001:db8::10]",
+                "[2001:db8::10]",
+                "443",
+            ),
+        ] {
+            let output = render(TEMPLATE, origin).unwrap();
+            assert_eq!(route_lines(TEMPLATE), route_lines(&output));
+            assert!(output.contains(&format!("server_name {host};")));
+            assert!(output.contains(&format!("proxy_set_header Host {authority};")));
+            assert!(output.contains(&format!("proxy_set_header X-Forwarded-Port {port};")));
+        }
+    }
+    #[test]
+    fn only_line_ending_normalization_is_allowed() {
+        let lf = normalized(TEMPLATE).unwrap();
+        assert_eq!(
+            render(&lf, "https://localhost:18443").unwrap(),
+            render(&lf.replace('\n', "\r\n"), "https://localhost:18443").unwrap()
+        );
+        assert!(render(&format!("{lf}\r"), "https://localhost:18443").is_err());
+        assert!(render(&format!("{lf}\0"), "https://localhost:18443").is_err());
+    }
+}

@@ -1,0 +1,555 @@
+import { defineConfig, loadEnv } from 'vite'
+import react from '@vitejs/plugin-react'
+import checker from 'vite-plugin-checker'
+import prerender from '@prerenderer/rollup-plugin'
+import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
+import { visualizer } from 'rollup-plugin-visualizer'
+import Sitemap from 'vite-plugin-sitemap'
+import { fileURLToPath, URL } from 'node:url'
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.mjs'
+import { productionBuildContract, productionBuildContractPlugin } from './scripts/production-build-contract.mjs'
+import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
+import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
+import { devServerOrigin } from './scripts/dev-server-origin.mjs'
+import { platformDemoScenarios } from './src/services/platformDemoScenarios.js'
+
+const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
+const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
+
+function sanitizePrerenderedAssetUrls(html: string) {
+  return html.replace(PRERENDER_RUNTIME_ASSET_ORIGIN, '')
+}
+
+function createManualChunk(id: string) {
+  const normalizedId = id.replace(/\\/g, '/')
+
+  if (normalizedId.includes('/commerce-extension/')) return 'commerce-extension'
+  if (normalizedId.includes('/node_modules/@elevenid/marty-api-core/')) return 'api-core-vendor'
+  if (normalizedId.includes('/node_modules/redoc/')) return 'docs-vendor'
+  if (normalizedId.includes('/node_modules/@emotion/') || normalizedId.includes('/node_modules/stylis/')) return 'emotion-vendor'
+  if (normalizedId.includes('/node_modules/@mui/icons-material/')) return 'mui-icons-vendor'
+  if (normalizedId.includes('/node_modules/@mui/x-date-pickers/') || normalizedId.includes('/node_modules/date-fns/')) return 'mui-pickers-vendor'
+  if (normalizedId.includes('/node_modules/@mui/') || normalizedId.includes('/node_modules/@popperjs/core/')) return 'mui-core-vendor'
+  if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/') || normalizedId.includes('/node_modules/react-router/')) return 'react-vendor'
+  if (normalizedId.includes('/node_modules/recharts/')) return 'chart-vendor'
+  if (normalizedId.includes('/node_modules/i18next/') || normalizedId.includes('/node_modules/react-i18next/')) return 'i18n-vendor'
+  if (normalizedId.includes('/node_modules/qrcode.react/')) return 'qr-vendor'
+
+  return undefined
+}
+
+function isConsoleAppRoute(url = '') {
+  const pathname = url.split('?')[0]
+
+  if (!pathname.startsWith('/console')) {
+    return false
+  }
+
+  return !/\.[a-z0-9]+$/i.test(pathname)
+}
+
+function consoleEntryRewritePlugin() {
+  const rewriteConsoleRequest = (req: { url?: string }, _res: unknown, next: () => void) => {
+    if (req.url && isConsoleAppRoute(req.url)) {
+      req.url = '/console/index.html'
+    }
+
+    next()
+  }
+
+  return {
+    name: 'console-entry-rewrite',
+    configureServer(server: { middlewares: { use: (handler: typeof rewriteConsoleRequest) => void } }) {
+      server.middlewares.use(rewriteConsoleRequest)
+    },
+    configurePreviewServer(server: { middlewares: { use: (handler: typeof rewriteConsoleRequest) => void } }) {
+      server.middlewares.use(rewriteConsoleRequest)
+    },
+  }
+}
+
+// MUI 9 publishes icon entry points as .mjs. The current marty-blog release was
+// built against MUI 5 and its generated ESM still references the former .js
+// entry points, so translate those immutable package imports during bundling.
+function muiIconMjsCompatibilityPlugin() {
+  return {
+    name: 'mui-icon-mjs-compatibility',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      if (!/^@mui\/icons-material\/.+\.js$/.test(source)) return null
+
+      const iconName = source.slice('@mui/icons-material/'.length, -'.js'.length)
+      const iconPath = fileURLToPath(new URL(`./node_modules/@mui/icons-material/${iconName}.mjs`, import.meta.url))
+      if (existsSync(iconPath)) return iconPath
+
+      const renamedIconPath = fileURLToPath(new URL(
+        `./node_modules/@mui/icons-material/${iconName.replace(/Outline$/, 'Outlined')}.mjs`,
+        import.meta.url,
+      ))
+      return existsSync(renamedIconPath) ? renamedIconPath : null
+    },
+  }
+}
+
+function prerenderLocaleAssetsPlugin() {
+  const localeRoot = fileURLToPath(new URL('./public/locales/', import.meta.url))
+
+  return {
+    name: 'prerender-locale-assets',
+    apply: 'build' as const,
+    buildStart() {
+        const emitDirectory = (directory: string, relativeDirectory = '') => {
+          readdirSync(directory, { withFileTypes: true }).forEach((entry) => {
+            const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+            const absolutePath = resolve(directory, entry.name)
+
+            if (entry.isDirectory()) {
+              emitDirectory(absolutePath, relativePath)
+            } else if (entry.isFile() && entry.name.endsWith('.json')) {
+              this.emitFile({
+                type: 'asset',
+                fileName: `locales/${relativePath}`,
+                source: readFileSync(absolutePath),
+              })
+            }
+          })
+        }
+
+        emitDirectory(localeRoot)
+    },
+  }
+}
+
+function promotePrerenderedRootPlugin() {
+  return {
+    name: 'promote-prerendered-root',
+    apply: 'build' as const,
+    enforce: 'post' as const,
+    writeBundle(outputOptions: { dir?: string }) {
+      if (!outputOptions.dir) {
+        throw new Error('Public prerender output directory is unavailable')
+      }
+
+      const stagedPath = resolve(outputOptions.dir, PRERENDERED_ROOT_STAGING_PATH)
+      const rootPath = resolve(outputOptions.dir, 'index.html')
+      if (!existsSync(stagedPath)) {
+        throw new Error(`Prerendered root artifact is missing: ${stagedPath}`)
+      }
+
+      const html = readFileSync(stagedPath, 'utf8')
+      if (!html.includes('ElevenID') || html.includes('Welcome to nginx')) {
+        throw new Error('Prerendered root artifact failed the public homepage content contract')
+      }
+
+      writeFileSync(rootPath, html)
+      unlinkSync(stagedPath)
+    },
+  }
+}
+
+// https://vitejs.dev/config/
+export default defineConfig(async ({ mode }) => {
+  // Load env file based on `mode` in the current working directory.
+  const env = loadEnv(mode, process.cwd(), '')
+  const isDev = mode === 'development'
+  const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
+  const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
+  const surface = process.env.MARTY_UI_SURFACE || 'combined'
+  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface')
+  if (isSelfhostBuild && surface !== 'combined') throw new Error('Customer UI cannot select a production surface')
+  const isWebsiteBuild = surface === 'website'
+  const isApplicationBuild = surface === 'application'
+  const sourceSha = process.env.MARTY_UI_SHA || 'development'
+  const pages = process.env.MARTY_PRODUCTION_PAGES || 'public'
+  const commerceSha = process.env.MARTY_COMMERCE_SOURCE_SHA
+  const websiteRevision = isWebsiteBuild ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision: process.env.MARTY_WEBSITE_REVISION }) : null
+  const assetBase = isWebsiteBuild ? websiteAssetBase(websiteRevision) : '/'
+  const disablePrerender = isDev || isSelfhostBuild || isApplicationBuild || process.env.DISABLE_PRERENDER === '1'
+  const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
+  const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
+  const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
+  const productionCommerceEntry = productionBuildContract({
+    pages,
+    surface,
+    selfhost: isSelfhostBuild,
+    extensionPath: process.env.MARTY_COMMERCE_EXTENSION_PATH,
+    sourceSha: process.env.MARTY_COMMERCE_SOURCE_SHA,
+  })
+  const commerceExtensionPath = productionCommerceEntry
+    || fileURLToPath(new URL('./src/extensions/commerce/publicStub.jsx', import.meta.url))
+  const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
+  let authorRoutes = []
+  let blogRoutes = []
+  let demoRoutes = []
+
+  if (!isSelfhostBuild && !isApplicationBuild) {
+    const {
+      BLOG_POSTS,
+      BLOG_AUTHORS,
+      BLOG_POST_CONCEPT_TAGS,
+      BLOG_POST_STANDARDS_TAGS,
+      GUIDE_ARTICLE_SLUGS,
+      GUIDE_ARTICLES,
+      GUIDE_CHAPTERS,
+      ARTICLE_META,
+      getBrowseVisiblePosts,
+      buildBlogTagPath,
+    } = await import('@elevenid/marty-blog/prerender-data')
+
+    const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
+    const tagPaths = new Set()
+
+    getBrowseVisiblePosts(BLOG_POSTS).forEach((post) => {
+      const meta = ARTICLE_META[post.slug]
+      const tags = new Set([
+        ...(BLOG_POST_STANDARDS_TAGS[post.slug] || []),
+        ...(BLOG_POST_CONCEPT_TAGS[post.slug] || []),
+        ...(meta?.topic ? [meta.topic] : []),
+      ])
+
+      tags.forEach((tag) => {
+        tagPaths.add(buildBlogTagPath(tag))
+      })
+    })
+
+    GUIDE_ARTICLES.forEach((article) => {
+      const tags = new Set([
+        ...(article.conceptTags || []),
+        ...(chapterById[article.chapterId]?.title ? [chapterById[article.chapterId].title] : []),
+      ])
+
+      tags.forEach((tag) => {
+        tagPaths.add(buildBlogTagPath(tag))
+      })
+    })
+
+    authorRoutes = ['/authors', ...Object.keys(BLOG_AUTHORS).map((authorId) => `/authors/${authorId}`)]
+    blogRoutes = Array.from(
+      new Set([
+        '/blog',
+        ...tagPaths,
+        ...BLOG_POSTS.map(({ slug }) => `/blog/${slug}`),
+        ...GUIDE_ARTICLE_SLUGS.map((slug) => `/blog/${slug}`),
+      ]),
+    )
+
+    const demoManifestDir = fileURLToPath(new URL('./public/demos/manifests/', import.meta.url))
+    const demoIndex = JSON.parse(readFileSync(`${demoManifestDir}/index.json`, 'utf8'))
+    demoRoutes = ['/demos']
+    demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
+      const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
+      demoRoutes.push(`/demos/${stackVersion}`)
+      platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
+      if (demoIndex.latest_approved_stack_version === stackVersion) {
+        platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
+      }
+    })
+  }
+
+  const requireUniqueRoutes = (label: string, routes: string[]) => {
+    const duplicates = routes.filter((route, index) => routes.indexOf(route) !== index)
+    if (duplicates.length > 0) {
+      throw new Error(`${label} contains duplicate routes: ${Array.from(new Set(duplicates)).join(', ')}`)
+    }
+    return routes
+  }
+  const prerenderRoutes = requireUniqueRoutes('prerender', [
+    '/',
+    '/product',
+    '/solutions',
+    '/developers',
+    '/architecture',
+    '/security',
+    '/resources',
+    ...demoRoutes,
+    '/verifiable-credential-api',
+    '/eudi-wallet-verification',
+    '/iso-18013-5-mdoc-verification',
+    '/sd-jwt-verification',
+    '/open-badges-verification',
+    '/open-badges-issuance',
+    '/trust-registry-infrastructure',
+    '/identity',
+    '/why-verifiable-identity',
+    '/from-idv-to-verifiable-identity',
+    '/what-is-verifiable-identity',
+    '/standards',
+    '/protocol',
+    '/privacy-policy',
+    '/terms-of-service',
+    ...blogRoutes,
+    ...authorRoutes,
+    ...(!isWebsiteBuild ? ['/docs'] : []),
+  ])
+  const sitemapOnlyRoutes = requireUniqueRoutes('sitemap-only', [
+    '/ai',
+    '/what-is-credential-verification',
+    '/what-is-open-badge',
+    '/what-is-digital-credential',
+    '/what-is-marty-protocol',
+  ])
+  const sitemapRoutes = requireUniqueRoutes('sitemap', [
+    ...prerenderRoutes,
+    ...sitemapOnlyRoutes,
+  ])
+  
+  return {
+    publicDir: isWebsiteBuild ? false : 'public',
+    define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify(assetBase) },
+    resolve: {
+      alias: {
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : 'public'}.js`, import.meta.url)),
+        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : isApplicationBuild ? 'application' : 'public'}.jsx`, import.meta.url)),
+        '@marty/commerce-extension': commerceExtensionPath,
+        'react-router-dom': 'react-router',
+      },
+      // Force all react-* and router packages to resolve to a single copy from this
+      // project root. This prevents duplicate instances when @elevenid/marty-blog
+      // local package) carries its own node_modules with react-router – which would
+      // create a second RouterContext that has no access to the outer <BrowserRouter>.
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router',
+        '@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled', 'prop-types'],
+    },
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
+      exclude: isSelfhostBuild || isApplicationBuild ? [] : ['@elevenid/marty-blog'],
+    },
+    plugins: [
+      muiIconMjsCompatibilityPlugin(),
+      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : [webSurfaceBuildContractPlugin({ surface, sourceSha, revision: websiteRevision, pages, commerceSha, commerceEntry: productionCommerceEntry })]),
+      ...(isWebsiteBuild ? [websiteAssetsPlugin(websiteRevision)] : []),
+      ...(productionCommerceEntry ? [productionBuildContractPlugin(productionCommerceEntry)] : []),
+      ...(!disablePrerender && !isWebsiteBuild ? [prerenderLocaleAssetsPlugin()] : []),
+      react(),
+      ...(!isWebsiteBuild ? [consoleEntryRewritePlugin()] : []),
+      ...(isDev ? [checker({
+        // Match the production build's checked sources. The broad root config
+        // includes test fixtures that do not currently type-check; Vitest owns
+        // their live behavioral feedback.
+        typescript: { tsconfigPath: 'tsconfig.build.json' },
+        eslint: {
+          lintCommand: 'eslint src --ext .js,.jsx',
+        },
+        // Shared source demos keep diagnostics in the terminal without a badge
+        // over the product UI. Local development retains the existing overlay.
+        overlay: env.MARTY_DEV_CHECKER_OVERLAY === '0' ? false : {
+          initialIsOpen: false,
+          position: 'br',
+        },
+      })] : []),
+      
+      // Prerendering for SEO - only in production builds
+      ...(!disablePrerender ? [
+        prerender({
+          routes: prerenderRoutes,
+          renderer: new PuppeteerRenderer({
+            injectProperty: '__ELEVENID_PRERENDER__',
+            inject: { demoManifests: true },
+            maxConcurrentRoutes: prerenderConcurrency,
+            renderAfterDocumentEvent: 'app-rendered',
+            timeout: 45000,
+            skipThirdPartyRequests: true,
+            headless: true,
+            pageHandler: prerenderDebug
+              ? (_page, route) => console.info(`[prerender] loaded ${route}`)
+              : undefined,
+            consoleHandler: prerenderDebug
+              ? (route, message) => {
+                  console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
+                  void Promise.all(message.args().map((argument) => argument.evaluate((value) => {
+                    if (value instanceof Error) {
+                      return { name: value.name, message: value.message, stack: value.stack }
+                    }
+                    return value
+                  }).catch(() => argument.toString())))
+                    .then((values) => console.info(`[prerender] ${route} values: ${JSON.stringify(values)}`))
+                }
+              : undefined,
+          }),
+          postProcess(route) {
+            // The renderer serves the build from a loopback origin. Dynamic-import
+            // preload hints must remain origin-relative when the HTML is deployed.
+            route.html = sanitizePrerenderedAssetUrls(route.html)
+            // Add prerender status meta tag
+            route.html = route.html.replace(
+              '</head>',
+              '<meta name="prerender-status-code" content="200" /></head>'
+            );
+            // The prerender plugin removes Vite's root entry before emitting the
+            // replacement. Stage the root under a unique name so a later plugin
+            // can promote it after all bundle writes have completed.
+            if (route.route === '/') {
+              route.outputPath = PRERENDERED_ROOT_STAGING_PATH
+            }
+          },
+        }),
+      ] : []),
+
+      // Crawler files do not require a browser. Dockerfile.prod deliberately
+      // disables prerendering, but every public build still needs these files.
+      ...(!isDev && !isSelfhostBuild && !isApplicationBuild ? [
+        Sitemap({
+          outDir: isWebsiteBuild ? 'dist-website' : 'dist',
+          hostname: 'https://elevenidllc.com',
+          // The plugin also scans emitted HTML. In prerendered builds, submit
+          // only routes without an HTML artifact; in Docker's SPA build, submit
+          // every public route except the root index it always discovers.
+          dynamicRoutes: sitemapRoutes.filter((route) => (
+            route !== '/' && (disablePrerender || !prerenderRoutes.includes(route))
+          )),
+          exclude: [
+            '/console',
+            '/console/*',
+            '/applicant',
+            '/applicant/*',
+            '/admin',
+            '/admin/*',
+            '/vendor',
+            '/vendor/*',
+            '/dashboard',
+            '/test-harness',
+            '/login',
+            '/auth/*',
+          ],
+          changefreq: 'weekly',
+          priority: {
+            '/': 1.0,
+            '/product': 0.9,
+            '/solutions': 0.9,
+            '/developers': 0.9,
+            '/standards': 0.8,
+            '/resources': 0.8,
+            '/architecture': 0.8,
+            '/security': 0.8,
+            '/docs': 0.8,
+            '/ai': 0.8,
+            '/why-verifiable-identity': 0.8,
+            '/what-is-credential-verification': 0.7,
+            '/what-is-open-badge': 0.7,
+            '/what-is-digital-credential': 0.7,
+            '/what-is-marty-protocol': 0.7,
+            '*': 0.7,
+          },
+          generateRobotsTxt: true,
+          robots: [
+            {
+              userAgent: '*',
+              allow: '/',
+              disallow: [
+                '/console',
+                '/console/*',
+                '/applicant',
+                '/applicant/*',
+                '/admin',
+                '/admin/*',
+                '/vendor',
+                '/vendor/*',
+                '/dashboard',
+                '/test-harness',
+                '/auth/*',
+                '/api/*',
+                '/v1/*',
+              ],
+            },
+            // Explicitly allow AI crawlers
+            { userAgent: 'GPTBot', allow: '/' },
+            { userAgent: 'ChatGPT-User', allow: '/' },
+            { userAgent: 'Google-Extended', allow: '/' },
+            { userAgent: 'Anthropic-AI', allow: '/' },
+            { userAgent: 'ClaudeBot', allow: '/' },
+            { userAgent: 'PerplexityBot', allow: '/' },
+            { userAgent: 'Cohere-AI', allow: '/' },
+          ],
+        }),
+      ] : []),
+      ...(!disablePrerender ? [promotePrerenderedRootPlugin()] : []),
+
+      ...(!isDev && enableBundleAnalysis ? [
+        visualizer({
+          filename: `build/${bundleAnalysisBaseName}.html`,
+          template: 'treemap',
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        }),
+        visualizer({
+          filename: `build/${bundleAnalysisBaseName}.json`,
+          template: 'raw-data',
+          gzipSize: true,
+          brotliSize: true,
+        }),
+      ] : []),
+    ],
+    server: {
+      port: port,
+      host: '0.0.0.0', // Listen on all network interfaces
+      strictPort: false,
+      ...devServerOrigin(env),
+      fs: {
+        // Allow serving sibling source packages linked via file: dependencies.
+        allow: ['..'],
+      },
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+      proxy: {
+        // Proxy /v1/* API requests to microservices gateway
+        '/v1': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
+        // Proxy /auth/* requests to the backend (OIDC flows)
+        '/auth': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
+        // Legacy /api/* proxy (for backwards compatibility during transition)
+        '/api': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
+        // Proxy health check
+        '/health': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+        },
+        // Proxy OpenAPI schema for API documentation
+        '/openapi.yaml': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+          rewrite: () => '/openapi.json',
+        },
+        '/openapi.json': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+    },
+    build: {
+      outDir: isSelfhostBuild ? 'dist-selfhost' : surface === 'combined' ? 'dist' : `dist-${surface}`,
+      assetsDir: isWebsiteBuild ? `${assetBase.slice(1)}assets` : 'assets',
+      sourcemap: !isSelfhostBuild && !productionCommerceEntry,
+      chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
+      rollupOptions: {
+        input: {
+          main: fileURLToPath(new URL('./index.html', import.meta.url)),
+          ...(!isWebsiteBuild ? { console: fileURLToPath(new URL('./console/index.html', import.meta.url)) } : {}),
+        },
+        output: {
+          manualChunks: createManualChunk,
+        },
+      },
+    },
+  }
+})

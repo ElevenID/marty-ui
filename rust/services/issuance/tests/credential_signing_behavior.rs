@@ -1,0 +1,1472 @@
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use axum::{body::Body, http::Request};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_issuance_service::{
+    credential::{
+        AllocatedCredentialStatus, BuiltCredential, CredentialAccessTokenGrant,
+        CredentialAuthorizationSession, CredentialBuildRequest, CredentialBuilder,
+        CredentialBuilderKind, CredentialIssuanceError, CredentialIssuanceService,
+        CredentialLifecycle, CredentialPorts, CredentialProofVerifier, CredentialRepository,
+        CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
+        ExistingCredential, IssuedCredential, IssuerContext, IssuerContextResolver,
+        NotificationIdGenerator, VerifiedCredentialProof,
+    },
+    http::router_with_credential_issuance,
+    proof_nonce::{ProofNonceError, ProofNonceRepository},
+    token_exchange::{DpopProofVerifier, TokenExchangeError},
+    transport::TransportPolicy,
+    IssuanceRuntime, IssuanceServiceConfig,
+};
+use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use serde_json::{json, Value};
+use tokio::sync::Notify;
+use tower::ServiceExt;
+
+#[path = "support/contract_grant.rs"]
+mod contract_grant;
+
+#[derive(Clone)]
+struct SigningHarness {
+    state: Arc<Mutex<SigningState>>,
+    build_started: Arc<Notify>,
+    release_build: Arc<Notify>,
+}
+
+struct SigningState {
+    transaction: CredentialTransaction,
+    existing: Option<ExistingCredential>,
+    events: Vec<String>,
+    remote_formats: Vec<String>,
+    build_request: Option<CredentialBuildRequest>,
+    builder_count: usize,
+    authorization_only: bool,
+    grant_collision: bool,
+    ensure_transaction_count: usize,
+    block_builder: bool,
+    complete_before_claim: bool,
+    mutation_before_claim: Option<fn(&mut CredentialTransaction)>,
+    mutation_after_concurrent_claim: Option<fn(&mut CredentialTransaction)>,
+    readiness_denied: bool,
+    repository_failure_reason: Option<String>,
+}
+
+impl SigningHarness {
+    fn new(case: &Value, contract: &Value) -> Self {
+        let inputs = &contract["inputs"];
+        let claim_policy = &contract["claim_policy"];
+        let mut claims = claim_policy["preserved_fixture"]
+            .as_object()
+            .unwrap()
+            .clone();
+        for field in claim_policy["excluded"].as_array().unwrap() {
+            claims.insert(
+                field.as_str().unwrap().to_owned(),
+                Value::String(format!("internal-{}", field.as_str().unwrap())),
+            );
+        }
+        claims.insert(
+            "_vct".to_owned(),
+            Value::String(format!(
+                "https://issuer.example/credentials/{}",
+                case["credential_type"].as_str().unwrap()
+            )),
+        );
+        claims.insert(
+            "_credential_subject".to_owned(),
+            json!({"id": "did:key:stored-subject", "role": "member"}),
+        );
+        let mut document = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", case["credential_type"]]
+        });
+        if let Some(id) = case["credential_document_id"].as_str() {
+            document["id"] = Value::String(id.to_owned());
+        }
+        claims.insert("_credential_document".to_owned(), document);
+        Self {
+            state: Arc::new(Mutex::new(SigningState {
+                transaction: CredentialTransaction {
+                    jwt_vc_profile: None,
+                    jwt_vc_signing_timing: None,
+
+                    id: inputs["transaction_id"].as_str().unwrap().to_owned(),
+                    organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),
+                    credential_template_id: "template-signing-contract".to_owned(),
+                    revocation_profile_id: None,
+                    renewal_of_credential_id: None,
+                    applicant_id: Some("applicant-signing-contract".to_owned()),
+                    application_id: Some("application-signing-contract".to_owned()),
+                    subject_did: None,
+                    idempotency_key_hash: None,
+                    idempotency_request_hash: None,
+                    status: CredentialTransactionStatus::Authorized,
+                    pre_authorized_code: "pre-auth-signing".to_owned(),
+                    nonce: Some(inputs["proof_nonce"].as_str().unwrap().to_owned()),
+                    claims,
+                    credential_type: Some(case["credential_type"].as_str().unwrap().to_owned()),
+                    selective_disclosure_claims: vec![],
+                    zk_predicate_claims: vec![],
+                    credential_payload_format: case["payload_format"].as_str().unwrap().to_owned(),
+                    wallet_configs: vec![],
+                    validity_days: 365,
+                    renewable: false,
+                    renewal_window_days: 30,
+                    delivery_mode: "wallet_only".to_owned(),
+                    issuer_profile_id: Some("issuer-profile-contract".to_owned()),
+                    issuer_mode: "org_managed".to_owned(),
+                    issuer_did: Some(inputs["issuer_did"].as_str().unwrap().to_owned()),
+                    issuer_algorithm: Some(case["algorithm"].as_str().unwrap().to_owned()),
+                    signing_service_id: Some("managed-custody-contract".to_owned()),
+                    reserved_credential_id: None,
+                    oid4vci_client_id: None,
+                    created_at: chrono::Utc::now(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::days(7),
+                },
+                existing: None,
+                events: vec![],
+                remote_formats: vec![],
+                build_request: None,
+                builder_count: 0,
+                authorization_only: false,
+                grant_collision: false,
+                ensure_transaction_count: 0,
+                block_builder: false,
+                complete_before_claim: false,
+                mutation_before_claim: None,
+                mutation_after_concurrent_claim: None,
+                readiness_denied: false,
+                repository_failure_reason: None,
+            })),
+            build_started: Arc::new(Notify::new()),
+            release_build: Arc::new(Notify::new()),
+        }
+    }
+
+    fn authorization_only(case: &Value, contract: &Value) -> Self {
+        let harness = Self::new(case, contract);
+        let mut state = harness.state.lock().unwrap();
+        state.authorization_only = true;
+        state.transaction.id = contract["authorization_code_only"]["transaction_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        drop(state);
+        harness
+    }
+
+    fn event(&self, event: &str) {
+        self.state.lock().unwrap().events.push(event.to_owned());
+    }
+}
+
+#[async_trait]
+impl CredentialRepository for SigningHarness {
+    async fn resolve_access_token_grant(
+        &self,
+        access_token: &str,
+    ) -> Result<CredentialAccessTokenGrant, CredentialIssuanceError> {
+        if self.state.lock().unwrap().grant_collision {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
+            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
+                transaction,
+            )));
+        }
+        Ok(self
+            .authorization_by_access_token(access_token)
+            .await?
+            .map_or(CredentialAccessTokenGrant::Missing, |session| {
+                CredentialAccessTokenGrant::Authorization(session)
+            }))
+    }
+
+    async fn transaction_by_access_token(
+        &self,
+        _access_token: &str,
+    ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
+        let state = self.state.lock().unwrap();
+        Ok((!state.authorization_only).then(|| state.transaction.clone()))
+    }
+
+    async fn authorization_by_access_token(
+        &self,
+        _access_token: &str,
+    ) -> Result<Option<CredentialAuthorizationSession>, CredentialIssuanceError> {
+        let state = self.state.lock().unwrap();
+        if !state.authorization_only {
+            return Ok(None);
+        }
+        Ok(Some(CredentialAuthorizationSession {
+            id: "authorization-session-race".to_owned(),
+            client_id: "wallet-client".to_owned(),
+            organization_id: state.transaction.organization_id.clone(),
+            issuer_state: None,
+            credential_configuration_ids: vec!["OpenBadgeCredential#sd-jwt".to_owned()],
+            dpop_jkt: None,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+        }))
+    }
+
+    async fn ensure_authorization_transaction(
+        &self,
+        _session: &CredentialAuthorizationSession,
+        _access_token: &str,
+    ) -> Result<CredentialTransaction, CredentialIssuanceError> {
+        let mut state = self.state.lock().unwrap();
+        state.ensure_transaction_count += 1;
+        Ok(state.transaction.clone())
+    }
+
+    async fn credential_by_transaction(
+        &self,
+        _transaction_id: &str,
+    ) -> Result<Option<ExistingCredential>, CredentialIssuanceError> {
+        Ok(self.state.lock().unwrap().existing.clone())
+    }
+
+    async fn transaction_by_id(
+        &self,
+        _transaction_id: &str,
+    ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
+        Ok(Some(self.state.lock().unwrap().transaction.clone()))
+    }
+
+    async fn claim_for_signing(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_id: &str,
+        authorization: &CredentialSigningAuthorization<'_>,
+    ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
+        let mut state = self.state.lock().unwrap();
+        state
+            .events
+            .push("claim_transaction_for_signing".to_owned());
+        if state.complete_before_claim {
+            state.transaction = transaction.clone();
+            state.transaction.status = CredentialTransactionStatus::Issued;
+            if let Some(mutate) = state.mutation_after_concurrent_claim {
+                mutate(&mut state.transaction);
+            }
+            return Ok(None);
+        }
+        if state.transaction.status != CredentialTransactionStatus::Authorized {
+            return Ok(None);
+        }
+        if state.transaction != *authorization.transaction
+            || state.transaction.expires_at <= chrono::Utc::now()
+        {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        state.transaction = transaction.clone();
+        state.transaction.status = CredentialTransactionStatus::Signing;
+        if let Some(selection) = &state.transaction.jwt_vc_profile {
+            state.transaction.jwt_vc_signing_timing =
+                Some(selection.timing_at(chrono::Utc::now().timestamp()).unwrap());
+        }
+        state.transaction.reserved_credential_id = Some(credential_id.to_owned());
+        Ok(Some(state.transaction.clone()))
+    }
+
+    async fn finalize(
+        &self,
+        _transaction: &CredentialTransaction,
+        credential: &IssuedCredential,
+        notification_id: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        let mut state = self.state.lock().unwrap();
+        state.events.push("finalize_credential_issuance".to_owned());
+        state.transaction.status = CredentialTransactionStatus::Issued;
+        state.transaction.nonce = None;
+        state.existing = Some(ExistingCredential {
+            id: credential.id.clone(),
+            credential: credential.credential.clone(),
+            notification_id: notification_id.to_owned(),
+        });
+        Ok(())
+    }
+
+    async fn mark_failed_if_signing(
+        &self,
+        _transaction_id: &str,
+        reason: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        // Controlled reason consumer enforces a text representability boundary.
+        // The actual PostgreSQL adapter ignores this argument and updates status
+        // only; this test does not claim persisted diagnostic parity.
+        if reason.contains('\0') {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        let mut state = self.state.lock().unwrap();
+        if state.transaction.status == CredentialTransactionStatus::Signing {
+            state.transaction.status = CredentialTransactionStatus::Failed;
+            state.repository_failure_reason = Some(reason.into());
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ProofNonceRepository for SigningHarness {
+    async fn save_proof_nonce(
+        &self,
+        _nonce: &str,
+        _ttl_seconds: u64,
+    ) -> Result<bool, ProofNonceError> {
+        unreachable!("signing fixture only consumes a nonce")
+    }
+
+    async fn consume_proof_nonce(&self, _nonce: &str) -> Result<bool, ProofNonceError> {
+        self.event("consume_nonce");
+        Ok(true)
+    }
+}
+
+impl DpopProofVerifier for SigningHarness {
+    fn verify(
+        &self,
+        _proof: &str,
+        _method: &str,
+        _expected_htu: &str,
+    ) -> Result<String, TokenExchangeError> {
+        Ok("unused-dpop-jkt".to_owned())
+    }
+}
+
+#[async_trait]
+impl CredentialProofVerifier for SigningHarness {
+    async fn verify(
+        &self,
+        _proof_jwt: &str,
+        _expected_nonce: &str,
+        _organization_id: &str,
+        _issuer: &IssuerContext,
+    ) -> Result<VerifiedCredentialProof, CredentialIssuanceError> {
+        self.event("verify_proof");
+        Ok(VerifiedCredentialProof {
+            holder_did: "did:key:contract-holder".to_owned(),
+            holder_jwk: Some(json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "holder-x",
+                "y": "holder-y"
+            })),
+        })
+    }
+}
+
+#[async_trait]
+impl IssuerContextResolver for SigningHarness {
+    async fn resolve(
+        &self,
+        transaction: &CredentialTransaction,
+        credential_format: &str,
+        _force: bool,
+    ) -> Result<IssuerContext, CredentialIssuanceError> {
+        self.state
+            .lock()
+            .unwrap()
+            .remote_formats
+            .push(credential_format.to_owned());
+        let public_jwk = if transaction.issuer_algorithm.as_deref() == Some("EdDSA") {
+            // The Ed25519 base point is public key material; this fixture never
+            // holds a private key or signs locally.
+            json!({"kty": "OKP", "crv": "Ed25519", "x": "WGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY"})
+        } else {
+            let proofs: Value =
+                serde_json::from_str(include_str!("fixtures/dpop_public_proofs.json"))
+                    .expect("public DPoP fixture");
+            proofs["es256"]["jwk"].clone()
+        };
+        Ok(IssuerContext {
+            issuer_profile_id: "issuer-profile-contract".to_owned(),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            signing_service_id: "managed-custody-contract".to_owned(),
+            algorithm: transaction.issuer_algorithm.clone().unwrap(),
+            verification_method_id: Some("did:web:issuer.example#contract-key".to_owned()),
+            public_jwk: Some(public_jwk),
+            certificate_chain: vec![],
+            raw_context: json!({"signing_key_reference": "transit/keys/contract-issuer"}),
+        })
+    }
+}
+
+#[async_trait]
+impl CredentialLifecycle for SigningHarness {
+    async fn ensure_ready(
+        &self,
+        _transaction: &CredentialTransaction,
+        _issuer: &IssuerContext,
+    ) -> Result<(), CredentialIssuanceError> {
+        let mut state = self.state.lock().unwrap();
+        state.events.push("canvas_readiness".to_owned());
+        if state.readiness_denied {
+            return Err(CredentialIssuanceError::ApplicationEligibilityDenied);
+        }
+        if let Some(mutate) = state.mutation_before_claim {
+            mutate(&mut state.transaction);
+        }
+        Ok(())
+    }
+
+    async fn allocate_status(
+        &self,
+        _transaction: &CredentialTransaction,
+        _credential_id: &str,
+        _credential_format: &str,
+    ) -> Result<AllocatedCredentialStatus, CredentialIssuanceError> {
+        self.event("allocate_status");
+        Ok(AllocatedCredentialStatus::default())
+    }
+
+    async fn after_issued(
+        &self,
+        _transaction: &CredentialTransaction,
+        _credential: &IssuedCredential,
+        _response_format: &str,
+    ) -> Result<(), CredentialIssuanceError> {
+        self.event("post_issuance_side_effects");
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CredentialBuilder for SigningHarness {
+    async fn build(
+        &self,
+        request: &CredentialBuildRequest,
+    ) -> Result<BuiltCredential, CredentialIssuanceError> {
+        let block_builder = {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("credential_builder".to_owned());
+            state.events.push("issuer_did_sign".to_owned());
+            state.build_request = Some(request.clone());
+            state.builder_count += 1;
+            state.block_builder
+        };
+        if block_builder {
+            self.build_started.notify_one();
+            self.release_build.notified().await;
+        }
+        tokio::task::yield_now().await;
+        let credential = if request.kind == CredentialBuilderKind::DataIntegrity {
+            json!({
+                "id": request.credential_id,
+                "proof": {"type": "DataIntegrityProof"}
+            })
+            .to_string()
+        } else {
+            format!("contract-{}-credential", builder_name(request.kind))
+        };
+        Ok(BuiltCredential {
+            credential_id: request.credential_id.clone(),
+            credential,
+        })
+    }
+}
+
+struct FixedNotification(String);
+
+impl NotificationIdGenerator for FixedNotification {
+    fn generate(&self) -> String {
+        self.0.clone()
+    }
+}
+
+fn builder_name(kind: CredentialBuilderKind) -> &'static str {
+    match kind {
+        CredentialBuilderKind::SdJwt => "sd_jwt",
+        CredentialBuilderKind::JwtVcJson => "jwt_vc",
+        CredentialBuilderKind::DataIntegrity => "data_integrity",
+        CredentialBuilderKind::Mdoc => "mdoc",
+    }
+}
+
+fn app(harness: SigningHarness, contract: &Value) -> axum::Router {
+    app_with_builder(harness.clone(), contract, Arc::new(harness))
+}
+
+fn app_with_builder(
+    harness: SigningHarness,
+    contract: &Value,
+    builder: Arc<dyn CredentialBuilder>,
+) -> axum::Router {
+    let config =
+        IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+    let runtime = IssuanceRuntime::new(&config).unwrap();
+    let service = CredentialIssuanceService::new(
+        CredentialPorts {
+            repository: Arc::new(harness.clone()),
+            nonce_repository: Arc::new(harness.clone()),
+            dpop_verifier: Arc::new(harness.clone()),
+            proof_verifier: Arc::new(harness.clone()),
+            issuer_resolver: Arc::new(harness.clone()),
+            builder,
+            lifecycle: Arc::new(harness),
+            notification_ids: Arc::new(FixedNotification(
+                contract["inputs"]["notification_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )),
+        },
+        "https://issuer.example",
+    );
+    router_with_credential_issuance(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example", "Issuer"),
+        TransportPolicy::new([]),
+        service,
+    )
+}
+
+#[tokio::test]
+async fn actual_remote_diagnostic_failure_releases_the_claim_and_preserves_http_projection() {
+    use marty_issuance_service::credential_builder::HttpCredentialBuilder;
+    use marty_signing_grant::{SigningOrigin, HEADER_NAME};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    struct Server(tokio::task::JoinHandle<()>);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "jwt_vc_json")
+        .unwrap();
+    for (remote_body, expected_status, expected_reason) in [
+        (br#"{"detail":"synthetic-signing-diagnostic"}"#.as_slice(), 503, "credential signing is unavailable: DID-mediated signing failed (HTTP 503): synthetic-signing-diagnostic"),
+        (br#"{"detail":"\u0000"}"#.as_slice(), 503, "Remote signing response diagnostic is not representable as database text"),
+        (br#"{"detail":"\ud800"}"#.as_slice(), 500, "Remote signing response diagnostic is not representable as database text"),
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let server_app = axum::Router::new().route("/internal/issuer-dids/sign", axum::routing::post(move |headers: axum::http::HeaderMap| {
+            let observed = observed.clone();
+            async move {
+                assert_eq!(headers["x-api-key"], "synthetic-key");
+                let grant = marty_signing_grant::GrantEnvelope::from_header_value(headers[HEADER_NAME].to_str().unwrap()).unwrap();
+                assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCredential);
+                assert_eq!(grant.claims.key_reference.as_deref(), Some("transit/keys/contract-issuer"));
+                observed.fetch_add(1, Ordering::SeqCst);
+                (axum::http::StatusCode::SERVICE_UNAVAILABLE, [("content-type", "application/json")], remote_body)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut server = Server(tokio::spawn(async move { axum::serve(listener, server_app).await.unwrap(); }));
+        let builder = HttpCredentialBuilder::new_with_grant(format!("http://{address}/internal").parse().unwrap(), Some("synthetic-key"), Duration::from_secs(2), contract_grant::ContractGrantMinter(SigningOrigin::IssuanceCredential)).unwrap();
+        let harness = SigningHarness::new(case, &contract);
+        // The original controlled-builder corpus intentionally carries both
+        // explicit subject and ordinary claims. A real JWT preparation accepts
+        // one form; keep the ordinary claims for this distinct HTTP scenario.
+        harness.state.lock().unwrap().transaction.claims.remove("_credential_subject");
+        let response = app_with_builder(harness.clone(), &contract, Arc::new(builder)).oneshot(request(case, &contract)).await.unwrap();
+        assert_eq!(response.status(), expected_status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        if expected_status == 500 {
+            assert_eq!(bytes.as_ref(), b"Internal Server Error");
+        } else {
+            let remote: Value = serde_json::from_slice(remote_body).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"detail": format!("DID-mediated signing failed (HTTP 503): {}", remote["detail"].as_str().unwrap())}));
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        {
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.transaction.status, CredentialTransactionStatus::Failed);
+            assert_eq!(state.repository_failure_reason.as_deref(), Some(expected_reason));
+            assert!(state.transaction.reserved_credential_id.is_some());
+            assert!(state.existing.is_none());
+            assert!(!state.events.iter().any(|event| event == "finalize_credential_issuance" || event == "post_issuance_side_effects"));
+        }
+        server.0.abort();
+        assert!((&mut server.0).await.as_ref().is_err_and(|error| error.is_cancelled()));
+    }
+}
+
+#[tokio::test]
+async fn missing_open_badge_criteria_returns_a_caller_error_without_signing_or_issuing() {
+    use marty_issuance_service::credential_builder::HttpCredentialBuilder;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    struct Server(tokio::task::JoinHandle<()>);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let mut case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "jwt_vc_json")
+        .unwrap()
+        .clone();
+    case["credential_type"] = json!("OpenBadgeCredential");
+    case["credential_configuration_id"] = json!("OpenBadgeCredential");
+    let count = Arc::new(AtomicUsize::new(0));
+    let observed = count.clone();
+    let server_app = axum::Router::new().route(
+        "/internal/issuer-dids/sign",
+        axum::routing::post(move || {
+            let observed = observed.clone();
+            async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut server = Server(tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    }));
+    let builder = HttpCredentialBuilder::new_with_grant(
+        format!("http://{address}/internal").parse().unwrap(),
+        Some("synthetic-key"),
+        Duration::from_secs(2),
+        contract_grant::ContractGrantMinter(marty_signing_grant::SigningOrigin::IssuanceCredential),
+    )
+    .unwrap();
+    let harness = SigningHarness::new(&case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.transaction.claims.clear();
+        state.transaction.claims.insert(
+            "_vct".to_owned(),
+            json!("https://issuer.example/achievements/course"),
+        );
+        // A canonical, otherwise complete subject with only criteria omitted.
+        state.transaction.claims.insert(
+            "_credential_subject".to_owned(),
+            json!({
+                "id":contract["inputs"]["holder_did"], "type":["AchievementSubject"],
+                "achievement": {
+                    "id":"https://issuer.example/achievements/course", "type":["Achievement"],
+                    "name":"Completed course", "description":"Completed the required assessment"
+                }
+            }),
+        );
+    }
+    let response = app_with_builder(harness.clone(), &contract, Arc::new(builder))
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body(response).await,
+        json!({
+            "error":"invalid_credential_request",
+            "error_description":"Open Badges achievement criteria is required and must be an object"
+        })
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    {
+        let state = harness.state.lock().unwrap();
+        assert_eq!(
+            state.transaction.status,
+            CredentialTransactionStatus::Failed
+        );
+        assert_eq!(
+            state.repository_failure_reason.as_deref(),
+            Some("invalid credential request: Open Badges achievement criteria is required and must be an object")
+        );
+        assert!(state.transaction.reserved_credential_id.is_some());
+        assert!(state.existing.is_none());
+        assert!(!state.events.iter().any(|event| {
+            event == "finalize_credential_issuance" || event == "post_issuance_side_effects"
+        }));
+    }
+    server.0.abort();
+    assert!((&mut server.0)
+        .await
+        .as_ref()
+        .is_err_and(|error| error.is_cancelled()));
+}
+
+fn encode(value: Value) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).unwrap())
+}
+
+fn request(case: &Value, contract: &Value) -> Request<Body> {
+    let inputs = &contract["inputs"];
+    let proof = format!(
+        "{}.{}.signature",
+        encode(json!({"alg": "ES256"})),
+        encode(json!({
+            "aud": inputs["proof_audience"],
+            "nonce": inputs["proof_nonce"]
+        }))
+    );
+    let body = json!({
+        "credential_configuration_id": case["credential_configuration_id"],
+        "proofs": {"jwt": [proof]}
+    });
+    Request::post(inputs["path"].as_str().unwrap())
+        .header("Host", "issuer.example")
+        .header("Content-Type", "application/json")
+        .header(
+            "Authorization",
+            format!("Bearer {}", inputs["access_token"].as_str().unwrap()),
+        )
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
+async fn body(response: axum::response::Response) -> Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn assert_subsequence(actual: &[String], expected: &[Value]) {
+    let mut position = 0;
+    for event in actual {
+        if position < expected.len() && expected[position].as_str() == Some(event) {
+            position += 1;
+        }
+    }
+    assert_eq!(position, expected.len(), "events={actual:?}");
+}
+
+#[tokio::test]
+async fn native_credential_signing_matches_every_python_format_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    for case in contract["formats"].as_array().unwrap() {
+        let harness = SigningHarness::new(case, &contract);
+        let response = app(harness.clone(), &contract)
+            .oneshot(request(case, &contract))
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "{}", case["name"]);
+        let response = body(response).await;
+        assert_eq!(
+            response["credentials"][0]["format"], case["response_format"],
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            response["notification_id"],
+            contract["inputs"]["notification_id"]
+        );
+
+        let state = harness.state.lock().unwrap();
+        let build = state.build_request.as_ref().unwrap();
+        assert_eq!(builder_name(build.kind), case["builder"].as_str().unwrap());
+        assert_eq!(
+            build.remote_credential_format,
+            case["remote_credential_format"]
+        );
+        assert_eq!(build.response_format, case["response_format"]);
+        let expected_id = case["credential_document_id"]
+            .as_str()
+            .unwrap_or("urn:uuid:bfdc1781-37a5-5f2d-929d-76487fbe2241");
+        assert_eq!(build.credential_id, expected_id);
+        assert_eq!(
+            build.claims,
+            contract["claim_policy"]["preserved_fixture"]
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        if case["holder_did_required"].as_bool().unwrap() {
+            assert_eq!(
+                build.subject_did.as_deref(),
+                Some("did:key:contract-holder")
+            );
+        } else {
+            assert_eq!(build.subject_did, None);
+        }
+        if case["holder_jwk_required"].as_bool().unwrap() {
+            assert_eq!(build.holder_jwk.as_ref().unwrap()["kty"], "EC");
+        }
+        if build.kind == CredentialBuilderKind::SdJwt {
+            assert_eq!(
+                build.selective_disclosure_claims,
+                contract["claim_policy"]["sd_jwt_default_disclosures"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            state.remote_formats,
+            vec![
+                case["remote_credential_format"].as_str().unwrap(),
+                case["remote_credential_format"].as_str().unwrap()
+            ]
+        );
+        assert_subsequence(
+            &state.events,
+            contract["critical_order"].as_array().unwrap(),
+        );
+        assert_eq!(
+            state.transaction.status,
+            CredentialTransactionStatus::Issued
+        );
+        assert_eq!(state.transaction.nonce, None);
+        assert_eq!(state.existing.as_ref().unwrap().id, expected_id);
+    }
+}
+
+#[tokio::test]
+async fn retired_ob2_profiles_never_allocate_status_or_reach_any_credential_builder() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    for case in contract["formats"].as_array().unwrap() {
+        let supported_document = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", case["credential_type"]]
+        });
+        let mut variants = Vec::new();
+        for legacy in ["Assertion", "OpenBadgeV2", "open_badge_v2", "Open Badge V2"] {
+            let mut legacy_case = case.clone();
+            legacy_case["credential_type"] = json!(legacy);
+            let selector = case["credential_configuration_id"].as_str().unwrap();
+            let suffix = selector.find('#').map_or("", |index| &selector[index..]);
+            legacy_case["credential_configuration_id"] = json!(format!("{legacy}{suffix}"));
+            // Keep the document supported so the transaction-type guard must fire.
+            variants.push((legacy_case, supported_document.clone()));
+        }
+        for (field, value) in [
+            (
+                "@context",
+                json!([
+                    "https://www.w3.org/ns/credentials/v2",
+                    "https://purl.imsglobal.org/spec/ob/v3p0/context.json",
+                    "https://w3id.org/openbadges/v2"
+                ]),
+            ),
+            ("context", json!("https://w3id.org/openbadges/v2")),
+            ("type", json!(["VerifiableCredential", "Assertion"])),
+        ] {
+            let mut document = supported_document.clone();
+            document[field] = value;
+            variants.push((case.clone(), document));
+        }
+        for (case, document) in variants {
+            let harness = SigningHarness::new(&case, &contract);
+            harness
+                .state
+                .lock()
+                .unwrap()
+                .transaction
+                .claims
+                .insert("_credential_document".to_owned(), document);
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(&case, &contract))
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400, "{case}");
+            assert_eq!(
+                body(response).await,
+                json!({"detail": CredentialIssuanceError::RetiredOpenBadge.to_string()})
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert!(state.build_request.is_none());
+            assert!(state.existing.is_none());
+            assert!(!state.events.iter().any(|event| matches!(
+                event.as_str(),
+                "allocate_status"
+                    | "credential_builder"
+                    | "issuer_did_sign"
+                    | "finalize_credential_issuance"
+                    | "post_issuance_side_effects"
+            )));
+        }
+    }
+}
+
+#[tokio::test]
+async fn retired_ob2_cached_credentials_never_replay_or_recover() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let legacy = json!({
+        "@context": "https://w3id.org/openbadges/v2",
+        "type": "Assertion",
+        "id": "https://issuer.example/assertions/retired"
+    });
+    let legacy_jwt = format!(
+        "{}.{}.signature",
+        encode(json!({"alg": "ES256"})),
+        encode(json!({"vc": legacy}))
+    );
+    let current = json!({
+        "@context": ["https://www.w3.org/ns/credentials/v2", "https://w3id.org/openbadges/v3"],
+        "type": ["VerifiableCredential", "OpenBadgeCredential"],
+        "proof": {"type": "DataIntegrityProof"}
+    })
+    .to_string();
+    for case in contract["formats"].as_array().unwrap() {
+        for concurrent in [false, true] {
+            for (legacy_type, legacy_document, stored) in [
+                (false, false, legacy.to_string()),
+                (false, false, legacy_jwt.clone()),
+                (false, false, format!("{legacy_jwt}~")),
+                (true, false, current.clone()),
+                (false, true, current.clone()),
+            ] {
+                let mut case = case.clone();
+                if legacy_type {
+                    case["credential_type"] = json!("OpenBadgeV2");
+                    let selector = case["credential_configuration_id"].as_str().unwrap();
+                    let suffix = selector.find('#').map_or("", |index| &selector[index..]);
+                    case["credential_configuration_id"] = json!(format!("OpenBadgeV2{suffix}"));
+                }
+                let harness = SigningHarness::new(&case, &contract);
+                {
+                    let mut state = harness.state.lock().unwrap();
+                    state.complete_before_claim = concurrent;
+                    if !concurrent {
+                        state.transaction.status = CredentialTransactionStatus::Issued;
+                    }
+                    if legacy_document {
+                        state
+                            .transaction
+                            .claims
+                            .insert("_credential_document".into(), legacy.clone());
+                    }
+                    state.existing = Some(ExistingCredential {
+                        id: "stored-credential".into(),
+                        credential: stored.clone(),
+                        notification_id: "original-notification".into(),
+                    });
+                }
+                let response = app(harness.clone(), &contract)
+                    .oneshot(request(&case, &contract))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    400,
+                    "{case}; concurrent={concurrent}"
+                );
+                assert_eq!(
+                    body(response).await,
+                    json!({
+                        "detail": CredentialIssuanceError::RetiredOpenBadge.to_string()
+                    })
+                );
+                let state = harness.state.lock().unwrap();
+                assert_eq!(state.builder_count, 0);
+                assert_eq!(state.existing.as_ref().unwrap().credential, stored);
+                assert_eq!(
+                    state.transaction.status,
+                    CredentialTransactionStatus::Issued
+                );
+                assert!(!state.events.iter().any(|event| matches!(
+                    event.as_str(),
+                    "allocate_status"
+                        | "credential_builder"
+                        | "issuer_did_sign"
+                        | "finalize_credential_issuance"
+                        | "post_issuance_side_effects"
+                )));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn current_credentials_keep_replay_and_recovery_without_resigning() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    for case in contract["formats"].as_array().unwrap() {
+        for concurrent in [false, true] {
+            let harness = SigningHarness::new(case, &contract);
+            let stored = if case["builder"] == "data_integrity" {
+                json!({"type": ["VerifiableCredential", "OpenBadgeCredential"],
+                    "proof": {"type": "DataIntegrityProof"}})
+                .to_string()
+            } else {
+                "original-current-credential".to_owned()
+            };
+            {
+                let mut state = harness.state.lock().unwrap();
+                state.complete_before_claim = concurrent;
+                if !concurrent {
+                    state.transaction.status = CredentialTransactionStatus::Issued;
+                }
+                state.existing = Some(ExistingCredential {
+                    id: "stored-credential".into(),
+                    credential: stored.clone(),
+                    notification_id: "original-notification".into(),
+                });
+            }
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(case, &contract))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                200,
+                "{case}; concurrent={concurrent}"
+            );
+            let response = body(response).await;
+            assert_eq!(response["notification_id"], "original-notification");
+            assert_eq!(
+                response["credentials"][0]["credential"],
+                if case["builder"] == "data_integrity" {
+                    serde_json::from_str::<Value>(&stored).unwrap()
+                } else {
+                    json!(stored)
+                }
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert_eq!(state.existing.as_ref().unwrap().credential, stored);
+        }
+    }
+}
+
+#[tokio::test]
+async fn credential_endpoint_fails_closed_on_ambiguous_access_token_grant() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"].as_array().unwrap()[0];
+    let harness = SigningHarness::new(case, &contract);
+    harness.state.lock().unwrap().grant_collision = true;
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 500);
+    assert_eq!(
+        body(response).await,
+        json!({"detail": "Credential issuance is temporarily unavailable"})
+    );
+    assert!(harness.state.lock().unwrap().events.is_empty());
+}
+
+async fn assert_single_concurrent_signer(harness: SigningHarness, case: &Value, contract: &Value) {
+    harness.state.lock().unwrap().block_builder = true;
+    let first_app = app(harness.clone(), contract);
+    let first_request = request(case, contract);
+    let first = tokio::spawn(async move { first_app.oneshot(first_request).await.unwrap() });
+
+    harness.build_started.notified().await;
+    let loser = app(harness.clone(), contract)
+        .oneshot(request(case, contract))
+        .await
+        .unwrap();
+    let expected = &contract["state_machine"]["concurrent_loser"];
+    assert_eq!(
+        loser.status().as_u16(),
+        expected["status_code"].as_u64().unwrap() as u16
+    );
+    assert_eq!(body(loser).await, expected["body"]);
+
+    harness.release_build.notify_one();
+    let winner = first.await.unwrap();
+    assert_eq!(winner.status().as_u16(), 200);
+
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 1);
+    assert_eq!(
+        state
+            .events
+            .iter()
+            .filter(|event| event.as_str() == "issuer_did_sign")
+            .count(),
+        1
+    );
+    assert_eq!(
+        state.transaction.status,
+        CredentialTransactionStatus::Issued
+    );
+}
+
+#[tokio::test]
+async fn concurrent_pre_authorized_requests_have_one_signer_and_exact_loser_response() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"][0];
+    assert_single_concurrent_signer(SigningHarness::new(case, &contract), case, &contract).await;
+}
+
+#[tokio::test]
+async fn authorization_code_only_requests_share_deterministic_transaction_and_one_signer() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"][0];
+    let harness = SigningHarness::authorization_only(case, &contract);
+    assert_single_concurrent_signer(harness.clone(), case, &contract).await;
+
+    let state = harness.state.lock().unwrap();
+    assert_eq!(
+        state.transaction.id,
+        contract["authorization_code_only"]["transaction_id"]
+    );
+    assert_eq!(state.ensure_transaction_count, 2);
+}
+
+#[tokio::test]
+async fn changed_authority_or_expired_transaction_never_reaches_the_signer() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    type TransactionMutation = (&'static str, fn(&mut CredentialTransaction));
+    let mutations: &[TransactionMutation] = &[
+        ("tenant", |transaction| {
+            transaction.organization_id = "other-tenant".into()
+        }),
+        ("dataset", |transaction| {
+            transaction
+                .claims
+                .insert("role".into(), json!("administrator"));
+        }),
+        ("applicant", |transaction| {
+            transaction.applicant_id = Some("other-applicant".into())
+        }),
+        ("application", |transaction| {
+            transaction.application_id = Some("other-application".into())
+        }),
+        ("subject", |transaction| {
+            transaction.subject_did = Some("did:key:other-subject".into())
+        }),
+        ("template", |transaction| {
+            transaction.credential_template_id = "other-template".into()
+        }),
+        ("credential configuration", |transaction| {
+            transaction.credential_type = Some("OtherCredential".into())
+        }),
+        ("issuer binding", |transaction| {
+            transaction.issuer_profile_id = Some("other-profile".into())
+        }),
+        ("expiry", |transaction| {
+            transaction.expires_at = chrono::Utc::now() - chrono::Duration::seconds(1)
+        }),
+    ];
+    for case in contract["formats"].as_array().unwrap() {
+        for (name, mutate) in mutations {
+            let harness = SigningHarness::new(case, &contract);
+            harness.state.lock().unwrap().mutation_before_claim = Some(*mutate);
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(case, &contract))
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400, "{name}: {case}");
+            assert_eq!(
+                body(response).await,
+                json!({
+                    "error": "invalid_credential_request",
+                    "error_description": "Invalid transaction state"
+                })
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0, "{name}: {case}");
+            assert!(state.build_request.is_none());
+            assert!(state.existing.is_none());
+            assert!(!state.events.iter().any(|event| matches!(
+                event.as_str(),
+                "allocate_status"
+                    | "issuer_did_sign"
+                    | "finalize_credential_issuance"
+                    | "post_issuance_side_effects"
+            )));
+            assert_eq!(
+                state.transaction.status,
+                CredentialTransactionStatus::Authorized
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn denied_readiness_and_preexisting_expiry_stop_before_signing_claim() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"][0];
+    for denied in [false, true] {
+        let harness = SigningHarness::new(case, &contract);
+        {
+            let mut state = harness.state.lock().unwrap();
+            state.readiness_denied = denied;
+            if !denied {
+                state.transaction.expires_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+            }
+        }
+        let response = app(harness.clone(), &contract)
+            .oneshot(request(case, &contract))
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 400);
+        assert_eq!(
+            body(response).await,
+            json!({
+                "error": "invalid_credential_request",
+                "error_description": if denied { "Credential eligibility requirements are not satisfied" } else { "Invalid transaction state" }
+            })
+        );
+        let state = harness.state.lock().unwrap();
+        assert_eq!(state.builder_count, 0);
+        assert!(!state
+            .events
+            .iter()
+            .any(|event| event == "claim_transaction_for_signing"));
+        if !denied {
+            assert!(!state
+                .events
+                .iter()
+                .any(|event| event == "verify_proof" || event == "consume_proof_nonce"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_issuer_resolution_keeps_the_original_admission_snapshot() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"][0];
+    let harness = SigningHarness::new(case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.transaction.issuer_profile_id = Some("previous-profile".into());
+        state.transaction.issuer_did = Some("did:web:previous.example".into());
+        state.transaction.signing_service_id = Some("previous-custody-service".into());
+    }
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 1);
+    assert_eq!(
+        state.transaction.issuer_profile_id.as_deref(),
+        Some("issuer-profile-contract")
+    );
+    assert_eq!(
+        state.transaction.issuer_did.as_deref(),
+        Some("did:web:issuer.example")
+    );
+    assert_eq!(
+        state.transaction.signing_service_id.as_deref(),
+        Some("managed-custody-contract")
+    );
+}
+
+#[tokio::test]
+async fn concurrent_recovery_rejects_a_credential_for_a_changed_dataset() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let case = &contract["formats"][0];
+    let harness = SigningHarness::new(case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.complete_before_claim = true;
+        state.mutation_after_concurrent_claim = Some(|transaction| {
+            transaction.organization_id = "other-tenant".into();
+            transaction
+                .claims
+                .insert("role".into(), json!("administrator"));
+        });
+        state.existing = Some(ExistingCredential {
+            id: "other-credential".into(),
+            credential: "other-dataset-credential".into(),
+            notification_id: "other-notification".into(),
+        });
+    }
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    assert_eq!(
+        body(response).await,
+        json!({
+            "error": "invalid_credential_request", "error_description": "Invalid transaction state"
+        })
+    );
+    assert_eq!(harness.state.lock().unwrap().builder_count, 0);
+}
+
+fn direct_signing_case() -> (Value, Value, SigningHarness) {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let mut case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["builder"] == "jwt_vc")
+        .unwrap()
+        .clone();
+    case["credential_type"] = json!("EmployeeCredential");
+    case["payload_format"] = json!("VC_JWT_DIRECT_V1");
+    case["credential_configuration_id"] = json!("EmployeeCredential#vc2-jose-2026-v1");
+    let harness = SigningHarness::new(&case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.transaction.application_id = None;
+        state.transaction.claims.remove("_credential_document");
+        state.transaction.issuer_did = Some("did:web:issuer.example".into());
+        state.transaction.jwt_vc_profile = Some(
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                "EmployeeCredential",
+                "template-signing-contract",
+                3,
+                2 * 86400,
+                -30,
+            )
+            .unwrap(),
+        );
+    }
+    (case, contract, harness)
+}
+
+#[tokio::test]
+async fn explicit_profile_redemption_uses_frozen_timing_and_exact_replay_without_resigning() {
+    let (case, contract, harness) = direct_signing_case();
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let first = body(response).await;
+    let timing = {
+        let state = harness.state.lock().unwrap();
+        assert_eq!(state.builder_count, 1);
+        assert!(state
+            .remote_formats
+            .iter()
+            .all(|format| format == "application/vc+jwt"));
+        let built = state.build_request.as_ref().unwrap();
+        assert_eq!(built.remote_credential_format, "application/vc+jwt");
+        assert_eq!(built.response_format, "application/vc+jwt");
+        let timing = built.jwt_vc_signing_timing.unwrap();
+        assert_eq!(
+            timing.signature_expires_at() - timing.signature_issued_at(),
+            3600
+        );
+        assert_eq!(
+            timing.credential_valid_from().timestamp(),
+            timing.signature_issued_at() - 30
+        );
+        assert_eq!(
+            timing.credential_valid_until().unwrap().timestamp(),
+            timing.signature_issued_at() - 30 + 2 * 86400
+        );
+        timing
+    };
+    // Advancing the offer state clock beyond expiry must not refresh a completed issuance.
+    harness.state.lock().unwrap().transaction.expires_at =
+        chrono::Utc::now() - chrono::Duration::days(1);
+    let replay = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(replay.status().as_u16(), 200);
+    assert_eq!(body(replay).await, first);
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 1);
+    assert_eq!(state.transaction.jwt_vc_signing_timing, Some(timing));
+}
+
+#[tokio::test]
+async fn explicit_profile_rejects_wrong_config_on_fresh_and_completed_transactions() {
+    for issued in [false, true] {
+        for id in [
+            "EmployeeCredential",
+            "EmployeeCredential#jwt_vc_json",
+            "Other#vc2-jose-2026-v1",
+            "",
+        ] {
+            let (mut case, contract, harness) = direct_signing_case();
+            if issued {
+                let mut state = harness.state.lock().unwrap();
+                state.transaction.status = CredentialTransactionStatus::Issued;
+                state.transaction.jwt_vc_signing_timing = Some(
+                    state
+                        .transaction
+                        .jwt_vc_profile
+                        .as_ref()
+                        .unwrap()
+                        .timing_at(1800000000)
+                        .unwrap(),
+                );
+                state.existing = Some(ExistingCredential {
+                    id: "original".into(),
+                    credential: "original-exact-bytes".into(),
+                    notification_id: "original-notification".into(),
+                });
+            }
+            case["credential_configuration_id"] = json!(id);
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(&case, &contract))
+                .await
+                .unwrap();
+            assert!(
+                response.status().is_client_error(),
+                "issued={issued}, id={id}"
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert!(state.remote_formats.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_profile_rejects_changed_issuer_target_before_claim_or_signing() {
+    let (case, contract, harness) = direct_signing_case();
+    harness.state.lock().unwrap().transaction.signing_service_id =
+        Some("different-frozen-service".into());
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 0);
+    assert!(!state
+        .events
+        .iter()
+        .any(|event| event == "claim_transaction_for_signing"));
+}

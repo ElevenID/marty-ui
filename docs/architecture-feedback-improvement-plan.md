@@ -1,0 +1,887 @@
+# Architecture and development-feedback improvement tracker
+
+Status: active requirements and queue, 2026-10-20.
+
+October 24 nightly publication: `feat/nightly-publication`, owned by the primary
+release worker, starts at protected main
+`6f63c66915bfa265f0683e2451dabb4e9503fab7`. The user authorized completing
+nightly publication for installation testing. Claim run `40114393354` passed,
+but existing intake emits evidence only. The next action is to connect a
+validated nightly claim to shared image builds and prerelease publication,
+retaining stable official qualification. The isolated
+`worktrees/nightly-publication` checkout is removed after verified merge or
+parked after a published checkpoint if an external gate blocks delivery.
+
+October 21 maintenance reconciliation: Adam Burdett's integration writer is
+resuming the existing `selfhost-log-boundary-20261004` checkout on
+`reconcile/selfhost-log-boundary-20261021`, based on published main
+`e02276e92775c330a0c52280b6eca91d34358dca`. The useful portion of local
+`ec53f05348ee70f59cde87c82780071eead599da` is a delayed-startup-log marker
+retry, ported to the maintained self-host acceptance owner. Reads and polling
+share a five-second budget, while the existing owned-command runner retains
+its separate bounded shutdown. Secret exposure, empty secrets, invalid UTF-8
+and Docker failures are not retried; late success is rejected. This changes
+no production runtime or CI selector. The exact self-host test roster grows
+from twelve to seventeen without dropping any existing case; function-scoped
+connectivity and mutation checks preserve the fail-closed source guard.
+Exact-candidate
+checks, independent review and protected merge remain the next action; remove
+this sole integration checkout after accepted merge and verified consumer cleanup.
+
+October 20 release-path checkpoint: exact-main full CI
+[39425370404](https://github.com/ElevenID/marty-ui/actions/runs/39425370404)
+passed at `d74f0133d2b6f0056b79a9f145842791bc1f04f8`; its Canvas job took
+34m54s. This validates that the current full tier still executes, not a
+before/after speedup. The separate `v1.1.260-selfhost-preview.1` handoff is
+public but remains an unsupported, unqualified manual-install preview; its
+archive verification is not installed-product qualification.
+
+October 18 checkpoint: #1393 and #1394 are merged after protected CI. The
+unfiltered Issuance-library diagnostic in #1397 passed its PR run with 594
+passed cases, including all 23 required renewal cases, plus fourteen
+fixture-owned ignored cases; its protected queue run remains the merge
+authority. This
+improves obligation visibility, not selective admission or measured full-CI
+turnaround. The Canvas seed-to-migration runtime edge is captured by #1398 in
+shadow-only planning; its scoped PR checks passed, while protected merge and
+complete non-Cargo closure remain open. No existing real-database, process,
+historical-oracle, security or release gate is removed.
+
+Handoff work is separate from A0-A7 completion: the public v1.1.255 preview
+remains unsupported. #1399's exact sixteen-role, pinned-version diagnostic
+must pass the live contracts and protected queue. Its reviewed follow-on emits
+only KMS name/version environment assignments, not a runnable installation.
+Native-Linux Docker reachability, operator-supplied domain/identity/secrets,
+and an outside tester's clean install remain open.
+
+## Current delivery and maintenance-batch checkpoint
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously verified assets. Its unchanged bundle passed
+all fifteen local installed-journey phases in 169.812 seconds. The descriptor
+remains unqualified: no supported installer, hardware minimum or independent
+native Linux consumer installation is established. Outside testing can proceed
+under the approved unsupported-preview policy; do not wait for all A0-A7 work.
+
+[PR #1390](https://github.com/ElevenID/marty-ui/pull/1390) merged as
+`6daf4232cd110656652dec28fd57794693078fce` after successful protected run
+`39081635419`. It supplies early operator-password validation/generation and
+two executed virtual-clock timeout matrices; it does not modify v1.1.255 assets.
+
+The independent renewal-write overlap [PR #1391](https://github.com/ElevenID/marty-ui/pull/1391)
+passed all PR checks and protected validation and merged on October 18 at
+00:48 UTC. Hosted contracts
+artifact `12119516080` records write boundaries at 10.803 seconds, versus
+30.292/30.254 seconds in two earlier observations. This roughly 19.5-second
+targeted reduction is not a controlled paired or overall-pipeline speedup.
+The worker inventory records eleven passed tests and three unchanged ignored
+diagnostics, not sixty individual nested outcome lines. A separately reviewed
+local tmpfs probe directly observed all sixty outcomes and owned cleanup;
+its reused worker had unproven producer provenance, so it is not installed
+qualification, physical-durability evidence or a hardware support claim.
+
+This maintenance batch starts from the verified #1390 main and does not depend
+on #1391. It combines Flow case/input evidence and owned cancellation, nineteen
+paused actual-handler port tests, and a 21-input mixed-roster producer drift
+guard. Component worker reviews cleared the changes. The Flow shell suite
+passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
+and combined focused Python checks passed 168 tests (five platform skips).
+PR CI `39084339386` compiled and executed all nineteen new Rust cases and four
+existing retry cases successfully. Its Flow evidence records nine selected and
+executed cases with same-run compiler-artifact identity. Independent review
+verified the named outcomes. Protected queue run `39085856892` passed and
+#1393 merged as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` on October 18
+at 01:39 UTC. The next maintenance batch starts from that actual main.
+The first batch CI release-contract run passed 6,938 tests but found one stale
+verified-leaf count after the new guarded test leaf was added. The correction
+retains the strict count and adds explicit new-leaf membership; its local
+selection regression passed and independent review cleared it. The detailed
+19-handler/60-SQL obligation map is included without authorizing SQL removal.
+No unique real-DB case, historical corpus, production behavior, required gate
+or connection limit is removed or weakened. Current-input drift evidence does
+not establish original-capture provenance or authorize qualification reuse.
+
+## Next reviewed maintenance batch (local; hosted validation pending)
+
+- A0: both self-host acceptance callers reuse the owned obligation recorder.
+  The twelve outer case outcomes, configured image/revision and bounded
+  packager/Compose byte identities do not prove nested assertion reachability,
+  upstream image provenance or installed-product cleanup.
+- Compilation visibility: the existing eight recovery preparation commands
+  emit flushed, fixed-label timings. Preparation-only mode reuses that owner
+  without Docker/TLS provisioning. Optional sanitized cache evidence and its
+  seven-day upload cannot weaken or block the required recovery qualification.
+- Profile consistency: host Rust test/lint and trusted-main warming explicitly
+  use zero dev/test debug info. This reduces CI debug information, not checks;
+  local debugging and production profiles remain unchanged. Package feature
+  graphs remain separate, and cache write failures remain undiagnosed.
+- A6: an opt-in PR diagnostic compiles the Issuance library and requires all
+  23 retry/renewal cases without Docker fixtures. Existing PR and protected
+  suites remain required, including existing optional worker diagnostics.
+  The classifier is unchanged. Narrow-feature hosted qualification must precede
+  any separately reviewed selective admission or speedup claim. Put the label
+  on the PR before its next synchronize event; label changes do not start CI.
+
+Independent integration review confirmed component identity and preserved gates.
+The combined local run passed 263 tests with five platform skips and exposed
+an obsolete container-only profile assertion. Its reviewed update preserves all
+container/compile-scope guards; 53 focused checks then passed. The batch is
+rebuilt on merged main `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` and
+independent review confirmed the reviewed code and main changes are preserved.
+Hosted validation remains required before merge.
+
+The first hosted batch exposed an exact protocol-owner guard that still
+recognized only the old diagnostic matrix. Its correction pins the new additive
+branches while retaining full-workspace and protected-matrix requirements;
+27 gateway tests passed, including new negative controls, and the complete
+public contract CLI passed against pinned protocol source
+`76c37dc229b328afe002b911a26624543f814a64`. Independent review cleared it.
+An additional reviewed ownership guard rejects symlink/non-regular Git-index
+Issuance test leaves before emitting verified ownership; all 35 ownership tests
+passed. Neither correction enables selective skipping.
+
+The same batch includes an opt-in staging flag that reuses the existing secure
+operator-password generator before provisioning. It validates the selected
+source checkout's realm, keeps the value out of reports/arguments/errors, and
+retains default staging and owned-root rollback. Existing released previews
+without the flag keep their separate helper; no v1.1.255 asset is changed.
+Independent review and 12 host tests passed; 15 POSIX cases still require
+Linux CI. This is setup assistance, not turnkey or installed qualification.
+
+The hosted fixture-free diagnostic executed all 23 exact cases successfully in
+run `39087827050`, job `117558108996`, artifact `12121287706`. Independent
+review verified the separate unit inventory, same-run compiler identity and
+that Docker, image and database steps were skipped only on this diagnostic.
+This does not authorize selective admission or prove overall feedback savings.
+The broader local six-module run recorded 496 passed, six platform skips and
+one stale assertion expecting the database step to be unconditional even on
+the new unit-only lane. Its reviewed one-line correction now requires exactly
+`matrix.lane != 'renewal-unit'`; all five focused ownership checks passed while
+retaining full shell/order/gate assertions. Complete hosted validation of the
+corrected head remains required. The previous full release lane recorded
+6,968 passes, 40 skips and 534 subtests, but three stale copies of this guard
+failed. The other two copies in pilot-workflow and dependency-order tests are
+corrected to the same exact condition, retaining their remaining assertions;
+all 26 checks in those two modules passed. The previous Linux stage/generator
+cases executed successfully, including opt-in private mode and owned cleanup.
+
+## Prior handoff checkpoint (superseded delivery state)
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously downloadable files. Use this preview rather
+than v1.1.250. Exact protected-main source is
+`76a7fb4ef6e2ad594dc431da511686a1664979ab`, produced by successful
+[Stack run #39077407940](https://github.com/ElevenID/marty-ui/actions/runs/39077407940).
+Two independent anonymous download checks passed checksums, archive, receipt,
+descriptor, original preparation transaction and source/run binding. The preview
+tag resolves to that source; the attachments remain separately unsigned and the
+descriptor remains **unqualified**.
+
+A fresh unchanged-artifact local replay passed all 15 diagnostic phases in
+169.812 seconds: startup/readiness, public credential journey, live KMS custody,
+Keycloak refresh, both database custody checks and main-stack cleanup. Independent
+review matched all 28 expected local services and the source, fixture, transaction
+and artifact digests. Both attempts' separate disposable OpenBao projects were
+subsequently removed; private bind state and reports were retained under
+`/home/canvasrunner/kms-qualification/v1.1.255/private`.
+
+This enables the approved **unsupported experimental** external testing, not
+supported installer qualification. The shared Windows/WSL Docker VM exposed
+15.1 GiB RAM and used warm caches. Resource capture had errors; the Windows
+backing disk was below the qualification target, regardless of Linux-visible
+virtual free space. Do not infer a supported memory/disk minimum or native Linux
+qualification. Setup remains manual and requires the source and pinned harness.
+Next handoff evidence is an outside tester's independent install and feedback;
+qualified signed installer assets and a reviewed hardware envelope remain open.
+Do not delay experimental testing for unrelated A0-A7 completion.
+
+The first local attempt had a definite invalid fixture input: its generated
+operator password lacked a required special character. Exact HTTP failure
+details were not recovered. The fresh replay used a policy-compliant password
+and passed without changing any immutable artifact or realm policy. The preview
+guide documents those requirements. Reviewed [PR #1390](https://github.com/ElevenID/marty-ui/pull/1390)
+adds early validation/generation and virtual-clock Canvas timeout matrices;
+it is not included in v1.1.255 and still requires hosted Rust execution evidence.
+
+[PR #1389](https://github.com/ElevenID/marty-ui/pull/1389) merged as
+`7693e6ebd098be240a068525f3df710f2c2948bf` after full PR and protected merge-group
+checks. Its effective DB-obligation inventory does not complete A0's transitive
+input graph. The next test-only draft overlaps three isolated renewal-write
+scenarios while retaining all SQL/cancellation assertions and actual 10-second
+intervals. Static review, pinned Rust compilation and a pure settlement test
+passed locally; real DB validation, connection observations and comparable
+before/after timing remain open because the disk guard refused local provisioning.
+No CI speedup is claimed. Existing gates and connection limits remain unchanged.
+
+## Prior handoff checkpoints (superseded delivery state)
+
+The snapshots below retain earlier evidence and failures; they do not override
+the current checkpoint or imply that the older preview is suitable for handoff.
+
+Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
+predates known fresh-install repairs and should not be the next tester handoff.
+Stack v1.1.254 published its standard signed assets and an unqualified prepared
+bundle in [run #39068340445](https://github.com/ElevenID/marty-ui/actions/runs/39068340445).
+Its fresh installed journey completed the public issue/present/verify/revoke
+flow and live OpenBao custody verification, but failed when diagnostics rejected
+later custody phase names. Reviewed [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
+repairs that reporting contract on protected main
+`76a7fb4ef6e2ad594dc431da511686a1664979ab` and selects v1.1.255.
+A fresh local rehearsal with the candidate diagnostics module passed the public
+journey, Keycloak refresh, both database custody checks and owned teardown;
+that overlay run does not qualify an immutable release.
+Its redacted local diagnostic report recorded 173.885 seconds overall:
+113.953 seconds startup, 1.986 seconds public journey and 33.516 seconds cleanup.
+The Linux-visible VM had 16,265,674,752 bytes RAM; sampled host used memory
+reached 7,913,373,696 bytes and swap use reached 2,653,372,416 bytes. These are
+shared-host observations, not stack-specific requirements. Container peak
+memory and OOM evidence were not collected, so this run cannot establish a
+supported memory minimum. Reports remain local at
+`/home/canvasrunner/kms-qualification/v1.1.254/private/install-39068340445-b/installed-diagnostic.json`
+and the sibling `installed-journey.json`.
+The subsequent cleanup audit found nine older disposable OpenBao services still
+running. Each was matched to its stage marker, exact Compose path and owned state
+mount before being stopped; containers, state and reports were retained. The
+existing stack was left running. Future evidence must include separate OpenBao
+cleanup as well as the main runner's teardown, and distinguish remaining shared
+host workloads from the new installation's own container measurements.
+
+Current-main CI evidence: the completed contracts lane of full qualification
+[run #39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
+recorded a 113.029-second ordinary DB group, including 98.520 seconds in
+`canvas_sync_worker_postgres_contract`. Its nested phase timings included
+50.947 seconds renewal job outcomes, 30.301 seconds renewal write failures and
+10.085 seconds renewal generation; these overlap the parent timing and must
+not be added to it. Full qualification subsequently passed. The separate
+published Canvas group recorded 1,105.244 seconds (18m25s), including a
+611.035-second worker target and a 347.953-second composition target. These
+target timings are included in that group; they are distinct from the ordinary
+DB worker above. The contracts-lane host compile cache report showed
+645 Rust hits and four Rust misses, with four cache-write errors. These are
+single-run observations, not before/after speedup measurements; preserve real
+renewal semantics and investigate the write errors before drawing conclusions
+about cache capacity or changing cache configuration.
+
+Next handoff work, in order:
+
+1. Produce the signed v1.1.255 Stack release and its exact prepared bundle.
+2. Replay a fresh installation from those unchanged artifacts, retaining the
+   original qualified preparation transaction and source/run/digest binding.
+   Record the complete journey, custody checks, cleanup and hardware measurements.
+3. Publish a separate explicitly unsupported experimental preview with the ZIP,
+   image lock, receipt, descriptor, original preparation transaction, tester
+   guide and checksums. Verify anonymous downloads independently and hand that
+   version to outside testers. Existing approval permits this experimental
+   distribution before supported qualification; retain accurate limitations.
+4. Finish independent installed replay and review the measured hardware envelope
+   before publishing qualified self-host assets or making support claims.
+
+Enable outside testers to anonymously download and try a disposable self-host
+bundle. The [v1.1.250 experimental preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+is published from protected-main source
+`5a89b3915f19e35c3f77bf9f278c212663e1150f`, with seven anonymously
+downloadable assets. An independent anonymous download passed checksum,
+archive, receipt, descriptor, source and run-lineage checks. Local Docker/Compose
+preflight passed all 31 locked services and confirmed that two project names
+produce separate default networks and Redis socket volumes. The
+[Stack release run](https://github.com/ElevenID/marty-ui/actions/runs/39007886412)
+passed image, security, integration, anonymous-pull and prepared-consumer gates.
+These are preparation checks, **not** installed acceptance; the preview remains
+unsupported and unqualified.
+
+The preview release notes now clarify the external tester's public seven-asset
+path: it supersedes the immutable v1.1.250 source-tag runbook's older Actions
+artifact acquisition step. Staging must not be repeated against the same
+private root. Main-line bundle/runbook guidance points to the current preview;
+neither clarification changes preview assets or installation qualification.
+
+The disposable staging, isolated locked-image OpenBao startup, Keycloak inputs,
+workload TLS and custody helpers are on protected main after reviewed
+[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375) and its prerequisites.
+The fresh-install KMS/startup repair from reviewed
+[PR #1379](https://github.com/ElevenID/marty-ui/pull/1379) is also on protected
+main. The published preview predates that repair; a new exact-source
+experimental candidate is needed before installed replay. Neither merge
+constitutes installed acceptance.
+The preview guide uses the original preparation transaction and a clean exact
+source checkout; it requires a non-root Linux operator and disposable private
+state. [Issue #1350](https://github.com/ElevenID/marty-ui/issues/1350)
+tracks the next evidence: an external tester's fresh installed journey with
+KMS custody, measured RAM/CPU/disk/swap/OOM and owned cleanup. Before a
+**supported** handoff, also establish a reviewed 16 GiB operating envelope or
+document the actual minimum, complete Linux qualification on suitable hardware,
+signed qualified self-host assets and independent anonymous install replay.
+The 15.1 GiB local Docker VM has completed a candidate-overlay rehearsal;
+fresh immutable-release acceptance and a reviewed measured hardware envelope
+remain pending. Defer unrelated A0-A7 optimization behind this handoff.
+
+The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
+published signed standard assets, but its [self-host preparation
+job](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) failed before
+producing a customer ZIP. The receipt verifier expected two OpenBao services
+after the packager added `openbao-tls-init`. PR #1370 repaired the exact
+three-service image check on main. `v1.1.249` published signed assets and a
+prepared ZIP, but its rendered Compose pinned the production default network,
+so the fresh isolated installation was unqualified.
+[PR #1377](https://github.com/ElevenID/marty-ui/pull/1377) fixed project
+network/Redis isolation. `v1.1.250` published the signed standard Stack assets,
+but that qualification does **not** qualify its separate self-host preview or
+either earlier bundle.
+
+## Installed setup requirements
+
+The workload TLS and Keycloak disposable provisioners are now on protected
+main. Preserve their remote-only contract: workload private keys stay in Transit,
+public certificates bind to the selected remote keys, and per-key/realm/purpose
+policies reject foreign-key and cross-realm use. Provisioning and TLS-oracle
+success do not establish installed Compose or supported release acceptance.
+
+- The exact v1.1.250 DIDComm-plugin image passed its release image gate for the
+  Keycloak JWE path; the older cached published image did not support it.
+  Current disposable JWE policies cover the initial key version only and
+  require scoped-token reprovisioning after rotation. Installed rotation
+  readiness remains unqualified.
+- The complete local journey inventory closes all 76 secret names:
+  17 scalar credentials,
+  31 workload TLS files, seven Keycloak files, 15 OpenBao outputs and six
+  disabled-optional placeholders. Independent customer-installed acceptance and
+  supported persistent operation remain unqualified; the local disposable
+  component replay above does not satisfy them. The HAIP token retains its narrow KMS policy.
+- For generated text credentials, preserve the private POSIX directory (`0700`)
+  and container-readable final files (`0444`), with initial `0600` creation and
+  rollback on a failed mode transition. Six optional integration files may be empty only when those
+  integrations are disabled. The local journey does not use a Cloudflare token.
+- Installed hooks require loopback HTTPS OpenBao at the selected signing-keys
+  port and must verify the staged public CA. Wrong-host and foreign-CA
+  rejection remain required.
+
+Disposable setup helpers enforce the POSIX private-root/mode contract and reject
+non-POSIX hosts. The seven Keycloak remote-key inputs share that private root,
+use container-readable final modes and must not overwrite existing files. The
+extracted bundle includes the small shared HTTPS OpenBao client and provisioner;
+focused Linux/Windows tests are not installed-journey acceptance.
+
+The exact services digest pinned by preview .2 lacks
+`/usr/local/bin/marty-passport-tls-bootstrap`; newer source does not repair
+that immutable older image. The v1.1.250 release gate passed the executable
+check on its exact services digest after native-schema qualification. This does
+not prove extracted-image startup or installed acceptance. A healthy
+source-built stack with existing state on a 15.1 GiB VM is not a fresh install
+or measured 16 GiB customer envelope.
+
+The Linux-only disposable TLS helper verifies the extracted image lock and the
+running OpenBao Compose owner, image and state mount. It stages only the 31
+verified self-host public certificates/scoped tokens into the existing private
+root, including the Verification client and exact Rust/catalog filenames; it
+stages neither a root token nor a private workload key. Preserve shared binding
+validation and chmod/chown/Docker-timeout cleanup failure handling. Fresh signed
+image installation and preview qualification remain open.
+
+Release-operator Cargo checks on both Linux architectures must report positive
+executed test counts before building/validating binaries. Preserve the unfiltered
+package, target builds, attestations and protected release gates; current-head
+hosted validation remains required.
+
+## Objective and scope
+
+Reduce the amount of unrelated code and infrastructure needed to validate a change. Establish independently testable Rust boundaries, select checks from their actual dependencies, and report failures earlier while preserving behavior, features, security guarantees, and release qualification.
+
+The user authorized implementation of the investigated improvements, requires self-review and regression prevention, and prefers reuse of Rust code following DRY. All repositories are eligible for a justified change; the evidence currently prioritizes `marty-ui`, with a smaller selector/preflight follow-up in `marty-core`. Repository creation, service deployment splits, and broad framework replacements are not prerequisites.
+
+The October 7 product-packaging and integration plan is now part of this active
+work, not a competing CI plan. Its product-level work IDs remain the source of
+truth for distribution, integration, consumer, and commercial acceptance; this
+tracker coordinates their implementation with A0-A8. The consumer audit was
+made against release v1.1.230 and source revisions older than current main, so
+each defect and dependency must be rechecked against the implementation base.
+Private business sources and unapproved pricing/marketing claims are not
+copied into this repository or turned into engineering decisions.
+
+This document coordinates the new architecture work. [The original build audit](rust-build-audit.md) and [its evidence](rust-build-audit-evidence.md) remain historical records of earlier optimizations. Those completed changes must not be reimplemented.
+
+## Implementation queue
+
+| ID | Work | Dependencies | Status | Remaining boundary |
+| --- | --- | --- | --- | --- |
+| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | DB-contract executables resolve from this run's Cargo artifacts. The normal DB runner now records selected/executed libtest cases, ignored/filter semantics and declared runtime input names/owners in run-bound JSONL. The separate acceptance runners, assertion reachability and complete transitive dependency/obligation graph remain incomplete; no selective skip is authorized. |
+| A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | Dedicated acceptance owners and the guard allowing only registered service composition fixtures have landed. Preserve all moved obligations; installed system acceptance remains distinct from component tests. |
+| A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | The narrow shared Rust extraction is landed. Keep one implementation and public/error/resource-limit compatibility across consumers. |
+| A3 | Preserve Core selection; retire the experimental UI affected-package planner | A0; map A1/A2 changes | UI experiment retired | The complete non-Cargo graph, runtime provisioning and assertion reachability remain unqualified. The shadow report does not select checks and is not close to an authoritative selector. Under the October 24 cleanup decision, remove its script, dedicated tests and PR feedback lane; retain conservative UI validation and Core feature/security owners. |
+| A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Retain old/new case-ID, fixture, assertion and required-lane parity; keep real database, adapter, process and cancellation obligations at their actual boundary. |
+| A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Historical reference closure remains incomplete. No additional qualification skips or weakened current-input/source/producer checks are authorized. |
+| A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | Unknown and mixed inputs remain broad. Preserve fail-closed planned-skip policy, required protected-main/full release gates and same-run evidence validity. |
+| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Cheap Core preflight separation is landed. Preserve the complete KMS, lint, compatibility, feature and security checks; do not extrapolate timings. |
+| A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Nightly qualification remains open: one Linux happy-path tier with no YouTube activity. Official releases retain complete happy/error E2E and official-only YouTube. Unknown tier or missing evidence fails closed. |
+
+October 18 A0 follow-up: the run-bound Flow record observes the
+first non-Cargo renderer hop from the Rust acceptance case to the Python
+renderer and its two direct Compose-owner helpers, with exact source markers
+and hashes. Deeper Python imports, rendered Compose profiles, generated loader
+files, child assertion reachability and fixture provenance remain unclosed.
+This is input visibility only; mixed or unknown diffs and protected/release
+paths remain broad, with no claimed timing improvement.
+
+October 18 A0 extension ([#1424](https://github.com/ElevenID/marty-ui/pull/1424),
+merged as `35dc7400b3f9dccbe1a8b2d55101a545ca030beb` after successful PR
+run `39164079935` and protected merge-group run `39165724387`): record exact
+path/SHA evidence for the statically observed 11-script `runpy` graph, the six
+selected/extended Compose source models, the loader script, public CA fixture,
+and three config/source reads. Reject changed helper edges, renderer model
+selections, and Compose `extends.file` paths. This deliberately inventories
+conditional imports conservatively; it does not prove which branches ran or
+close generated secrets, external tools/packages, Cargo inputs, and child
+assertion reachability. Retain `transitive_source_closure=incomplete` and all
+existing broad/protected gates. The renderer checkout-root provenance check
+and negative tests address the review finding without asserting full closure.
+
+The next A0 renderer slice [#1426](https://github.com/ElevenID/marty-ui/pull/1426)
+merged as `58e92ace7` after protected CI. It records eleven helpers' static
+Python import names and rejects relative, direct dynamic-loader,
+non-stdlib/non-PyYAML and checkout-shadowed imports. It does not pin
+third-party package bytes or prove conditional execution, generated outputs,
+external tools or assertion reachability; retain
+`transitive_source_closure=incomplete` and the unchanged protected gates.
+
+October 20 A0 Canvas follow-up: the last successful main full
+run `39231230045` lasted 41m18s; Canvas was 40.8m, with 22.57m database
+contracts, 8.17m four-case preflight and 7.45m compilation. Routine #1428 PR
+run `39225063739` had a 22.4m Canvas job: 10.15m database contracts, 2.05m
+two-case preflight and 7.42m compilation. These are different revisions and
+qualification tiers, not a controlled speedup comparison. The full tier's
+367.4s published mixed-roster reference and 366.6s current preflight are
+distinct; the reference's 365.3s probe timer is nested, not extra work. The
+reference is serial to protect its 10s child-interrupt bound. Routine PR CI
+already omits the long historical tier, so reference reuse would not shorten
+its feedback. [#1429](https://github.com/ElevenID/marty-ui/pull/1429)
+merged as `52e9c3c9a` after passing targeted tests, independent review, full PR
+CI `39392901208`, and protected merge-group CI `39395522416`. It records the
+exact pinned published image refs and runner-exported PostgreSQL registry in
+each Canvas acceptance record; it does not skip tests or establish historical
+evidence reuse. No measured speedup is claimed.
+
+The routine #1428 artifact's 409s Bookworm container compile did not use the
+host sccache wrapper; its host cache counters cannot describe that isolated
+compile. The same routine Canvas group recorded 78 pinned-probe migration
+seeds and 107 PostgreSQL readiness rows, but their overlapping durations are
+not additive. Seven inspected successful manual runs skipped the opt-in
+migrated-base diagnostics. The [manual full-Canvas pilot 39395651084](https://github.com/ElevenID/marty-ui/actions/runs/39395651084)
+passed on the same Rust source `5be7d6754` as switch-off full-main baseline
+`39231230045`. The `published-canvas` group took 1,203.1s versus 1,353.9s
+(150.8s, 11.1% less); its step took 1,204s versus 1,354s. The exact 135
+composition, 133 worker, and 9 DB-contract cases completed in both runs;
+all five added parity/isolation/failure diagnostics passed. The whole Canvas
+job improved by only 56s (2,395s versus 2,451s), with 58s added diagnostics
+and 26s more compile time. This is same-source evidence, not a guarantee under
+other runner/cache conditions. The reviewed next maintenance change enables
+reuse only for the Canvas CI database step; separate pinned-reference and
+native process obligations, full tiers and protected gates remain unchanged.
+
+The next A0 Canvas inventory slice observes each acceptance target's direct
+Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
+fixtures, recording checkout-relative paths and exact hashes (95 composition,
+50 worker inputs in the reviewed tree). Bounded count checks reject the tested
+non-literal `#[path]`/`include!`/embedded-file forms; missing files and
+out-of-checkout paths fail the evidence recorder before test execution. This is
+observed first-hop visibility, not a complete Rust parser: other module forms,
+nested imports, generated/runtime files,
+external images, assertion reachability and full source closure remain open.
+No Canvas test or qualification tier is skipped.
+
+The follow-up reuses that bounded Rust first-hop collector for the Flow and
+self-host acceptance targets (9 and 10 source inputs in the reviewed tree).
+Their run-bound records now name direct `#[path]`/`include!` Rust modules and
+literal embedded fixtures alongside the existing renderer/runner evidence.
+This does not establish nested-module or runtime-input closure, nor prove that
+all future Rust module syntaxes are recognized. It does not change acceptance
+selection or the required CI lanes.
+
+The Canvas first-hop inventory landed in
+[#1439](https://github.com/ElevenID/marty-ui/pull/1439) as
+`c084fc0fe4c06da59fad5e3261290482d1301c19`; the Flow/self-host extension
+landed in [#1440](https://github.com/ElevenID/marty-ui/pull/1440) as
+`537884a37e2387a85a72caa08d611318fe234732`. Both are diagnostic input
+visibility, not evidence of complete source closure, changed CI selection, or
+a measured turnaround reduction.
+
+The next A0 slice records the Rust compiler depfile adjacent to each of the
+four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
+file inputs without relying on a second hand-maintained module list. A local
+Rust 1.95 package-scoped compile of `marty-platform-clock` confirmed that the
+actual Cargo depfile names both `src/lib.rs` and its embedded public JSON
+fixture; the recorder also parsed that actual depfile. The compiler record is
+target-scoped diagnostic evidence, not authenticated provenance or complete
+closure: it does not enumerate source in dependent crates, cannot guarantee
+coverage of generated files, and does not cover runtime inputs or reached
+assertions. `transitive_source_closure`
+remains incomplete, and no test selection or qualification gate changes.
+
+October 20 A5 diagnostic gap: the first exact-main full run
+[39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
+had one substantive test failure,
+`worker_lease_expiry_reference_matches_published_process`, in its 33m55s
+Canvas job; 125 worker cases passed and two were ignored. The aggregate CI
+gate failed consequentially. The frozen
+published-process oracle rejected a PostgreSQL waiter in `assert_blocker` at
+line 494 during `renewal_lock_early_release`. Its safe failure report contains
+only the exception class and frames, so it cannot distinguish the count,
+worker-query match, and PID conditions in that composite assertion. Identical
+source passed the independent full rerun
+[39413856660](https://github.com/ElevenID/marty-ui/actions/runs/39413856660)
+(Canvas 34m54s); the later current-main full run above also passed. The
+intermittent cause is therefore unproven. Do not relax the real-time lock,
+expiry, or process assertions, rewrite the pinned historical capture source,
+or claim successful reuse. A separate current-input diagnostic should classify
+only bounded, non-secret blocker states before any future oracle change; keep
+the frozen corpus and its source hashes independent.
+
+October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
+landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
+the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
+feature graph but did not warm those exact package graphs. Reviewed
+[UI #1414](https://github.com/ElevenID/marty-ui/pull/1414) reuses the existing
+eight-command Rust-only preparation in the main-only warmer; full PR and
+protected combined-head CI passed before merge. The first
+[main warmer](https://github.com/ElevenID/marty-ui/actions/runs/39148458877)
+passed in 19m42s, with zero cache-write errors. A later read-only
+[#1416 recovery job](https://github.com/ElevenID/marty-ui/actions/runs/39150263162)
+recorded six Rust misses versus 355 pre-warmer; unchanged Flow live signing
+went from 104 misses to zero. Preparation and job time were 6m07s and 5m58s
+shorter respectively across these two runs, but Signing Keys/Issuance source
+and hosted conditions also changed. This demonstrates cache reuse, not a
+guaranteed time saving. Cache occupancy approached the included 10 GiB limit;
+retention and later-run performance need watching. A0 input closure, A3 shadow
+coverage and the remaining A4-A6 obligations stay open; no check or release
+gate was removed.
+
+A3 shadow audit also identified Issuance's separate grant-authorized
+issuer-DID signing dependency on Signing Keys. The planner records that edge
+without narrowing any gate. Source inspection found a runtime contract mismatch:
+the former direct `/internal` base yielded a GET `/internal/resolve-issuer-did`
+and POST `/internal/issuer-dids/sign`, whereas Signing Keys registers POST
+`/internal/compat/resolve-issuer-did` and POST
+`/internal/compat/issuer-dids/sign`. The standard Compose profiles now route
+Issuance through Gateway's supported GET resolve and POST sign endpoints,
+with scoped API keys and the one-use KMS grant. This is source and local HTTP
+test evidence; an installed recovery remains required for the external handoff.
+
+The follow-on shadow inventory also records conditional managed-passport
+issuer-DID signing with its separate passport-origin one-use grant, plus CSCA
+trust-anchor lookup. Both reuse existing Rust signing clients: Issuance calls
+Gateway, which forwards authenticated signing and organization-scoped trust GET
+requests to Signing Keys. Both standard Compose profiles point the relevant
+Issuance role at Gateway; production keeps managed passport signing off unless
+explicitly enabled. The source-backed planner tests check the routes, grant
+origin and production key bindings. This changes no live selector, and A3
+non-Cargo closure remains open.
+
+The October 20 shadow replay over `5be7d6754..52e9c3c9a` also remained broad:
+the exact planning document is an external/unknown input to Cargo metadata.
+That conservative fallback is correct until a non-Cargo/document consumer
+proof exists; the #1429 CI plan was not narrowed by its Rust source ownership.
+
+The October 20 shadow-planner audit found a packaged runtime edge absent from
+Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or
+embedded pages previously returned only that crate, although the binary is
+built and shipped by the sandbox image, service images, and Canvas profile.
+The planner now records six source-backed packaging/use witnesses and keeps
+these inputs broad even if a witness disappears. This corrects shadow evidence
+only; live CI selection and its required checks are unchanged. No speedup is
+claimed until the full non-Cargo graph is qualified.
+
+The October 20 packaged-runtime audit also found that Cargo reverse edges
+alone returned narrow results for the `marty-keyless-grpc-bridge` and
+`marty-passport-keyless-edge` crates. The service-image build copies their
+executables, while Compose runs the Envoy-to-Issuance bridge and the Passport
+and OIDF keyless edges. The shadow planner now records the source-backed
+build, image and runtime witnesses, including the packaged passport TLS
+bootstrap binary, and keeps these changes broad if a witness disappears.
+This is input evidence, not a live CI selector change or measured speedup.
+
+The next A3 shadow audit records the direct `marty-demo-vendor-seed` binary
+consumer as well as its Cargo-dependent Canvas seed: the migrations image builds
+and copies the binary, and the explicit `seed-demo-vendor-fixtures` Make target
+invokes it through `db-migrate`. The existing full fallback remains in place
+even if a packaging witness disappears; no live check is skipped.
+
+A6 narrow PR pilot: a change containing only the two verified Issuance
+`canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
+full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
+and Docker-context proof must pass first. That lane discovers and executes the
+entire Issuance library roster, requires all 23 retry/renewal cases and the
+exact separately owned ignored cases, and retains run-bound artifact evidence.
+Mixed, missing, or unproved inputs keep the broader PR plan. Protected merge
+groups, main, and official releases retain their full required qualification;
+the 60 real-PostgreSQL renewal cases are not removed. Treat this as a selective
+feedback candidate, not a measured speedup until comparable hosted runs exist.
+
+The next A6 extension adds the other eight verified, non-ignored Issuance
+library test leaves to that same PR-only route. These cover Canvas operation,
+provider and processor, DIDComm renewal, Python formatting, signing HTTP
+projection/response and token-rate middleware. Each is a direct `cfg(test)`
+module with one proved library owner and no separately owned database fixture.
+The passport reconciliation leaf is excluded because five cases require its
+PostgreSQL owner and are ignored in the ordinary library run. The lane still
+executes and records the complete Issuance library; mixed or unproved diffs,
+merge groups and releases remain broad. No production source or case is removed.
+
+## Product packaging and integration gates
+
+The coordinating workspace product plan
+`artifacts/consumer-audit-2026-10-07/marty-product-packaging-and-integration-plan.md`
+retains the detailed PKG01-09, INT01-06, TST01-05, CICD01-04, BUS01-02,
+MKT01-02 and QA01-02 criteria. Preserve these identifiers when reconciling work.
+
+- TST/CICD: map old/new case IDs, fixtures, assertions and required lanes;
+  establish run-bound parity and conservative selection. Nightly discovery
+  cannot replace required merge or release checks.
+- INT01/PKG01-02: use anonymously accessible, digest-bound artifacts and fresh
+  installation evidence. Default Canvas worker behavior remains unchanged;
+  no-Canvas is opt-in. Any default switch requires pre-upgrade detection,
+  existing-customer rehearsal and rollback. Do not narrow Canvas CI without
+  dependency closure and affected-case parity.
+- PKG03-07/INT02-04: prove independent verification/issuance artifact and adapter
+  closures, tenant/security/transaction boundaries, migrations and ownership.
+  A smaller image alone does not establish an independent verifier.
+- INT05-06/PKG08-09: qualify installed capability authorization, supported
+  existing-customer migration/recovery, public SDK/install paths, exact-artifact
+  journeys and digest-preserving promotion. Keep official-release E2E and
+  critical negative/security coverage.
+- BUS/MKT/QA: retain license, source/notices and demonstrable public artifact
+  facts. Commercial/legal owners decide pricing, license routes, hosted
+  availability and public claims. Engineering does not invent those claims.
+
+## Coverage and evidence safeguards
+
+### A4 renewal-handler port matrix
+
+The merged `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
+`SpyRepository`, `NoOAuth` and retry job fixture. Its optional scripted boundary
+leaves existing short-test fail-fast behavior unchanged. Fifteen separately
+discoverable paused-clock cases execute the actual `process_job`: three renewal
+write failures crossed with the five canonical processor outcomes from
+`canvas-worker-renewal-job-outcomes.json`. Three secondary-persistence failures
+preserve the original renewal error; one real `run_cycle` case checks accounting.
+The tests assert exact port identities, ordering, cleanup acknowledgement and
+20-second renewal/30-second deadline behavior without waiting in real time.
+
+This is additive handler coverage, not SQL or durable-fence emulation. All 60
+real PostgreSQL cases, pinned references, process guarantees and required lanes
+remain unchanged; `cutover_authorized` remains false. Future removal requires
+reviewed old/new case/assertion/input/lane mapping and preserved adapter evidence.
+The new leaf is omitted from release Docker contexts through the existing
+exact-file, direct-`cfg(test)` ownership guard. PR #1393's hosted contracts
+job executed all 19 new cases and its protected merge-group run passed before
+merge as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567`. No SQL case was
+removed and no overall speedup is claimed.
+
+[The obligation inventory](architecture-test-obligations.md) retains assertion,
+input and execution owners. An assertion move is not a new independent oracle.
+Keep tests and source/dependency ownership aligned; an ignored, conditional,
+undiscovered or empty test does not satisfy a gate. Reuse evidence only when
+its source, inputs, producer, environment and scope remain valid. Require full
+qualification on the exact protected-main source before stable preparation;
+a changed source requires a new applicable qualification run.
+
+Batch related changes by owner and validation path. Moving tests, changing
+assertions and reducing triggers together requires independent coverage proof.
+Report measured setup, compilation, execution, queue and approval times
+separately, with comparable warm/cold conditions; file size is not a speedup.
+
+## Review, validation, and coordination
+
+1. Start each implementation PR from current upstream main in an isolated worktree. Claim its tracker row and list affected paths; avoid overlapping ownership of manifests, fixture helpers, and workflow selectors.
+2. Write the behavioral and coverage invariants before editing. Identify shared Rust code to reuse and any temporary compatibility layer to remove later.
+3. Run package-scoped checks, targeted tests, and relevant workflow/packaging validation. Reserve expensive full runs for meaningful milestones and existing protected CI; do not rerun them after every small edit without a reason.
+4. Self-review the complete diff and dependency/test-selection changes. Have a reviewer worker examine implementation PRs for regressions, missed inputs, boundary leaks, and coverage loss, following the user's established review loop.
+5. Resolve findings and review again. Record validation against the reviewed commit; invalidate affected evidence after subsequent changes. Do not merge with unresolved correctness, security, or coverage findings or failed required checks.
+6. Merge ready maintenance PRs through the existing protected process. Preserve tests, features, environment approvals, and the open-source/free-tier constraint. Record PR, merge SHA, checks, reviewer disposition, and any justified deviations here.
+7. Verify normal post-merge behavior at milestones and compare equivalent job/step timings. Distinguish execution time, compilation, setup, queue/approval delay, and runner work; report warm/cold conditions and uncertainty.
+
+Self-review specifically checks error paths, tenant/security boundaries, feature combinations, ownership/cleanup, public interfaces, dependency changes, and whether a test really executed its intended scenario. For selection changes, it also checks negative cases and conservative fallback behavior.
+
+## Goal completion criteria
+
+- Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
+- Tests have explicit owners and inputs; cross-service acceptance no longer requires unjustified service development dependencies for the moved scenarios.
+- At least one justified narrow Rust boundary is independently testable, with shared implementations and no untracked duplicate logic.
+- Selective validation is supported by dependency and regression evidence; unproven exclusions remain broad.
+- No unique behavioral/security obligation, feature, test case, or protected release requirement is lost.
+- Historical reference and native validation responsibilities are explicit, with any evidence reuse checked for validity.
+- Normal GitHub runs demonstrate the resulting feedback behavior. Record actual savings or absence of savings without extrapolating from code size.
+- Release-tier tests prove nightly single-Linux happy-path qualification and no YouTube activity, while official production releases run the complete happy/error E2E inventory with release-bound evidence and official-only YouTube publication; unknown tier and missing evidence fail closed.
+- The test inventory demonstrates a genuine pyramid across unit, integration/contract, and E2E layers, with explicit tier/trigger ownership and no lost unique assertion; nightly executes only its declared happy-path cases at each layer, major-version qualification executes the complete mapped matrices, and every official stable release retains complete E2E qualification.
+
+## Historical checkpoints
+
+Chronological implementation, PR, run and timing snapshots are recoverable at
+Git commit `c86b2f8c6b34ba7ec1bac5461ded03b28adb7745`. They were removed from this active queue.
+Keep current requirements and unresolved acceptance here; store per-run output
+in CI artifacts or ignored local directories. Historical branch/recorder reports
+do not authorize removal of local unmerged work or imply current workspace state.
+
+Additional October 16 setup checkpoint history is recoverable from protected
+main commit `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its active constraints are retained above.
+
+The installed-setup requirements also incorporate protected-main checkpoint
+`dd0d8d17a556696d6d287b785f40c3fc61f72b66`; source/package checks do not qualify the preview.
+
+### October 24: UI impact-analysis experiment retired
+
+The affected-Rust planner required more than a final enablement step: complete
+non-Cargo runtime/image/provisioning ownership and assertion reachability were
+still open. Its package report only went to logs; no CI selector consumed it.
+The user authorized retirement when completion was not close. Remove the shadow
+report and its dedicated feedback mode rather than keep expanding witness tables.
+Existing conservative Rust, release, security and protected merge-group checks
+remain authoritative. Earlier A3 observations below/above are historical research,
+not a remaining implementation commitment. A0 run-bound execution checks remain.
+
+### October 24: shared Rust startup and Passport model policy
+
+Nine services share signal installation and the unchanged watch-channel shutdown
+loop through `marty-service-runtime`. Strict and best-effort installation policies
+remain distinct. Organization and Credential Template additionally share their
+server-only OpenBao TLS configuration and sequential incoming stream adapter;
+MMF still owns TLS and KMS signing. Workload mTLS, service authorization, health
+rosters, outbox draining and public diagnostics retain their service owners.
+
+Passport tooling delegates the common read-only custody, beta origin/loopback,
+runtime selector and credential-isolation scans to `marty-deploy operator
+passport-model`. The four Python entrypoints retain their public functions and
+error types. They use the existing source-matched native operator launcher; no
+Python policy fallback or production resource mutation is added. Model input is
+bounded and credential values stay on stdin, absent from policy results.
+
+Surface-specific filesystem safety, Docker/Kubernetes identity observations,
+attestation verification, provisioning, recovery and receipt collection remain
+necessary features, not obsolete proof artifacts. Their migration is deliberately
+separate from sharing these deterministic validation rules. This change does not
+claim installed-release or live supported-Passport acceptance.
+
+Local beta configuration checks now need the matching Rust operator: source
+checkouts use Cargo/toolchain 1.95.0 with the locked workspace; installed use must
+supply the signed source-matched `MARTY_DEPLOY_BIN` and its existing digest/source/
+release identity variables. A missing or outdated operator fails closed. The
+supported-consumer workflow installs that toolchain and builds the operator before
+collection. No previous-release binary without `passport-model` is accepted.
+
+### October 24: remaining deployment and execution consolidation
+
+Move deterministic Kubernetes admission and self-host credential policy into the
+existing Rust deployment operator. Keep kubectl/cluster UID and CA observations,
+Docker/HTTP inspection, secret-file reads and provisioning at their current owners.
+Python public preflight functions retain their error types and checks; source and
+installed workflows require the matching verified native operator.
+
+CI libtest selection, discovery, result-log parsing, exact roster/summary consistency
+and positive-summary policy now share the CI-only `marty-ci-execution` Rust helper.
+It is separate from the shipped deployment operator. Both use the same digest,
+source, release-tag and checkout identity verifier and shared CI build bootstrap.
+CI prepares the helper before consuming checks; source checkouts can build it
+with pinned Cargo 1.95.0 and the locked workspace. Candidate summary filtering
+keeps arbitrary child output outside the policy request; the CI-only stdin
+interface retains the old local parsers' input capacity.
+
+Keep the existing process-group cancellation/reaping, streaming, per-database
+scheduling, exact Cargo executable identity, runtime input checks, Python AST
+source inventory and evidence schemas. These enforce behavior and are not dead
+proof artifacts. The process supervisor is retained until a native replacement
+has equivalent signal-during-spawn and descendant cleanup qualification. A full
+orchestrator rewrite is not required to share deterministic policy.
+
+Python Canvas production launch compatibility is not yet a dead path. Read-only
+Docker inspection on October 24 found the elevenid-beta worker running the native
+binary, while `marty-selfhost-prod-canvas-sync-worker-1` still ran the Python
+loader and configured processor. The live self-host deployment must keep its
+preflight/rollback coverage until the deployment owner qualifies and deploys an
+accepted Rust-only release, verifies KMS/readiness/database/process behavior and
+records a rollback plan. Root/deployment owner owns that cutover; cleanup owns
+subsequent allowance removal. No production process, image or configuration was
+changed by this code cleanup. Historical published-image qualification remains
+independent. Retiring the allowance before that cutover would remove a live
+feature and is deferred rather than silently changing its supported scope.
+
+
+### October 24: Compose policy, signing ceremonies and Canvas response handling
+
+The source-matched Rust deployment operator now owns deterministic supported
+Compose topology/runtime checks and beta simulator/physical-provider admission.
+Python keeps canonical filesystem and mounted-file inspection, rendering, live
+identity/expiry observations, registry loading, provisioning and attestation.
+Both provider modes remain supported; passing static policy does not qualify a
+live release. Installed callers need the matching verified operator containing
+these Compose operations. Credential-bearing inputs remain on bounded stdin.
+Unicode authority validation uses the already locked ICU normalizer; no package
+version is changed.
+
+Gateway and Signing Keys share CSR intent validation and grant field construction
+through `marty-signing-grant`. Gateway keeps authorization and tenant scoping;
+Signing Keys independently checks the resolved KMS key, algorithm and actual
+bytes before consuming the one-use grant. No local signing fallback is added.
+Gateway ceremony orchestration lives in its own module and shares mint-error
+handling without merging the distinct public routes or purposes.
+
+Canvas catalog, OAuth and sync responses share bounded JSON body collection.
+Their status mapping, byte ceilings and pagination policies remain distinct.
+The sync reader still drives each chunk through the owned operation/inactivity
+timeout and cancellation path; the other clients retain their total deadlines.
+Pagination parsers are colocated without changing strict sync versus permissive
+catalog handling. The production Python Canvas cutover hold above still applies.
+
+### October 25: shared deployment observations and certificate operations
+
+Rendered support-service admission and live Compose ownership now share native
+service expectations. Model validation retains Organization-bound database and
+tenant values; live inspection retains fixed protected-run identity, duplicate
+environment-key refusal and raw-credential exclusion. Python still reads Docker
+and filesystem observations. Native results contain decisions and public
+readiness metadata, never observed credential-bearing environment maps.
+Supported-consumer runtime image/readiness checks and selfhost KMS transport
+admission also use the matching Rust operator. URL parsing stays with the
+existing adapter to preserve its hostname, port and userinfo semantics.
+
+The same operator validates disposable staging inputs, preserved scoped Raft
+OpenBao custody and partial resume generations. It preserves stopped-old versus
+replacement identity, config hashes, selectors, process bindings, subset network
+admission and exact-network readiness. Existing release attestations, lease and
+filesystem checks, maintenance receipt lineage, SQL fences, production isolation,
+Docker mutations and rollback remain with their protected owners. Static native
+policy does not establish release acceptance or authorize a production cutover.
+
+Signing Keys certificate issuance, enrollment and publication operations are
+separate from the transport router. Shared CSR completion classifies remote DER
+encoding, base64 and signature-verification failures while preserving each
+provider's existing HTTP diagnostics. Issuer and service grants, resolved-key
+checks, CSCA/DSC idempotency and KMS-only custody remain independent. No process
+supervisor, active Canvas compatibility path or physical Passport feature is
+retired by this consolidation.
+
+### October 25: Gateway domains, KMS adapters and aggregate planning
+
+Gateway profile/template, issuance/verification orchestration and internal signing
+compatibility handlers live in private domain modules. The router, middleware
+order, tenant authorization, trusted identities and proxy transport remain at
+their existing owner. Three identical body admission paths share the same bounded
+JSON-object reader; grant parsing and tenant binding still precede forwarding.
+
+Signing Keys cloud provider adapters are separate modules. OpenBao continues to
+use the existing trusted HTTPS transport. Provider request execution shares
+response-size bounds, status classification and redacted errors; only the existing
+lifecycle calls accept an empty success response. Provider authentication,
+requested key versions, algorithms and response-key binding remain distinct.
+Every production signature remains remote KMS backed.
+
+Rust deployment policy now calculates aggregate start groups and expected networks
+from the observed signed generation and rendered services. It reuses beta origin
+and private Gateway admission, preserves OpenBao, checks native dispatch/selectors,
+and separates application replacement from ingress startup. Python retains
+protected SQL hashes, receipt/fence lineage and metadata copying, including integer
+receipt IDs larger than JSON's native u64 range. Native output contains public
+resource identities and decisions, not observed credential-bearing environments.
+
+Disposable teardown also delegates record and final project inventory admission
+to Rust. Live resource reinspection, labels, mounts, canonical filesystem paths,
+network attachments, exact Docker mutations and post-deletion absence checks stay
+with the current protected owner. Private input staging and its filesystem rollback
+are retained. This completes these policy consolidations; it does not claim a
+native replacement for all deployment I/O or authorize production changes.

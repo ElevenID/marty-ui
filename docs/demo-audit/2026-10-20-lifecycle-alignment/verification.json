@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-10-20",
+  "scope": "Focused local implementation verification, synthetic UI interception, and generated-media composition.",
+  "runtime": {
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "chromeForTesting": "155.0.8059.84"
+  },
+  "uniqueFocusedTestsPassed": 129,
+  "groups": [
+    {
+      "name": "React reviewer/issuance/identity/API tests",
+      "pass": 31,
+      "fail": 0,
+      "command": "cd ui && npm test -- src/components/console/operate/IssuingSection.test.tsx src/components/console/operate/ApplicationReviewPage.test.tsx src/components/__tests__/MyIdentityPage.test.tsx src/services/__tests__/applicantApi.test.ts src/services/__tests__/authApi.test.ts",
+      "counting": "Initial five-file run passed 30 cases. The later IssuingSection run passed four cases, including one newly added map-only-offer regression: 31 unique cases total.",
+      "boundary": "React and scripted service fixtures; no deployed backend."
+    },
+    {
+      "name": "Lifecycle exact ownership and action evidence",
+      "pass": 33,
+      "fail": 0,
+      "command": "node tests/scripts/audit-beta-credential-lifecycle.test.js",
+      "boundary": "20 retained ownership checks and 13 new recording/evidence checks."
+    },
+    {
+      "name": "Shared recording, ownership, review, employee, passport, provider guards",
+      "pass": 53,
+      "fail": 0,
+      "rawResults": "evidence/local-node-checks.json",
+      "command": "Run each listed test file directly with node from marty-ui/tests/scripts.",
+      "cases": [
+        {
+          "file": "demo-recording.test.js",
+          "exitCode": 0,
+          "tests": 8,
+          "pass": 8,
+          "fail": 0,
+          "skipped": 0
+        },
+        {
+          "file": "beta-demo-resource-helpers.test.js",
+          "exitCode": 0,
+          "tests": 24,
+          "pass": 24,
+          "fail": 0,
+          "skipped": 0
+        },
+        {
+          "file": "beta-demo-review-ui.test.js",
+          "exitCode": 0,
+          "tests": 3,
+          "pass": 2,
+          "fail": 0,
+          "skipped": 1
+        },
+        {
+          "file": "audit-beta-employee-access.test.js",
+          "exitCode": 0,
+          "tests": 5,
+          "pass": 5,
+          "fail": 0,
+          "skipped": 0
+        },
+        {
+          "file": "audit-beta-passport-clearance.test.js",
+          "exitCode": 0,
+          "tests": 6,
+          "pass": 6,
+          "fail": 0,
+          "skipped": 0
+        },
+        {
+          "file": "audit-beta-issuer-provider-switch.test.js",
+          "exitCode": 0,
+          "tests": 6,
+          "pass": 6,
+          "fail": 0,
+          "skipped": 0
+        },
+        {
+          "file": "beta-issuer-provider-switch-contract.test.js",
+          "exitCode": 0,
+          "tests": 2,
+          "pass": 2,
+          "fail": 0,
+          "skipped": 0
+        }
+      ],
+      "boundary": "The browser fixture is skipped in this no-browser invocation; it was executed separately below."
+    },
+    {
+      "name": "Real Chrome reviewer-control fixture",
+      "pass": 1,
+      "fail": 0,
+      "command": "MARTY_AUDIT_BROWSER=/path/to/chrome node tests/scripts/beta-demo-review-ui.test.js",
+      "counting": "The command passed three cases: two pure checks already counted above and one additional browser fixture.",
+      "boundary": "Real local browser clicks with every service request intercepted. Asserts exact approval note/request, exact issue route, and QR masking before first displayed frame. No beta access."
+    },
+    {
+      "name": "Lifecycle composition profile",
+      "pass": 11,
+      "fail": 0,
+      "command": "node --test --test-reporter=spec test/lifecyclePresentationProfile.test.js",
+      "boundary": "Includes an actual compose CLI run using generated test bars and a tone; validates the shared profile, not an actual demo or the provisional voice audio."
+    }
+  ],
+  "legacyCompatibility": {
+    "pass": 20,
+    "fail": 1,
+    "testCount": 21,
+    "testSources": {
+      "repository": "ElevenID/marty-demo-recorder",
+      "revision": "64c9bc986185b53bdcb1dd3d383787ad94fe931a",
+      "paths": [
+        "test/compose.test.js",
+        "test/openingRoadmap.test.js"
+      ]
+    },
+    "baselineCompared": "a31f7d3b4fab3c00631c00b1575eff5d8dfcc9f8",
+    "failure": "Expected container duration 12 seconds; observed 11.96 seconds with the correct 300 frames. Same failure on prior source.",
+    "regressionIntroducedByThisPass": false,
+    "evidence": "evidence/baseline-compose-compatibility.txt"
+  },
+  "otherChecks": [
+    {
+      "check": "npx tsc -p tsconfig.build.json --noEmit",
+      "result": "PASS",
+      "scope": "UI, before the final small guard/copy changes; focused component tests rerun afterward."
+    },
+    {
+      "check": "JavaScript parse and git diff --check",
+      "result": "PASS"
+    },
+    {
+      "check": "Alignment data",
+      "result": "PASS",
+      "catalogMatches": 14,
+      "acceptanceContracts": 12,
+      "orderedStoryBeats": 61,
+      "validRoadmaps": 14,
+      "unboundCaptures": 14,
+      "configReferences": 16,
+      "sourceLocatorReferences": 41,
+      "pinnedUpstreamReferences": 3,
+      "compositionSourceReferences": 4
+    },
+    {
+      "check": "Visual fixture inspection",
+      "result": "PASS",
+      "frames": [
+        "Six-stage roadmap",
+        "Reserved subtitle band",
+        "Focused action and reconstructed pointer"
+      ],
+      "boundary": "Generated test bars and tone; not user footage or actual voice."
+    }
+  ],
+  "generatedMediaFixture": {
+    "classification": "SYNTHETIC_TEST_PATTERN_AND_TONE_ONLY",
+    "actualDemo": false,
+    "actualVoice": false,
+    "durationSeconds": 11,
+    "width": 2560,
+    "height": 1440,
+    "fps": 25,
+    "roadmapStages": 6,
+    "profileStatus": "DRAFT_AWAITING_EXACT_MASTER_REVIEW",
+    "voiceStatus": "PROVISIONAL",
+    "qualification": "NOT_EVALUATED_BY_COMPOSITION",
+    "masterSha256": "8f96b809b9b1fa36e5eb7d02b1d0bced61020bd32f78aea5d00f72ec3d02082d",
+    "compositionReportSha256": "ffe5013464bbb0ea15daa0127f70a7cdc70826247b2c32290a7c25f0c7670717",
+    "retainedInDownload": false,
+    "reproduction": "Set DEMO_PROFILE_TEST_ARTIFACTS to an empty output directory while running lifecyclePresentationProfile.test.js."
+  },
+  "notExecuted": [
+    "A new full production build in this pass; the preceding audit records its own build result.",
+    "Fresh authenticated beta journeys or native/Android/Windows production qualification.",
+    "Real external KMS switching or stock Canvas OSS portability.",
+    "A production audit receiver for the offline upload scenario.",
+    "Current D11 deployed callback denial/scope/duplicate qualification or D12 physical-booklet verification.",
+    "Any actual demo rerecording, voice synthesis, exact-master human review, deployment, or publication."
+  ],
+  "catalogStateAfterWork": "14 DRAFT scenarios; 60 NOT_RUN assertions; release/public readiness false.",
+  "gitApplicationChecks": "Recorded separately in the download after the audit documentation commits are finalized. Selected-source recorder application does not establish full private-checkout compatibility."
+}

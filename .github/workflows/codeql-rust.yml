@@ -1,0 +1,209 @@
+name: CodeQL Rust
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze-rust:
+    name: Analyze Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CODEQL_ADVANCED_ENABLED: ${{ vars.CODEQL_ADVANCED_ENABLED }}
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
+      # Full dependency source can be present in CodeQL databases and caches.
+      CODEQL_OVERLAY_DATABASE_MODE: none
+      CODEQL_ACTION_DEBUG_COMBINED_SARIF: 'false'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+      security-events: write
+    steps:
+      - name: Require the completed advanced CodeQL cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CODEQL_ADVANCED_ENABLED" = "true"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate the complete source-bound analysis diff
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 scripts/ci/codeql_scope.py
+      - name: Classify Rust analysis scope
+        id: scope
+        env:
+          CODEQL_SCOPE_FILE: ${{ runner.temp }}/codeql-scope.json
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { readFileSync } = require('node:fs');
+            const scope = JSON.parse(readFileSync(process.env.CODEQL_SCOPE_FILE, 'utf8'));
+            if (scope.event !== context.eventName) throw new Error('CodeQL event mismatch');
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('analyze', String(!(context.eventName === 'merge_group' && scope.website_only)));
+              return;
+            }
+            const files = scope.files;
+            const analyze = files.some(({ filename }) =>
+              filename.startsWith('scripts/ci/') ||
+              filename === 'contracts/website-source-ownership.json' ||
+              filename.startsWith('rust/') ||
+              filename.startsWith('.github/codeql/') ||
+              filename === '.github/workflows/codeql-rust.yml'
+            );
+            const testOnlyCandidate = files.length > 0 && files.every(
+              ({ filename, status, previous_filename }) =>
+                status === 'modified' && !previous_filename &&
+                /^(?:rust\/crates\/(?:flow|selfhost|service)-acceptance|rust\/services\/signing-keys)\/tests\/[a-z0-9_/-]+\.rs$/.test(filename)
+            );
+            core.info(analyze
+              ? 'Rust-relevant changes require CodeQL analysis.'
+              : 'No Rust-relevant changes; satisfying the required check without analysis.');
+            core.setOutput('analyze', String(analyze));
+            core.setOutput('test_only_candidate', String(testOnlyCandidate));
+            if (testOnlyCandidate) {
+              core.setOutput('candidate_paths', Buffer.from(
+                JSON.stringify(files.map(({ filename }) => filename))
+              ).toString('base64'));
+            }
+      - name: Record scoped analysis skip
+        if: steps.scope.outputs.analyze != 'true'
+        run: echo "Rust CodeQL is not affected by this pull request."
+      - name: Prove test-only sources are outside production Rust analysis
+        id: test_only
+        if: steps.scope.outputs.test_only_candidate == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          CANDIDATE_PATHS: ${{ steps.scope.outputs.candidate_paths }}
+        with:
+          script: |
+            const { readFileSync } = require('node:fs');
+            const { spawnSync } = require('node:child_process');
+            const expectedConfig = [
+              'name: Production Rust', '', 'paths:',
+              '  - rust/crates/**', '  - rust/services/**',
+              'paths-ignore:', '  - rust/**/tests/**',
+              '  - rust/third_party/**', '', '',
+            ].join('\n');
+            const config = readFileSync('.github/codeql/codeql-production.yml', 'utf8')
+              .replace(/\r\n/g, '\n');
+            if (config !== expectedConfig) {
+              core.info('Production CodeQL scope changed; retaining Rust analysis.');
+              return;
+            }
+            const workflow = readFileSync('.github/workflows/codeql-rust.yml', 'utf8')
+              .replace(/\r\n/g, '\n');
+            const initBlocks = workflow.split('      - name: Initialize production-focused analysis\n');
+            const expectedConfigFile = '$' + "{{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}";
+            const expectedInit = [
+              "        if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'",
+              '        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066',
+              '        with:',
+              '          languages: rust',
+              '          build-mode: none',
+              '          dependency-caching: false',
+              '          trap-caching: false',
+              '          debug: false',
+              `          config-file: ${expectedConfigFile}`,
+            ].join('\n');
+            if (initBlocks.length !== 2 ||
+                initBlocks[1].split('\n      - name: Analyze Rust\n')[0] !== expectedInit) {
+              core.info('Rust CodeQL initialization changed; retaining analysis.');
+              return;
+            }
+            const candidates = JSON.parse(Buffer.from(
+              process.env.CANDIDATE_PATHS, 'base64'
+            ).toString('utf8'));
+            const verified = new Set();
+            for (const flag of [
+              '--emit-verified-flow-tests',
+              '--emit-verified-selfhost-tests',
+              '--emit-verified-contract-tests',
+            ]) {
+              const result = spawnSync('python3', [
+                'tests/test_rust_test_only_docker_context.py', flag,
+              ], { encoding: 'utf8' });
+              if (result.status !== 0 || result.stderr ||
+                  !result.stdout.endsWith('\0')) {
+                core.info(`${flag} proof unavailable; retaining Rust analysis.`);
+                return;
+              }
+              for (const path of result.stdout.slice(0, -1).split('\0')) {
+                if (!path || verified.has(path)) {
+                  core.info('Duplicate or empty test source; retaining Rust analysis.');
+                  return;
+                }
+                verified.add(path);
+              }
+            }
+            if (!candidates.every(path => verified.has(path))) {
+              core.info('Unverified test source; retaining Rust analysis.');
+              return;
+            }
+            core.info('All changed Rust files are proven test-only and excluded by production CodeQL; protected merge-group analysis remains required.');
+            core.setOutput('skip', 'true');
+      - name: Record proven test-only analysis skip
+        if: steps.test_only.outputs.skip == 'true'
+        run: echo "Production Rust CodeQL has no changed input in this exact-source PR."
+      # Scope classification above has no reader or private dependency cache.
+      # Preserve source-only skips before admitting native analysis.
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python3 ".github/scripts/private-forks.py" check
+      - name: Reject private source debug exports
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # CodeQL enables database debug artifacts when core.isDebug() is true,
+          # even with debug:false. Stop before fetching private source.
+          if [[ "${RUNNER_DEBUG:-}" == "1" ]]; then
+            echo '::error::Private Rust analysis requires Actions step debug logging to be disabled.'
+            exit 1
+          fi
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - name: Initialize production-focused analysis
+        if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: rust
+          build-mode: none
+          dependency-caching: false
+          trap-caching: false
+          debug: false
+          config-file: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}
+      - name: Analyze Rust
+        if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          category: /language:rust
+          upload-database: false

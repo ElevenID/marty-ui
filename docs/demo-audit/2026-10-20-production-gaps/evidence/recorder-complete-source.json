@@ -1,0 +1,11 @@
+{
+  "upstreamRevision": "64c9bc986185b53bdcb1dd3d383787ad94fe931a",
+  "upstreamTree": "4e6089f470c9e1a1ca5a704a4587c233acb2e12c",
+  "blobsVerified": 453,
+  "syntheticSnapshotCommit": "c31ebb6ca1a2189d2e1c10d53b61961310730bff",
+  "priorAuditsReplayed": 6,
+  "priorAuditEquivalentHead": "d9e41aefdfd9b5fee5109b4d7d186929fa7106dc",
+  "priorAuditEquivalentTree": "ca29838b63cab4985e62a31c50c68951dccf32d1",
+  "upstreamHistoryImported": false,
+  "fullUpstreamSourceTreeApplication": "PASS"
+}

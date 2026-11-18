@@ -1,0 +1,1450 @@
+//! Fail-closed runtime configuration for the Rust gateway executable.
+
+use marty_service_runtime::config;
+use std::{
+    collections::BTreeMap,
+    env, fmt, fs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
+
+use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
+use thiserror::Error;
+
+use crate::discovery::{release_version_label, ReleaseIdentity};
+
+const DEFAULT_READY_SERVICES: &[&str] = &[
+    "auth",
+    "organizations",
+    "credential-templates",
+    "trust-profiles",
+    "presentation-policies",
+    "deployment-profiles",
+    "signing-keys",
+    "flows",
+    "issuance",
+];
+
+const SERVICE_URLS: &[(&str, &str, &str)] = &[
+    ("auth", "AUTH_SERVICE_URL", "http://localhost:8001"),
+    (
+        "organizations",
+        "ORGANIZATION_SERVICE_URL",
+        "http://localhost:8002",
+    ),
+    (
+        "credential-templates",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "http://localhost:8003",
+    ),
+    (
+        "trust-profiles",
+        "TRUST_PROFILE_SERVICE_URL",
+        "http://localhost:8004",
+    ),
+    ("issuance", "ISSUANCE_SERVICE_URL", "http://localhost:8005"),
+    (
+        "applicant",
+        "APPLICANT_SERVICE_URL",
+        "http://localhost:8006",
+    ),
+    (
+        "notifications",
+        "NOTIFICATION_SERVICE_URL",
+        "http://localhost:8007",
+    ),
+    (
+        "compliance-profiles",
+        "COMPLIANCE_PROFILE_SERVICE_URL",
+        "http://localhost:8008",
+    ),
+    (
+        "presentation-policies",
+        "PRESENTATION_POLICY_SERVICE_URL",
+        "http://localhost:8009",
+    ),
+    (
+        "deployment-profiles",
+        "DEPLOYMENT_PROFILE_SERVICE_URL",
+        "http://localhost:8010",
+    ),
+    ("flows", "FLOW_SERVICE_URL", "http://localhost:8011"),
+    (
+        "verification",
+        "VERIFICATION_SERVICE_URL",
+        "http://localhost:8012",
+    ),
+    (
+        "revocation-profiles",
+        "REVOCATION_PROFILE_SERVICE_URL",
+        "http://localhost:8013",
+    ),
+    (
+        "device-registration",
+        "DEVICE_REGISTRATION_SERVICE_URL",
+        "http://localhost:8014",
+    ),
+    (
+        "signing-keys",
+        "SIGNING_KEYS_SERVICE_URL",
+        "http://localhost:8017",
+    ),
+];
+
+#[derive(Debug, Error)]
+#[error("invalid gateway configuration: {0}")]
+pub struct GatewayConfigError(String);
+
+#[derive(Clone)]
+pub struct GatewayConfig {
+    pub address: SocketAddr,
+    pub production: bool,
+    pub service_urls: BTreeMap<String, String>,
+    pub auth_grpc_target: String,
+    pub auth_grpc_client_tls: Option<GatewayAuthClientTls>,
+    pub organization_grpc_target: String,
+    pub event_stream_grpc_target: String,
+    pub grpc_ca_certificate: Option<PathBuf>,
+    pub organization_grpc_ca_certificate: Option<PathBuf>,
+    pub event_stream_grpc_ca_certificate: Option<PathBuf>,
+    pub grpc_insecure_allowed: bool,
+    pub grpc_service_token: Option<String>,
+    pub device_registration_gateway_key: String,
+    pub signing_internal_api_key: String,
+    pub service_sign_gateway_key: String,
+    pub sign_grant_bao_addr: Option<String>,
+    pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub issuer_csr_grant_mint_token_file: Option<PathBuf>,
+    pub issuer_sign_key: String,
+    pub dsc_issue_gateway_key: Option<String>,
+    pub csca_issue_gateway_key: Option<String>,
+    pub mdoc_iaca_issue_gateway_key: Option<String>,
+    pub mdoc_dsc_issue_gateway_key: Option<String>,
+    pub issuance_api_key: String,
+    pub passport_native_gateway_enabled: bool,
+    pub passport_provider_ingress_gateway_enabled: bool,
+    pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
+    pub redis_url: Option<String>,
+    pub cors_origins: Vec<String>,
+    pub issuer_base_url: String,
+    pub public_api_url: String,
+    pub public_domain: String,
+    pub default_organization_id: Option<String>,
+    pub required_ready_services: Vec<String>,
+    pub rate_limit_rpm: u64,
+    pub observe_client_ip: bool,
+    pub maximum_response_bytes: usize,
+    pub hosted_pilot_auto_purge_enabled: bool,
+    pub hosted_pilot_auto_purge_interval_seconds: u64,
+    pub hosted_pilot_auto_purge_batch_size: usize,
+    pub release_identity: ReleaseIdentity,
+}
+
+pub use marty_service_runtime::WorkloadTlsFiles as GatewayAuthClientTls;
+
+// Runtime credentials and connection targets must never enter diagnostic logs.
+impl fmt::Debug for GatewayConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayConfig")
+            .field("address", &self.address)
+            .field("production", &self.production)
+            .field(
+                "service_names",
+                &self.service_urls.keys().collect::<Vec<_>>(),
+            )
+            .field("grpc_targets_configured", &true)
+            .field("grpc_ca_certificate", &self.grpc_ca_certificate)
+            .field(
+                "organization_grpc_ca_certificate",
+                &self.organization_grpc_ca_certificate,
+            )
+            .field(
+                "event_stream_grpc_ca_certificate",
+                &self.event_stream_grpc_ca_certificate,
+            )
+            .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
+            .field(
+                "grpc_service_token_configured",
+                &self.grpc_service_token.is_some(),
+            )
+            .field("device_registration_gateway_key_configured", &true)
+            .field("signing_internal_api_key_configured", &true)
+            .field("service_sign_gateway_key_configured", &true)
+            .field("sign_grant_bao_addr", &self.sign_grant_bao_addr)
+            .field(
+                "sign_grant_mint_token_file",
+                &self.sign_grant_mint_token_file,
+            )
+            .field(
+                "issuer_csr_grant_mint_token_file",
+                &self.issuer_csr_grant_mint_token_file,
+            )
+            .field("issuer_sign_key_configured", &true)
+            .field(
+                "dsc_issue_gateway_key_configured",
+                &self.dsc_issue_gateway_key.is_some(),
+            )
+            .field(
+                "csca_issue_gateway_key_configured",
+                &self.csca_issue_gateway_key.is_some(),
+            )
+            .field("issuance_api_key_configured", &true)
+            .field(
+                "passport_native_gateway_enabled",
+                &self.passport_native_gateway_enabled,
+            )
+            .field(
+                "passport_provider_ingress_gateway_enabled",
+                &self.passport_provider_ingress_gateway_enabled,
+            )
+            .field(
+                "passport_tenant_keys_configured",
+                &self.passport_tenant_keys.is_some(),
+            )
+            .field("redis_url_configured", &self.redis_url.is_some())
+            .field("cors_origins", &self.cors_origins)
+            .field("issuer_base_url", &self.issuer_base_url)
+            .field("public_api_url", &self.public_api_url)
+            .field("public_domain", &self.public_domain)
+            .field("default_organization_id", &self.default_organization_id)
+            .field("required_ready_services", &self.required_ready_services)
+            .field("rate_limit_rpm", &self.rate_limit_rpm)
+            .field("observe_client_ip", &self.observe_client_ip)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field(
+                "hosted_pilot_auto_purge_enabled",
+                &self.hosted_pilot_auto_purge_enabled,
+            )
+            .field(
+                "hosted_pilot_auto_purge_interval_seconds",
+                &self.hosted_pilot_auto_purge_interval_seconds,
+            )
+            .field(
+                "hosted_pilot_auto_purge_batch_size",
+                &self.hosted_pilot_auto_purge_batch_size,
+            )
+            .field("release_identity", &self.release_identity)
+            .finish()
+    }
+}
+
+impl GatewayConfig {
+    pub fn from_env() -> Result<Self, GatewayConfigError> {
+        Self::from_values(&env::vars().collect())
+    }
+
+    pub fn from_values(values: &BTreeMap<String, String>) -> Result<Self, GatewayConfigError> {
+        let environment = value(values, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+        let production = !matches!(
+            environment.to_ascii_lowercase().as_str(),
+            "development" | "dev" | "local" | "test"
+        );
+        let passport_native_gateway_enabled =
+            boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
+        let passport_provider_ingress_gateway_enabled =
+            boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?;
+        let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
+        let mut service_urls = SERVICE_URLS
+            .iter()
+            .map(|(service, variable, default)| {
+                (
+                    (*service).to_owned(),
+                    value(values, variable).unwrap_or_else(|| (*default).to_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let issuance_native_url = value(values, "ISSUANCE_NATIVE_SERVICE_URL")
+            .unwrap_or_else(|| service_urls["issuance"].clone());
+        service_urls.insert("issuance-native".into(), issuance_native_url);
+        let provider_ingress_url = value(values, "PASSPORT_PROVIDER_INGRESS_SERVICE_URL");
+        if passport_provider_ingress_gateway_enabled && provider_ingress_url.is_none() {
+            return Err(error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is required when provider ingress routing is enabled"));
+        }
+        if passport_provider_ingress_gateway_enabled {
+            let configured = provider_ingress_url.as_deref().unwrap_or_default();
+            let url = url::Url::parse(configured)
+                .map_err(|_| error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is invalid"))?;
+            let host = url.host_str().unwrap_or_default();
+            let private_host = matches!(
+                host,
+                "passport-provider-ingress"
+                    | "passport-provider-ingress.marty-prod.svc.cluster.local"
+                    | "127.0.0.1"
+                    | "localhost"
+                    | "::1"
+            );
+            if !private_host || url.path() != "/" {
+                return Err(error(
+                    "PASSPORT_PROVIDER_INGRESS_SERVICE_URL must name the private ingress service",
+                ));
+            }
+        }
+        service_urls.insert(
+            "passport-provider-ingress".into(),
+            provider_ingress_url.unwrap_or_else(|| "http://localhost:8021".into()),
+        );
+        validate_service_urls(&service_urls)?;
+
+        let grpc_service_token = secret(values, "GRPC_SERVICE_TOKEN")?;
+        if production {
+            validate_production_secret("GRPC_SERVICE_TOKEN", grpc_service_token.as_deref(), 32)?;
+        }
+        let device_registration_gateway_key = secret(values, "DEVICE_REGISTRATION_GATEWAY_KEY")?
+            .or_else(|| {
+                (!production).then(|| "dev-device-registration-gateway-key-change-me".into())
+            })
+            .ok_or_else(|| error("DEVICE_REGISTRATION_GATEWAY_KEY is required"))?;
+        if production {
+            validate_production_secret(
+                "DEVICE_REGISTRATION_GATEWAY_KEY",
+                Some(&device_registration_gateway_key),
+                32,
+            )?;
+        }
+        if grpc_service_token.as_deref() == Some(device_registration_gateway_key.as_str()) {
+            return Err(error(
+                "DEVICE_REGISTRATION_GATEWAY_KEY must differ from GRPC_SERVICE_TOKEN",
+            ));
+        }
+        let signing_internal_api_key = secret(values, "SIGNING_KEYS_INTERNAL_API_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-internal-api-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_INTERNAL_API_KEY is required"))?;
+        if production {
+            validate_production_secret(
+                "SIGNING_KEYS_INTERNAL_API_KEY",
+                Some(&signing_internal_api_key),
+                16,
+            )?;
+        }
+        let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        let service_sign_gateway_key = secret(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-service-sign-gateway-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY is required"))?;
+        if service_sign_gateway_key.len() < 32
+            || service_sign_gateway_key == signing_internal_api_key
+            || (production
+                && service_sign_gateway_key == "dev-signing-keys-service-sign-gateway-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters",
+            ));
+        }
+        let issuer_sign_key = secret(values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-issuer-did-sign-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_ISSUER_SIGN_KEY is required"))?;
+        if issuer_sign_key.len() < 32
+            || issuer_sign_key == signing_internal_api_key
+            || issuer_sign_key == service_sign_gateway_key
+            || (production && issuer_sign_key == "dev-signing-keys-issuer-did-sign-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters",
+            ));
+        }
+        let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
+        if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
+            return Err(error("CSCA issuance credential is beta-only"));
+        }
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || dsc_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY",
+                dsc_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str()) {
+            return Err(error(
+                "DSC issuance credential must differ from the shared Signing Keys key",
+            ));
+        }
+        if (environment.eq_ignore_ascii_case("beta") && passport_native_gateway_enabled)
+            || csca_issue_gateway_key.is_some()
+        {
+            validate_production_secret(
+                "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY",
+                csca_issue_gateway_key.as_deref(),
+                32,
+            )?;
+        }
+        if csca_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
+            || csca_issue_gateway_key.as_deref() == dsc_issue_gateway_key.as_deref()
+                && csca_issue_gateway_key.is_some()
+        {
+            return Err(error(
+                "CSCA issuance credential must differ from shared and DSC Signing Keys credentials",
+            ));
+        }
+        let mdoc_iaca_issue_gateway_key =
+            secret(values, "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY")?;
+        let mdoc_dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY")?;
+        for (name, key, other) in [
+            (
+                "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY",
+                mdoc_iaca_issue_gateway_key.as_deref(),
+                mdoc_dsc_issue_gateway_key.as_deref(),
+            ),
+            (
+                "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY",
+                mdoc_dsc_issue_gateway_key.as_deref(),
+                mdoc_iaca_issue_gateway_key.as_deref(),
+            ),
+        ] {
+            if let Some(key) = key {
+                validate_production_secret(name, Some(key), 32)?;
+                if [
+                    Some(signing_internal_api_key.as_str()),
+                    Some(service_sign_gateway_key.as_str()),
+                    Some(issuer_sign_key.as_str()),
+                    dsc_issue_gateway_key.as_deref(),
+                    csca_issue_gateway_key.as_deref(),
+                    grpc_service_token.as_deref(),
+                    Some(device_registration_gateway_key.as_str()),
+                    other,
+                ]
+                .contains(&Some(key))
+                    || values.iter().any(|(entry, value)| {
+                        entry != name && entry != &format!("{name}_FILE") && value.contains(key)
+                    })
+                {
+                    return Err(error(
+                        "MDOC operator credentials must be distinct from all other credentials",
+                    ));
+                }
+            }
+        }
+        let issuance_api_key = secret(values, "ISSUANCE_API_KEY")?
+            .or_else(|| (!production).then(|| "dev-issuance-api-key".into()))
+            .ok_or_else(|| error("ISSUANCE_API_KEY is required"))?;
+        if [
+            mdoc_iaca_issue_gateway_key.as_deref(),
+            mdoc_dsc_issue_gateway_key.as_deref(),
+        ]
+        .contains(&Some(issuance_api_key.as_str()))
+        {
+            return Err(error(
+                "MDOC operator credentials must differ from Issuance authority",
+            ));
+        }
+        if production {
+            validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
+        }
+        if device_registration_gateway_key == signing_internal_api_key
+            || device_registration_gateway_key == service_sign_gateway_key
+            || device_registration_gateway_key == issuer_sign_key
+            || device_registration_gateway_key == issuance_api_key
+        {
+            return Err(error(
+                "DEVICE_REGISTRATION_GATEWAY_KEY must differ from other service credentials",
+            ));
+        }
+        if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(dsc_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(dsc_key)
+                || issuance_api_key == dsc_key
+            {
+                return Err(error(
+                    "DSC issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
+            || issuance_api_key == service_sign_gateway_key
+            || grpc_service_token.as_deref() == Some(service_sign_gateway_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
+                    && value.contains(&service_sign_gateway_key)
+            })
+        {
+            return Err(error(
+                "Service signing credential must not be reused by another configuration value",
+            ));
+        }
+        if issuer_sign_key == issuance_api_key
+            || grpc_service_token.as_deref() == Some(issuer_sign_key.as_str())
+            || dsc_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    && name != "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                    && value.contains(&issuer_sign_key)
+            })
+        {
+            return Err(error(
+                "Issuer signing credential must not be reused by another configuration value",
+            ));
+        }
+        if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
+            let reused_in_environment = values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"
+                    && value.contains(csca_key)
+            });
+            if reused_in_environment
+                || grpc_service_token.as_deref() == Some(csca_key)
+                || issuance_api_key == csca_key
+            {
+                return Err(error(
+                    "CSCA issuance credential must not be reused by another configuration value",
+                ));
+            }
+        }
+        let passport_internal_service_auth_enabled =
+            boolean(values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", false)?;
+        if passport_internal_service_auth_enabled
+            && (value(values, "PASSPORT_TENANT_API_KEYS").is_some()
+                || value(values, "PASSPORT_TENANT_API_KEYS_FILE").is_some())
+        {
+            return Err(error(
+                "internal passport service authentication cannot be combined with a tenant keyring",
+            ));
+        }
+        let passport_tenant_keys = secret(values, "PASSPORT_TENANT_API_KEYS")?
+            .map(|value| {
+                PassportTenantKeyring::from_json(&value)
+                    .map_err(|_| error("PASSPORT_TENANT_API_KEYS must be a valid tenant keyring"))
+            })
+            .transpose()?
+            .map(Into::into);
+        let passport_tenant_keys = if passport_internal_service_auth_enabled {
+            Some(
+                PassportTenantCredentialSource::internal_service_token(
+                    grpc_service_token.as_deref().ok_or_else(|| {
+                        error("GRPC_SERVICE_TOKEN is required for internal passport authentication")
+                    })?,
+                )
+                .map_err(|_| {
+                    error("GRPC_SERVICE_TOKEN is invalid for internal passport authentication")
+                })?,
+            )
+        } else {
+            passport_tenant_keys
+        };
+        if passport_native_gateway_enabled && passport_tenant_keys.is_none() {
+            return Err(error(
+                "PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_GATEWAY_ENABLED is true",
+            ));
+        }
+
+        let grpc_ca_certificate = value(values, "GRPC_TLS_CA_CERT").map(PathBuf::from);
+        let organization_grpc_ca_certificate = value(values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        let event_stream_grpc_ca_certificate = value(values, "ES_GRPC_CA_CERT").map(PathBuf::from);
+        let grpc_insecure_allowed = boolean(values, "GRPC_INSECURE_ALLOWED", false)?;
+        if production && grpc_insecure_allowed {
+            return Err(error("deployed Gateway cannot allow insecure gRPC"));
+        }
+        if production && grpc_ca_certificate.is_none() {
+            return Err(error("GRPC_TLS_CA_CERT is required outside development"));
+        }
+
+        let cors_origins = csv(value(values, "CORS_ORIGINS")
+            .as_deref()
+            .unwrap_or("http://localhost:3000,https://beta.elevenidllc.com,http://localhost:5173"));
+        if cors_origins.is_empty() || cors_origins.iter().any(|origin| origin == "*") {
+            return Err(error("credentialed CORS requires explicit origins"));
+        }
+
+        let issuer_base_url = value(values, "ISSUER_BASE_URL")
+            .unwrap_or_else(|| "http://localhost:8000".into())
+            .trim_end_matches('/')
+            .to_owned();
+        let issuer_url = url::Url::parse(&issuer_base_url)
+            .map_err(|_| error("ISSUER_BASE_URL must be a valid HTTP(S) origin"))?;
+        if !matches!(issuer_url.scheme(), "http" | "https")
+            || issuer_url.host_str().is_none()
+            || !issuer_url.username().is_empty()
+            || issuer_url.password().is_some()
+            || issuer_url.query().is_some()
+            || issuer_url.fragment().is_some()
+        {
+            return Err(error(
+                "ISSUER_BASE_URL must be a credential-free HTTP(S) origin",
+            ));
+        }
+        let public_domain = value(values, "PUBLIC_DOMAIN").unwrap_or_else(|| {
+            let host = issuer_url.host_str().unwrap_or("localhost");
+            issuer_url
+                .port()
+                .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"))
+        });
+        let public_api_url = value(values, "PUBLIC_API_URL")
+            .or_else(|| value(values, "ISSUER_BASE_URL"))
+            .or_else(|| value(values, "PUBLIC_BASE_URL"))
+            .unwrap_or_else(|| issuer_base_url.clone())
+            .trim_end_matches('/')
+            .to_owned();
+        let public_api = url::Url::parse(&public_api_url)
+            .map_err(|_| error("PUBLIC_API_URL must be a valid HTTP(S) URL"))?;
+        if !matches!(public_api.scheme(), "http" | "https")
+            || public_api.host_str().is_none()
+            || !public_api.username().is_empty()
+            || public_api.password().is_some()
+            || public_api.query().is_some()
+            || public_api.fragment().is_some()
+        {
+            return Err(error(
+                "PUBLIC_API_URL must be a credential-free HTTP(S) URL without query or fragment",
+            ));
+        }
+
+        let redis_database = parse(values, "REDIS_DB_GATEWAY", 2_u8)?;
+        let redis_url = value(values, "REDIS_URL")
+            .map(|raw| redis_database_url(&raw, redis_database))
+            .transpose()?;
+        let required_ready_services = value(values, "GATEWAY_REQUIRED_READY_SERVICES").map_or_else(
+            || {
+                DEFAULT_READY_SERVICES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect()
+            },
+            |configured| csv(&configured),
+        );
+        if required_ready_services.is_empty() {
+            return Err(error("GATEWAY_REQUIRED_READY_SERVICES must not be empty"));
+        }
+        let hosted_pilot_auto_purge_interval_seconds =
+            parse(values, "HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS", 3600_u64)?;
+        let hosted_pilot_auto_purge_batch_size =
+            parse(values, "HOSTED_PILOT_AUTO_PURGE_BATCH_SIZE", 100_usize)?;
+        if hosted_pilot_auto_purge_interval_seconds == 0 || hosted_pilot_auto_purge_batch_size == 0
+        {
+            return Err(error(
+                "Hosted Pilot auto-purge interval and batch size must be positive",
+            ));
+        }
+
+        let auth_grpc_target = grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?;
+        let auth_grpc_client_tls = gateway_auth_client_tls(values, production)?;
+        if auth_grpc_client_tls.is_some() && !auth_grpc_target.starts_with("https://") {
+            return Err(error(
+                "AUTH_GRPC_TARGET must use HTTPS with the remote client identity",
+            ));
+        }
+        let organization_grpc_target = grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?;
+        if production && organization_grpc_ca_certificate.is_none() {
+            return Err(error("ORG_GRPC_CA_CERT is required outside development"));
+        }
+        if organization_grpc_ca_certificate.is_some()
+            && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ORG_GRPC_TARGET must use explicit HTTPS with ORG_GRPC_CA_CERT",
+            ));
+        }
+        let event_stream_grpc_target = grpc_target(values, "ES_GRPC_TARGET", "event-stream:9015")?;
+        if production && event_stream_grpc_ca_certificate.is_none() {
+            return Err(error("ES_GRPC_CA_CERT is required outside development"));
+        }
+        if event_stream_grpc_ca_certificate.is_some()
+            && !event_stream_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ES_GRPC_TARGET must use explicit HTTPS with ES_GRPC_CA_CERT",
+            ));
+        }
+        if grpc_ca_certificate.is_some()
+            && [
+                &auth_grpc_target,
+                &organization_grpc_target,
+                &event_stream_grpc_target,
+            ]
+            .iter()
+            .any(|target| !target.starts_with("https://"))
+        {
+            return Err(error(
+                "gRPC targets must use explicit HTTPS when GRPC_TLS_CA_CERT is configured",
+            ));
+        }
+
+        Ok(Self {
+            address: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
+            production,
+            service_urls,
+            auth_grpc_target,
+            auth_grpc_client_tls,
+            organization_grpc_target,
+            event_stream_grpc_target,
+            grpc_ca_certificate,
+            organization_grpc_ca_certificate,
+            event_stream_grpc_ca_certificate,
+            grpc_insecure_allowed,
+            grpc_service_token,
+            device_registration_gateway_key,
+            signing_internal_api_key,
+            service_sign_gateway_key,
+            sign_grant_bao_addr: value(values, "BAO_ADDR"),
+            sign_grant_mint_token_file: value(values, "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE")
+                .map(PathBuf::from),
+            issuer_csr_grant_mint_token_file: value(
+                values,
+                "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
+            issuer_sign_key,
+            dsc_issue_gateway_key,
+            csca_issue_gateway_key,
+            mdoc_iaca_issue_gateway_key,
+            mdoc_dsc_issue_gateway_key,
+            issuance_api_key,
+            passport_native_gateway_enabled,
+            passport_provider_ingress_gateway_enabled,
+            passport_tenant_keys,
+            redis_url,
+            cors_origins,
+            issuer_base_url,
+            public_api_url,
+            public_domain,
+            default_organization_id: value(values, "DEFAULT_ORG_ID"),
+            required_ready_services,
+            rate_limit_rpm: parse(values, "RATE_LIMIT_RPM", 120_u64)?,
+            observe_client_ip: boolean(values, "GATEWAY_OBSERVE_CLIENT_IP", true)?,
+            maximum_response_bytes: parse(
+                values,
+                "GATEWAY_MAXIMUM_RESPONSE_BYTES",
+                10 * 1024 * 1024_usize,
+            )?,
+            hosted_pilot_auto_purge_enabled: boolean(
+                values,
+                "HOSTED_PILOT_AUTO_PURGE_ENABLED",
+                true,
+            )?,
+            hosted_pilot_auto_purge_interval_seconds,
+            hosted_pilot_auto_purge_batch_size,
+            release_identity: ReleaseIdentity {
+                release_version: release_version_label(
+                    values.get("MARTY_RELEASE_VERSION").map(String::as_str),
+                ),
+                stack_version: value(values, "ELEVENID_STACK_VERSION")
+                    .unwrap_or_else(|| "development".into()),
+                marty_ui_sha: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
+                component_revisions: component_revisions(values)?,
+                image_digests: image_digests(values),
+            },
+        })
+    }
+}
+
+fn value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    config::trimmed_nonempty(values.get(name).map(String::as_str)).map(str::to_owned)
+}
+
+fn secret(
+    values: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<Option<String>, GatewayConfigError> {
+    let direct = value(values, name);
+    let file = value(values, &format!("{name}_FILE"));
+    if direct.is_some() && file.is_some() {
+        return Err(error(format!("both {name} and {name}_FILE are configured")));
+    }
+    match (direct, file) {
+        (Some(value), None) => Ok(Some(value)),
+        (None, Some(path)) => fs::read_to_string(path)
+            .map(|value| Some(value.trim().to_owned()))
+            .map_err(|_| error(format!("unable to read {name}_FILE"))),
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => unreachable!("handled above"),
+    }
+}
+
+fn validate_production_secret(
+    name: &str,
+    secret: Option<&str>,
+    minimum_length: usize,
+) -> Result<(), GatewayConfigError> {
+    let secret = secret.ok_or_else(|| error(format!("{name} is required outside development")))?;
+    let normalized = secret.to_ascii_lowercase();
+    if secret.len() < minimum_length
+        || [
+            "change-me",
+            "change_me",
+            "changeme",
+            "dev-",
+            "replace-me",
+            "replace_me",
+        ]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+    {
+        return Err(error(format!("{name} is not production-safe")));
+    }
+    Ok(())
+}
+
+fn validate_service_urls(urls: &BTreeMap<String, String>) -> Result<(), GatewayConfigError> {
+    for raw in urls.values() {
+        let parsed = url::Url::parse(raw).map_err(|_| error("service URL is invalid"))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(error("service URLs must be credential-free HTTP(S) URLs"));
+        }
+    }
+    Ok(())
+}
+
+fn redis_database_url(raw: &str, database: u8) -> Result<String, GatewayConfigError> {
+    let mut parsed = url::Url::parse(raw).map_err(|_| error("REDIS_URL is invalid"))?;
+    if parsed.scheme() == "unix" {
+        if parsed.host_str().is_some() || !parsed.path().starts_with('/') {
+            return Err(error("REDIS_URL Unix socket must be local and absolute"));
+        }
+        parsed
+            .query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+        return Ok(parsed.to_string());
+    }
+    if parsed.scheme() != "redis" && parsed.scheme() != "rediss" {
+        return Err(error("REDIS_URL must use redis, rediss, or unix"));
+    }
+    if matches!(parsed.path(), "" | "/") {
+        parsed.set_path(&format!("/{database}"));
+    }
+    Ok(parsed.to_string())
+}
+
+fn grpc_target(
+    values: &BTreeMap<String, String>,
+    name: &str,
+    default: &str,
+) -> Result<String, GatewayConfigError> {
+    let value = value(values, name).unwrap_or_else(|| default.into());
+    let target = if value.contains("://") {
+        value
+    } else {
+        format!("http://{value}")
+    };
+    let parsed = url::Url::parse(&target).map_err(|_| error(format!("{name} is invalid")))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(error(format!(
+            "{name} must identify a credential-free HTTP(S) gRPC endpoint"
+        )));
+    }
+    Ok(target)
+}
+
+fn gateway_auth_client_tls(
+    values: &BTreeMap<String, String>,
+    required: bool,
+) -> Result<Option<GatewayAuthClientTls>, GatewayConfigError> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(error("GRPC_WORKLOAD_TLS_CLIENT_KEY is retired"));
+    }
+    GatewayAuthClientTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_CLIENT"),
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        required || value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|detail| {
+        error(format!(
+            "Gateway Auth mTLS configuration is invalid: {detail}"
+        ))
+    })
+}
+
+fn csv(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse<T>(
+    values: &BTreeMap<String, String>,
+    name: &str,
+    default: T,
+) -> Result<T, GatewayConfigError>
+where
+    T: std::str::FromStr,
+{
+    value(values, name).map_or(Ok(default), |raw| {
+        raw.parse().map_err(|_| error(format!("{name} is invalid")))
+    })
+}
+
+fn boolean(
+    values: &BTreeMap<String, String>,
+    name: &str,
+    default: bool,
+) -> Result<bool, GatewayConfigError> {
+    value(values, name).map_or(Ok(default), |raw| {
+        config::boolean(raw.as_str(), config::BooleanVocabulary::ExactWithOnOff)
+            .map_err(|_| error(format!("{name} must be a boolean")))
+    })
+}
+
+fn image_digests(values: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    value(values, "ELEVENID_IMAGE_DIGESTS_JSON")
+        .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn component_revisions(
+    values: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, GatewayConfigError> {
+    let Some(raw) = value(values, "ELEVENID_COMPONENT_REVISIONS_JSON") else {
+        return Ok(BTreeMap::new());
+    };
+    let revisions = serde_json::from_str::<BTreeMap<String, String>>(&raw)
+        .map_err(|_| error("ELEVENID_COMPONENT_REVISIONS_JSON must be a JSON string map"))?;
+    if revisions.iter().any(|(component, revision)| {
+        component.trim().is_empty()
+            || revision.len() != 40
+            || !revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(error(
+            "ELEVENID_COMPONENT_REVISIONS_JSON must map component names to full lowercase Git revisions",
+        ));
+    }
+    Ok(revisions)
+}
+
+fn error(message: impl Into<String>) -> GatewayConfigError {
+    GatewayConfigError(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aws_auth_client_tls_keeps_peer_ca_and_rejects_openbao_residue() {
+        let mut values = BTreeMap::from([
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into()),
+            ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "auth-ca.pem".into()),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_PROVIDER".into(),
+                "aws-kms".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_REGION".into(),
+                "us-east-1".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        let tls = gateway_auth_client_tls(&values, true).unwrap().unwrap();
+        assert_eq!(tls.identity.provider(), "aws-kms");
+        assert_eq!(tls.ca_certificate, PathBuf::from("auth-ca.pem"));
+        values.insert(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE".into(),
+            "old-token".into(),
+        );
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+        values.remove("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE");
+        values.remove("GRPC_WORKLOAD_TLS_CA_CERT");
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+    }
+
+    fn add_remote_auth_client(values: &mut BTreeMap<String, String>) {
+        for (name, value) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT", "gateway-public.pem"),
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "workload-public-ca.pem"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+                "https://bao.internal:8200",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT", "bao-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE", "scoped-token"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+                "gateway-auth-client",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+    }
+
+    #[test]
+    fn deployed_auth_client_identity_rejects_private_key_files_and_invalid_kms_origin() {
+        let mut values = BTreeMap::new();
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+        add_remote_auth_client(&mut values);
+        assert!(gateway_auth_client_tls(&values, true).unwrap().is_some());
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "private.pem".into());
+        assert!(gateway_auth_client_tls(&values, true)
+            .unwrap_err()
+            .to_string()
+            .contains("retired"));
+        values.remove("GRPC_WORKLOAD_TLS_CLIENT_KEY");
+        values.insert(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR".into(),
+            "http://bao.internal:8200".into(),
+        );
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+    }
+
+    #[test]
+    fn development_defaults_preserve_legacy_local_runtime() {
+        let config = GatewayConfig::from_values(&BTreeMap::new()).expect("development config");
+        assert!(!config.production);
+        assert_eq!(config.address.port(), 8000);
+        assert_eq!(config.rate_limit_rpm, 120);
+        assert!(config.observe_client_ip);
+        assert_eq!(config.public_domain, "localhost:8000");
+        assert_eq!(
+            config.service_urls["issuance-native"],
+            config.service_urls["issuance"]
+        );
+        assert!(config.redis_url.is_none());
+        assert!(config.passport_tenant_keys.is_none());
+        assert!(!config.passport_native_gateway_enabled);
+        assert!(!config.passport_provider_ingress_gateway_enabled);
+        assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn client_ip_observation_is_explicit_validated_and_independent_of_rate_limits() {
+        let mut values = BTreeMap::from([("GATEWAY_OBSERVE_CLIENT_IP".into(), "false".into())]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(!config.observe_client_ip);
+        assert_eq!(config.rate_limit_rpm, 120);
+        values.insert("GATEWAY_OBSERVE_CLIENT_IP".into(), "true".into());
+        assert!(
+            GatewayConfig::from_values(&values)
+                .unwrap()
+                .observe_client_ip
+        );
+        values.insert("GATEWAY_OBSERVE_CLIENT_IP".into(), "unknown".into());
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("GATEWAY_OBSERVE_CLIENT_IP must be a boolean"));
+    }
+
+    #[test]
+    fn passport_tenant_keyring_is_shared_validated_and_redacted() {
+        let key_a = "passport-gateway-tenant-key-00000001";
+        let key_b = "passport-gateway-tenant-key-00000002";
+        let mut values = BTreeMap::from([(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            format!(r#"{{"org-a":"{key_a}","org-b":"{key_b}"}}"#),
+        )]);
+        let config = GatewayConfig::from_values(&values).expect("shared passport keyring");
+        let keyring = config.passport_tenant_keys.as_ref().unwrap();
+        assert_eq!(keyring.key_for("org-a"), Some(key_a));
+        assert_eq!(keyring.key_for("org-b"), Some(key_b));
+        assert!(!format!("{config:?}").contains(key_a));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            r#"{"org-a":"short"}"#.into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("weak tenant key")
+            .to_string()
+            .contains("valid tenant keyring"));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            format!(r#"{{"org-a":"{key_a}","org-b":"{key_a}"}}"#),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn internal_passport_auth_uses_existing_service_token_without_loading_a_keyring() {
+        let token = "g".repeat(32);
+        let mut values = BTreeMap::from([
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), token.clone()),
+        ]);
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert_eq!(
+            config
+                .passport_tenant_keys
+                .as_ref()
+                .unwrap()
+                .key_for("org-a"),
+            Some(token.as_str())
+        );
+        assert!(!format!("{config:?}").contains(&token));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS_FILE".into(),
+            "nonexistent-keyring".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined"));
+        values.remove("PASSPORT_TENANT_API_KEYS_FILE");
+        values.remove("GRPC_SERVICE_TOKEN");
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn grpc_target_rejects_embedded_credentials_before_configuration_can_be_logged() {
+        let values = BTreeMap::from([(
+            "ORG_GRPC_TARGET".into(),
+            "http://synthetic-private-value@organization:9002".into(),
+        )]);
+        let error = GatewayConfig::from_values(&values).unwrap_err();
+        assert!(!error.to_string().contains("synthetic-private-value"));
+    }
+
+    #[test]
+    fn passport_native_gateway_switch_is_default_off_and_requires_tenant_keys() {
+        let mut values =
+            BTreeMap::from([("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing keyring")
+            .to_string()
+            .contains("PASSPORT_TENANT_API_KEYS"));
+        values.insert(
+            "PASSPORT_TENANT_API_KEYS".into(),
+            r#"{"org-a":"passport-gateway-tenant-key-00000001"}"#.into(),
+        );
+        assert!(
+            GatewayConfig::from_values(&values)
+                .expect("configured passport gateway")
+                .passport_native_gateway_enabled
+        );
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "invalid".into());
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn provider_ingress_routing_requires_an_explicit_private_service() {
+        let mut values = BTreeMap::from([(
+            "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED".into(),
+            "true".into(),
+        )]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://public.example".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "https://passport-provider-ingress.foreign.svc.cluster.local".into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "PASSPORT_PROVIDER_INGRESS_SERVICE_URL".into(),
+            "http://passport-provider-ingress:8021".into(),
+        );
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.passport_provider_ingress_gateway_enabled);
+        assert!(!config.passport_native_gateway_enabled);
+    }
+
+    #[test]
+    fn grpc_targets_reject_embedded_credentials_without_echoing_them() {
+        for target in [
+            "http://synthetic-private-value@organization:9002",
+            "http://organization:9002/synthetic-private-value",
+            "http://organization:9002?token=synthetic-private-value",
+            "http://organization:9002#synthetic-private-value",
+        ] {
+            let values = BTreeMap::from([("ORG_GRPC_TARGET".into(), target.into())]);
+            let error = GatewayConfig::from_values(&values).unwrap_err();
+            assert!(!error.to_string().contains("synthetic-private-value"));
+        }
+    }
+
+    #[test]
+    fn gateway_config_debug_redacts_runtime_secrets_and_targets() {
+        let values = BTreeMap::from([
+            ("ORG_GRPC_TARGET".into(), "private-organization:9002".into()),
+            (
+                "ORGANIZATION_SERVICE_URL".into(),
+                "http://organization:8002/synthetic-service-path-token".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), "synthetic-grpc-token".into()),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "synthetic-signing-key".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "synthetic-dedicated-service-sign-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
+                "synthetic-dsc-gateway-only-credential-000001".into(),
+            ),
+            ("ISSUANCE_API_KEY".into(), "synthetic-issuance-key".into()),
+            (
+                "REDIS_URL".into(),
+                "redis://:synthetic-redis-password@localhost:6379".into(),
+            ),
+        ]);
+        let debug = format!("{:?}", GatewayConfig::from_values(&values).unwrap());
+        for secret in [
+            "private-organization",
+            "synthetic-grpc-token",
+            "synthetic-signing-key",
+            "synthetic-dedicated-service-sign-key-000001",
+            "synthetic-dsc-gateway-only-credential-000001",
+            "synthetic-issuance-key",
+            "synthetic-redis-password",
+            "synthetic-service-path-token",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+    }
+
+    #[test]
+    fn native_issuance_upstream_can_be_enabled_without_replacing_legacy() {
+        let values = BTreeMap::from([
+            ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".into(),
+                "http://issuance-native:8005".into(),
+            ),
+        ]);
+        let config = GatewayConfig::from_values(&values).expect("split upstream config");
+        assert_eq!(config.service_urls["issuance"], "http://issuance:8005");
+        assert_eq!(
+            config.service_urls["issuance-native"],
+            "http://issuance-native:8005"
+        );
+    }
+
+    #[test]
+    fn release_component_revisions_are_exact_and_fail_closed() {
+        let mut values = BTreeMap::from([(
+            "ELEVENID_COMPONENT_REVISIONS_JSON".into(),
+            format!(r#"{{"marty-ui":"{}"}}"#, "a".repeat(40)),
+        )]);
+        let config = GatewayConfig::from_values(&values).expect("valid component revisions");
+        assert_eq!(
+            config.release_identity.component_revisions["marty-ui"],
+            "a".repeat(40)
+        );
+        values.insert(
+            "ELEVENID_COMPONENT_REVISIONS_JSON".into(),
+            r#"{"marty-ui":"dirty"}"#.into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn production_requires_distributed_authentication_and_tls() {
+        let mut values = BTreeMap::from([("ENVIRONMENT".into(), "production".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing secrets")
+            .to_string()
+            .contains("GRPC_SERVICE_TOKEN"));
+        values.insert("GRPC_SERVICE_TOKEN".into(), "g".repeat(32));
+        values.insert("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "d".repeat(32));
+        values.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing dedicated service signing credential")
+            .to_string()
+            .contains("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"));
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "k".repeat(32),
+        );
+        values.insert("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32));
+        values.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing TLS")
+            .to_string()
+            .contains("GRPC_TLS_CA_CERT"));
+        values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("deployed plaintext override is retired")
+            .to_string()
+            .contains("cannot allow insecure gRPC"));
+        values.insert("GRPC_INSECURE_ALLOWED".into(), "false".into());
+        values.insert("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("remote Auth mTLS is mandatory")
+            .to_string()
+            .contains("Gateway Auth mTLS"));
+        add_remote_auth_client(&mut values);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization CA is mandatory")
+            .to_string()
+            .contains("ORG_GRPC_CA_CERT"));
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization target must use HTTPS")
+            .to_string()
+            .contains("ORG_GRPC_TARGET"));
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream CA is mandatory")
+            .to_string()
+            .contains("ES_GRPC_CA_CERT"));
+        values.insert("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream target must use HTTPS")
+            .to_string()
+            .contains("ES_GRPC_TARGET"));
+        values.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn ca_verified_grpc_requires_explicit_https_targets() {
+        let mut values =
+            BTreeMap::from([("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("explicit HTTPS"));
+        for (name, target) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("ORG_GRPC_TARGET", "https://organization:9002"),
+            ("ES_GRPC_TARGET", "https://event-stream:9015"),
+        ] {
+            values.insert(name.into(), target.into());
+        }
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn beta_passport_requires_a_distinct_dsc_gateway_credential() {
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".into(), "beta".into()),
+            ("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "true".into()),
+            (
+                "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+                "true".into(),
+            ),
+            ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
+            ("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "a".repeat(32)),
+            ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32)),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "k".repeat(32),
+            ),
+            ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
+            ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+            ("GRPC_INSECURE_ALLOWED".into(), "false".into()),
+            ("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into()),
+            ("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into()),
+            ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+            ("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into()),
+            ("ES_GRPC_TARGET".into(), "https://event-stream:9015".into()),
+        ]);
+        add_remote_auth_client(&mut values);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "g".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "i".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        values.insert(
+            "OTHER_SERVICE_URL".into(),
+            format!("https://example/?token={}", "d".repeat(32)),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_URL");
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY"));
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "d".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY".into(), "c".repeat(32));
+        assert!(GatewayConfig::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            "C:\\beta-csca-key.txt".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE"));
+        let path =
+            std::env::temp_dir().join(format!("marty-gateway-csca-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, format!("{}\n", "c".repeat(32))).unwrap();
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        values.insert(
+            "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),
+            path.to_string_lossy().into_owned(),
+        );
+        assert_eq!(
+            GatewayConfig::from_values(&values)
+                .unwrap()
+                .csca_issue_gateway_key
+                .as_deref(),
+            Some("cccccccccccccccccccccccccccccccc")
+        );
+        values.insert("ENVIRONMENT".into(), "production".into());
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert("ENVIRONMENT".into(), "beta".into());
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE");
+        std::fs::remove_file(path).unwrap();
+        values.insert("PASSPORT_NATIVE_GATEWAY_ENABLED".into(), "false".into());
+        values.remove("SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY");
+        values.remove("SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY");
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn configured_redis_database_is_scoped_to_gateway() {
+        let values = BTreeMap::from([
+            ("REDIS_URL".into(), "redis://redis:6379".into()),
+            ("REDIS_DB_GATEWAY".into(), "7".into()),
+        ]);
+        assert_eq!(
+            GatewayConfig::from_values(&values)
+                .expect("config")
+                .redis_url
+                .as_deref(),
+            Some("redis://redis:6379/7")
+        );
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 7).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=7"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 7).is_err());
+    }
+
+    #[test]
+    fn direct_and_file_secret_conflict_fails_closed() {
+        let values = BTreeMap::from([
+            ("GRPC_SERVICE_TOKEN".into(), "direct".into()),
+            ("GRPC_SERVICE_TOKEN_FILE".into(), "token.txt".into()),
+        ]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+    }
+}

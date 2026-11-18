@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "scope": "Follow-up source mapping for the supported Canvas claim contract and wallet controls",
+  "source_repository": "https://github.com/ElevenID/marty-demo-recorder.git",
+  "implementation_revision": "ed60078849fb57b2f9f90bee8640d44a1aec49d0",
+  "source_files": [
+    {
+      "path": "docs/canvas-capture-source-gaps.md",
+      "bytes": 10328,
+      "sha256": "6777673ae826665ecddc356bf396efbb463029bb2c9245ba1fa8317f6677327d"
+    }
+  ],
+  "prior_guard_verification": "canvas-prerequisite-guard-verification.json",
+  "prior_guard_verification_sha256": "8b3909e4914f7ac12562001f87a6158c092ed2589257a4281ee268a5f5b51450",
+  "claim_contract_ui_revision": "b02894b1809d3d09a6d7087ceccd8943d287707e",
+  "claim_contract_rust_revision": "e67364c367a09d184246f7c7af83317beb9f4d1e",
+  "wallet_control_ui_revision": "0943e115b987be1208238c61dcb1437c16f23fe0",
+  "correction": [
+    "The supported /v1/me/applications/{application_id}/claim request is an empty JSON object after wallet-catalog lookup; destination/Canvas-consent choices are not supported.",
+    "Pending offers may be reused idempotently; a newly generated offer on every dialog open is not guaranteed.",
+    "The primary mobile launch control is wallet-open-link; the shared OID4VCI desktop display can expose credential-open-wallet-action."
+  ],
+  "validation": "Read-only comparison against the committed UI and Rust claim contracts; no new runtime test or successful capture is claimed by this documentation-only follow-up.",
+  "qualification": "D07 and D08 remain OPEN_SOURCE_AND_LIVE_EVIDENCE.",
+  "prior_evidence_immutable": true
+}

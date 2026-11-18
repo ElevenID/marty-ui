@@ -1,0 +1,217 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  buildCredentialTemplatePayload,
+  normalizeCredentialTemplate,
+} from '../presentationPolicyApi'
+
+describe('credential template normalization', () => {
+  it('does not invent version or flow usage when the HTTP response omits them', () => {
+    const template = normalizeCredentialTemplate({ id: 'ct-1', status: 'ACTIVE' })
+    expect(template).not.toHaveProperty('version')
+    expect(template.usedByFlowsCount).toBeNull()
+  })
+
+  it.each([0, 1, 2])('preserves an explicitly reported flow count of %s', (count) => {
+    expect(normalizeCredentialTemplate({ version: 3, used_by_flows_count: count })).toMatchObject({
+      version: 3, usedByFlowsCount: count,
+    })
+    expect(normalizeCredentialTemplate({ usedByFlowsCount: count }).usedByFlowsCount).toBe(count)
+  })
+
+  it('preserves an explicit zero over the existing fallback field', () => {
+    expect(normalizeCredentialTemplate({ usedByFlowsCount: 0, used_by_flows_count: 9 }).usedByFlowsCount).toBe(0)
+  })
+
+  it.each([null, -1, 1.5, '0', true])('does not turn invalid flow usage into an authoritative count: %s', (count) => {
+    expect(normalizeCredentialTemplate({ used_by_flows_count: count }).usedByFlowsCount).toBeNull()
+  })
+
+  it('normalizes canonical protocol response fields for UI consumers', () => {
+    const template = normalizeCredentialTemplate({
+      id: 'ct-1',
+      organization_id: 'org-1',
+      name: 'Canonical Template',
+      status: 'ACTIVE',
+      credential_type: 'EmployeeBadge',
+      claims: [
+        {
+          name: 'given_name',
+          type: 'STRING',
+          required: true,
+          display: { label: 'Given Name' },
+        },
+      ],
+      validity_rules: {
+        ttl_seconds: 30 * 86400,
+        renewable: true,
+        reissue_within_seconds: 7 * 86400,
+        not_before_offset_seconds: 300,
+      },
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-02T00:00:00Z',
+    })
+
+    expect(template.status).toBe('active')
+    expect(template.claims[0].display_name).toBe('Given Name')
+    expect(template.validity_rules).toMatchObject({
+      ttl_seconds: 30 * 86400,
+      default_validity_days: 30,
+      reissue_within_seconds: 7 * 86400,
+      renewal_window_days: 7,
+      not_before_offset_seconds: 300,
+      not_before_offset: 300,
+    })
+    expect(template.createdAt).toBe('2024-01-01T00:00:00Z')
+    expect(template.updatedAt).toBe('2024-01-02T00:00:00Z')
+  })
+
+  it('builds backend-compatible payloads from canonical validity fields', () => {
+    const payload = buildCredentialTemplatePayload({
+      organization_id: 'org-1',
+      name: 'Canonical Payload',
+      credential_type: 'EmployeeBadge',
+      issuer_did: 'did:web:issuer.example.com',
+      issuer_profile_id: 'ip-1',
+      issuer_algorithm: 'ES256',
+      signing_algorithm: 'ES256',
+      issuer_certificate_chain_pem: 'private certificate material',
+      key_access_mode: 'REMOTE_SIGNING',
+      remote_signing_config: { signing_service_id: 'service-1' },
+      signing_service_id: 'service-1',
+      signing_key_reference: 'key-1',
+      kms_provider: 'openbao',
+      kms_key_id: 'key-1',
+      auto_generate_artifacts: true,
+      generate_artifacts_automatically: true,
+      compliance_profile_id: 'compliance-1',
+      vct: 'com.example.employee',
+      claims: [
+        { name: 'given_name', type: 'string', required: true },
+        { name: 'score', type: 'number', display_name: 'Score', required: false },
+      ],
+      validity_rules: {
+        ttl_seconds: 14 * 86400,
+        renewable: false,
+        reissue_within_seconds: 3 * 86400,
+        not_before_offset: 900,
+      },
+    })
+
+    expect(payload.validity_rules).toEqual({
+      ttl_seconds: 14 * 86400,
+      renewable: false,
+      reissue_within_seconds: 3 * 86400,
+      not_before_offset: 900,
+    })
+    expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
+    expect(payload.issuer_did).toBe('did:web:issuer.example.com')
+    for (const privateField of [
+      'issuer_profile_id',
+      'issuer_algorithm',
+      'signing_algorithm',
+      'issuer_certificate_chain_pem',
+      'key_access_mode',
+      'remote_signing_config',
+      'signing_service_id',
+      'signing_key_reference',
+      'kms_provider',
+      'kms_key_id',
+      'auto_generate_artifacts',
+      'generate_artifacts_automatically',
+    ]) {
+      expect(payload).not.toHaveProperty(privateField)
+    }
+    expect(payload.compliance_profile_id).toBe('compliance-1')
+    expect(payload).not.toHaveProperty('compliance_profile')
+    expect(payload.claims).toEqual([
+      {
+        name: 'given_name',
+        display_name: 'Given Name',
+        claim_type: 'string',
+        required: true,
+        selectively_disclosable: true,
+      },
+      {
+        name: 'score',
+        display_name: 'Score',
+        claim_type: 'integer',
+        required: false,
+        selectively_disclosable: true,
+      },
+    ])
+    expect(payload.claims[0]).not.toHaveProperty('type')
+  })
+
+  it('preserves explicit compliance profile IDs and absolute VCT values', () => {
+    const payload = buildCredentialTemplatePayload({
+      organization_id: 'org-1',
+      name: 'EUDI Payload',
+      credential_type: 'PersonIdentificationData',
+      issuer_did: 'did:web:issuer.example.com',
+      issuer_profile_id: 'ip-1',
+      compliance_profile_id: 'compliance-2',
+      vct: 'https://credentials.example.com/pid',
+      compliance_profile: { compliance_code: 'EUDI_PID', credential_format: 'sd_jwt_vc' },
+      wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
+      claims: [{ name: 'given_name', claim_type: 'string', display_name: 'Given Name' }],
+    })
+
+    expect(payload.vct).toBe('https://credentials.example.com/pid')
+    expect(payload.compliance_profile_id).toBe('compliance-2')
+    expect(payload).not.toHaveProperty('compliance_profile')
+    expect(payload).not.toHaveProperty('wallet_configs')
+  })
+
+  it('does not expose legacy custody metadata returned by an older service', () => {
+    const template = normalizeCredentialTemplate({
+      id: 'ct-legacy',
+      organization_id: 'org-1',
+      issuer_did: 'did:web:issuer.example.com',
+      issuer_profile_id: 'profile-1',
+      issuer_key_id: 'key-1',
+      issuer_algorithm: 'ES256',
+      signing_algorithm: 'ES256',
+      key_access_mode: 'REMOTE_SIGNING',
+      remote_signing_config: { signing_service_id: 'service-1' },
+      issuer_certificate_chain_pem: 'private certificate material',
+      auto_generate_artifacts: true,
+      artifacts_status: 'valid',
+      hasArtifacts: true,
+      artifactsValidated: true,
+      kms_provider: 'openbao',
+      kms_key_id: 'key-1',
+      signing_service_id: 'service-1',
+      signing_key_reference: 'key-1',
+    })
+
+    expect(template.issuer_did).toBe('did:web:issuer.example.com')
+    for (const privateField of [
+      'issuer_profile_id',
+      'issuer_key_id',
+      'issuer_algorithm',
+      'signing_algorithm',
+      'key_access_mode',
+      'remote_signing_config',
+      'issuer_certificate_chain_pem',
+      'auto_generate_artifacts',
+      'artifacts_status',
+      'hasArtifacts',
+      'artifactsValidated',
+      'kms_provider',
+      'kms_key_id',
+      'signing_service_id',
+      'signing_key_reference',
+    ]) {
+      expect(template).not.toHaveProperty(privateField)
+    }
+  })
+
+  it('rejects payloads without an active issuer DID', () => {
+    expect(() => buildCredentialTemplatePayload({
+      organization_id: 'org-1',
+      name: 'Missing Issuer',
+      credential_type: 'EmployeeBadge',
+    })).toThrow('active issuer DID')
+  })
+})

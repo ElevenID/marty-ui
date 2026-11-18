@@ -1,0 +1,12 @@
+[package]
+name = "marty-openbao-http"
+version = "0.1.0"
+description = "Authenticated HTTPS transport for Marty OpenBao clients"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+reqwest.workspace = true

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "runtime_inputs": {
+    "templates": [{"id":"template-1","status":"ACTIVE","issuer_did":"did:web:issuer.example:orgs:org-1"},{"id":"template-draft","status":"draft","issuer_did":"did:web:draft"}],
+    "policies": {"policies":[{"id":"policy-1","status":"enabled"}]},
+    "deployments": {"deployment_profiles":[{"id":"deployment-1","status":"ready"}]},
+    "flows": {"definitions":[{"id":"flow-1","status":"ACTIVE","credential_template_id":"template-1"}]}
+  },
+  "expected_runtime": {
+    "can_issue": true,
+    "can_verify": true,
+    "issuer_keys_valid": true,
+    "issuer_active": true,
+    "deployment_active": true,
+    "policy_reachable": true,
+    "last_issuance_timestamp": null,
+    "last_verification_timestamp": null,
+    "artifact_counts": {
+      "active_credential_templates": 1,
+      "did_backed_credential_templates": 1,
+      "active_presentation_policies": 1,
+      "active_deployment_profiles": 1,
+      "active_flows": 1
+    }
+  },
+  "applicants": {"items":[{"status":"SUBMITTED"},{"state":"under_review"},{"status":"APPROVED"},{"status":"OFFERED"},{"status":"CREDENTIALED"},"ignored"]},
+  "expected_applicant_stats": {"pending":2,"approved":1,"issuable":2,"total":5},
+  "lifecycle": {"created_at":"2026-04-01T00:00:00+00:00","audit_retention_days":30,"pilot_retention":{"enabled":true,"window_days":30,"scope_items":["applications"]},"plan_tier":"starter"},
+  "retention_summary": {"cutoff_at":"2026-03-14T00:00:00+00:00","next_expiry_at":"2026-04-13T00:00:00+00:00","oldest_retained_record_at":"2026-03-15T00:00:00+00:00","eligible_for_purge":{"applications":2,"total":2},"tracked_scope":["applications"]},
+  "expected_lifecycle": {"created_at":"2026-04-01T00:00:00+00:00","compliance_profiles":[],"data_retention_mode":"standard","audit_retention_days":30,"pilot_retention":{"enabled":true,"window_days":30,"scope_summary":null,"scope_items":["applications"],"access_behavior":null,"last_purged_at":null,"cutoff_at":"2026-03-14T00:00:00+00:00","next_expiry_at":"2026-04-13T00:00:00+00:00","oldest_retained_record_at":"2026-03-15T00:00:00+00:00","eligible_for_purge":{"issuance_transactions":0,"applications":2,"authorization_sessions":0,"issuance_events":0,"issued_credentials":0,"total":2},"tracked_scope":["applications"]}},
+  "expected_integration_info": {"org_id":"org-1","base_url":"https://beta.elevenidllc.com/v1","example_request":"curl -sS -X POST \"https://beta.elevenidllc.com/v1/flows/instances\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-API-Key: <api-key>\" \\\n  -H \"X-Organization-ID: org-1\" \\\n  -d '{\"flow_definition_id\":\"<flow-definition-id>\",\"subject_id\":\"<subject-id>\",\"initial_context\":{}}'"},
+  "sweep_now":"2026-04-13T12:00:00Z",
+  "due_lifecycle":{"pilot_retention":{"enabled":true,"eligible_for_purge":{"total":2},"next_expiry_at":"2099-01-01T00:00:00Z"}},
+  "future_lifecycle":{"pilot_retention":{"enabled":true,"eligible_for_purge":{"total":0},"next_expiry_at":"2099-01-01T00:00:00Z"}}
+}

@@ -1,0 +1,1189 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/ui
+
+ ❯ src/components/__tests__/ApplicationForm.test.tsx (15 tests | 6 failed) 8308ms
+   ❯ ApplicationForm (15)
+     × refreshes Canvas claim status after closing the dialog without issuing again 1174ms
+     × refreshes the current Canvas claim on browser focus return 1144ms
+     × refreshes the current Canvas claim on browser visibilitychange return 1166ms
+     × does not treat closing a canceled wallet claim as successful issuance 1160ms
+     × clears stale Canvas claim availability when the return status read fails 1146ms
+     × discards a late claim read after leaving the Canvas application and removes return listeners 1171ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > refreshes Canvas claim status after closing the dialog without issuing again
+TestingLibraryElementError: Unable to find an element by: [data-testid="canvas-claim-complete"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+ ❯ waitForWrapper ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:443:25
+    441|     await user.click(screen.getByRole('button', { name: 'Close claim d…
+    442|
+    443|     expect(await screen.findByTestId('canvas-claim-complete')).toHaveT…
+       |                         ^
+    444|     expect(screen.queryByTestId('canvas-claim-action')).not.toBeInTheD…
+    445|     expect(mockPost).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > refreshes the current Canvas claim on browser focus return
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > refreshes the current Canvas claim on browser visibilitychange return
+TestingLibraryElementError: Unable to find an element by: [data-testid="canvas-claim-complete"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+ ❯ waitForWrapper ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:458:25
+    456|     fireEvent(event === 'focus' ? window : document, new Event(event));
+    457|
+    458|     expect(await screen.findByTestId('canvas-claim-complete')).toBeInT…
+       |                         ^
+    459|     expect(screen.getByTestId('claim-credential-dialog')).toHaveTextCo…
+    460|     expect(mockPost).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > does not treat closing a canceled wallet claim as successful issuance
+AssertionError: expected 1 to be greater than 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head>[39m
+    [36m<meta[39m
+      [33mcontent[39m=[32m""[39m
+      [33mname[39m=[32m"emotion-insertion-point"[39m
+    [36m/>[39m
+  [36m</head>[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+        [33mdata-testid[39m=[32m"credential-application-form"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+              [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+              [33mfocusable[39m=[32m"false"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+            [36m>[39m
+              [0mCanvas Achievement Badge[0m
+            [36m</h1>[39m
+          [36m</div>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+          [36m>[39m
+            [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+          [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-0"[39m
+            [33mdata-testid[39m=[32m"review-step"[39m
+          [36m>[39m
+            [36m<h6[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+            [36m>[39m
+              [0mapplicationForm.review.title[0m
+            [36m</h6>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+            [36m>[39m
+              [0mapplicationForm.review.description[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+              [33mdata-testid[39m=[32m"canvas-application-context"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+              [36m>[39m
+                [36m<h6[39m
+                  [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                  [33mfont-weight[39m=[32m"700"[39m
+                [36m>[39m
+                  [0mCourse completion requirement[0m
+                [36m</h6>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mLaunch verified[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mApplication pending[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mCanvas identity linked[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+              [36m>[39m
+                [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+              [36m</p>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+                [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                  [36m>[39m
+                    [36m<h6[39m
+                      [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                    [36m>[39m
+                      [0mAuthoritative Canvas evidence[0m
+                    [36m</h6>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                    [36m>[39m
+                      [0mScores and completion are read from Canvas by the background worker.[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<button[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                    [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                    [33mtabindex[39m=[32m"0"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"MuiButton-ico...
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:472:59
+    470|     await user.click(screen.getByRole('button', { name: 'Close claim d…
+    471|
+    472|     await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterT…
+       |                                                           ^
+    473|     expect(screen.getByTestId('canvas-ready-to-claim')).toBeInTheDocum…
+    474|     expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTh…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../marty-ui/ui/node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > clears stale Canvas claim availability when the return status read fails
+TestingLibraryElementError: Unable to find an element by: [data-testid="canvas-evidence-sync-error"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+      [33mdata-testid[39m=[32m"credential-application-form"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33maria-hidden[39m=[32m"true"[39m
+            [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+            [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+            [33mfocusable[39m=[32m"false"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+          [36m>[39m
+            [0mCanvas Achievement Badge[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+        [36m>[39m
+          [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+        [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-0"[39m
+          [33mdata-testid[39m=[32m"review-step"[39m
+        [36m>[39m
+          [36m<h6[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.title[0m
+          [36m</h6>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+          [36m>[39m
+            [0mapplicationForm.review.description[0m
+          [36m</p>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+            [33mdata-testid[39m=[32m"canvas-application-context"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+            [36m>[39m
+              [36m<h6[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                [33mfont-weight[39m=[32m"700"[39m
+              [36m>[39m
+                [0mCourse completion requirement[0m
+              [36m</h6>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mLaunch verified[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mApplication pending[0m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+              [36m>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                [36m>[39m
+                  [0mCanvas identity linked[0m
+                [36m</span>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+            [36m>[39m
+              [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+              [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                [36m>[39m
+                  [36m<h6[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mAuthoritative Canvas evidence[0m
+                  [36m</h6>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                  [36m>[39m
+                    [0mScores and completion are read from Canvas by the background worker.[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<button[39m
+                  [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                  [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiButton-icon MuiButton-startIcon css-t70kls-MuiButton-startIcon"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-fontSizeMedium css-1umw9bq-MuiSvgIcon-root"[39m
+                      [33mdata-testid[39m=[32m"RefreshIcon"[39m
+                      [33mfocusable[39m=[32m"false"[39m
+          ...
+ ❯ waitForWrapper ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../marty-ui/ui/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:488:25
+    486|     await user.click(screen.getByRole('button', { name: 'Close claim d…
+    487|
+    488|     expect(await screen.findByTestId('canvas-evidence-sync-error')).to…
+       |                         ^
+    489|     expect(screen.queryByTestId('canvas-ready-to-claim')).not.toBeInTh…
+    490|     expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTh…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > discards a late claim read after leaving the Canvas application and removes return listeners
+AssertionError: expected 1 to be greater than 1
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head>[39m
+    [36m<meta[39m
+      [33mcontent[39m=[32m""[39m
+      [33mname[39m=[32m"emotion-insertion-point"[39m
+    [36m/>[39m
+  [36m</head>[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"MuiContainer-root MuiContainer-maxWidthMd css-ds0qfq-MuiContainer-root"[39m
+        [33mdata-testid[39m=[32m"credential-application-form"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiBox-root css-1yjvs5a"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-syu8eu"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"MuiSvgIcon-root MuiSvgIcon-colorPrimary MuiSvgIcon-fontSizeLarge css-1lzqybq-MuiSvgIcon-root"[39m
+              [33mdata-testid[39m=[32m"CheckCircleIcon"[39m
+              [33mfocusable[39m=[32m"false"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-h4 css-f84ov1-MuiTypography-root"[39m
+            [36m>[39m
+              [0mCanvas Achievement Badge[0m
+            [36m</h1>[39m
+          [36m</div>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"MuiTypography-root MuiTypography-body1 css-rizt0-MuiTypography-root"[39m
+          [36m>[39m
+            [0mReview the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation1 css-1csr4dh-MuiPaper-root"[39m
+          [33mstyle[39m=[32m"--Paper-shadow: 0px 2px 1px -1px rgba(0,0,0,0.2),0px 1px 1px 0px rgba(0,0,0,0.14),0px 1px 3px 0px rgba(0,0,0,0.12);"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"MuiBox-root css-0"[39m
+            [33mdata-testid[39m=[32m"review-step"[39m
+          [36m>[39m
+            [36m<h6[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-h6 MuiTypography-gutterBottom css-1wmifpn-MuiTypography-root"[39m
+            [36m>[39m
+              [0mapplicationForm.review.title[0m
+            [36m</h6>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-1tty75b-MuiTypography-root"[39m
+            [36m>[39m
+              [0mapplicationForm.review.description[0m
+            [36m</p>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"MuiBox-root css-lx7oui"[39m
+              [33mdata-testid[39m=[32m"canvas-application-context"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-dpjmko"[39m
+              [36m>[39m
+                [36m<h6[39m
+                  [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle1 css-1i3tsf3-MuiTypography-root"[39m
+                  [33mfont-weight[39m=[32m"700"[39m
+                [36m>[39m
+                  [0mCourse completion requirement[0m
+                [36m</h6>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mLaunch verified[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorPrimary css-zcopdn-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mApplication pending[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiChip-root MuiChip-outlined MuiChip-sizeSmall MuiChip-colorSuccess css-2nu2az-MuiChip-root"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"MuiChip-label css-19m61dl-MuiChip-label"[39m
+                  [36m>[39m
+                    [0mCanvas identity linked[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<p[39m
+                [33mclass[39m=[32m"MuiTypography-root MuiTypography-body2 css-956xpl-MuiTypography-root"[39m
+              [36m>[39m
+                [0mThis request started from Canvas. ElevenID will use the course and activity details below, plus the issuer requirements, to evaluate the credential request.[0m
+              [36m</p>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"MuiBox-root css-vwu1lq"[39m
+                [33mdata-testid[39m=[32m"canvas-evidence-sync-panel"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"MuiBox-root css-53worq"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mclass[39m=[32m"MuiBox-root css-0"[39m
+                  [36m>[39m
+                    [36m<h6[39m
+                      [33mclass[39m=[32m"MuiTypography-root MuiTypography-subtitle2 css-1ypmsg6-MuiTypography-root"[39m
+                    [36m>[39m
+                      [0mAuthoritative Canvas evidence[0m
+                    [36m</h6>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"MuiTypography-root MuiTypography-caption css-mpaqru-MuiTypography-root"[39m
+                    [36m>[39m
+                      [0mScores and completion are read from Canvas by the background worker.[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<button[39m
+                    [33mclass[39m=[32m"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-sizeSmall MuiButton-colorPrimary css-wyro15-MuiButtonBase-root-MuiButton-root"[39m
+                    [33mdata-testid[39m=[32m"canvas-evidence-sync-action"[39m
+                    [33mtabindex[39m=[32m"0"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"MuiButton-ico...
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:505:59
+    503|     const readsBeforeClose = mockGet.mock.calls.length;
+    504|     await first.user.click(screen.getByRole('button', { name: 'Close c…
+    505|     await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterT…
+       |                                                           ^
+    506|     first.unmount();
+    507|     const readsAfterUnmount = mockGet.mock.calls.length;
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../marty-ui/ui/node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../marty-ui/ui/node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 failed | 9 passed (15)
+   Start at  03:16:20
+   Duration  11.82s (tests 71%, import 14%, environment 7%, transform 4%, setup 3%)
+

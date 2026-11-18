@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "allowed_states": ["awaiting_wallet", "in_progress"],
+  "expired_transition": "compare_and_set_to_expired_with_request_expired_history",
+  "identity_resolution": "every_fetch",
+  "post_request_uri": "wallet_nonce_required",
+  "url_query_retrieval": "rejected",
+  "compatibility_profiles": ["standard", "lissi"],
+  "transports": ["request_uri", "dc_api"],
+  "dc_api_protocol": "openid4vp-v1-signed",
+  "dc_api_response_mode": "dc_api.jwt",
+  "persistence": "status_and_updated_at_compare_and_set",
+  "response_content_type": "application/oauth-authz-req+jwt",
+  "response_cache": "no-store"
+}

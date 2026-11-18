@@ -1,0 +1,99 @@
+"""Regression checks for edge readiness routing.
+
+These config files are easy to break accidentally: if /ready falls through to
+the SPA server, external health checks can report a healthy UI while gateway
+dependencies such as the organization service are unavailable.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _text(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _assert_ready_proxied_before_spa_fallback(relative_path: str) -> None:
+    contents = _text(relative_path)
+
+    assert "location = /ready" in contents
+    assert "proxy_pass http://$backend_api/ready;" in contents
+    assert "location = /health/ready" in contents
+    assert "proxy_pass http://$backend_api/health/ready;" in contents
+    assert contents.index("location = /ready") < contents.index("location / {")
+
+
+def test_selfhost_nginx_proxies_readiness_before_spa_fallback() -> None:
+    _assert_ready_proxied_before_spa_fallback("docker/nginx-selfhost.prod.conf.template")
+
+
+def test_tunnel_nginx_proxies_readiness_before_spa_fallback() -> None:
+    _assert_ready_proxied_before_spa_fallback("nginx-tunnel.conf.template")
+
+
+def test_static_ui_nginx_does_not_serve_spa_for_readiness() -> None:
+    contents = _text("ui/nginx.spa.conf")
+
+    assert "location = /ready" in contents
+    assert "location = /health/ready" in contents
+    assert "readiness_not_proxied" in contents
+    assert contents.index("location = /ready") < contents.index("location / {")
+
+
+def test_static_ui_nginx_routes_demo_catalog_around_manifest_directory() -> None:
+    expected_location = "location ~ ^/demos/?$"
+    expected_fallback = "try_files /demos/index.html /index.html;"
+
+    for relative_path in (
+        "ui/nginx.spa.conf",
+        "ui/nginx.prod.conf",
+        "ui/nginx.dev.conf",
+    ):
+        contents = _text(relative_path)
+        assert expected_location in contents, relative_path
+        assert expected_fallback in contents, relative_path
+
+
+def test_beta_tunnel_edge_healthcheck_uses_readiness() -> None:
+    contents = _text("docker-compose.profile.tunnel.yml")
+
+    assert "http://127.0.0.1/ready" in contents
+    assert "http://127.0.0.1/health" not in contents
+
+
+def test_beta_keycloak_publishes_the_canonical_https_issuer_without_proxy_headers() -> None:
+    contents = _text("docker-compose.profile.tunnel.yml")
+
+    assert "KC_HOSTNAME: https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}" in contents
+    assert "KC_HOSTNAME: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}" not in contents
+
+
+def test_selfhost_edge_healthchecks_use_readiness() -> None:
+    for relative_path, service in (
+        ("docker-compose.selfhost.cloudflare-legacy.yml", "tunnel-nginx-proxy"),
+    ):
+        model = yaml.safe_load(_text(relative_path))
+        healthcheck = model["services"][service]["healthcheck"]["test"]
+        assert "http://127.0.0.1/ready" in healthcheck, relative_path
+        assert "http://127.0.0.1/health" not in healthcheck, relative_path
+
+
+def test_production_edge_can_start_while_product_is_unavailable() -> None:
+    edge = yaml.safe_load(_text("docker-compose.selfhost.prod.yml"))["services"]["edge"]
+    assert "http://127.0.0.1/edge-healthz" in edge["healthcheck"]["test"]
+    assert not edge.get("depends_on")
+    template = _text("docker/nginx-selfhost.prod.conf.template")
+    assert "include /etc/nginx/marty-website/*.conf;" in template
+    assert "location = /edge-healthz" in template
+    # Existing product readiness retains its gateway semantics.
+    _assert_ready_proxied_before_spa_fallback("docker/nginx-selfhost.prod.conf.template")
+
+
+def test_gateway_container_healthchecks_use_dependency_readiness() -> None:
+    assert "http://localhost:8000/health/ready" in _text("docker-compose.base.yml")
+    assert "http://localhost:8000/health/ready" in _text("docker-compose.selfhost.prod.yml")

@@ -1,0 +1,274 @@
+    Updating git repository `https://github.com/ElevenID/ssi-elevenid`
+    Updating git submodule `https://github.com/w3c-ccg/rdf-dataset-canonicalization`
+    Updating git repository `https://github.com/ElevenID/ssi-elevenid`
+    Updating crates.io index
+warning: patch `ssi v0.16.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-bbs v0.2.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-did-test v0.3.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-ssh v0.3.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-status v0.8.1 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-tzkey v0.4.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-ucan v0.5.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+warning: patch `ssi-zcap-ld v0.8.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+ Downloading crates ...
+  Downloaded tokio-macros v2.7.1
+  Downloaded enum-ordinalize-derive v4.4.1
+  Downloaded enum-ordinalize v4.4.1
+  Downloaded data-encoding-macro v0.1.20
+  Downloaded data-encoding-macro-internal v0.1.18
+  Downloaded quote v1.0.46
+  Downloaded data-encoding v2.11.0
+  Downloaded rustls-pki-types v1.15.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded uuid v1.25.0
+  Downloaded bytemuck v1.25.1
+  Downloaded zerocopy-derive v0.8.54
+  Downloaded rustls-webpki v0.103.15
+  Downloaded http v1.4.2
+  Downloaded rustls v0.23.45
+  Downloaded hyper v1.10.1
+  Downloaded aho-corasick v1.1.4
+  Downloaded cc v1.4.4
+  Downloaded ipnet v2.12.0
+  Downloaded aws-lc-rs v1.18.1
+  Downloaded displaydoc v0.2.6
+  Downloaded zerocopy v0.8.54
+  Downloaded regex-automata v0.4.16
+  Downloaded aws-lc-sys v0.45.0
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling serde v1.0.229
+   Compiling zerocopy v0.8.54
+   Compiling syn v1.0.109
+   Compiling syn v2.0.119
+   Compiling syn v3.0.3
+   Compiling serde_derive v1.0.229
+   Compiling zeroize_derive v1.5.0
+   Compiling zeroize v1.9.0
+   Compiling zerocopy-derive v0.8.54
+   Compiling memchr v2.8.3
+   Compiling generic-array v0.14.7
+   Compiling thiserror-impl v1.0.69
+   Compiling half v2.7.1
+   Compiling thiserror v1.0.69
+   Compiling num-traits v0.2.19
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling ciborium-ll v0.2.2
+   Compiling nom v7.1.3
+   Compiling ciborium v0.2.2
+   Compiling proc-macro-error v1.0.4
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling abnf-core v0.5.0
+   Compiling digest v0.10.7
+   Compiling btree-range-map v0.7.2
+   Compiling sha2 v0.10.9
+   Compiling abnf v0.13.0
+   Compiling indexmap v2.14.0
+   Compiling static-regular-grammar v2.0.2
+   Compiling pct-str v2.0.0
+   Compiling num-integer v0.1.46
+   Compiling num-bigint v0.4.8
+   Compiling futures-sink v0.3.34
+   Compiling futures-channel v0.3.34
+   Compiling futures-macro v0.3.34
+   Compiling synstructure v0.13.2
+   Compiling iref-core v3.2.2
+   Compiling futures-io v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling iref v3.2.2
+   Compiling static-iref v3.0.0
+   Compiling zerofrom-derive v0.1.7
+   Compiling enum-ordinalize-derive v4.4.1
+   Compiling chrono v0.4.45
+   Compiling enum-ordinalize v4.4.1
+   Compiling zerofrom v0.1.8
+   Compiling yoke-derive v0.8.2
+   Compiling der_derive v0.7.3
+   Compiling thiserror-impl v2.0.20
+   Compiling cc v1.4.4
+   Compiling thiserror v2.0.20
+   Compiling der v0.7.10
+   Compiling yoke v0.8.3
+   Compiling json-number v0.4.10
+   Compiling educe v0.5.11
+   Compiling langtag v0.4.0
+   Compiling enum-ordinalize v3.1.15
+   Compiling locspan-derive v0.6.0
+   Compiling smallstr v0.3.1
+   Compiling locspan v0.8.2
+   Compiling rdf-types v0.22.5
+   Compiling json-syntax v0.12.5
+   Compiling educe v0.4.23
+   Compiling cmake v0.1.58
+   Compiling num-rational v0.4.2
+   Compiling ordered-float v3.9.2
+   Compiling zerovec-derive v0.11.3
+   Compiling serde_json v1.0.151
+   Compiling aws-lc-sys v0.45.0
+   Compiling zerovec v0.11.6
+   Compiling xsd-types v0.9.6
+   Compiling spki v0.7.3
+   Compiling linked-data-derive v0.1.2 (https://github.com/ElevenID/ssi-elevenid?rev=6f86efc1579033e14ff2ad7d115ca0857e16a67f#6f86efc1)
+   Compiling displaydoc v0.2.6
+   Compiling serdect v0.2.0
+   Compiling linked-data v0.1.2 (https://github.com/ElevenID/ssi-elevenid?rev=6f86efc1579033e14ff2ad7d115ca0857e16a67f#6f86efc1)
+   Compiling ahash v0.8.12
+   Compiling signature v2.2.0
+   Compiling hashbrown v0.13.2
+   Compiling sec1 v0.7.3
+   Compiling pkcs8 v0.10.2
+   Compiling futures-executor v0.3.34
+   Compiling crypto-bigint v0.5.5
+   Compiling tracing-attributes v0.1.31
+   Compiling aws-lc-rs v1.18.1
+   Compiling tracing v0.1.44
+   Compiling elliptic-curve v0.13.8
+   Compiling futures v0.3.34
+   Compiling json-ld-syntax v0.21.4
+   Compiling tinystr v0.8.3
+   Compiling http v1.4.2
+   Compiling tokio-macros v2.7.1
+   Compiling litemap v0.8.2
+   Compiling writeable v0.6.3
+   Compiling icu_locale_core v2.2.0
+   Compiling json-ld-core v0.21.4
+   Compiling tokio v1.53.1
+   Compiling http-body v1.1.0
+   Compiling zerotrie v0.2.4
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_provider v2.2.0
+   Compiling ecdsa v0.16.9
+   Compiling block-buffer v0.9.0
+   Compiling digest v0.9.0
+   Compiling rustls-pki-types v1.15.0
+   Compiling pin-project-internal v1.1.13
+   Compiling sha2 v0.9.9
+   Compiling json-ld-context-processing v0.21.4
+   Compiling pin-project v1.1.13
+   Compiling primeorder v0.13.6
+   Compiling async-trait v0.1.92
+   Compiling rustls v0.23.45
+   Compiling byteorder v1.5.0
+   Compiling uint v0.9.5
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling json-ld-expansion v0.21.4
+   Compiling bs58 v0.4.0
+   Compiling csv-core v0.1.13
+   Compiling hyper v1.10.1
+   Compiling csv v1.4.0
+   Compiling primitive-types v0.9.1
+   Compiling ssi-crypto v0.2.1 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling json-ld-compaction v0.21.4
+   Compiling idna_adapter v1.2.2
+   Compiling json-ld-serialization v0.21.4
+   Compiling ppv-lite86 v0.2.21
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling ipnet v2.12.0
+   Compiling regex-syntax v0.8.11
+   Compiling data-encoding v2.11.0
+   Compiling ssi-rdf v0.1.1 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling data-encoding-macro-internal v0.1.18
+   Compiling regex-automata v0.4.16
+   Compiling hyper-util v0.1.20
+   Compiling rand_chacha v0.3.1
+   Compiling json-ld v0.21.4
+   Compiling keccak-hash v0.7.0
+   Compiling idna v1.1.0
+   Compiling ssi-multicodec v0.2.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling tower v0.5.3
+   Compiling p384 v0.13.1
+   Compiling p256 v0.13.2
+   Compiling http-body-util v0.1.4
+   Compiling ed25519 v2.2.3
+   Compiling serde_jcs v0.1.0
+   Compiling match-lookup v0.1.2
+   Compiling ssi-contexts v0.1.10 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling bytemuck v1.25.1
+   Compiling data-encoding-macro v0.1.20
+   Compiling rustls-native-certs v0.8.4
+   Compiling atomic v0.6.1
+   Compiling base256emoji v1.0.2
+   Compiling ssi-json-ld v0.3.3 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling ssi-eip712 v0.1.1 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling ed25519-dalek v2.2.0
+   Compiling url v2.5.8
+   Compiling rand v0.8.7
+   Compiling simple_asn1 v0.6.4
+   Compiling strum_macros v0.25.3
+   Compiling serde_urlencoded v0.7.1
+   Compiling ssi-core v0.3.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling p521 v0.13.3
+   Compiling x509-cert v0.2.5
+   Compiling base-x v0.2.11
+   Compiling multibase v0.9.3
+   Compiling tower-http v0.6.11
+   Compiling jsonwebtoken v10.4.0
+   Compiling ssi-claims-core v0.2.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling strum v0.25.0
+   Compiling uuid v1.25.0
+   Compiling strum_macros v0.24.3
+   Compiling simple_asn1 v0.5.4
+   Compiling sha1 v0.10.7
+   Compiling coset v0.3.8
+   Compiling isomdl-macros v0.1.0 (https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a5294)
+   Compiling num-derive v0.3.3
+   Compiling serde_bytes v0.11.19
+   Compiling isomdl v0.3.0 (https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a5294)
+   Compiling ssi-jwk v0.4.0 (https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e)
+   Compiling marty-crypto v0.2.2 (/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation/marty-crypto)
+   Compiling axum-core v0.5.6
+   Compiling matchers v0.2.0
+   Compiling regex v1.13.1
+   Compiling rustls-webpki v0.103.15
+   Compiling sd-jwt-rs v0.8.0 (https://github.com/ElevenID/sd-jwt-rust?rev=82143d688355315f22297b40ca18050a94cd2525#82143d68)
+   Compiling k256 v0.13.4
+   Compiling tracing-serde v0.2.0
+   Compiling axum v0.8.9
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling reqwest v0.13.4
+   Compiling marty-oid4vci v0.2.2 (/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation/marty-oid4vci)
+   Compiling marty-test-wallet v0.2.2 (/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation/marty-test-wallet)
+warning: variable does not need to be mutable
+   --> marty-test-wallet/src/signer_ipc.rs:985:13
+    |
+985 |         let mut listener = LocalListener::bind(&endpoint).unwrap();
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> marty-test-wallet/src/signer_ipc.rs:1021:13
+     |
+1021 |         let mut listener = LocalListener::bind(&endpoint).unwrap();
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: `marty-test-wallet` (lib test) generated 2 warnings (run `cargo fix --lib -p marty-test-wallet --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 36s
+     Running unittests src/lib.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/marty_test_wallet-887bbaf8a71e0f2e)
+
+running 5 tests
+test wallet_sessions::tests::malformed_or_duplicate_cookies_never_select_the_interactive_wallet ... ok
+test wallet_sessions::tests::close_drains_delayed_operations_and_rejects_queued_operations_before_acknowledging ... ok
+test wallet_sessions::tests::stale_capabilities_expire_and_never_resolve_to_another_wallet ... ok
+test wallet_sessions::tests::separate_runs_cannot_reset_read_or_close_each_others_credentials ... ok
+test wallet_sessions::tests::capacity_and_duplicate_runs_fail_without_evicting_a_live_run ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+

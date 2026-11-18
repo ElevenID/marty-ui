@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from scripts import debug_issuance_response as debug_issuance
+from scripts.operator_gateway import (
+    GatewayActorConfigurationError,
+    resolve_gateway_actor,
+)
+
+
+@dataclass
+class Response:
+    status_code: int
+    body: Any
+
+    def json(self) -> Any:
+        if isinstance(self.body, ValueError):
+            raise self.body
+        return self.body
+
+
+class RecordingClient:
+    def __init__(self, response: Response) -> None:
+        self.response = response
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __enter__(self) -> "RecordingClient":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def post(self, url: str, **kwargs: Any) -> Response:
+        self.calls.append((url, kwargs))
+        return self.response
+
+
+class TransportFailureClient(RecordingClient):
+    def post(self, url: str, **_kwargs: Any) -> Response:
+        raise httpx.ConnectError(
+            "private transport detail", request=httpx.Request("POST", url)
+        )
+
+
+def test_shared_gateway_actor_rejects_service_credential_only_configuration() -> None:
+    environment = {
+        "ISSUANCE_API_KEY": "private-service-key",
+        "ISSUANCE_API_BASE_URL": "http://legacy-issuance:8005",
+    }
+    try:
+        resolve_gateway_actor(environment, required_scopes=("credentials:issue",))
+    except GatewayActorConfigurationError as error:
+        rendered = str(error)
+    else:
+        raise AssertionError("service credential must not authenticate a gateway actor")
+
+    assert "MARTY_API_KEY is required" in rendered
+    assert "private-service-key" not in rendered
+    assert "legacy-issuance" not in rendered
+
+
+def test_debug_diagnostic_authenticates_gateway_and_redacts_secrets(
+    monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv("MARTY_API_BASE_URL", "https://gateway.example/")
+    monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
+    monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")
+    client = RecordingClient(
+        Response(
+            200,
+            {
+                "credential_offer_uri": "private-offer-uri",
+                "credential_offer_uris": {"wallet-a": "private-wallet-offer"},
+                "credential_offer_labels": {"wallet-a": "Wallet A"},
+            },
+        )
+    )
+    caplog.set_level(logging.INFO)
+
+    assert debug_issuance.main(lambda **_kwargs: client) == 0
+    assert client.calls[0][0] == "https://gateway.example/v1/issuance/initiate"
+    assert client.calls[0][1]["headers"] == {"X-API-Key": "private-gateway-actor-key"}
+    for secret in [
+        "private-gateway-actor-key",
+        "private-service-key",
+        "private-offer-uri",
+        "private-wallet-offer",
+    ]:
+        assert secret not in caplog.text
+
+def test_debug_diagnostic_fails_fast_with_only_service_key(
+    monkeypatch, caplog
+) -> None:
+    monkeypatch.delenv("MARTY_API_KEY", raising=False)
+    monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")
+    debug_factory_called = False
+
+    def client_factory(**_kwargs: Any) -> RecordingClient:
+        nonlocal debug_factory_called
+        debug_factory_called = True
+        raise AssertionError("debug diagnostic must fail before HTTP")
+
+    caplog.set_level(logging.INFO)
+    assert debug_issuance.main(client_factory) == 2
+    assert not debug_factory_called
+    assert "private-service-key" not in caplog.text
+
+def test_debug_diagnostic_handles_transport_status_and_json_failures_without_leaks(
+    monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
+    caplog.set_level(logging.INFO)
+    transport = TransportFailureClient(Response(200, {}))
+    assert debug_issuance.main(lambda **_kwargs: transport) == 1
+    status = RecordingClient(Response(503, ValueError("private non-json response")))
+    assert debug_issuance.main(lambda **_kwargs: status) == 1
+    malformed = RecordingClient(Response(200, ValueError("private malformed JSON")))
+    assert debug_issuance.main(lambda **_kwargs: malformed) == 1
+    for secret in [
+        "private-gateway-actor-key",
+        "private transport detail",
+        "private non-json response",
+        "private malformed JSON",
+    ]:
+        assert secret not in caplog.text

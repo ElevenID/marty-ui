@@ -1,0 +1,57 @@
+---
+# ================================================================
+# Revocation Profile Rust Migration Job
+# Runs before the shared Marty UI migration graph because downstream
+# credential-template migrations read the revocation-profile schema.
+# Re-run by deleting the Job and applying again.
+# ================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: revocation-profile-migrations
+  namespace: marty-prod
+  labels:
+    app: revocation-profile-migrations
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ['sh', '-c',
+            'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 3; done']
+      containers:
+        - name: revocation-profile-migrations
+          image: ${OCIR_REGISTRY}/marty-ui/revocation-profile:${IMAGE_TAG}
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: SERVICE_NAME
+              value: revocation_profile
+            - name: RP_MIGRATE_ONLY
+              value: "true"
+            - name: ENVIRONMENT
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_SYNC_URL
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

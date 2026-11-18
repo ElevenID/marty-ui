@@ -1,0 +1,29 @@
+{
+  "title": "Template issuer options",
+  "description": "Current organization registry compatibility for an active compliance profile. Public DID publication, provider health and credential interoperability require their respective checks. Signing algorithms and private binding coordinates are not template selectors.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["organization_id", "compliance_profile_id", "credential_payload_format", "supported_formats", "issuance_protocol", "requirements", "identities", "rejected_issuers"],
+  "properties": {
+    "organization_id": {"type": "string", "minLength": 1},
+    "compliance_profile_id": {"type": "string", "minLength": 1},
+    "credential_payload_format": {"type": "string", "minLength": 1},
+    "supported_formats": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "issuance_protocol": {"type": "string", "minLength": 1},
+    "requirements": {
+      "type": "object", "additionalProperties": false,
+      "required": ["vct", "doctype", "revocation_profile", "x509_certificate"],
+      "properties": {"vct": {"type": "boolean"}, "doctype": {"type": "boolean"}, "revocation_profile": {"type": "boolean"}, "x509_certificate": {"type": "boolean"}}
+    },
+    "identities": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false, "required": ["issuer_did", "bindings"],
+      "properties": {
+        "issuer_did": {"type": "string", "pattern": "^did:"},
+        "bindings": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false,
+          "required": ["credential_format", "key_purpose", "algorithm"], "properties": {"credential_format": {"type": "string"}, "key_purpose": {"type": "string"}, "algorithm": {"type": "string"}}}}
+      }
+    }},
+    "rejected_issuers": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["issuer_did", "reason"],
+      "properties": {"issuer_did": {"type": "string", "pattern": "^did:"}, "reason": {"enum": ["ambiguous_identity", "incompatible_identity"]}}}}
+  }
+}

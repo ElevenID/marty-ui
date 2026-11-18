@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External observation admission candidate v1",
+  "description": "Proposed unsigned producer envelope. Not an enabled public endpoint or a verified EvidenceFact. Identity, resource scope and fact type come from the core-owned binding. The byte decoder also enforces a 65536-byte body limit, unique decoded member names, UTF-8 byte limits, integer JSON tokens for revisions/sequences/timestamps, and no numerical overflow or nonzero underflow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding_id", "binding_revision", "observation_id", "sequence", "observed_at_ms", "effective_at_ms", "claims"],
+  "properties": {
+    "binding_id": {"$ref": "#/$defs/id"},
+    "binding_revision": {"$ref": "#/$defs/positiveInteger"},
+    "observation_id": {"$ref": "#/$defs/id"},
+    "sequence": {"$ref": "#/$defs/positiveInteger"},
+    "observed_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Producer observation time, Unix milliseconds. Retries retain this original value."},
+    "effective_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Time at which the unsigned producer attests the state was effective, Unix milliseconds; must not exceed observed_at_ms. Use the provider event time when available. A source without an event timestamp may use an explicitly opted-in as-of-read time only with provenance in the core-approved claim contract; it must never be presented as a provider event timestamp. No timestamp or provenance claim grants verification or issuance authority."},
+    "claims": {
+      "type": "object", "minProperties": 1, "maxProperties": 32,
+      "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$"},
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "null"}, {"type": "boolean"}, {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
+          {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"}
+        ]
+      },
+      "description": "Only primitive unsigned claims. The admission kernel additionally applies the exact administrator-approved claim allowlist, types, numeric ranges, UTF-8 byte lengths and reserved-name exclusions. JSON schema alone does not grant trust."
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+    "positiveInteger": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "valueProposition": {
+    "headline": "Marty：自社で運用するアイデンティティワークフロー。",
+    "subheadline": "ワークフローに合わせて信頼を設計。",
+    "extendedSubheadline": "ユースケースを定義し、合成データで評価して、合意した構成を自社または選定したパートナーで運用します。",
+    "primaryCTA": "開発者ドキュメントを見る",
+    "secondaryCTA": "検証APIを見る",
+    "supporting": "ポータブルな資格情報、申請者・文書の検証、Travel Trust。"
+  },
+  "idvComparison": {
+    "title": "信頼のやり取りを設計",
+    "takeaway": "ワークフローで答えるべき問いを定義し、対象実装を評価します。",
+    "traditional": {
+      "title": "確認する問い",
+      "oneTimeChecks": "どの主張を検証するか？",
+      "vendorControlled": "データと鍵を誰が管理するか？",
+      "biometric": "提示者と資格情報をどう結び付けるか？",
+      "closedAPIs": "必要なインターフェースとプロファイルは？",
+      "manualTrust": "どの発行者とルールを信頼するか？",
+      "reVerification": "いつ資格情報を再利用できるか？"
+    },
+    "elevenid": {
+      "title": "Martyでの評価",
+      "reusable": "資格情報と文書の入力を定義",
+      "holderControlled": "顧客または選定パートナーによる運用",
+      "cryptographic": "プロファイルごとの保有者との紐付けテスト",
+      "openStandards": "文書化されたAPIと検証済みの組み合わせ",
+      "governedTrust": "発行者の信頼とポリシーを明示的に設定",
+      "reuseAcross": "合意したワークフローで再利用を評価"
+    }
+  },
+  "eudiOpenBadges": {
+    "title": "ウォレットと資格情報の相互運用性を検討",
+    "verifyCredentials": "必要な資格情報形式と提示プロファイルを定義。",
+    "trustIssuers": "信頼する発行者と受入条件を明確化。",
+    "walletFirst": "選定したウォレットとリリースを組み合わせてテスト。",
+    "quote": "規格名は出発点です。対象リリースとプロファイルを確認し、互換性と適合性を個別の証拠で評価してください。"
+  },
+  "audienceRouting": {
+    "title": "あなたの道を選ぶ",
+    "subtitle": "Martyを直接、またはパートナー・OEM連携を通じて検討。",
+    "enterprise": {
+      "title": "企業",
+      "description": "有用な資格情報・文書ワークフローと運用チームを定義。",
+      "cta": "企業向けを見る"
+    },
+    "government": {
+      "title": "行政",
+      "description": "信頼の情報源、必要なプロファイル、導入条件を確認。",
+      "cta": "行政向けを見る"
+    },
+    "developers": {
+      "title": "開発者",
+      "description": "対象ワークフローのAPI、ソース、連携要件を確認。",
+      "cta": "ドキュメントを読む"
+    }
+  },
+  "organizationOutcomes": {
+    "title": "評価できること",
+    "reduceKYC": "合意したワークフローで資格情報の再利用を検討",
+    "eudiReady": "渡航文書の信頼と旅程ルールを評価",
+    "avoidLockIn": "申請者と文書の検証条件を明確化",
+    "supportBadges": "顧客またはパートナーが運用"
+  },
+  "proofStrip": {
+    "title": "製品範囲と運用モデルを明確に",
+    "interoperability": "範囲",
+    "offlineVerification": "評価",
+    "deployment": "運用",
+    "keySecurity": "鍵セキュリティ",
+    "compliance": "証拠"
+  },
+  "landingPage": {
+    "loading": "読み込み中...",
+    "checkingAccount": "アカウントを確認しています...",
+    "features": {
+      "issuance": {
+        "title": "発行",
+        "description": "必要な資格情報形式と提示プロファイルを定義。"
+      },
+      "verification": {
+        "title": "検証",
+        "description": "信頼する発行者と受入条件を明確化。"
+      },
+      "governance": {
+        "title": "ガバナンス",
+        "description": "信頼と鍵を明示的に設定"
+      }
+    },
+    "identityProblem": {
+      "title": "アイデンティティの課題",
+      "description": "多くの組織は、分断されたシステム、不明確な信頼、増大するコンプライアンス圧力に直面しています。",
+      "items": {
+        "fragmented": "相互運用できない分断されたアイデンティティシステム",
+        "unclearTrust": "パートナーや法域をまたぐ発行者の信頼性が不明確",
+        "privacyPressure": "プライバシー対応の圧力（データ最小化＋選択的開示）",
+        "pkiComplexity": "PKIと失効の運用が大規模で複雑"
+      }
+    },
+    "solvesIt": {
+      "title": "ElevenID LLC が解決する方法",
+      "intro": "入力、信頼情報源、期待する結果を合意",
+      "subheading": "規格名は出発点です。対象リリースとプロファイルを確認し、互換性と適合性を個別の証拠で評価してください。"
+    },
+    "howItWorks": {
+      "title": "仕組み",
+      "description": "デジタル・アイデンティティは4者間の統治された交換です。",
+      "cta": "全体フローを見る"
+    },
+    "standards": {
+      "title": "標準に基づくアーキテクチャ",
+      "subtitle": "規格を設計の指針にし、テストで互換性を確認。",
+      "description": "規格名は出発点です。対象リリースとプロファイルを確認し、互換性と適合性を個別の証拠で評価してください。",
+      "cta": "標準を見る"
+    },
+    "startFirst": {
+      "title": "最初に何をしますか？",
+      "description": "ユースケースを定義し、合成データで評価して、合意した構成を自社または選定したパートナーで運用します。",
+      "cards": {
+        "verify": {
+          "title": "資格情報を検証",
+          "description": "必要な資格情報形式と提示プロファイルを定義。"
+        },
+        "issue": {
+          "title": "資格情報を発行",
+          "description": "ワークフォース、教育、政府の資格情報を発行します。"
+        },
+        "offline": {
+          "title": "オフライン／施設",
+          "description": "オフライン・ヘッドレス構成は検証が必要"
+        },
+        "wallet": {
+          "title": "ウォレット体験",
+          "description": "選定したウォレットとリリースを組み合わせてテスト。"
+        }
+      },
+      "notSure": "迷っていますか？",
+      "startWithVerificationApi": "Verification API から始める"
+    },
+    "products": {
+      "title": "Martyの構成要素",
+      "description": "1つのMarty製品の構成要素です。利用可能な機能と範囲は対象リリースと合意内容によって異なります。",
+      "viewDetails": "詳細を見る",
+      "viewAll": "Martyの構成要素を見る"
+    },
+    "trustSignals": {
+      "title": "セキュリティと導入の確認",
+      "security": {
+        "title": "セキュリティ",
+        "item1": "信頼と鍵を明示的に設定",
+        "item2": "署名、有効期限、失敗時の処理をテスト",
+        "item3": "対象構成の鍵保管方法を確認"
+      },
+      "infrastructure": {
+        "title": "インフラ",
+        "item1": "顧客またはパートナーが運用",
+        "item2": "リリースごとのインストール要件",
+        "item3": "オフライン・ヘッドレス構成は検証が必要",
+        "item4": "本番運用代行や稼働率SLAは含まれません",
+        "item5": "文書化された不具合・脆弱性の報告窓口を利用"
+      },
+      "compliance": {
+        "title": "受入要件",
+        "item1": "必要な資格情報形式と提示プロファイルを定義。",
+        "item2": "リリースごとの証拠",
+        "item3": "実データの取扱いは別途承認",
+        "item4": "責任を持つ組織に受入要件を確認"
+      }
+    },
+    "proofStrip": {
+      "claims": {
+        "w3c": "1つのMarty製品、3つのユースケース",
+        "offlineCache": "まず合成データで評価",
+        "deployment": "顧客またはパートナーが運用",
+        "keySecurity": "信頼と鍵を明示的に設定",
+        "auditLogs": "リリースごとの証拠"
+      }
+    },
+    "portals": {
+      "emphasis": "組み込みポータル",
+      "message": "（申請者／ベンダー／管理者向け）—APIキー、信頼ポリシー、運用を1か所で管理。",
+      "learnMore": "詳しく見る"
+    },
+    "footer": {
+      "title": "始めましょうか？",
+      "description": "ドキュメントと合成データのデモを確認し、必要なワークフローと導入構成をご相談ください。",
+      "viewPricing": "商用利用の範囲を確認",
+      "descriptionComingSoon": "ドキュメントと合成データのデモを確認し、必要なワークフローと導入構成をご相談ください。"
+    },
+    "orientation": {
+      "title": "検証可能なアイデンティティが初めてですか？",
+      "cta": "仕組み"
+    }
+  },
+  "protocol": {
+    "heroTitle": "オープンなドラフトプロトコルを基盤に",
+    "badge": "オープンなドラフトプロトコル",
+    "standardsSubtitle": "規格名は出発点です。対象リリースとプロファイルを確認し、互換性と適合性を個別の証拠で評価してください。",
+    "componentsSubtitle": "規格名は出発点です。対象リリースとプロファイルを確認し、互換性と適合性を個別の証拠で評価してください。"
+  },
+  "infrastructure": {
+    "title": "役立つワークフローから始める",
+    "commodity": "入力、信頼情報源、期待する結果を合意",
+    "orchestration": "顧客またはパートナーが運用",
+    "reusable": "まず合成データで評価",
+    "preventLockIn": "証拠が揃った範囲から拡張"
+  }
+}

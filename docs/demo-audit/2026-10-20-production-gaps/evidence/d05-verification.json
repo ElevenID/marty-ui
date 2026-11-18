@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "kind": "d05-production-gap-local-verification",
+  "verifiedAt": "2026-10-20T04:07:23.039352+00:00",
+  "status": "PASS",
+  "scope": "LOCAL_SOURCE_CONTRACT_AND_SYNTHETIC_FIXTURE_TESTS_ONLY",
+  "repositories": {
+    "marty-ui": {
+      "headAtVerification": "47479695f3ca2218952900639f747877b8103895",
+      "sourceState": "UNCOMMITTED_WORKING_TREE_FILES_HASHED_BELOW",
+      "files": [
+        {
+          "path": "tests/scripts/audit-beta-membership-support.js",
+          "sha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c"
+        },
+        {
+          "path": "tests/scripts/audit-beta-membership-support.test.js",
+          "sha256": "4e09f26f0127f7498efecd03cf7470758b428bc3b603043b2bbe60c1e8f9744d"
+        },
+        {
+          "path": "tests/scripts/beta-membership-support-contract.js",
+          "sha256": "8d0d37a3a62f57bc6f27e36d76f9680c7cf8b97b4b724d18bca76fe6849d8e02"
+        }
+      ]
+    },
+    "marty-demo-recorder": {
+      "headAtVerification": "2ffb38ec0aadf2e2d49fd283297fb4768f68f648",
+      "sourceState": "UNCOMMITTED_WORKING_TREE_FILES_HASHED_BELOW",
+      "files": [
+        {
+          "path": "demos/membership-badge-login.json",
+          "sha256": "7ffcfc5b13e5c42541fb201593894229bdaf19c05f06e69a3f35d5d579181d2c"
+        },
+        {
+          "path": "demos/membership-badge-login-expired-offer.json",
+          "sha256": "655cf220a793dea6cd68a7d8da3a3b94f97ed67c95bcd5ca435c4a98ae820385"
+        },
+        {
+          "path": "demos/membership-badge-login-untrusted-issuer.json",
+          "sha256": "b72af313c2cf860c218ba3bf4d08552e577f43e499576eada40279308c273c72"
+        },
+        {
+          "path": "docs/d05-supporting-lanes.md",
+          "sha256": "2eec719614e5795b8e5386d748e851dbc230599fc3c7f4d2000188e6dbfb0e0d"
+        },
+        {
+          "path": "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+          "sha256": "56149400ac498122eb91bfb0eb0c4a0cdd5b888a5db6a066a867af6fb55cfc44"
+        },
+        {
+          "path": "src/androidManifestEvidence.js",
+          "sha256": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96"
+        },
+        {
+          "path": "src/androidMembershipCancel.js",
+          "sha256": "929b0a16000333c1b3f3bedbdea540e1a5e2a451c49538cd26b5ab956da149e7"
+        },
+        {
+          "path": "src/androidRecorder.js",
+          "sha256": "e12d134570e371e20372a3037033153ebfffd7568d864c01ca835e586f9f4b56"
+        },
+        {
+          "path": "src/androidReleaseGateway.js",
+          "sha256": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6"
+        },
+        {
+          "path": "src/assertionCoverage.js",
+          "sha256": "29245c7a55d1ebff0f7a30e27ef7825db0237f010f178f6ce5d2ee3db8869efc"
+        },
+        {
+          "path": "test/androidMembershipCancel.test.js",
+          "sha256": "b21ba31293f8997bb06268f3cf3eee316150abdc65ff40f5b99e3bc0f20495a2"
+        },
+        {
+          "path": "test/androidRecorder.test.js",
+          "sha256": "26ca79fbae7712f97201f0b1fc87f542a56a31c8b029f86e1f2b51199b3f75ed"
+        },
+        {
+          "path": "test/assertionCoverage.test.js",
+          "sha256": "3b66b086f1a6629c5fe70a4398252d044d3ff7890a640635639c1f293a880dc2"
+        }
+      ]
+    }
+  },
+  "driverSource": {
+    "entrypoint": "tests/scripts/audit-beta-membership-support.js",
+    "sha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c",
+    "revisionEnvironment": "DEMO_D05_SUPPORT_DRIVER_REVISION",
+    "revisionValue": "Supply final reviewed UI commit after applying the package; not a claimed deployed revision."
+  },
+  "tests": [
+    {
+      "repository": "marty-ui",
+      "command": "node --test tests/scripts/audit-beta-membership-support.test.js",
+      "namedTests": 18,
+      "passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "command": "node --test test/androidMembershipCancel.test.js test/androidRecorder.test.js test/assertionCoverage.test.js",
+      "namedTests": 24,
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    }
+  ],
+  "namedTestsInTheseCommands": 42,
+  "relatedVerification": [
+    {
+      "repository": "marty-ui",
+      "command": "node --test tests/scripts/beta-demo-resource-helpers.test.js",
+      "namedTests": 28,
+      "passed": 28,
+      "failed": 0,
+      "note": "Already verified when the exact owned cancellation helper was added; not rerun here. Root also verified its lifecycle reuse."
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "command": "node --test test/privateAgeProofGateway.test.js",
+      "namedTests": 7,
+      "passed": 7,
+      "failed": 0,
+      "note": "D03 owner independently reran this target against the strict wallet producer after adding its synthetic completedAt fixture."
+    },
+    {
+      "artifact": "android-manifest-verification.json",
+      "note": "Separate consumer-owner evidence records strict UI schema, validator and lane rendering checks. Do not double count the same producer tests."
+    }
+  ],
+  "configurationChecks": [
+    {
+      "path": "demos/membership-badge-login.json",
+      "scenarioRevision": 2,
+      "schemaAndSourcePinCheck": "PASS"
+    },
+    {
+      "path": "demos/membership-badge-login-expired-offer.json",
+      "scenarioRevision": 2,
+      "schemaAndSourcePinCheck": "PASS"
+    },
+    {
+      "path": "demos/membership-badge-login-untrusted-issuer.json",
+      "scenarioRevision": 2,
+      "schemaAndSourcePinCheck": "PASS"
+    }
+  ],
+  "checkedFailurePaths": [
+    "missing or seven-day expiry prerequisite blocks before a successful lane",
+    "exact transaction detail, not application id, supplies expiry",
+    "failed/expired pending offers require public cancellation and scoped revoked readback",
+    "lost cancellation retains uncertainty and cleanup false until confirmed",
+    "partial creation/approval errors retain owned identifiers or uncertainty",
+    "foreign denial requires native signature-valid trust failure and actual Auth no-session plus trusted recovery",
+    "sealed fixture bytes cannot be substituted",
+    "blocked no-video preflight writes both JSON receipts without supplied password",
+    "holder cancel binds exact source hash and indexed wallet Cancel/Chrome return/Auth false observations",
+    "wallet projection rejects unknown or malformed public fields and mismatched evidence-file digests"
+  ],
+  "proofLimits": [
+    "No shared-beta mutation, KMS request, deployment, actual D05 browser run, Android emulator/device workflow, recording, voice generation or publication was performed.",
+    "Fake native DTO responses and fixture clocks verify adapter contracts; they are not product cryptographic, expiration, native trust or interoperability evidence.",
+    "The expired-offer lane still requires an authorized isolated deployment with actual server TTL of 60 or 120 seconds; native default is seven days.",
+    "The foreign-issuer lane still requires separately preprovisioned authorized real issuers, signing services, templates, policy/trust relationships and a synthetic applicant. The driver does not provision or weaken these.",
+    "The Rust test wallet must advertise isolated_sessions v1. Its results remain first-party controls; required SpruceID and EUDI qualification needs actual device observations.",
+    "Fresh source/deployment/manifest binding, real capture, cleanup, redaction/editorial review and publication approval remain required. Scenario assertions remain unqualified until such evidence exists.",
+    "UI source state was uncommitted at this verification; exact per-file digests bind the tested source. Root owns final commits and patch-application verification.",
+    "Recorder work uses the hydrated exact complete upstream file tree with earlier patches; its local baseline is synthetic ancestry. Patch applicability must be established separately by exact blobs/application proofs, not represented as a true upstream Git checkout."
+  ]
+}

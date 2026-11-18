@@ -1,0 +1,182 @@
+name: Prepare stack release claim
+
+run-name: Claim ${{ inputs.tag }} at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Previously unused stack tag (for example, v1.2.0)
+        required: true
+        type: string
+      source_sha:
+        description: Exact protected-main commit to validate and claim
+        required: true
+        type: string
+      qualification_run_id:
+        description: Definite original full-CI run admitted at the same source
+        required: true
+        type: string
+
+concurrency:
+  group: ui-stack-release-claim-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
+  SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
+  MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
+  OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
+  KEYCLOAK_IMAGE: ghcr.io/elevenid/marty-ui-oss/keycloak
+
+jobs:
+  release-environment-preflight:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: stack-release
+
+  claim-stack-release:
+    name: Validate exact main and persist the no-write claim
+    needs: release-environment-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    steps:
+      - name: Require exact protected-main dispatch
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha }}
+          RUN_SHA: ${{ github.sha }}
+          RUN_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$RUN_REF" = refs/heads/main
+          test "$RUN_SHA" = "$EXPECTED_SHA"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Wait for the admitted original full CI before claiming
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: python scripts/wait_release_dependency.py full-ci --run-id "$QUALIFICATION_RUN_ID"
+
+      - name: Require valid eligible release inputs before external work
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA" --require-eligible
+
+      - name: Require an accepted official harness source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/validate_official_harness_source.py
+
+      - name: Fetch exact main and reject an existing tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tag_refs="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+          if [[ -n "$tag_refs" ]]; then
+            echo "::error::Immutable tag $TAG already exists; it will not be moved or reused"
+            exit 1
+          fi
+
+      - name: Capture exact-main workflow evidence
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$COMMIT&per_page=100" \
+            > workflow-runs.json
+
+      - name: Require every configured exact-main gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: >-
+          python scripts/stack_tag_gate.py prepare
+          --repository .
+          --repository-name "$GITHUB_REPOSITORY"
+          --tag "$TAG"
+          --commit "$COMMIT"
+          --run-id "$GITHUB_RUN_ID"
+          --qualification-run-id "$QUALIFICATION_RUN_ID"
+          --runs-json workflow-runs.json
+          --policy .github/stack-tag-policy.json
+          --evidence stack-tag-evidence.json
+
+      - name: Require every public release coordinate to be absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag }}
+        shell: bash
+        run: >-
+          python scripts/check_release_absent.py
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$VERSION"
+          --version-tag "${VERSION#v}"
+          --image "$IMAGE"
+          --image "$SERVICES_IMAGE"
+          --image "$MIGRATIONS_IMAGE"
+          --image "$OPENBAO_DIDCOMM_IMAGE"
+          --image "$KEYCLOAK_IMAGE"
+
+      - name: Create the durable digest-first release claim
+        env:
+          COMMIT: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: >-
+          python scripts/release_transaction.py claim
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$TAG"
+          --source-sha "$COMMIT"
+          --stack-lock release/stack-lock.json
+          --claim-run-id "$GITHUB_RUN_ID"
+          --image "ui=$IMAGE"
+          --image "services=$SERVICES_IMAGE"
+          --image "migrations=$MIGRATIONS_IMAGE"
+          --image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"
+          --image "keycloak=$KEYCLOAK_IMAGE"
+          --tag-absent
+          --release-absent
+          --version-tag-absent ui=true
+          --version-tag-absent services=true
+          --version-tag-absent migrations=true
+          --version-tag-absent openbao_didcomm=true
+          --version-tag-absent keycloak=true
+          --output release-transaction.json
+
+      - name: Upload immutable no-write release claim
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-claim-${{ inputs.tag }}
+          path: |
+            stack-tag-evidence.json
+            release-transaction.json
+          if-no-files-found: error
+          retention-days: 90

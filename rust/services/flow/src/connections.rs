@@ -1,0 +1,338 @@
+use std::{sync::Arc, time::Duration};
+
+use marty_schema_startup::SchemaStartupMode;
+use marty_signing_grant::{configuration::GrantAuthority, SigningOrigin};
+use redis::aio::ConnectionManager;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use thiserror::Error;
+use url::Url;
+
+use crate::{
+    migrate_flow_schema_for_organization, FlowDependency, FlowGrpcChannelFactories,
+    FlowMigrationError, FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
+    HttpFlowReferenceProvider, HttpPhysicalDocumentProvider, HttpSigningProvider,
+    PostgresFlowRepository,
+};
+
+pub struct FlowBackendConnections {
+    pub repository: PostgresFlowRepository,
+    pub nonce_store: ConnectionManager,
+    pub providers: Arc<FlowProviderRegistry>,
+}
+
+#[derive(Debug, Error)]
+pub enum FlowConnectionError {
+    #[error("FLOW.DEPENDENCY_DATABASE: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("FLOW.DEPENDENCY_SCHEMA: {0}")]
+    Migration(#[from] FlowMigrationError),
+    #[error("FLOW.DEPENDENCY_NONCE_STORE: {0}")]
+    Redis(#[from] redis::RedisError),
+    #[error("FLOW.DEPENDENCY_GRPC: {0}")]
+    Grpc(#[from] mmf_platform::PlatformError),
+    #[error("FLOW.DEPENDENCY_HTTP: {0}")]
+    Http(#[from] FlowProviderError),
+    #[error("FLOW.DEPENDENCY_RUNTIME: {0}")]
+    Runtime(#[from] mmf_core::MmfError),
+    #[error("FLOW.CONFIGURATION: {0}")]
+    Configuration(String),
+}
+
+impl FlowBackendConnections {
+    pub async fn connect(
+        config: &FlowServiceConfig,
+        runtime: &FlowRuntime,
+    ) -> Result<Self, FlowConnectionError> {
+        let pool = connect_database(config, runtime).await?;
+        let nonce_store = connect_nonce_store(config, runtime).await?;
+        let providers = connect_providers(config, runtime).await?;
+        providers.require_complete()?;
+        Ok(Self {
+            repository: PostgresFlowRepository::new(pool),
+            nonce_store,
+            providers: Arc::new(providers),
+        })
+    }
+}
+
+async fn connect_database(
+    config: &FlowServiceConfig,
+    runtime: &FlowRuntime,
+) -> Result<PgPool, FlowConnectionError> {
+    let pool = PgPoolOptions::new()
+        .max_connections(config.database_max_connections)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&config.database_url)
+        .await?;
+    let organization_id = crate::flow_seed_organization_id(Some(&config.marty_organization_id))?;
+    match SchemaStartupMode::from_env()
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?
+    {
+        SchemaStartupMode::Migrate => {
+            migrate_flow_schema_for_organization(&pool, organization_id).await?
+        }
+        SchemaStartupMode::Validate => {
+            crate::validate_flow_schema_for_organization(&pool, organization_id).await?
+        }
+    }
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&pool)
+        .await?;
+    runtime.mark_healthy(FlowDependency::Database)?;
+    Ok(pool)
+}
+
+async fn connect_nonce_store(
+    config: &FlowServiceConfig,
+    runtime: &FlowRuntime,
+) -> Result<ConnectionManager, FlowConnectionError> {
+    let redis_url = redis_database_url(&config.redis_url, config.redis_database)?;
+    let client = redis::Client::open(redis_url)?;
+    let mut connection = client.get_connection_manager().await?;
+    let response: String = redis::cmd("PING").query_async(&mut connection).await?;
+    if response != "PONG" {
+        return Err(FlowConnectionError::Configuration(
+            "nonce store returned an invalid health response".into(),
+        ));
+    }
+    runtime.mark_healthy(FlowDependency::NonceStore)?;
+    Ok(connection)
+}
+
+async fn connect_providers(
+    config: &FlowServiceConfig,
+    runtime: &FlowRuntime,
+) -> Result<FlowProviderRegistry, FlowConnectionError> {
+    let factories = FlowGrpcChannelFactories::from_config(config)?;
+    let clients = factories.connect().await?;
+    runtime.mark_healthy(FlowDependency::Organization)?;
+    runtime.mark_healthy(FlowDependency::CredentialTemplate)?;
+    runtime.mark_healthy(FlowDependency::PresentationPolicy)?;
+    runtime.mark_healthy(FlowDependency::IssuanceGrpc)?;
+    let grpc = clients.providers(config.service_token.as_deref())?;
+
+    let grant_authority = GrantAuthority::from_environment()
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+    let grant_minter = grant_authority
+        .minter(
+            SigningOrigin::FlowWalletRequest,
+            config.sign_grant_bao_addr.as_deref(),
+            config.sign_grant_mint_token_file.clone(),
+        )
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+    let mut signing = HttpSigningProvider::new(
+        &config.signing_keys_url,
+        required_secret(&config.signing_keys_api_key, "signing keys API key")?,
+        required_secret(&config.issuer_sign_key, "issuer signing API key")?,
+    )?
+    .with_grant_minter(grant_minter);
+    if config
+        .public_verification
+        .as_ref()
+        .is_some_and(crate::PublicVerificationOptions::demo_holder_enabled)
+    {
+        let minter = grant_authority
+            .minter(
+                SigningOrigin::FlowDemoHolder,
+                config.sign_grant_bao_addr.as_deref(),
+                config.demo_holder_sign_grant_mint_token_file.clone(),
+            )
+            .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+        signing = signing.with_demo_holder_grant_minter(minter);
+    }
+    let signing = Arc::new(signing);
+    signing.health_check().await?;
+    runtime.mark_healthy(FlowDependency::SigningKeys)?;
+
+    let physical = Arc::new(physical_document_provider(config)?);
+    physical.health_check().await?;
+    runtime.mark_healthy(FlowDependency::PhysicalIssuance)?;
+
+    let references = Arc::new(HttpFlowReferenceProvider::new(
+        &config.issuance_native_url,
+        required_secret(&config.issuance_api_key, "issuance API key")?,
+        &config.credential_template_url,
+        &config.trust_profile_url,
+        &config.deployment_profile_url,
+        config.service_token.as_deref(),
+    )?);
+    references.health_check().await?;
+    runtime.mark_healthy(FlowDependency::ReferenceCatalog)?;
+
+    Ok(FlowProviderRegistry {
+        gateway_api_key_actor: None,
+        tenant_membership: Some(Arc::new(grpc.tenant_membership)),
+        credential_template: Some(Arc::new(grpc.credential_template)),
+        presentation_policy: Some(Arc::new(grpc.presentation_policy)),
+        issuance: Some(Arc::new(grpc.issuance)),
+        signing_identity: Some(signing.clone()),
+        flow_key_envelope: Some(signing),
+        physical_document: Some(physical),
+        reference_catalog: Some(references),
+    })
+}
+
+fn physical_document_provider(
+    config: &FlowServiceConfig,
+) -> Result<HttpPhysicalDocumentProvider, FlowConnectionError> {
+    if config.passport_native_flow_enabled {
+        let keys = config.passport_tenant_keys.clone().ok_or_else(|| {
+            FlowConnectionError::Configuration(
+                "PASSPORT_TENANT_API_KEYS is required for native passport Flow".into(),
+            )
+        })?;
+        HttpPhysicalDocumentProvider::new_tenant_bound(&config.issuance_native_url, keys)
+            .map_err(Into::into)
+    } else {
+        HttpPhysicalDocumentProvider::new(
+            &config.issuance_url,
+            required_secret(&config.issuance_api_key, "issuance API key")?,
+        )
+        .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod physical_provider_tests {
+    use std::{collections::BTreeMap, sync::Mutex};
+
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::{PhysicalDocumentOperation, PhysicalDocumentProvider, PhysicalDocumentRequest};
+
+    type Captured = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    async fn capture(
+        State((owner, captured)): State<(String, Captured)>,
+        headers: HeaderMap,
+    ) -> Json<Value> {
+        captured.lock().unwrap().push((
+            owner.clone(),
+            headers["x-organization-id"].to_str().unwrap().to_owned(),
+            headers["x-api-key"].to_str().unwrap().to_owned(),
+        ));
+        Json(json!({"status": "DRAFT", "owner": owner}))
+    }
+
+    #[tokio::test]
+    async fn native_flow_selector_uses_tenant_key_and_keeps_legacy_rollback() {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let legacy_app = Router::new()
+            .route("/v1/passport/applications", post(capture))
+            .with_state(("legacy".to_owned(), captured.clone()));
+        let native_app = Router::new()
+            .route("/v1/passport/applications", post(capture))
+            .with_state(("native".to_owned(), captured.clone()));
+        let legacy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let legacy_address = legacy_listener.local_addr().unwrap();
+        let native_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let legacy_server =
+            tokio::spawn(async move { axum::serve(legacy_listener, legacy_app).await.unwrap() });
+        let native_server =
+            tokio::spawn(async move { axum::serve(native_listener, native_app).await.unwrap() });
+        let shared = "s".repeat(32);
+        let tenant = "t".repeat(32);
+        let mut values = BTreeMap::from([
+            ("ENVIRONMENT".to_owned(), "development".to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgresql://localhost/flow".to_owned(),
+            ),
+            ("REDIS_URL".to_owned(), "redis://localhost:6379".to_owned()),
+            (
+                "ISSUANCE_SERVICE_URL".to_owned(),
+                format!("http://{legacy_address}"),
+            ),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".to_owned(),
+                format!("http://{native_address}"),
+            ),
+            ("ISSUANCE_API_KEY".to_owned(), shared.clone()),
+            (
+                "PASSPORT_TENANT_API_KEYS".to_owned(),
+                format!("{{\"org-a\":\"{tenant}\"}}"),
+            ),
+            ("PASSPORT_NATIVE_FLOW_ENABLED".to_owned(), "true".to_owned()),
+        ]);
+        let request = PhysicalDocumentRequest {
+            organization_id: "org-a".into(),
+            flow_instance_id: "flow-a".into(),
+            operation: PhysicalDocumentOperation::Initialize,
+            start_idempotency_key: None,
+            data: BTreeMap::new(),
+        };
+        let native = FlowServiceConfig::from_values(values.clone()).unwrap();
+        let result = physical_document_provider(&native)
+            .unwrap()
+            .execute(&request)
+            .await
+            .unwrap();
+        assert_eq!(result.data["owner"], "native");
+        values.insert("PASSPORT_NATIVE_FLOW_ENABLED".into(), "false".into());
+        let legacy = FlowServiceConfig::from_values(values).unwrap();
+        let result = physical_document_provider(&legacy)
+            .unwrap()
+            .execute(&request)
+            .await
+            .unwrap();
+        assert_eq!(result.data["owner"], "legacy");
+        assert_eq!(
+            *captured.lock().unwrap(),
+            vec![
+                ("native".into(), "org-a".into(), tenant),
+                ("legacy".into(), "org-a".into(), shared),
+            ]
+        );
+        legacy_server.abort();
+        native_server.abort();
+    }
+}
+
+fn redis_database_url(value: &str, database: u8) -> Result<String, FlowConnectionError> {
+    let mut url = Url::parse(value)
+        .map_err(|_| FlowConnectionError::Configuration("Redis URL is invalid".into()))?;
+    if url.scheme() == "unix" {
+        if url.host_str().is_some() || !url.path().starts_with('/') {
+            return Err(FlowConnectionError::Configuration(
+                "Redis Unix socket must be local and absolute".into(),
+            ));
+        }
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+    } else {
+        url.set_path(&format!("/{database}"));
+    }
+    Ok(url.into())
+}
+
+fn required_secret<'a>(
+    value: &'a Option<String>,
+    name: &str,
+) -> Result<&'a str, FlowConnectionError> {
+    value
+        .as_deref()
+        .ok_or_else(|| FlowConnectionError::Configuration(format!("{name} is missing")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redis_database_url;
+
+    #[test]
+    fn redis_database_selection_is_canonical_and_secret_safe() {
+        assert_eq!(
+            redis_database_url("redis://user:secret@redis:6379/9", 3).unwrap(),
+            "redis://user:secret@redis:6379/3"
+        );
+        assert!(redis_database_url("not a URL", 3).is_err());
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 3).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=3"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 3).is_err());
+    }
+}

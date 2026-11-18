@@ -1,0 +1,145 @@
+{
+  "schema": "marty.selfhost-bundle-python-reference/v1",
+  "reference": {
+    "revision": "31287d26676872736820f97ae6d6d30d0d8e65f1",
+    "source": "scripts/package-selfhost-bundle.py",
+    "blob": "77c04ba60f7a31432d210526f50e136f6bde0545",
+    "scope": "Original pure transformations and synthetic directory/ZIP with controlled Compose renderer; no deployed stack or image provenance proof. ZIP bytes/timestamps and host permission representation are not portable parity claims."
+  },
+  "cases": [
+    {
+      "function": "strip_build_blocks",
+      "input": "services:\n  a:\n    build:\n      context: .\n      args:\n        X: y\n    image: example:v1\n",
+      "value": "services:\n  a:\n    image: example:v1\n"
+    },
+    {
+      "function": "strip_build_blocks",
+      "input": "services:\n  a:\n    build: .\n\n    image: example:v1\n",
+      "value": "services:\n  a:\n    image: example:v1\n"
+    },
+    {
+      "function": "strip_build_blocks",
+      "input": "services:\n  a:\n    image: example:v1\n",
+      "value": "services:\n  a:\n    image: example:v1\n"
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:latest",
+      "value": true
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:prod@sha256:123",
+      "value": true
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:main",
+      "value": true
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:dev",
+      "value": true
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:v1",
+      "value": false
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example@sha256:123",
+      "value": false
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:${TAG:-latest}",
+      "value": false
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:${TAG:?required}",
+      "value": false
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "example:LATEST",
+      "value": false
+    },
+    {
+      "function": "image_uses_mutable_tag",
+      "input": "registry:5000/example:v1",
+      "value": false
+    },
+    {
+      "function": "validate_image_based_compose",
+      "input": "services:\n  a:\n    image: example:v1\n",
+      "value": null
+    },
+    {
+      "function": "validate_image_based_compose",
+      "input": "services:\n  a:\n    build: .\n    image: example:v1\n",
+      "error": "RuntimeError",
+      "message": "Generated customer compose still contains build blocks; image-based bundles must not require source builds."
+    },
+    {
+      "function": "validate_image_based_compose",
+      "input": "services:\n  a:\n    image: example:latest\n",
+      "error": "RuntimeError",
+      "message": "Generated customer compose contains mutable image tags; use immutable release tags only:\n  - image: example:latest"
+    },
+    {
+      "function": "validate_image_based_compose",
+      "input": "services:\n  a:\n    command: echo\n",
+      "error": "RuntimeError",
+      "message": "Generated customer compose services missing image declarations: a"
+    },
+    {
+      "function": "validate_image_based_compose",
+      "input": "services:\n  b:\n    command: echo\n  a:\n    command: echo\n",
+      "error": "RuntimeError",
+      "message": "Generated customer compose services missing image declarations: a, b"
+    }
+  ],
+  "staging": {
+    "assets": [
+      "SELFHOST_BUNDLE.md",
+      "scripts/launch.sh",
+      "config/example.bin",
+      "docker-compose.selfhost.prod.yml",
+      "docker-compose.selfhost.bundle.override.yml"
+    ],
+    "directory_hex": {
+      "config/example.bin": "ff00",
+      "docker-compose.yml": "73657276696365733a0a20206170703a0a20202020696d6167653a206578616d706c653a76310a20202020766f6c756d65733a0a2020202020202d20747970653a2062696e640a2020202020202020736f757263653a202e2f736372697074732f6c61756e63682e73680a20202020202020207461726765743a202f6c61756e63682e73680a736563726574733a0a20206f70657261746f723a0a2020202066696c653a20247b5345435245545f4449527d2f6b65790a",
+      "README.md": "73796e74686574696320636f6e74656e740a",
+      "scripts/launch.sh": "73796e74686574696320636f6e74656e740a"
+    },
+    "archive_files_hex": {
+      "bundle/docker-compose.yml": "73657276696365733a0a20206170703a0a20202020696d6167653a206578616d706c653a76310a20202020766f6c756d65733a0a2020202020202d20747970653a2062696e640a2020202020202020736f757263653a202e2f736372697074732f6c61756e63682e73680a20202020202020207461726765743a202f6c61756e63682e73680a736563726574733a0a20206f70657261746f723a0a2020202066696c653a20247b5345435245545f4449527d2f6b65790a",
+      "bundle/README.md": "73796e74686574696320636f6e74656e740a",
+      "bundle/config/example.bin": "ff00",
+      "bundle/scripts/launch.sh": "73796e74686574696320636f6e74656e740a"
+    },
+    "archive_directories": ["bundle/", "bundle/config/", "bundle/scripts/"],
+    "render_calls": [
+      {
+        "argv": [
+          "docker",
+          "compose",
+          "--env-file",
+          ".env.selfhost.production.example",
+          "-f",
+          "docker-compose.selfhost.prod.yml",
+          "-f",
+          "docker-compose.selfhost.bundle.override.yml",
+          "config",
+          "--no-interpolate"
+        ],
+        "cwd_is_output": true
+      }
+    ],
+    "top_level_shell_executable": false
+  }
+}

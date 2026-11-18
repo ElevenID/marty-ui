@@ -1,0 +1,54 @@
+{
+	"general": {
+		"unknown": "Ocurrió un error desconocido",
+		"networkError": "Error de red. Comprueba tu conexión.",
+		"serverError": "Error del servidor. Inténtalo de nuevo más tarde.",
+		"unauthorized": "No estás autorizado para realizar esta acción",
+		"forbidden": "Acceso prohibido",
+		"notFound": "No se encontró el recurso solicitado",
+		"timeout": "Tiempo de espera agotado. Inténtalo de nuevo."
+	},
+	"validation": {
+		"required": "Este campo es obligatorio",
+		"invalidEmail": "Correo electrónico no válido",
+		"invalidPhone": "Número de teléfono no válido",
+		"invalidUrl": "URL no válida",
+		"passwordTooShort": "La contraseña debe tener al menos 8 caracteres",
+		"passwordsDoNotMatch": "Las contraseñas no coinciden"
+	},
+	"auth": {
+		"loginFailed": "Error de inicio de sesión. Revisa tus credenciales.",
+		"sessionExpired": "Tu sesión ha caducado. Inicia sesión de nuevo.",
+		"logoutFailed": "Error al cerrar sesión. Inténtalo de nuevo.",
+		"invalidCredentials": "Usuario o contraseña no válidos",
+		"accountLocked": "Tu cuenta ha sido bloqueada. Contacta con soporte."
+	},
+	"api": {
+		"fetchFailed": "No se pudieron obtener los datos",
+		"saveFailed": "No se pudieron guardar los cambios",
+		"deleteFailed": "No se pudo eliminar el elemento",
+		"uploadFailed": "No se pudo subir el archivo",
+		"connectionFailed": "No se pudo conectar con el servidor"
+	},
+	"errorState": {
+		"defaultTitle": "Algo salió mal",
+		"operationFailed": "La operación falló",
+		"error": "Error",
+		"unexpectedError": "Ocurrió un error inesperado",
+		"genericError": "Ocurrió un error",
+		"detailsCopied": "Detalles del error copiados al portapapeles",
+		"errorReport": "Informe de error: {{code}}",
+		"requestId": "ID de solicitud:",
+		"timestamp": "Marca de tiempo:",
+		"errorCode": "Código de error:",
+		"message": "Mensaje:",
+		"technicalDetails": "Detalles técnicos:",
+		"copyDetails": "Copiar detalles"
+	},
+	"messages": {
+		"tryAgain": "Inténtalo de nuevo",
+		"contactSupport": "Si el problema persiste, contacta con soporte",
+		"goBack": "Volver a la página anterior",
+		"retry": "Reintentar"
+	}
+}

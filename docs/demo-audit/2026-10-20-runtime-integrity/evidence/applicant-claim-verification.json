@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "topic": "Actual applicant claim capabilities and completed-attempt integrity",
+  "recordedAt": "2026-10-20T07:40:23.467386+00:00",
+  "status": "LOCAL_SOURCE_VERIFIED",
+  "sourceRepository": "ElevenID/marty-ui",
+  "branch": "audit/demo-runtime-integrity-2026-10-20",
+  "baseRevision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+  "priorWithdrawalCommit": "0a2b100c8202e2ebfb2870377df95f2981da5042",
+  "implementationCommit": "e67364c367a09d184246f7c7af83317beb9f4d1e",
+  "ownedChangedPaths": [
+    "rust/services/applicant/src/http.rs",
+    "rust/services/applicant/src/issuance.rs",
+    "rust/services/applicant/src/service.rs",
+    "rust/services/applicant/tests/application_behavior.rs",
+    "rust/services/applicant/tests/http_behavior.rs"
+  ],
+  "observedProblem": [
+    "The holder claim handler ignored its request body, including delivery destination and Canvas consent values, although this Rust claim path did not perform those selections.",
+    "Concurrent calls sharing an already reserved attempt could receive the same offer, but the later completion failed with AttemptChanged after the first completion removed the active attempt.",
+    "A late NoActiveFlow provider error could mark an already completed and reconciled claim BLOCKED and move its updated_at backwards.",
+    "The production handler already reused a pending unexpired offer, contrary to a UI expectation that opening or changing consent always generated a fresh offer."
+  ],
+  "claimContract": {
+    "supportedRequestBodies": [
+      "empty HTTP body",
+      "{}"
+    ],
+    "unsupportedOptionsHttpStatus": 422,
+    "unsupportedOptionsError": "CLAIM_OPTIONS_UNSUPPORTED",
+    "malformedJsonHttpStatus": 400,
+    "malformedJsonError": "INVALID_CLAIM_JSON",
+    "nonObjectJsonRejected": true,
+    "holderOwnershipCheckedBeforeBodyErrors": true,
+    "bodyValuesNotEchoedInErrors": true,
+    "capabilitiesOnApplicationReadAndClaimResponse": {
+      "oid4vci_wallet": true,
+      "delivery_destination_selection": false,
+      "canvas_credentials_mirror": false,
+      "offer_reuse": "pending_until_consumed_or_expired"
+    },
+    "capabilityIsNotEligibility": "Existing status, claim_state, blocker and offer expiry still govern whether the application may be claimed.",
+    "unsupportedSelectionPerformed": false
+  },
+  "completedAttemptIntegrity": {
+    "sameStoreWriteLockForComparisonAndReturn": true,
+    "exactIdentityChecks": [
+      "last_issuance_attempt_id",
+      "issuance_transaction_id",
+      "credential_offer_uri",
+      "credential_offer_uris",
+      "credential_offer_labels",
+      "offer_expires_at",
+      "flow_instance_id",
+      "flow_definition_id",
+      "issuance_source"
+    ],
+    "refusesAnyActiveAttemptKey": true,
+    "refusesMalformedOrMissingCompletedIdentity": true,
+    "requiresOfferedOrCredentialedStatus": true,
+    "requiresNonemptyTransactionIdAndOffer": true,
+    "sharedOfferIdentityUsedForWriteAndComparison": true,
+    "matchingLateCompletionReturnsCurrentPersistedClaimedOrExpiredState": true,
+    "matchingLateCompletionDoesNotPersistOrResetProjection": true,
+    "lateNoFlowErrorRequiresMatchingCurrentActiveAttemptBeforeMutation": true,
+    "concurrencyBoundary": "Pre-reservation snapshot conflicts can still return 409. This is safe completed-attempt convergence, not a guarantee that every simultaneous request is deduplicated. The UI must share its own pending claim request for the same application, holder and organization."
+  },
+  "verification": [
+    {
+      "phase": "regression before production change with restricted loopback",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --no-fail-fast --test application_behavior --test http_behavior claim_ -- --nocapture",
+      "log": "applicant-claim-before.log",
+      "exitCode": 101,
+      "passed": 4,
+      "failed": 4,
+      "ignored": 0,
+      "environmentFailure": "The pending-offer HTTP fixture could not bind its ephemeral localhost listener: Operation not permitted. This one failure is not evidence of a source defect.",
+      "boundary": "New tests ran against applicant production source at the prior withdrawal commit. Test source was subsequently formatted; final byte hashes are not claimed as the exact before-run test input."
+    },
+    {
+      "phase": "regression before production change with permitted synthetic loopback",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --no-fail-fast --test application_behavior --test http_behavior claim_ -- --nocapture",
+      "log": "applicant-claim-before-loopback.log",
+      "exitCode": 101,
+      "passed": 4,
+      "failed": 4,
+      "ignored": 0,
+      "suites": {
+        "application_behavior": {
+          "passed": 3,
+          "failed": 2
+        },
+        "http_behavior": {
+          "passed": 1,
+          "failed": 2
+        }
+      },
+      "sourceRegressions": [
+        "Matching late completion returned AttemptChanged",
+        "Late NoActiveFlow overwrote a reconciled claimed projection",
+        "Unsupported options were silently ignored",
+        "Read-only claim capabilities were absent"
+      ],
+      "loopbackApproval": "Automatic review permitted the offline test process to bind an ephemeral localhost fixture; no deployed service was contacted.",
+      "selectedCases": "Seven new claim cases plus one existing uncertain Flow retry test selected by the claim_ name filter."
+    },
+    {
+      "phase": "final focused verification",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --test application_behavior --test http_behavior --test issuance_behavior --test domain_behavior",
+      "log": "applicant-claim-after.log",
+      "exitCode": 0,
+      "passed": 38,
+      "failed": 0,
+      "ignored": 0,
+      "suites": {
+        "application_behavior": 17,
+        "http_behavior": 9,
+        "issuance_behavior": 6,
+        "domain_behavior": 6
+      },
+      "newNamedCasesThisCommit": 7,
+      "newNamedCasesAcrossWithdrawalAndClaimCommits": 14,
+      "existingNamedCasesBeforeThisContinuation": 24,
+      "overlap": "All 31 cases in applicant-withdrawal-after.log are included in these 38; 31 and 38 are not additive unique test counts.",
+      "syntheticProviders": "Concurrency tests use the real applicant service and store with controlled FlowProvider replies. The HTTP pending-offer case uses a real ephemeral localhost Axum fixture for three synthetic issuer transaction readbacks.",
+      "loopbackApproval": "Automatic review permitted the offline test process to bind an ephemeral localhost fixture; no deployed service was contacted."
+    },
+    {
+      "phase": "source whitespace before commit",
+      "command": "git diff --check -- rust/services/applicant/src/http.rs rust/services/applicant/src/issuance.rs rust/services/applicant/src/service.rs rust/services/applicant/tests/application_behavior.rs rust/services/applicant/tests/http_behavior.rs",
+      "exitCode": 0
+    }
+  ],
+  "logFiles": {
+    "applicant-claim-before.log": {
+      "sha256": "393efbf1d523011cf364ec50d227b9821f32b32fddd72bbae9be9b561d834db3",
+      "bytes": 7501
+    },
+    "applicant-claim-before-loopback.log": {
+      "sha256": "b64eaabe38541b67f7c580625b6a37939d7ea62f04f791e3207107ed3e9d2bff",
+      "bytes": 7512
+    },
+    "applicant-claim-after.log": {
+      "sha256": "8b15e07c7c2e2864eed798270b445f0f0fbd8c273aabaaea875c90985912f205",
+      "bytes": 4098
+    }
+  },
+  "sourceFiles": [
+    {
+      "path": "rust/services/applicant/src/http.rs",
+      "sha256": "7a565c4b85bf20505ea151a617d83601f8d03de6a60d8fb28bf989c77c0977e1",
+      "bytes": 55205,
+      "gitBlob": "88f962c2f98bcee81c67002f0133d0711a600c2c"
+    },
+    {
+      "path": "rust/services/applicant/src/issuance.rs",
+      "sha256": "ee50d824e4830fdc9961a5688d3974f12f8e2001ad5659d44b83085aa0034fde",
+      "bytes": 11652,
+      "gitBlob": "e23942a9841301223898c48dca633893b76cc1f1"
+    },
+    {
+      "path": "rust/services/applicant/src/service.rs",
+      "sha256": "1623301eafafe8526aff80630fba729858eb3c8d845b3920d28583a9ffe69382",
+      "bytes": 60344,
+      "gitBlob": "d0578744e09ccf68159e21ec5fdc397bb9d6e5a8"
+    },
+    {
+      "path": "rust/services/applicant/tests/application_behavior.rs",
+      "sha256": "37bc20f71b81cc5a0ed23dcefd3bd0081101d575d70322c0e2a47d7f6d4fd1fd",
+      "bytes": 32964,
+      "gitBlob": "e08ac615982c9c6ac3c6f8bdf322898950d00fd4"
+    },
+    {
+      "path": "rust/services/applicant/tests/http_behavior.rs",
+      "sha256": "4776e6716fd6c826b3a2f1c540783785ebe56d6658f1fa8a15362807705907ed",
+      "bytes": 23581,
+      "gitBlob": "191f6c3a27c240eb027b96bfb4cec8b019fd05bf"
+    },
+    {
+      "path": "rust/services/applicant/tests/issuance_behavior.rs",
+      "sha256": "13255c116bdf5761c8f64106c7308e9442557348175ba65ab08076626e4cc060",
+      "bytes": 6848,
+      "gitBlob": "22c9635a3f4deecf22e05b5e337a6c75d5f78bd1"
+    },
+    {
+      "path": "rust/services/applicant/tests/domain_behavior.rs",
+      "sha256": "48692c7b21e57e5f4f57aab323e03798a83d2bbf23c4ffd16c9438c2efbb477f",
+      "bytes": 7050,
+      "gitBlob": "1b87a9b42222fefdfb839503a39a99998c7a2df0"
+    },
+    {
+      "path": "rust/services/applicant/Cargo.toml",
+      "sha256": "c8c90c533bc7d2edb85a9d147a69e68b0bbee08028e6adc087e41395f1e655e7",
+      "bytes": 931,
+      "gitBlob": "5a64670964fa870d7e5f46243c62ee58b8d0e530"
+    },
+    {
+      "path": "rust/Cargo.toml",
+      "sha256": "a2407d78f8577263f5963270557da8063f93c23a8d1a452b35f6a2b78e68a6a5",
+      "bytes": 6733,
+      "gitBlob": "e137dcd100ef913a687e5b93811565432f3f2df9"
+    },
+    {
+      "path": "rust/Cargo.lock",
+      "sha256": "27053750b90bc41a547b3300734ab40745c35ea5b9cef9c075af767489c45750",
+      "bytes": 210829,
+      "gitBlob": "a51d4bbfcad18aaa25592aeeaefc6439ac9897e5"
+    },
+    {
+      "path": "contracts/applicant-service-behavior.json",
+      "sha256": "d11fe61311b03b2b9dd668acda48d53733273656824f4ff5dcd6020e48895998",
+      "bytes": 5097,
+      "gitBlob": "b112665a18f753929e27d878aacbfb6018a2f105"
+    }
+  ],
+  "priorEvidence": {
+    "file": "applicant-withdrawal-verification.json",
+    "sha256": "8ee7071171b57e11863029c338f422306cc188d9f88bc36897cb5022c2e6c2cc",
+    "bytes": 7666,
+    "preservedUnchanged": true,
+    "followupExplanation": "Four applicant files recorded at the withdrawal commit subsequently changed in this separately committed claim fix. Their final hashes are recorded above. The final 38-test run repeats the previous 31 withdrawal and existing applicant cases."
+  },
+  "remainingBoundaries": [
+    "No live beta, deployed Rust service, native wallet, physical device, KMS publication, or external Canvas delivery was exercised.",
+    "Delivery destination selection and Canvas consent are explicitly unsupported by the holder claim path; existing issuer publication modules do not establish holder-side consent handling.",
+    "No new credential revocation, offer cancellation, historical data repair, application deletion, or native resource retirement implementation is included. Native server retirement remains NOT_PERFORMED.",
+    "No guarantee is made that all concurrent pre-reservation calls succeed; a changed snapshot remains a safe conflict.",
+    "No Cargo manifest, dependency, lockfile, frozen route-inventory or external side-effect change was made."
+  ]
+}

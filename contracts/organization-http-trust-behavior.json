@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "service_token": "0123456789abcdef0123456789abcdef",
+  "cases": [
+    {
+      "name": "trusted user context",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef", "x-user-id": "user-1"},
+      "expected": "user"
+    },
+    {
+      "name": "trusted api key context",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef", "x-user-id": "api_key:key-1", "x-api-key-id": "key-1", "x-organization-id": "11111111-1111-1111-1111-111111111111", "x-required-permission": "application:review"},
+      "expected": "api_key"
+    },
+    {
+      "name": "missing gateway credential",
+      "headers": {"x-user-id": "user-1"},
+      "expected": "service_authentication_required"
+    },
+    {
+      "name": "wrong gateway credential",
+      "headers": {"x-service-token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "x-user-id": "user-1"},
+      "expected": "service_authentication_required"
+    },
+    {
+      "name": "missing forwarded identity",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef"},
+      "expected": "user_authentication_required"
+    },
+    {
+      "name": "api key missing tenant",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef", "x-user-id": "api_key:key-1", "x-api-key-id": "key-1", "x-required-permission": "application:review"},
+      "expected": "invalid_api_key_context"
+    },
+    {
+      "name": "api key malformed tenant",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef", "x-user-id": "api_key:key-1", "x-api-key-id": "key-1", "x-organization-id": "not-a-uuid", "x-required-permission": "application:review"},
+      "expected": "invalid_api_key_context"
+    },
+    {
+      "name": "api key missing minimized permission",
+      "headers": {"x-service-token": "0123456789abcdef0123456789abcdef", "x-user-id": "api_key:key-1", "x-api-key-id": "key-1", "x-organization-id": "11111111-1111-1111-1111-111111111111"},
+      "expected": "invalid_api_key_context"
+    }
+  ]
+}

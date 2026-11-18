@@ -1,0 +1,74 @@
+# Inputs used by the migration image's Rust builder and runtime.
+**
+!rust/
+!rust/**
+!proto/
+!proto/**
+!contracts/
+!contracts/python-text-semantics.json
+!contracts/demo-seed-reference-v1.json
+!contracts/issuer-identity-capabilities-response.json
+!contracts/issuer-identity-inspection-response.json
+!scripts/
+!scripts/load-secrets-env.sh
+!scripts/run-migrations-with-secrets.sh
+
+# Oracle inventories are CI inputs, not migration-image inputs.
+contracts/python-value-fast-obligations.json
+
+rust/**/target
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
+rust/acceptance/support/didcomm_native_grpc_fixture.rs
+rust/acceptance/support/issuance_named_peers.rs
+rust/**/.git
+rust/**/*.log
+rust/**/.env*
+rust/**/%SystemDrive%/
+
+# Exact test-only leaves stay out of production Rust build contexts.
+rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs
+rust/services/issuance/src/passport_http_reconciliation_tests.rs
+rust/services/issuance/src/python_format_tests.rs
+rust/services/issuance/src/signing_http_projection_tests.rs
+rust/services/issuance/src/signing_http_response_tests.rs
+rust/services/issuance/src/token_rate_limit_http_tests.rs
+rust/crates/oid4vp-contract/tests/contract_vectors.rs
+rust/crates/oid4vp-contract/tests/transport_metadata.rs
+rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs
+rust/crates/flow-acceptance/tests/public_demo_signing_live_kms.rs
+rust/crates/flow-acceptance/tests/support/public_demo_browser.rs
+rust/crates/flow-acceptance/tests/support/public_demo_canonical.rs
+rust/crates/flow-acceptance/tests/support/public_demo_gateway.rs
+rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs
+rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
+rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
+rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
+rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
+rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs
+rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
+rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs
+rust/crates/service-acceptance/tests/holder_remote_live_kms.rs
+rust/crates/service-acceptance/tests/support/holder_issuer_authority.rs
+rust/crates/service-acceptance/tests/support/holder_native_receipt.rs
+rust/crates/service-acceptance/tests/csca_capability_contract.rs
+rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
+rust/services/signing-keys/tests/csca_lifecycle_behavior.rs
+rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs
+
+# Only the credential-free helper code enters the build context. The reader
+# itself is supplied as a BuildKit secret and is never copied into a layer.
+!.github/
+!.github/scripts/
+!.github/scripts/private-forks.py
+**/.cargo
+
+# Exact platform acceptance wrappers; runtime sources remain included.
+rust/crates/flow-acceptance/tests/support/base_runtime_redis.rs
+rust/crates/flow-acceptance/tests/support/didcomm_gateway_replay.rs

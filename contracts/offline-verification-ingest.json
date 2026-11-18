@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "contract": "offline-verification-ingest.v1",
+  "source": {
+    "repository": "ElevenID/marty-verifier",
+    "revision": "29e35854d0a34bcd0cc943453ea5d426246b383b",
+    "event_model": "crates/marty-reporting/src/events.rs",
+    "reporter": "crates/marty-reporting/src/reporter.rs",
+    "state": "src-tauri/src/state.rs",
+    "boundary": "Synthetic wire example of the current native verification event; not live verification or deployment evidence. Native AppState leaves reporter organization/device/hardware fields null."
+  },
+  "routes": [
+    "GET /v1/organizations/{organization_id}/offline-verification-events",
+    "POST /v1/organizations/{organization_id}/offline-verification-events",
+    "GET /v1/organizations/{organization_id}/offline-verification-events/{verification_id}"
+  ],
+  "native_request": {
+    "events": [
+      {
+        "event_id": "599a86a1-fd67-4d12-ae10-92ac1b4d73b4",
+        "event_type": "verification",
+        "timestamp": "2026-10-20T12:00:00Z",
+        "payload": {
+          "type": "verification",
+          "verification_id": "ff6fe1bf-7077-4cff-b9ac-8c13aa9b87af",
+          "credential_type": "dtc",
+          "result": "valid",
+          "jurisdiction": "UTO",
+          "trust_chain_type": "x509",
+          "offline_verified": true,
+          "processing_time_ms": 24,
+          "biometric_verified": null,
+          "biometric_score": null
+        },
+        "device_id": null,
+        "hardware_tier": null,
+        "org_id": null
+      }
+    ]
+  },
+  "invariants": [
+    "Only a live tenant-bound API key with explicit audit:write scope may ingest or read its own receipts.",
+    "Organization and producer ID derive from gateway-authenticated API-key authority, rechecked against the locked key record in PostgreSQL.",
+    "All events in a batch validate before persistence and commit atomically to the existing organization audit table.",
+    "Repeated identical event and verification IDs return the same receipt; changed payload or reused verification ID fails with HTTP 409.",
+    "Event and verification IDs are unique organization-wide; another producer or rotated API key cannot re-account or take ownership of either ID and receives HTTP 409.",
+    "Receipts report authenticated ingestion of a client-reported offline result, not cryptographic re-verification or physical-device attestation.",
+    "No credential, disclosed claims, raw biometric data or score, caller-provided authority, or free-form error fields are accepted."
+  ]
+}

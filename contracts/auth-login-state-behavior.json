@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "oidc_callback_failures": {
+    "log": "stable_stage_code_without_private_downstream_detail",
+    "browser_redirect": "generic_retry_message",
+    "stage_codes": [
+      "auth_oidc_state_invalid",
+      "auth_oidc_state_expired",
+      "auth_oidc_nonce_missing",
+      "auth_oidc_access_token_missing",
+      "auth_oidc_id_token_missing",
+      "auth_passkey_enrollment_unavailable",
+      "auth_passkey_enrollment_account_mismatch",
+      "auth_oidc_state_save_failed",
+      "auth_oidc_authorization_url_failed",
+      "auth_oidc_state_consume_failed",
+      "auth_oidc_code_exchange_failed",
+      "auth_oidc_token_validation_failed",
+      "auth_user_provisioning_failed",
+      "auth_session_save_failed",
+      "auth_login_event_publish_failed",
+      "auth_session_event_publish_failed",
+      "auth_backend_operation_failed"
+    ]
+  },
+  "session_id_vectors": [
+    {
+      "secret": "test-flow-webhook-secret-at-least-32-bytes",
+      "flow_instance_id": "flow-1",
+      "nonce": "nonce-1",
+      "expected": "6b1eb358-efac-4344-a360-bacbf842ccd3"
+    }
+  ],
+  "failure_cases": [
+    {
+      "reason": "Credential verification failed: Issuer did:web:example does not match any trust source issuer identifier",
+      "reason_code": "issuer_not_trusted",
+      "message_contains": "does not trust",
+      "detail": true
+    },
+    {
+      "reason": "Credential verification failed: Revocation status was not checked by the verifier",
+      "reason_code": "revocation_not_checked",
+      "message_contains": "still active",
+      "detail": true
+    },
+    {
+      "reason": "keycloak_user_not_found",
+      "reason_code": "keycloak_user_not_found",
+      "message_contains": "no ElevenID account",
+      "detail": false
+    },
+    {
+      "reason": "invalid presentation payload",
+      "reason_code": "credential_payload_invalid",
+      "message_contains": "could not verify",
+      "detail": true
+    }
+  ]
+}

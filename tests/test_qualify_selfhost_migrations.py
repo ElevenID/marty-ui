@@ -1,0 +1,443 @@
+"""Safety and evidence contracts for the release-only migration probe."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
+
+from scripts.qualify_selfhost_migrations import (
+    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_CONTENT_QUERY,
+    PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
+    VERIFY_ONLY_CATALOG_QUERY,
+    QualificationError,
+    _assert_run, native_command, qualify, verify_rust_database_probe,
+    validate_images, validate_model,
+)
+
+
+IMAGES = {
+    "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "a" * 64,
+    "services": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64,
+    "postgres": "docker.io/library/postgres@sha256:" + "b" * 64,
+    "redis": "docker.io/library/redis@sha256:" + "c" * 64,
+    "openbao": "quay.io/openbao/openbao@sha256:" + "d" * 64,
+}
+SUCCESS = '{"level":"INFO","message":"notification schema migrated"}\n'
+
+
+PROJECT = "marty-selfhost-migrate-probe-" + "1" * 16
+
+
+def model(secret_dir: Path, project: str = PROJECT) -> dict:
+    return {
+        "name": project,
+        "services": {
+            "postgres": {"image": IMAGES["postgres"],
+                         "networks": {"private": None},
+                         "command": None, "entrypoint": None,
+                         "environment": {"POSTGRES_DB": "marty",
+                                         "POSTGRES_USER": "marty",
+                                         "POSTGRES_PASSWORD_FILE":
+                                             "/run/secrets/marty_db_password"},
+                         "healthcheck": {"test": ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U marty -d marty"],
+                                         "interval": "2s", "retries": 30},
+                         "secrets": [{"source": "marty_db_password",
+                                      "target": "/run/secrets/marty_db_password"}]},
+            "redis": {"image": IMAGES["redis"],
+                      "networks": {"private": None},
+                      "command": None, "entrypoint": None,
+                      "healthcheck": {"test": ["CMD", "redis-cli", "ping"],
+                                      "interval": "2s", "retries": 30}},
+            "openbao": {"image": IMAGES["openbao"],
+                        "hostname": "openbao",
+                        "networks": {"private": None}, "command": None,
+                        "entrypoint": ["/bin/sh",
+                                       "/usr/local/bin/passport-supported-openbao-start"],
+                        "environment": {"PASSPORT_BAO_TLS_MODE": "required"},
+                        "healthcheck": {"test": ["CMD-SHELL",
+                            "BAO_CACERT=/bao/public-ca/ca.crt bao status -address=https://127.0.0.1:8200 >/dev/null"],
+                                        "interval": "2s", "retries": 30},
+                        "tmpfs": ["/tmp/bao-tls:rw,mode=1777"],
+                        "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                                     "target": "/bao/public-ca", "volume": {}}],
+                        "configs": [{"source": "openbao_start",
+                                     "target": "/usr/local/bin/passport-supported-openbao-start"}],
+                        "secrets": [{"source": "bao_root_token",
+                                     "target": "/run/secrets/bao_root_token"}]},
+            "db-migrate": {"image": IMAGES["migrations"],
+                           "networks": {"private": None},
+                           "command": None, "entrypoint": None, "restart": "no",
+                           "depends_on": {name: {"condition": "service_healthy",
+                                                 "required": True}
+                                          for name in ("postgres", "redis", "openbao")},
+                           "secrets": [{"source": name,
+                                        "target": f"/run/secrets/{name}"}
+                                       for name in ("marty_db_password", "bao_root_token",
+                                                    "notification_openbao_token")],
+                           "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                                        "target": "/bao/public-ca", "read_only": True,
+                                        "volume": {}}],
+                           "environment": {
+                               "ENVIRONMENT": "production",
+                               "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                               "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+                               "REDIS_DB_GATEWAY": "2",
+                               "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                               "BAO_TOKEN_FILE": "/run/secrets/bao_root_token",
+                               "BAO_CACERT": "/bao/public-ca/ca.crt",
+                               "NOTIFICATION_OPENBAO_TOKEN_FILE":
+                                   "/run/secrets/notification_openbao_token",
+                               "NOTIFICATION_OPENBAO_CA_CERT_FILE":
+                                   "/bao/public-ca/ca.crt",
+                               "BAO_ADDR": "https://openbao:8200",
+                               "DATABASE_URL_TEMPLATE":
+                                   "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+                               "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
+                               "MARTY_ORG_ID":
+                                   "00000000-0000-0000-0000-000000000001",
+                               "MARTY_ORG_SLUG": "marty",
+                               "REDIS_URL": "redis://redis:6379",
+                               "PUBLIC_DOMAIN": "migration.invalid",
+                               "PUBLIC_API_URL": "https://migration.invalid",
+                               "ISSUER_BASE_URL": "https://migration.invalid",
+                           }},
+            "native-schema-migrate": {
+                "image": IMAGES["services"],
+                "networks": {"private": None},
+                "entrypoint": ["/bin/sh", "-ec"],
+                "command": [native_command("migrate")],
+                "restart": "no",
+                "depends_on": {"postgres": {"condition": "service_healthy",
+                                            "required": True}},
+                "secrets": [{"source": "marty_db_password",
+                             "target": "/run/secrets/marty_db_password"}],
+                "environment": {
+                    "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                    "DATABASE_URL_TEMPLATE":
+                        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+                },
+            },
+        },
+        "networks": {"private": {"internal": True,
+                                 "name": f"{project}_private", "ipam": {}}},
+        "volumes": {"openbao_public_ca": {
+            "name": f"{project}_openbao_public_ca"}},
+        "secrets": {
+            name: {"file": str(secret_dir / name), "name": f"{project}_{name}"}
+            for name in ("marty_db_password", "bao_root_token",
+                         "notification_openbao_token")
+        },
+        "configs": {"openbao_start": {
+            "name": f"{project}_openbao_start",
+            "file": str((ROOT / "scripts/passport_supported_openbao_start.sh").resolve())}},
+    }
+
+
+def result(args: list[str], stdout: str = "", status: int = 0
+           ) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args, status, stdout, "")
+
+
+def verify_only_fixture(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    if args[-1:] == [VERIFY_ONLY_CATALOG_QUERY]:
+        return result(args, "0\n")
+    if args[-1:] == ["--verify-only"]:
+        return result(args, status=1 if "--env" in args else 0)
+    return None
+
+
+@pytest.mark.parametrize(("failure", "expected"), [
+    ("reachable", "could not reach disposable database"),
+    ("unreachable", "accepted unreachable database"),
+    ("credential", "exposed database credentials"),
+    ("malformed", "accepted malformed database URL"),
+    ("malformed_credential", "exposed malformed database URL"),
+    ("write", "changed the database catalog"),
+])
+def test_verify_only_rejects_incorrect_packaged_behavior(
+    failure: str, expected: str,
+) -> None:
+    catalog_reads = 0
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        nonlocal catalog_reads
+        if args[-1] == VERIFY_ONLY_CATALOG_QUERY:
+            catalog_reads += 1
+            return result(args, "1\n" if failure == "write" and catalog_reads == 2
+                          else "0\n")
+        if args[-1] == "--verify-only":
+            is_malformed = "DATABASE_URL=not-a-postgres-url-" in " ".join(args)
+            leak = (failure == "credential" and not is_malformed) or (
+                failure == "malformed_credential" and is_malformed)
+            accepts = (failure == "unreachable" and not is_malformed) or (
+                failure == "malformed" and is_malformed)
+            return result(args, "verify-only-probe-secret" if leak else "",
+                          0 if accepts else 1)
+        return result(args, status=1 if failure == "reachable" else 0)
+
+    with pytest.raises(QualificationError, match=expected):
+        verify_rust_database_probe(["docker", "compose"], {}, run)
+
+
+def test_verify_only_recovers_from_one_fresh_docker_network_drop() -> None:
+    positive_attempts = 0
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        nonlocal positive_attempts
+        if args[-1:] == [VERIFY_ONLY_CATALOG_QUERY]:
+            return result(args, "0\n")
+        if args[-1].endswith("--verify-only") and "/bin/sh" in args:
+            positive_attempts += 1
+            return result(args, status=1 if positive_attempts == 1 else 0)
+        return result(args, status=1)
+
+    verify_rust_database_probe(["docker", "compose"], {}, run)
+    assert positive_attempts == 2
+
+
+def test_rejects_mutable_or_foreign_image() -> None:
+    validate_images(IMAGES)
+    for role, bad in (
+        ("migrations", "ghcr.io/elevenid/marty-ui-oss/migrations:latest"),
+        ("migrations", "ghcr.io/other/migrations@sha256:" + "a" * 64),
+        ("services", "ghcr.io/elevenid/marty-ui-oss/services:latest"),
+        ("services", "ghcr.io/other/services@sha256:" + "e" * 64),
+    ):
+        with pytest.raises(QualificationError, match=f"{role} must use"):
+            validate_images(dict(IMAGES, **{role: bad}))
+
+
+def test_model_rejects_profile_network_port_or_secret_escape(tmp_path: Path) -> None:
+    source = model(tmp_path)
+    validate_model(source, IMAGES, tmp_path, PROJECT)
+    for edit in (
+        lambda m: m["services"]["db-migrate"]["environment"].update(
+            MARTY_MIGRATION_PROFILE="dev"),
+        lambda m: m["services"]["db-migrate"]["environment"].update(
+            ENVIRONMENT="development"),
+        lambda m: m["services"]["db-migrate"]["environment"].pop(
+            "NOTIFICATION_OPENBAO_TOKEN_FILE"),
+        lambda m: m["services"]["db-migrate"]["environment"].update(
+            BAO_ADDR="http://openbao:8200"),
+        lambda m: m["services"]["db-migrate"]["environment"].pop(
+            "NOTIFICATION_OPENBAO_CA_CERT_FILE"),
+        lambda m: m["services"]["openbao"].update(hostname="wrong-host"),
+        lambda m: m["services"]["openbao"]["environment"].update(
+            PASSPORT_BAO_TLS_MODE="database-probe"),
+        lambda m: m["services"]["openbao"].pop("tmpfs"),
+        lambda m: m["services"]["db-migrate"].update(command=["true"]),
+        lambda m: m["services"]["db-migrate"].update(ports=["5432:5432"]),
+        lambda m: m["services"]["db-migrate"].update(pid="host"),
+        lambda m: m["services"]["db-migrate"].update(volumes_from=["live-db"]),
+        lambda m: m["services"]["db-migrate"].update(devices=["/dev/sda"]),
+        lambda m: m["services"]["db-migrate"].update(env_file=["/live/.env"]),
+        lambda m: m["services"]["db-migrate"].update(configs=[{
+            "source": "openbao_start", "target": "/app/run-migrations-with-secrets.sh"}]),
+        lambda m: m["services"]["native-schema-migrate"].update(image="alpine:latest"),
+        lambda m: m["services"]["native-schema-migrate"].update(ports=["5432:5432"]),
+        lambda m: m["services"]["native-schema-migrate"].update(
+            command=["/usr/local/bin/marty-issuance-service serve"]),
+        lambda m: m["services"]["native-schema-migrate"].update(
+            command=[native_command("migrate").replace(
+                "/usr/local/bin/marty-device-registration migrate && ", "")]),
+        lambda m: m["networks"]["private"].update(internal=False),
+        lambda m: m["secrets"]["bao_root_token"].update(file="/production/token"),
+    ):
+        changed = deepcopy(source)
+        edit(changed)
+        with pytest.raises(QualificationError):
+            validate_model(changed, IMAGES, tmp_path, PROJECT)
+
+
+def test_postgres_readiness_rejects_socket_only_initialization_server(
+    tmp_path: Path,
+) -> None:
+    source = model(tmp_path)
+    validate_model(source, IMAGES, tmp_path, PROJECT)
+    socket_only = deepcopy(source)
+    socket_only["services"]["postgres"]["healthcheck"]["test"] = [
+        "CMD-SHELL", "pg_isready -U marty -d marty",
+    ]
+    with pytest.raises(QualificationError, match="dependency wiring changed"):
+        validate_model(socket_only, IMAGES, tmp_path, PROJECT)
+
+
+def test_migration_entrypoint_requires_native_notification_completion() -> None:
+    _assert_run(SUCCESS)
+    with pytest.raises(QualificationError):
+        _assert_run(SUCCESS.replace("notification schema migrated", "notification started"))
+
+
+def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
+        assert environment["PROBE_MIGRATIONS_IMAGE"] == IMAGES["migrations"]
+        assert environment["PROBE_SERVICES_IMAGE"] == IMAGES["services"]
+        assert Path(environment["PROBE_SECRET_DIR"]).is_dir()
+        if args[-3:] == ["config", "--format", "json"]:
+            return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
+                                                args[args.index("--project-name") + 1])))
+        if args[-1:] == ["db-migrate"]:
+            return result(args, SUCCESS)
+        if args[-1:] == ["native-schema-migrate"]:
+            return result(args)
+        if "psql" in args:
+            if args[-1] == PRIVATE_KEY_SCHEMA_QUERY:
+                return result(args)
+            if args[-1] == SCHEMA_INVENTORY_QUERY:
+                return result(args, json.dumps([{
+                    "schema": "device_registration_service",
+                    "table": "device_holder_keys", "column": "public_x",
+                    "data_type": "character varying",
+                }]))
+            if args[-1] == NOTIFICATION_HEAD:
+                return result(args, "20260808_0002\n")
+            if "alembic_version" in args[-1]:
+                return result(args, "t\n")
+            return result(args)
+        if "redis-cli" in args:
+            return result(args, "1\n")
+        if "bao read" in " ".join(args):
+            return result(args, "aes256-gcm96\nfalse\n")
+        return result(args)
+
+    report = qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "1" * 16)
+    assert report["runs"] == "2"
+    assert report["private_key_storage"] == "absent"
+    assert report["native_schemas"] == "verified"
+    assert report["verify_only_database"] == "reachable-unreachable-malformed-read-only"
+    assert report["services_image"] == IMAGES["services"]
+    assert report["notification_head"] == "20260808_0002"
+    assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
+    assert sum("psql" in args for args in calls) == 12
+    assert sum("--verify-only" in " ".join(args) for args in calls) == 3
+    assert sum(args[-1] == PRIVATE_KEY_CONTENT_QUERY for args in calls) == 2
+    assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
+    assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
+    assert all("marty-device-registration verify-owned-schema" in " ".join(args)
+               for args in calls if "verify-owned-schema" in " ".join(args))
+    assert sum(args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY] for args in calls) == 2
+    assert sum(args[-1:] == [SCHEMA_INVENTORY_QUERY] for args in calls) == 2
+    assert report["table_columns"] == [{
+        "schema": "device_registration_service", "table": "device_holder_keys",
+        "column": "public_x", "data_type": "character varying",
+    }]
+    assert all("printf '\\n'" in " ".join(args) for args in calls
+               if "bao read" in " ".join(args))
+    assert any("down" in args and "--volumes" in args for args in calls)
+
+
+@pytest.mark.parametrize(("blocked_query", "failure"), [
+    (PRIVATE_KEY_SCHEMA_QUERY, "created private-key storage"),
+    (PRIVATE_KEY_CONTENT_QUERY, "Private-key content storage scan failed"),
+])
+def test_private_key_storage_fails_qualification_and_cleans(
+    blocked_query: str, failure: str,
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
+        if args[-3:] == ["config", "--format", "json"]:
+            return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
+                                                args[args.index("--project-name") + 1])))
+        if args[-1:] == ["db-migrate"]:
+            return result(args, SUCCESS)
+        if args[-1:] == ["native-schema-migrate"]:
+            return result(args)
+        if args[-1:] == [NOTIFICATION_HEAD]:
+            return result(args, "20260808_0002\n")
+        if "psql" in args and "alembic_version" in args[-1]:
+            return result(args, "t\n")
+        if args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY]:
+            return result(args, "column:issuance_service.issuer_signing_keys.encrypted_jwk_json\n"
+                          if blocked_query == PRIVATE_KEY_SCHEMA_QUERY else "")
+        if args[-1:] == [PRIVATE_KEY_CONTENT_QUERY] and blocked_query == PRIVATE_KEY_CONTENT_QUERY:
+            return result(args, status=1)
+        return result(args)
+
+    with pytest.raises(QualificationError, match=failure):
+        qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "3" * 16)
+    assert any("down" in args and "--volumes" in args for args in calls)
+
+
+def test_migration_failure_still_cleans(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
+        if args[-3:] == ["config", "--format", "json"]:
+            return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
+                                                args[args.index("--project-name") + 1])))
+        if args[-1:] == ["db-migrate"]:
+            return result(args, "secret-bearing failure", 1)
+        return result(args)
+
+    with pytest.raises(QualificationError, match="Released self-host migrations failed"):
+        qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "2" * 16)
+    assert any("down" in args and "--volumes" in args for args in calls)
+
+
+def test_native_schema_failure_still_cleans() -> None:
+    calls: list[list[str]] = []
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
+        if args[-3:] == ["config", "--format", "json"]:
+            return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
+                                                args[args.index("--project-name") + 1])))
+        if args[-1:] == ["db-migrate"]:
+            return result(args, SUCCESS)
+        if args[-1:] == ["native-schema-migrate"]:
+            return result(args, "", 1)
+        return result(args)
+
+    with pytest.raises(QualificationError, match="Rust native schema migrations failed"):
+        qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "4" * 16)
+    assert any("down" in args and "--volumes" in args for args in calls)
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Compose CLI unavailable")
+def test_actual_compose_render_is_isolated(tmp_path: Path) -> None:
+    from scripts.qualify_selfhost_migrations import COMPOSE
+
+    environment = {
+        "PROBE_MIGRATIONS_IMAGE": IMAGES["migrations"],
+        "PROBE_SERVICES_IMAGE": IMAGES["services"],
+        "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
+        "PROBE_REDIS_IMAGE": IMAGES["redis"],
+        "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_SECRET_DIR": str(tmp_path),
+    }
+    import os
+    completed = subprocess.run(["docker", "compose", "-f", str(COMPOSE),
+                                "config", "--format", "json"],
+                               env={**os.environ, **environment},
+                               capture_output=True, text=True, check=True)
+    validate_model(json.loads(completed.stdout), IMAGES, tmp_path,
+                   json.loads(completed.stdout)["name"])

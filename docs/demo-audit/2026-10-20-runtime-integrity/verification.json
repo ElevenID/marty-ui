@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "scope": "Final local verification for runtime-integrity continuation and Codex handoff",
+  "sourceCheckpoints": {
+    "marty-ui": "b5d08219b900f38ad01217db8f1eab60e054a401",
+    "marty-demo-recorder": "5f99d6a3f0e5831d2fb9b8ffa54e3d9ab7183a4e"
+  },
+  "finalScopes": [
+    {
+      "name": "Rust applicant",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "record": "evidence/applicant-reconciliation-verification.json",
+      "overlap": "Includes earlier 31 and 38 Rust gates."
+    },
+    {
+      "name": "Claim dialog and actual invite/QR child",
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0,
+      "components": {
+        "ClaimCredentialDialog": 19,
+        "OID4VCIInviteDisplay": 12
+      },
+      "record": "evidence/claim-dialog-runtime-verification.json",
+      "overlap": "The child 12 are also in its separately retained run; do not add those executions."
+    },
+    {
+      "name": "Canvas application return",
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "record": "evidence/canvas-claim-return-verification.json"
+    },
+    {
+      "name": "Owned cleanup and D01/D04/D05 drivers",
+      "passed": 74,
+      "failed": 0,
+      "skipped": 0,
+      "components": {
+        "sharedHelper": 33,
+        "D01PassportClearance": 9,
+        "D04EmployeeAccess": 8,
+        "D05MembershipSupport": 24
+      },
+      "record": "evidence/owned-retirement-verification.json",
+      "labels": "Two raw harness log filenames swap D01/D04 labels. Commands and canonical scenario metadata determine 9/8 results; bytes were preserved."
+    },
+    {
+      "name": "Recorder media",
+      "passed": 54,
+      "failed": 0,
+      "skipped": 0,
+      "record": "evidence/media-runtime-integrity-verification.json"
+    },
+    {
+      "name": "Canvas prerequisite assertion guard",
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "record": "evidence/canvas-prerequisite-guard-verification.json"
+    },
+    {
+      "name": "Recorder configuration",
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "record": "evidence/owned-retirement-verification.json",
+      "additionalChecks": "Two committed driver hash/config schema checks, not live driver execution."
+    },
+    {
+      "name": "Production TypeScript",
+      "exitCode": 0,
+      "command": "node node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
+      "log": "evidence/ui-production-typecheck-final.log",
+      "record": "evidence/claim-dialog-runtime-verification.json"
+    }
+  ],
+  "catalog": {
+    "scenarioState": "DRAFT",
+    "scenarios": 14,
+    "assertionResult": "NOT_RUN",
+    "assertions": 66,
+    "presentationBeatBinding": "UNBOUND",
+    "presentationBeats": 61,
+    "qualificationUpgrades": 0
+  },
+  "records": [
+    {
+      "path": "evidence/applicant-withdrawal-verification.json",
+      "bytes": 7666,
+      "sha256": "8ee7071171b57e11863029c338f422306cc188d9f88bc36897cb5022c2e6c2cc"
+    },
+    {
+      "path": "evidence/applicant-claim-verification.json",
+      "bytes": 12279,
+      "sha256": "9f5bdb6f974ae52b778bad1ef074743769c08bdf2a187bdc7d3a92336d340843"
+    },
+    {
+      "path": "evidence/applicant-reconciliation-verification.json",
+      "bytes": 11311,
+      "sha256": "7f6050b08f05e545639409b19870b569a20f1e46b7aa6b7bb2ca3157efccb852"
+    },
+    {
+      "path": "evidence/applicant-reconciliation-baseline.json",
+      "bytes": 716,
+      "sha256": "85b54c59a81dc809a0a6271b7b1e47b9e7636805138c03dadb45909fea37ec6b"
+    },
+    {
+      "path": "evidence/canvas-claim-return-verification.json",
+      "bytes": 3373,
+      "sha256": "82e502ea7978933d87c620532c7d44c5df0ca6e0d1b84356c1dda959fc77b48a"
+    },
+    {
+      "path": "evidence/canvas-prerequisite-guard-verification.json",
+      "bytes": 2613,
+      "sha256": "8b3909e4914f7ac12562001f87a6158c092ed2589257a4281ee268a5f5b51450"
+    },
+    {
+      "path": "evidence/canvas-source-gap-followup-verification.json",
+      "bytes": 1626,
+      "sha256": "aa8abbf821b602ac6cd38b729f94a70697c87689ba4ad49d2555b95e8d59a785"
+    },
+    {
+      "path": "evidence/claim-dialog-runtime-verification.json",
+      "bytes": 10160,
+      "sha256": "959907cd8c20c1c8fdac9fd606d83c2db83f328d91be15e66edf94d81abfcfd7"
+    },
+    {
+      "path": "evidence/ui-wallet-open-child-verification.json",
+      "bytes": 3723,
+      "sha256": "169e97987edb97a4f4e1fb89c051208aafcf1cddc3ec49dd160d48a275ea906f"
+    },
+    {
+      "path": "evidence/ui-wallet-open-handoff.json",
+      "bytes": 4595,
+      "sha256": "37c33104741d3e1e7a58e18cebbfc7d7148bcf98dd1f032a8454c60199adf4b5"
+    },
+    {
+      "path": "evidence/ui-wallet-open-parent-review.json",
+      "bytes": 2109,
+      "sha256": "d2b90950c345fb272b19dc5ac8fc699af91233cf96ad6e9c724c3e0fdd2901c4"
+    },
+    {
+      "path": "evidence/owned-retirement-verification.json",
+      "bytes": 9321,
+      "sha256": "00fccd153cbdf86f1913ea17f47ae3029ef43341b7cfcf2364203a140433a6fc"
+    },
+    {
+      "path": "evidence/owned-retirement-driver-pin-inputs.json",
+      "bytes": 1169,
+      "sha256": "428e5520f4858547c5ad6cf6a2ebdb8dfc6af75312fd0372dcfaa72e7e33c601"
+    },
+    {
+      "path": "evidence/media-runtime-integrity-verification.json",
+      "bytes": 6026,
+      "sha256": "e16313031acce33a6825f8b1c9f48979c02bc5cf0808fc80a38bf263a0fceffc"
+    },
+    {
+      "path": "evidence/media-final-test-verification.json",
+      "bytes": 22576,
+      "sha256": "a535b556a2becc4011e562f07a5fca7b96d9a7b81d906fb4afd9dae8f469d493"
+    },
+    {
+      "path": "evidence/media-baseline-diagnostics.json",
+      "bytes": 1101,
+      "sha256": "f85a0e4c211a62da0e63731599c596a9d58ffc9e6fd5d0ef0b7ad60609a166c9"
+    }
+  ],
+  "evidenceBytesPreserved": true,
+  "boundaries": [
+    "Exact source/evidence reconciliation is recorded separately. Source checkpoint IDs precede the documentation commit; package BASELINES.json provides final delivered heads.",
+    "Final checks are controlled component/service/HTTP and synthetic-media verification. No fresh deployed, native-wallet or production-master qualification is inferred.",
+    "42/38/31 Rust gates and19+12 vs31 UI totals overlap. No portfolio-wide total is claimed.",
+    "Original six-test dialog baseline reproduced five MUI fixture failures. The 13-case contract baseline predates six final status/normalization cases; it is not an all 19-case before run.",
+    "Exploratory unsupported-consent mock tests were superseded and are not included as final production verification.",
+    "Explicit intermediate D05 and driver-pin harness failures referenced by the owned-retirement record remain retained as checkpoints, with final successful commands separately identified.",
+    "Previous broad test-source TypeScript diagnostics remain documented in the prior audit; no broad typing pass is claimed."
+  ],
+  "sourceEvidenceReconciliation": {
+    "path": "evidence/source-evidence-reconciliation.json",
+    "sha256": "d7f6b0288047f64b439414ab8c7645c4acfac6adc903c860744ded156f1d4f3a",
+    "status": "RECONCILED_WITH_EXPLICIT_BASELINE_BOUNDARY",
+    "activeSourceGate": "PASS",
+    "sourceAssertions": 291,
+    "current": 271,
+    "verifiedHistorical": 18,
+    "baselineOnly": 2,
+    "uniqueCurrentPaths": 132,
+    "artifactDigestAssertions": 56,
+    "artifactDigestMatches": 56,
+    "missingOrUnexplained": 0,
+    "boundary": "Two occurrences refer to one pre-format baseline test snapshot that was hashed before the test but not retained at its exact byte form. This does not claim historical Git-byte verification for that snapshot, rerun tests, or qualify production execution."
+  }
+}

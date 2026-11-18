@@ -1,0 +1,10 @@
+# Select only for the aggregate beta release after its signed migration image
+# has completed against the fenced database and schema verification has passed.
+services:
+  flow:
+    environment:
+      MARTY_SCHEMA_STARTUP_MODE: validate
+
+  issuance-native:
+    environment:
+      MARTY_SCHEMA_STARTUP_MODE: validate

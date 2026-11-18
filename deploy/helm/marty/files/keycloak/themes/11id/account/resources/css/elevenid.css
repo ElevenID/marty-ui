@@ -1,0 +1,17 @@
+/* Match the existing ElevenID login header without replacing native controls. */
+:root {
+  --pf-v5-global--primary-color--100: #1976d2;
+  --pf-v5-global--primary-color--200: #1565c0;
+  --pf-v5-global--FontFamily--text: "Roboto", "Helvetica", "Arial", sans-serif;
+}
+
+.pf-v5-c-masthead {
+  --pf-v5-c-masthead--BackgroundColor: #1976d2;
+  --pf-v5-c-masthead--Color: #fff;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 20%);
+}
+
+.pf-v5-c-masthead__brand .pf-v5-c-brand {
+  height: 32px;
+  max-width: min(200px, 55vw);
+}

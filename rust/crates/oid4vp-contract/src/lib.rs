@@ -1,0 +1,33 @@
+//! Versioned, language-neutral contracts for the canonical OID4VP trust boundary.
+//!
+//! These types deliberately do not perform credential or presentation verification.
+//! They separate untrusted wallet input, server-owned frozen authority, and the
+//! privacy-minimized projection emitted by a verifier. Arbitrary JSON never
+//! becomes [`AuthenticatedOid4vpEvidenceV1`]; promotion belongs to the future
+//! canonical Flow and presentation-policy producer adapter.
+
+mod callback;
+mod digest;
+mod flow_receipt;
+pub mod haip_key;
+pub mod jwt_vc_profile;
+mod managed_evidence;
+pub mod managed_status;
+mod rejection;
+mod response;
+pub mod trust_authority;
+mod types;
+mod validation;
+mod validity;
+pub mod wallet_issuance;
+
+pub use callback::build_verification_callback_payload;
+pub use digest::*;
+pub use flow_receipt::*;
+pub use managed_evidence::*;
+pub use types::*;
+pub use validation::Oid4vpContractError;
+pub use validity::*;
+
+pub use rejection::*;
+pub use response::*;

@@ -1,0 +1,13 @@
+✔ old wallet capability blocks before any session creation or global reset (3.362825ms)
+✔ a changed run, session or process cannot be reset or closed by a prior owner (2.301125ms)
+✔ visible wallet actions keep the server run guard and cleanup erases only their session (0.80974ms)
+✔ failed owned reset remains a failure and one browser context cannot acquire another session (1.508321ms)
+✔ wallet transport rejects public hosts, credentials and route-bearing origins (0.777731ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15.901588

@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "repositories": [
+    {
+      "repository": "marty-ui",
+      "previousHead": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+      "sourceCheckpoint": "b5d08219b900f38ad01217db8f1eab60e054a401",
+      "changedSourcePaths": [
+        {
+          "path": "rust/services/applicant/src/http.rs",
+          "bytes": 55599,
+          "sha256": "26fa44811cb2b991c43da13757c5d1bbeac19ad6dc59e9ea1ac195bfc40d0367",
+          "gitBlob": "826ddc14ec5a0e7e015774a3005b625503d53050"
+        },
+        {
+          "path": "rust/services/applicant/src/issuance.rs",
+          "bytes": 11652,
+          "sha256": "ee50d824e4830fdc9961a5688d3974f12f8e2001ad5659d44b83085aa0034fde",
+          "gitBlob": "e23942a9841301223898c48dca633893b76cc1f1"
+        },
+        {
+          "path": "rust/services/applicant/src/service.rs",
+          "bytes": 60848,
+          "sha256": "e94520b21e34bb91e9e9314ba78a6089a8115eb5afde16eef5b25accfb01c789",
+          "gitBlob": "d777d1d2aa57aec44df63541dfb3185057bebf10"
+        },
+        {
+          "path": "rust/services/applicant/tests/application_behavior.rs",
+          "bytes": 34845,
+          "sha256": "6a219dae7d75ca9f5830fdd41a1ead72bf6519ee7cc01c85059a9c782b53f62a",
+          "gitBlob": "33f27b290812a095e1f584fa4e62d1d68528994a"
+        },
+        {
+          "path": "rust/services/applicant/tests/http_behavior.rs",
+          "bytes": 30317,
+          "sha256": "afaef17f1a98003dfa6c1f7a5659c649397411c71db61af1b1e04430c338edb2",
+          "gitBlob": "5f95b98f2c18c168fe7eff462e354cb560b692e7"
+        },
+        {
+          "path": "tests/scripts/audit-beta-employee-access.js",
+          "bytes": 30221,
+          "sha256": "f4ab6cdb89d84a6e1767d12f691e42b0309852eb3611b58fa3806608f0dcbbf1",
+          "gitBlob": "51ce20af833340951dabd39e56d31e03dfa6f59b"
+        },
+        {
+          "path": "tests/scripts/audit-beta-membership-support.js",
+          "bytes": 41422,
+          "sha256": "034d82f7cb5d5474bad95c53f47f69fb277aca2c3650bc1a6dc4b0b7a4709160",
+          "gitBlob": "c2e25e5368f9d220aeac6d14844bdf1a4f9fb60e"
+        },
+        {
+          "path": "tests/scripts/audit-beta-membership-support.test.js",
+          "bytes": 35961,
+          "sha256": "da34d36eeda74dc303dffeae1af5b4f73ecffc5819752f072a322f09f34909be",
+          "gitBlob": "5f2de3efa47bc2374b4792005ef6765e2c45d7f8"
+        },
+        {
+          "path": "tests/scripts/audit-beta-passport-clearance.js",
+          "bytes": 33206,
+          "sha256": "563f21677ce0006ebb4b2883afe771a78487eea018439d94572688e5a7090cdd",
+          "gitBlob": "bd25aeffbe5ba7cef5bb5fd68084b84ebc2aa7f3"
+        },
+        {
+          "path": "tests/scripts/beta-demo-resource-helpers.js",
+          "bytes": 35755,
+          "sha256": "1079b8aff83d550010ac1c0ccb53afc959057aa6c8b3f0ade8fce524a7e04ea1",
+          "gitBlob": "de89925c23fe71c631f6f4ffeb813a744d98496b"
+        },
+        {
+          "path": "tests/scripts/beta-demo-resource-helpers.test.js",
+          "bytes": 39425,
+          "sha256": "d8e4fa9b3bd56ab3c3e8e58b16ca5eb033e848819ae5499177fddfae05b5cef3",
+          "gitBlob": "17c5dcb4e9380ddf4704bd537c3e4cdb1f0db446"
+        },
+        {
+          "path": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+          "bytes": 27510,
+          "sha256": "6e763f8e12c24415dc5ba75319063d884cbd566ce0c6b6badd85051679d80933",
+          "gitBlob": "01377c8cb4c62ec9be953e708fc71c1ca20c4232"
+        },
+        {
+          "path": "ui/src/components/__tests__/ClaimCredentialDialog.test.tsx",
+          "bytes": 20818,
+          "sha256": "5f6cb37fb4cf13aecaad4323bb501dd459be26babd81d55041dcb2407f7c524e",
+          "gitBlob": "9344e7e6b26fc1f5ef2e5c1319dd30581dc7c338"
+        },
+        {
+          "path": "ui/src/components/applicant/ApplicationForm.jsx",
+          "bytes": 54679,
+          "sha256": "445755b3975a387ce793a60bc846f711ff8db842f435f74f5832c3bb5dfbdb44",
+          "gitBlob": "9636f0c12d8ee78364cd2a63a8e84df4e2de0286"
+        },
+        {
+          "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+          "bytes": 24792,
+          "sha256": "6f7e1752481baac9c77dd349b39cfbe0c21e42e3f7ea977f7cdb26087cbd2a8b",
+          "gitBlob": "6f1f49f4764bc1dc96d32750d448f2baafc74954"
+        },
+        {
+          "path": "ui/src/components/issuance/OID4VCIInviteDisplay.jsx",
+          "bytes": 7413,
+          "sha256": "ad55f6af1490d1e2b19e713a0550eed198ca2b94735a6163e3036fb5c1497add",
+          "gitBlob": "717fa09e1e60d41ce858c48ab1f302e950f22d60"
+        },
+        {
+          "path": "ui/src/components/issuance/OID4VCIInviteDisplay.test.tsx",
+          "bytes": 9885,
+          "sha256": "146165ecb582316b775006eb65775554513b90e5388f82799152eb37b56a19df",
+          "gitBlob": "a23ead27333dcc6e0c779a49587c65fc3041237e"
+        },
+        {
+          "path": "ui/src/components/issuance/QRCodeDisplay.jsx",
+          "bytes": 13715,
+          "sha256": "49c77ffb4368b5ec96f575d13cfd3b3723e118048416a42a5e15c7bff1369bbf",
+          "gitBlob": "0ffc9a28085c5efa273f894fabafac86be81ab65"
+        },
+        {
+          "path": "ui/src/hooks/useWalletOpenLink.js",
+          "bytes": 2618,
+          "sha256": "3a556999ca80dade5adb6b365f095c094bb944f8acceb399377f65a3bf086293",
+          "gitBlob": "d275df25aa555f25dd88fa2bbc358248884688cc"
+        },
+        {
+          "path": "ui/src/services/credentialsApi.jsx",
+          "bytes": 9120,
+          "sha256": "9007415ae93a9d9c58527fb1b67aaa0e238e66b2da7ebc798def6a6189992e14",
+          "gitBlob": "b354cc74ade7035ba5903aa429289775341a652a"
+        }
+      ],
+      "allBytesMatchCommittedSource": true
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "previousHead": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+      "sourceCheckpoint": "5f99d6a3f0e5831d2fb9b8ffa54e3d9ab7183a4e",
+      "changedSourcePaths": [
+        {
+          "path": "demos/canvas-learning-achievement.hooks.js",
+          "bytes": 14215,
+          "sha256": "a10a2f195e3c5445caca8b18b2ab01e36884a52d34e4aa758204b65a6c083f94",
+          "gitBlob": "6a6f2cd48326e4266bec03f400569b5b2b6cb185"
+        },
+        {
+          "path": "demos/membership-badge-login-expired-offer.json",
+          "bytes": 2962,
+          "sha256": "b6f72cd4326a523dd1de7ae442232a369c4476c1ab1a29c8c7066c53ae25d9f7",
+          "gitBlob": "e46dfd68f1e467f887dc964f318ea09ee9f21f85"
+        },
+        {
+          "path": "demos/membership-badge-login-untrusted-issuer.json",
+          "bytes": 3033,
+          "sha256": "682e43e730a4a00c6b993747eebe4d69c952bec7da9556fb67d4ac75ae72b733",
+          "gitBlob": "e04ff05d7564cb00a6be945e5572b613ae309fff"
+        },
+        {
+          "path": "docs/canvas-capture-source-gaps.md",
+          "bytes": 10328,
+          "sha256": "6777673ae826665ecddc356bf396efbb463029bb2c9245ba1fa8317f6677327d",
+          "gitBlob": "64f20181fc7508e64716204f77e32c6432eb3e02"
+        },
+        {
+          "path": "docs/d05-supporting-lanes.md",
+          "bytes": 13887,
+          "sha256": "91e111d5e171492a58688d3ad85ab581a1711d8e04c945fd066c79a600f76b3b",
+          "gitBlob": "3275e64ec01ebd69958f40d6ed921e2ea58f79f3"
+        },
+        {
+          "path": "docs/editorial-pointer-evidence.md",
+          "bytes": 4535,
+          "sha256": "c34319afc58cfb932d8cb31bef81277fd0745e5922c90d7a20e0848369533f4e",
+          "gitBlob": "1e80abcb62230ca00c27079cad24a8e90bcf2d3a"
+        },
+        {
+          "path": "docs/lifecycle-presentation-profile.md",
+          "bytes": 11069,
+          "sha256": "406164a5ea7ba89e9447b0e24222c545ef6dc984a0461cb61cad03c6e70f04b7",
+          "gitBlob": "226b2b0c95b50e6da2901c62faffab0f40d615fc"
+        },
+        {
+          "path": "src/compose.js",
+          "bytes": 51758,
+          "sha256": "2cd5aa050ed958a30b6e48500438300a9abf7af941425f40d8bdea6d0b12ed3b",
+          "gitBlob": "a187d728888484a392c48c41c29363ec47c0e1af"
+        },
+        {
+          "path": "src/editTimeline.js",
+          "bytes": 1060,
+          "sha256": "9ce42d70f37414b1e2452e4f9764d5f1d915d6940fa1e3052a9a2850ad80ef7a",
+          "gitBlob": "b317dc1ee1c178e64021e5b6db1ac2776d4558a9"
+        },
+        {
+          "path": "src/editorialPointer.js",
+          "bytes": 6431,
+          "sha256": "a2aa4f893102b3e792e66e1b5a9180a521aab4c02860bfed44597a030687699b",
+          "gitBlob": "b03154641a87e806b31fb976671bb5e9c1abe460"
+        },
+        {
+          "path": "src/guidedPresentationProfile.js",
+          "bytes": 8324,
+          "sha256": "a7fe2e4725aea1838af9c2cbdabb9e82d9197d15b56efe7c8017fbdf60fd0bd6",
+          "gitBlob": "8ccc96cc0d8b4be0361a9c5bddd919898e8339de"
+        },
+        {
+          "path": "src/mediaQuality.js",
+          "bytes": 6041,
+          "sha256": "0a3e9f90faddbc79258c6fbb4e69b50edd7744a3debe78e7706e4aaf0e9efc41",
+          "gitBlob": "d1d57b3c20c3890242090153213f5811377fccfb"
+        },
+        {
+          "path": "src/pointerEvidence.js",
+          "bytes": 6585,
+          "sha256": "672fa6d5834695fde4cf1514b11f9ca052d7ebdb879dddf35f425cd590a06e05",
+          "gitBlob": "51b7005e54f43251e00a41920bcf2867974c4909"
+        },
+        {
+          "path": "src/retainedIndependentOverview.js",
+          "bytes": 5084,
+          "sha256": "19d17c2195f91586e5f7949a439cd7ba6edf83fa182b066074e7438ac40c0f6a",
+          "gitBlob": "3e1304a09af7a2eb87db06be9b911e0697fb0548"
+        },
+        {
+          "path": "test/canvasPortability.test.js",
+          "bytes": 15766,
+          "sha256": "8d88f41293bd8c295acc322a19bf7ae228d3f493f7836677933b07b2fa5bd381",
+          "gitBlob": "476b46be7dc70f1a1693a2161793891e681ea63b"
+        },
+        {
+          "path": "test/compose.test.js",
+          "bytes": 24542,
+          "sha256": "8417f9a367c2f9d5c133cc2880beb8a87351403691285501c1ed7a4d75296aa4",
+          "gitBlob": "5cca2546bcafe2da87ead4880d11df589256bd7c"
+        },
+        {
+          "path": "test/editTimeline.test.js",
+          "bytes": 4328,
+          "sha256": "352938a3c51c8011a76748607dc0f7f64a7cb2a87737232d9d7d4d6e9843b601",
+          "gitBlob": "181c71d19da735c1de8d3e63654251b750f21b84"
+        },
+        {
+          "path": "test/editorialPointer.test.js",
+          "bytes": 5104,
+          "sha256": "c236c20dfb992e8000548cdb76d2f4b21740ac63bc7cf7eeb3a20b63b43c6429",
+          "gitBlob": "57d038cebc941488343df831846584359c11a0b2"
+        },
+        {
+          "path": "test/helpers/pointerMeasurementFixture.js",
+          "bytes": 992,
+          "sha256": "c17489338cdf4085a99e13b74ea0448814530e0136ea41c52cea7bf4188a2819",
+          "gitBlob": "d9c86a3c08b42a15faf20862811bbd243da1159a"
+        },
+        {
+          "path": "test/lifecyclePresentationProfile.test.js",
+          "bytes": 17318,
+          "sha256": "2511602ca6258dc18723af343250b2019b11e0163c647911aacd9f082b3009ac",
+          "gitBlob": "f520604962a0afc178ce6bbbc56c40b8bd14ba50"
+        },
+        {
+          "path": "test/mediaQuality.test.js",
+          "bytes": 3356,
+          "sha256": "0d252f840a2dd2014b20ee9137c3282a52978dc2e3cbb008eb473d54c9fe1ab8",
+          "gitBlob": "220009d5ef80d861ec8a83e8dd74c06ebc5fc208"
+        },
+        {
+          "path": "test/nativeGuidedComposition.test.js",
+          "bytes": 9316,
+          "sha256": "224b9eababd394e6504831c988eecde292dec04b5780ddb778611e41f9650b96",
+          "gitBlob": "4e2ce044abe1b373610e3508548cc8894c48d9eb"
+        },
+        {
+          "path": "test/pointerEvidence.test.js",
+          "bytes": 5497,
+          "sha256": "9f23a90b41fb0d93a1e88469da1a7aee6961518f09e80e6ca86ae08ab50421f5",
+          "gitBlob": "8f9c84da20fdc3a97443c5a40985b11c6f3b02ee"
+        }
+      ],
+      "allBytesMatchCommittedSource": true
+    }
+  ],
+  "boundary": "Source checkpoints precede the final audit documentation and lifecycle integration commits. Package BASELINES.json contains final delivery identities."
+}

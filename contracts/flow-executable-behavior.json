@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "implementation_owner": "marty-flow",
+  "listeners": {
+    "http": "FLOW_HTTP_ADDR_or_FLOW_SERVICE_PORT",
+    "grpc": "FLOW_GRPC_ADDR_or_FLOW_GRPC_PORT",
+    "addresses_must_differ": true,
+    "bind_before_activation": true,
+    "both_required": true
+  },
+  "lifecycle": {
+    "dependency_probes_before_bind": true,
+    "listener_bind_before_active": true,
+    "grpc_health_serving_after_active": true,
+    "readiness_only_while_active": true,
+    "shutdown_sequence": [
+      "draining",
+      "grpc_not_serving",
+      "listener_graceful_shutdown",
+      "callback_worker_shutdown",
+      "stopped"
+    ]
+  },
+  "callback_delivery": {
+    "durable_claim": "skip_locked_fenced_lease",
+    "destination_revalidated_per_attempt": true,
+    "redirects_followed": false,
+    "connect_timeout_seconds": 3,
+    "request_timeout_seconds": 10,
+    "success_status": "2xx",
+    "retry_statuses": ["non_2xx", "timeout", "network_error"],
+    "destination_rejection": "dead_letter",
+    "delivered_payload": "scrubbed",
+    "expired_payload": "scrubbed",
+    "default_retention_seconds": 900,
+    "retention_bounds_seconds": [60, 86400],
+    "default_max_attempts": 10,
+    "max_attempt_bounds": [1, 32],
+    "default_lease_seconds": 30,
+    "lease_bounds_seconds": [5, 300],
+    "default_poll_milliseconds": 1000,
+    "poll_bounds_milliseconds": [100, 60000],
+    "default_retry_base_seconds": 1,
+    "retry_base_bounds_seconds": [1, 60],
+    "default_retry_cap_seconds": 60,
+    "retry_cap_bounds_seconds": [1, 900],
+    "default_batch_size": 10,
+    "batch_bounds": [1, 100]
+  },
+  "required_runtime_components": [
+    "database",
+    "nonce_store",
+    "organization_grpc",
+    "credential_template_grpc",
+    "presentation_policy_grpc",
+    "issuance_grpc",
+    "signing_keys_http",
+    "physical_issuance_http",
+    "reference_catalog_http",
+    "callback_delivery",
+    "http_listener",
+    "grpc_listener"
+  ],
+  "python_fallback": false,
+  "deployment_during_slice": false
+}

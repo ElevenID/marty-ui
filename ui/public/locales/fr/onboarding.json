@@ -1,0 +1,98 @@
+{
+	"welcome": {
+		"title": "Bienvenue sur {{appName}}",
+		"subtitle": "Commençons la configuration",
+		"getStarted": "Commencer"
+	},
+	"roleSelection": {
+		"title": "Choisissez votre rôle",
+		"subtitle": "Qu'est-ce qui vous amène ici ?",
+		"promptTitle": "Choisissez l'option qui vous décrit le mieux",
+		"administrator": "Administrateur",
+		"administratorDesc": "Gérer la plateforme et l'infrastructure de confiance",
+		"vendor": "Fournisseur / Organisation",
+		"vendorDesc": "J'émets des documents pour mon organisation",
+		"vendorFeatures": [
+			"Émettre des documents de voyage numériques",
+			"Gérer les candidats et les demandes",
+			"Utiliser l'API pour les intégrations",
+			"Configurer des webhooks et des automatisations"
+		],
+		"applicant": "Candidat",
+		"applicantDesc": "Je demande des documents de voyage numériques",
+		"applicantFeatures": [
+			"Demander des documents de voyage numériques",
+			"Stocker des justificatifs dans votre portefeuille",
+			"Partager des documents en toute sécurité",
+			"Suivre l'état de la demande"
+		]
+	},
+	"organization": {
+		"title": "Rejoindre une organisation",
+		"subtitle": "Saisissez les informations de votre organisation",
+		"organizationName": "Nom de l'organisation",
+		"organizationCode": "Code d'organisation",
+		"createNew": "Créer une nouvelle organisation",
+		"joinExisting": "Rejoindre une organisation existante"
+	},
+	"profile": {
+		"title": "Votre profil",
+		"subtitle": "Parlez-nous de vous",
+		"firstName": "Prénom",
+		"lastName": "Nom",
+		"email": "E-mail",
+		"phone": "Numéro de téléphone"
+	},
+	"trustSetup": {
+		"title": "Profil de confiance",
+		"subtitle": "Définissez les émetteurs de justificatifs de confiance",
+		"addIssuers": "Ajouter des émetteurs de confiance",
+		"configurePolicies": "Configurer les politiques"
+	},
+	"completion": {
+		"title": "Tout est prêt !",
+		"subtitle": "Votre compte est prêt à l'emploi",
+		"goToDashboard": "Aller au tableau de bord"
+	},
+	"steps": {
+		"role": "Rôle",
+		"organization": "Organisation",
+		"profile": "Profil",
+		"trust": "Confiance",
+		"complete": "Terminé"
+	},
+	"domainMatch": {
+		"title": "Organisations trouvées pour votre domaine e-mail",
+		"info": "Nous avons trouvé {{count}} organisation qui accepte les utilisateurs du domaine",
+		"info_other": "Nous avons trouvé {{count}} organisations qui acceptent les utilisateurs du domaine",
+		"domain": "<strong>{{domain}}</strong>.",
+		"policies": {
+			"auto": "Accès instantané",
+			"approval": "Approbation requise",
+			"closed": "Fermé"
+		},
+		"autoDescription": "Vous serez automatiquement ajouté en tant que <strong>{{role}}</strong>",
+		"approvalDescription": "Votre demande sera examinée par un administrateur. Vous serez notifié dès qu'elle sera approuvée.",
+		"buttons": {
+			"joinNow": "Rejoindre maintenant",
+			"requestToJoin": "Demander à rejoindre",
+			"closed": "Fermé",
+			"processing": "Traitement..."
+		},
+		"skipWarning": "Vous pouvez également ignorer cette étape et rejoindre plus tard avec un code d'invitation.",
+		"skipButton": "Ignorer pour l'instant"
+	},
+	"confirmOrg": {
+		"title": "Confirmer la sélection de l'organisation",
+		"warning": "Veuillez confirmer que vous souhaitez rejoindre l'organisation suivante :",
+		"approvalInfo": "Cette organisation nécessite une approbation. Votre demande sera examinée par un administrateur.",
+		"cancel": "Annuler",
+		"confirm": "Confirmer et rejoindre",
+		"processing": "Traitement..."
+	},
+	"membershipMode": {
+		"inviteOnly": "Sur invitation uniquement",
+		"approval": "Demander à rejoindre",
+		"open": "Ouvert"
+	}
+}

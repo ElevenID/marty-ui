@@ -1,0 +1,325 @@
+"""Protected final producer binds the same old writer after predeletion."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import json
+
+import pytest
+
+from scripts import collect_passport_python_deletion_cutover as producer
+from scripts.compose_passport_predeletion_acceptance import RUNTIME_PROBES, compose
+from scripts.probe_passport_beta_fence_direct_writes import UNRELATED_WRITES
+from scripts.probe_passport_beta_cutover_snapshot import digest
+
+
+HEAD = "a" * 40
+DELETION = "b" * 40
+WRITER = "c" * 64
+
+
+def fixture():
+    first = {"observation_watermark": 100, "receipt_sha256": "1" * 64,
+             "observed_at_utc": "2026-09-29T01:00:00.000Z"}
+    prior = {"observation_watermark": 150, "receipt_sha256": "2" * 64,
+             "observed_at_utc": "2026-09-29T02:00:00.000Z"}
+    final = {"observation_watermark": 190, "receipt_sha256": "3" * 64,
+             "observed_at_utc": "2026-09-29T03:00:00.000Z"}
+    for probe in (first, prior, final):
+        probe["unrelated_writes"] = deepcopy(UNRELATED_WRITES)
+    installation = {
+        "schema": "marty.passport-beta-fence-installation/v1",
+        "source_commit": HEAD, "credentials_deletion_head": DELETION,
+        "direct_database_probe": first,
+        "fence_installed_at_utc": "2026-09-29T00:59:00.000Z",
+        "production_snapshot_sha256": "4" * 64,
+        "production_attachments_sha256": "5" * 64,
+    }
+    snapshot = {
+        "schema": "marty.passport-beta-cutover-snapshot/v1",
+        "status": "observed", "installation_provenance": "local_host_continuity_only",
+        "installation_receipt_sha256": digest(installation),
+        "fence_first_probe": first, "direct_database_probe": final,
+        "database_uid": "postgresql:123:456",
+        "beta_cluster_uid": "docker:daemon",
+        "beta_inventory_attestation_sha256": "6" * 64,
+        "writer_deployment_uid": f"elevenid-beta:issuance:{WRITER}",
+        "writer_container_id": WRITER,
+        "writer_image_digest": "sha256:" + "7" * 64,
+        "writer_started_at": "2026-09-29T00:00:00Z",
+        "writer_generation": 0,
+        "fence_epoch": 9,
+        "fence_installed_at_utc": installation["fence_installed_at_utc"],
+        "fence_verification_sha256": "8" * 64,
+        "observation_watermark": 200,
+        "observed_at_utc": "2026-09-29T03:05:00.000Z",
+        "production_snapshot_sha256": "4" * 64,
+        "production_attachments_sha256": "5" * 64,
+        "counts": {
+            "total_job_count": 0, "nonterminal_job_count": 0,
+            "legacy_or_unknown_artifact_count": 0,
+            "unreadable_artifact_count": 0,
+            "active_passport_flow_count": 0,
+        },
+    }
+    snapshot["snapshot_sha256"] = digest(snapshot)
+    legacy = {
+        "database_uid": snapshot["database_uid"],
+        "beta_cluster_uid": snapshot["beta_cluster_uid"],
+        "beta_inventory_attestation_sha256":
+            snapshot["beta_inventory_attestation_sha256"],
+        "writer_deployment_uid": snapshot["writer_deployment_uid"],
+        "writer_container_id": WRITER,
+        "writer_image_digest": snapshot["writer_image_digest"],
+        "writer_generation_at_drain": 0,
+        "writer_database_role": "marty",
+        "fence_watermark": 9,
+        "fence_enabled_at_utc": installation["fence_installed_at_utc"],
+        "drain_watermark": 150,
+        "drain_snapshot_attestation_sha256": "a" * 64,
+        "drain_checked_at_utc": "2026-09-29T02:10:00Z",
+    }
+    fence = {
+        "scope": "physical_document_jobs_and_physical_flows",
+        "enabled": True,
+        "database_uid": snapshot["database_uid"],
+        "writer_deployment_uid": snapshot["writer_deployment_uid"],
+        "writer_container_id": WRITER, "writer_generation": 0,
+        "fence_epoch": 9,
+        "verification_sha256": snapshot["fence_verification_sha256"],
+        "unrelated_issuance_continues": True,
+        "direct_database_probe": prior,
+    }
+    predeletion = {
+        "schema": "marty.passport-rust-predeletion-acceptance/v1",
+        "status": "accepted", "release": {"source_commit": HEAD},
+        "fence_installation_receipt_sha256": hashlib.sha256(
+            (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest(),
+        "probes": {"legacy_drain": {"evidence": {
+            "legacy_source": legacy, "passport_write_fence": fence,
+        }}},
+    }
+    return predeletion, snapshot, installation
+
+
+def run(predeletion, snapshot, installation, lineage=lambda *_: None):
+    return producer.collect(
+        source_commit=HEAD, run_id=42, deletion_head=DELETION,
+        predeletion_run_id=11, predeletion=predeletion,
+        snapshot=snapshot, snapshot_file_sha256="9" * 64,
+        installation=installation,
+        installation_file_sha256=hashlib.sha256(
+            (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest(),
+        checked_at=datetime(2026, 9, 29, 3, 30, tzinfo=timezone.utc),
+        lineage=lineage,
+    )
+
+
+def test_final_report_matches_predeletion_writer_and_zero_counts():
+    predeletion, snapshot, installation = fixture()
+    report = run(predeletion, snapshot, installation)
+    assert report["status"] == "accepted"
+    assert report["legacy_source"]["writer_container_id"] == WRITER
+    assert report["legacy_source"]["final_watermark"] == 190
+    assert report["write_fence"]["direct_database_probe"] == (
+        snapshot["direct_database_probe"])
+
+
+def test_composed_predeletion_receipt_reaches_final_cutover() -> None:
+    _, final_snapshot, installation = fixture()
+    installation_file_sha = hashlib.sha256(
+        (json.dumps(installation, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+    prior_probe = {
+        "observation_watermark": 150, "receipt_sha256": "2" * 64,
+        "observed_at_utc": "2026-09-29T02:00:00.000Z",
+        "unrelated_writes": deepcopy(UNRELATED_WRITES),
+    }
+    observed = deepcopy(final_snapshot)
+    observed["observed_at_utc"] = "2026-09-29T02:10:00.000Z"
+    observed["direct_database_probe"] = prior_probe
+    observed["snapshot_sha256"] = digest({
+        key: value for key, value in observed.items()
+        if key != "snapshot_sha256"
+    })
+    fresh = deepcopy(observed)
+    fresh["observed_at_utc"] = "2026-09-29T02:20:00.000Z"
+    fresh["direct_database_probe"]["observation_watermark"] = 160
+    fresh["snapshot_sha256"] = digest({
+        key: value for key, value in fresh.items()
+        if key != "snapshot_sha256"
+    })
+    legacy = {
+        "database_uid": final_snapshot["database_uid"],
+        "beta_cluster_uid": final_snapshot["beta_cluster_uid"],
+        "beta_inventory_attestation_sha256":
+            final_snapshot["beta_inventory_attestation_sha256"],
+        "writer_deployment_uid": final_snapshot["writer_deployment_uid"],
+        "writer_container_id": final_snapshot["writer_container_id"],
+        "writer_image_digest": final_snapshot["writer_image_digest"],
+        "writer_generation_at_drain": final_snapshot["writer_generation"],
+        "writer_database_role": "marty", "fence_watermark": 9,
+        "fence_enabled_at_utc": installation["fence_installed_at_utc"],
+        "drain_watermark": 150,
+        "drain_snapshot_attestation_sha256": "a" * 64,
+        "drain_checked_at_utc": "2026-09-29T02:10:00Z",
+    }
+    fence = {
+        "scope": "physical_document_jobs_and_physical_flows",
+        "enabled": True, "database_uid": final_snapshot["database_uid"],
+        "writer_deployment_uid": final_snapshot["writer_deployment_uid"],
+        "writer_container_id": final_snapshot["writer_container_id"],
+        "writer_generation": final_snapshot["writer_generation"],
+        "fence_epoch": 9,
+        "verification_sha256": final_snapshot["fence_verification_sha256"],
+        "unrelated_issuance_continues": True,
+        "direct_database_probe": prior_probe,
+    }
+    identity = {
+        "kind": "compose", "source_commit": HEAD,
+        "production_resources_excluded": True,
+        "project_id": "passport-disposable", "owner_uid": "test-owner",
+        "owner_labels": {},
+    }
+    projection = {
+        "schema": "marty.passport-rust-predeletion-producer-projection/v1",
+        "status": "blocked", "source_commit": HEAD,
+        "release": {"source_commit": HEAD},
+        "deployment": identity,
+        "probes": {name: {"verified": True} for name in RUNTIME_PROBES},
+        "runtime_images": {}, "pre_restart_native_runtime": {},
+        "producer_run_id": 7, "record_run_id": 8,
+        "producer_receipt_sha256": "b" * 64,
+        "producer_attestation_sha256": "c" * 64,
+        "plan_sha256": "d" * 64,
+        "record_completed_at_utc": "2026-09-29T01:30:00Z",
+    }
+    observation = {
+        "schema": "marty.passport-rust-predeletion-drain/v1",
+        "status": "verified_observation", "source_commit": HEAD,
+        "installation": installation, "snapshot": observed,
+        "fence_installation_receipt_sha256": installation_file_sha,
+        "observation_run_id": 9,
+        "observation_completed_at_utc": "2026-09-29T02:12:00Z",
+        "attestation_sha256": {"installation": "e" * 64},
+        "probe": {"verified": True, "evidence": {
+            "source_commit": HEAD,
+            "python_passport_writes_fenced": True,
+            "count_source_database_uid": final_snapshot["database_uid"],
+            "legacy_source": legacy,
+            "passport_write_fence": fence,
+        }},
+    }
+    accepted = compose(
+        projection, observation, fresh, run_id=11,
+        installation_file_sha256=installation_file_sha,
+        workflow_started_at_utc="2026-09-29T02:15:00Z",
+        accepted_at_utc="2026-09-29T02:25:00Z",
+    )
+    assert run(accepted, final_snapshot, installation)["status"] == "accepted"
+    accepted["fence_installation_receipt_sha256"] = "f" * 64
+    with pytest.raises(producer.HostProbeError,
+                       match="attested predeletion installation"):
+        run(accepted, final_snapshot, installation)
+
+
+def test_final_report_accepts_later_head_only_after_lineage_check():
+    predeletion, snapshot, installation = fixture()
+    installation["credentials_deletion_head"] = "a" * 40
+    predeletion["fence_installation_receipt_sha256"] = hashlib.sha256(
+        (json.dumps(installation, sort_keys=True) + "\n").encode()).hexdigest()
+    snapshot["installation_receipt_sha256"] = digest(installation)
+    snapshot["snapshot_sha256"] = digest({
+        key: value for key, value in snapshot.items() if key != "snapshot_sha256"
+    })
+    seen = []
+    report = run(predeletion, snapshot, installation,
+                 lambda anchor, current: seen.append((anchor, current)))
+    assert seen == [("a" * 40, DELETION)]
+    assert report["deletion_head"] == DELETION
+
+
+def test_changed_writer_or_stale_probe_is_rejected():
+    predeletion, snapshot, installation = fixture()
+    snapshot["writer_generation"] = 1
+    snapshot["snapshot_sha256"] = digest({
+        key: value for key, value in snapshot.items() if key != "snapshot_sha256"
+    })
+    with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
+        run(predeletion, snapshot, installation)
+    snapshot["writer_generation"] = 0
+    snapshot["direct_database_probe"] = (
+        predeletion["probes"]["legacy_drain"]["evidence"]
+        ["passport_write_fence"]["direct_database_probe"])
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+
+
+def test_changed_snapshot_or_fence_is_rejected():
+    predeletion, snapshot, installation = fixture()
+    snapshot["counts"]["total_job_count"] = 1
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "fence_epoch"] += 1
+    with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
+        run(predeletion, snapshot, installation)
+
+
+def test_same_drain_snapshot_attestation_is_rejected():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "drain_snapshot_attestation_sha256"] = "9" * 64
+    with pytest.raises(producer.HostProbeError, match="predeletion acceptance"):
+        run(predeletion, snapshot, installation)
+
+
+def test_unbound_fence_installation_is_rejected():
+    predeletion, snapshot, installation = fixture()
+    predeletion["fence_installation_receipt_sha256"] = "f" * 64
+    with pytest.raises(producer.HostProbeError, match="attested predeletion installation"):
+        run(predeletion, snapshot, installation)
+
+
+def test_predeletion_drain_watermark_must_be_the_direct_probe_watermark():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "drain_watermark"] += 1
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+
+
+def test_predeletion_fence_time_must_be_database_installed_time():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "fence_enabled_at_utc"] = "2026-09-29T00:58:00.000Z"
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+
+
+def test_predeletion_drain_must_follow_its_write_probe():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["legacy_source"][
+        "drain_checked_at_utc"] = "2026-09-29T01:59:00Z"
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+
+
+def test_predeletion_unrelated_write_proof_is_required():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "direct_database_probe"]["unrelated_writes"] = {}
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)
+
+
+def test_predeletion_numeric_unrelated_write_proof_is_rejected():
+    predeletion, snapshot, installation = fixture()
+    predeletion["probes"]["legacy_drain"]["evidence"]["passport_write_fence"][
+        "direct_database_probe"]["unrelated_writes"]["issuance_transactions"][
+            "rolled_back"] = 1
+    with pytest.raises(producer.HostProbeError, match="stale"):
+        run(predeletion, snapshot, installation)

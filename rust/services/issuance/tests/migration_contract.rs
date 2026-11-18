@@ -1,0 +1,2504 @@
+//! Historical migration consistency checks; never part of service startup.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use mmf_core::{ErrorCode, MmfError};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+const SURFACE: &[u8] = include_bytes!("../../../../contracts/issuance-runtime-surface.json");
+const COVERAGE: &str = include_str!("../../../../contracts/issuance-native-coverage.json");
+const STATIC_DISCOVERY: &[u8] =
+    include_bytes!("../../../../contracts/issuance-static-discovery.json");
+const TENANT_DISCOVERY: &[u8] =
+    include_bytes!("../../../../contracts/issuance-tenant-discovery.json");
+const TRANSACTION_READS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-offer-transaction-reads.json");
+const TOKEN_EXCHANGE: &[u8] = include_bytes!("../../../../contracts/issuance-token-exchange.json");
+const PROOF_NONCE: &[u8] = include_bytes!("../../../../contracts/issuance-proof-nonce.json");
+const CREDENTIAL_ADMISSION: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-admission.json");
+const CREDENTIAL_SIGNING: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-signing.json");
+const CREDENTIAL_LIFECYCLE: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-lifecycle.json");
+const INITIATION: &[u8] = include_bytes!("../../../../contracts/issuance-initiation.json");
+const APPLICATION_TEMPLATES: &[u8] =
+    include_bytes!("../../../../contracts/issuance-application-templates.json");
+const INTERNAL_APPLICATIONS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-internal-applications.json");
+const RETENTION: &[u8] = include_bytes!("../../../../contracts/issuance-retention-management.json");
+const RESOURCE_OWNERS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-resource-owner-lookups.json");
+const ISSUED_CREDENTIAL_ADAPTERS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-issued-credential-adapters.json");
+const OID4VCI_AUTHORIZATION: &[u8] =
+    include_bytes!("../../../../contracts/issuance-oid4vci-authorization.json");
+const DIDCOMM: &[u8] =
+    include_bytes!("../../../../contracts/gateway-didcomm-delivery-behavior.json");
+const RENEWAL_REFERENCE: &[u8] =
+    include_bytes!("../../../../contracts/credential-renewal-python-reference.json");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoverageSummary {
+    pub native_http: usize,
+    pub remaining_http: u64,
+    pub remaining_grpc: u64,
+}
+
+#[derive(Deserialize)]
+struct Coverage {
+    schema: String,
+    upstream: Upstream,
+    behavior_contract: Upstream,
+    tenant_behavior_contract: Upstream,
+    transaction_read_behavior_contract: Upstream,
+    token_exchange_behavior_contract: Upstream,
+    proof_nonce_behavior_contract: Upstream,
+    credential_admission_behavior_contract: Upstream,
+    credential_signing_behavior_contract: Upstream,
+    credential_lifecycle_behavior_contract: Upstream,
+    initiation_behavior_contract: Upstream,
+    application_template_behavior_contract: Upstream,
+    internal_application_behavior_contract: Upstream,
+    retention_behavior_contract: Upstream,
+    resource_owner_behavior_contract: SourceBehaviorContract,
+    issued_credential_adapter_behavior_contract: SourceBehaviorContract,
+    oid4vci_authorization_behavior_contract: Oid4vciBehaviorContract,
+    renewal_behavior_contract: RenewalBehaviorContract,
+    native_http: Vec<HttpOperation>,
+    native_grpc: Vec<String>,
+    platform_additive_http: Vec<PlatformOperation>,
+    platform_additive_environment_variables: Vec<String>,
+    remaining: Remaining,
+    retired_legacy: RetiredLegacy,
+    native_environment_variables: Vec<String>,
+    deployment: String,
+}
+
+#[derive(Deserialize)]
+struct Upstream {
+    repository: String,
+    path: String,
+    commit: String,
+    sha256: String,
+    #[serde(default)]
+    platform_adaptation: Option<ContractAdaptation>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContractAdaptation {
+    owner: String,
+    base_sha256: String,
+    sha256: String,
+    reason: String,
+}
+
+impl Upstream {
+    fn effective_sha256(&self) -> Result<&str, MmfError> {
+        if let Some(adaptation) = &self.platform_adaptation {
+            require(
+                adaptation.owner == "ElevenID/marty-ui"
+                    && adaptation.base_sha256 == self.sha256
+                    && adaptation.sha256.len() == 64
+                    && adaptation
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    && !adaptation.reason.trim().is_empty(),
+                "invalid platform contract adaptation provenance",
+            )?;
+            Ok(&adaptation.sha256)
+        } else {
+            Ok(&self.sha256)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RetiredLegacy {
+    http_routes: Vec<HttpOperation>,
+    runtime_modes: Vec<String>,
+    environment_variables: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct RenewalBehaviorContract {
+    path: String,
+    sha256: String,
+    intentional_native_corrections: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SourceBehaviorContract {
+    path: String,
+    sha256: String,
+    source_repository: String,
+    source_path: String,
+    source_commit: String,
+}
+
+#[derive(Deserialize)]
+struct Oid4vciBehaviorContract {
+    path: String,
+    sha256: String,
+    source_repository: String,
+    source_commit: String,
+    source_tree: String,
+    intentional_native_corrections: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HttpOperation {
+    method: String,
+    path: String,
+    operation: String,
+    #[serde(default)]
+    response: Option<ExpectedResponse>,
+    #[serde(default)]
+    behavior_case: Option<String>,
+    #[serde(default)]
+    tenant_behavior_case: Option<String>,
+    #[serde(default)]
+    transaction_read_behavior_case: Option<String>,
+    #[serde(default)]
+    token_exchange_behavior_case: Option<String>,
+    #[serde(default)]
+    proof_nonce_behavior_case: Option<String>,
+    #[serde(default)]
+    credential_behavior_contract: bool,
+    #[serde(default)]
+    credential_lifecycle_behavior_contract: bool,
+    #[serde(default)]
+    didcomm_behavior_contract: bool,
+    #[serde(default)]
+    initiation_behavior_contract: bool,
+    #[serde(default)]
+    renewal_behavior_contract: bool,
+    #[serde(default)]
+    application_template_behavior_case: Option<String>,
+    #[serde(default)]
+    internal_application_behavior_case: Option<String>,
+    #[serde(default)]
+    retention_behavior_contract: bool,
+    #[serde(default)]
+    resource_owner_behavior_contract: bool,
+    #[serde(default)]
+    issued_credential_adapter_behavior_contract: bool,
+    #[serde(default)]
+    oid4vci_authorization_behavior_contract: bool,
+}
+
+impl HttpOperation {
+    fn behavior_selector_count(&self) -> usize {
+        usize::from(self.response.is_some())
+            + usize::from(self.behavior_case.is_some())
+            + usize::from(self.tenant_behavior_case.is_some())
+            + usize::from(self.transaction_read_behavior_case.is_some())
+            + usize::from(self.token_exchange_behavior_case.is_some())
+            + usize::from(self.proof_nonce_behavior_case.is_some())
+            + usize::from(self.credential_behavior_contract)
+            + usize::from(self.credential_lifecycle_behavior_contract)
+            + usize::from(self.didcomm_behavior_contract)
+            + usize::from(self.initiation_behavior_contract)
+            + usize::from(self.renewal_behavior_contract)
+            + usize::from(self.application_template_behavior_case.is_some())
+            + usize::from(self.internal_application_behavior_case.is_some())
+            + usize::from(self.retention_behavior_contract)
+            + usize::from(self.resource_owner_behavior_contract)
+            + usize::from(self.issued_credential_adapter_behavior_contract)
+            + usize::from(self.oid4vci_authorization_behavior_contract)
+    }
+}
+
+#[derive(Deserialize)]
+struct ExpectedResponse {
+    status_code: u16,
+    body: Value,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryContract {
+    schema: String,
+    transport: Value,
+    cases: Vec<DiscoveryCase>,
+    rejected_paths: Vec<String>,
+    remaining_tenant_backed_operations: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DiscoveryCase {
+    operation: String,
+    method: String,
+    path: String,
+    status_code: u16,
+    content_type: String,
+    body: Value,
+}
+
+#[derive(Deserialize)]
+struct TenantDiscoveryContract {
+    schema: String,
+    inputs: Value,
+    failure: Value,
+    variants: Vec<TenantDiscoveryVariant>,
+}
+
+#[derive(Deserialize)]
+struct TenantDiscoveryVariant {
+    operation: String,
+    path: String,
+    issuer_suffix: String,
+    expected_resolver_calls: Vec<Value>,
+    credential_configurations_supported: Value,
+}
+
+#[derive(Deserialize)]
+struct TransactionReadContract {
+    schema: String,
+    inputs: Value,
+    cases: Vec<TransactionReadCase>,
+    edge_cases: Vec<TransactionReadOutcome>,
+    failures: Vec<TransactionReadOutcome>,
+}
+
+#[derive(Deserialize)]
+struct TransactionReadOutcome {
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct TransactionReadCase {
+    operation: String,
+    method: String,
+    path: String,
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct TokenExchangeContract {
+    schema: String,
+    inputs: Value,
+    rate_limit: TokenRateLimit,
+    dependency_failures: Vec<TokenDependencyFailure>,
+    cases: Vec<TokenExchangeOutcome>,
+    failures: Vec<TokenExchangeOutcome>,
+}
+
+#[derive(Deserialize)]
+struct TokenDependencyFailure {
+    status_code: u16,
+    content_type: String,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct TokenRateLimit {
+    requests: usize,
+    window_seconds: u64,
+    request: Value,
+    allowed_status_code: u16,
+    status_code: u16,
+    headers: BTreeMap<String, String>,
+    body: Value,
+}
+
+#[derive(Deserialize)]
+struct TokenExchangeOutcome {
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct ProofNonceContract {
+    schema: String,
+    inputs: Value,
+    nonce_shape: Value,
+    persistence: Value,
+    success: Value,
+    failures: Vec<Value>,
+    rate_limit: Value,
+}
+
+#[derive(Deserialize)]
+struct PlatformOperation {
+    method: String,
+    path: String,
+    owner: String,
+}
+
+#[derive(Deserialize)]
+struct Remaining {
+    http: u64,
+    grpc: u64,
+    runtime_modes: Vec<String>,
+    literal_environment_variables: u64,
+    dynamic_configuration_lookups: u64,
+    migration_revisions: u64,
+    migration_heads: u64,
+}
+
+pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
+    let surface: Value = serde_json::from_slice(SURFACE)
+        .map_err(|error| contract_error("invalid issuance surface", error))?;
+    let coverage: Coverage = serde_json::from_str(COVERAGE)
+        .map_err(|error| contract_error("invalid native coverage", error))?;
+    let didcomm: Value = serde_json::from_slice(DIDCOMM)
+        .map_err(|error| contract_error("invalid DIDComm delivery contract", error))?;
+    let initiation: Value = serde_json::from_slice(INITIATION)
+        .map_err(|error| contract_error("invalid initiation contract", error))?;
+    let discovery: DiscoveryContract = serde_json::from_slice(STATIC_DISCOVERY)
+        .map_err(|error| contract_error("invalid static discovery contract", error))?;
+    let tenant_discovery: TenantDiscoveryContract = serde_json::from_slice(TENANT_DISCOVERY)
+        .map_err(|error| contract_error("invalid tenant discovery contract", error))?;
+    let transaction_reads: TransactionReadContract = serde_json::from_slice(TRANSACTION_READS)
+        .map_err(|error| contract_error("invalid transaction read contract", error))?;
+    let token_exchange: TokenExchangeContract = serde_json::from_slice(TOKEN_EXCHANGE)
+        .map_err(|error| contract_error("invalid token exchange contract", error))?;
+    let proof_nonce: ProofNonceContract = serde_json::from_slice(PROOF_NONCE)
+        .map_err(|error| contract_error("invalid proof nonce contract", error))?;
+    let credential_admission: Value = serde_json::from_slice(CREDENTIAL_ADMISSION)
+        .map_err(|error| contract_error("invalid credential admission contract", error))?;
+    let credential_signing: Value = serde_json::from_slice(CREDENTIAL_SIGNING)
+        .map_err(|error| contract_error("invalid credential signing contract", error))?;
+    let credential_lifecycle: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE)
+        .map_err(|error| contract_error("invalid credential lifecycle contract", error))?;
+    let application_templates: Value = serde_json::from_slice(APPLICATION_TEMPLATES)
+        .map_err(|error| contract_error("invalid application template contract", error))?;
+    let internal_applications: Value = serde_json::from_slice(INTERNAL_APPLICATIONS)
+        .map_err(|error| contract_error("invalid internal application contract", error))?;
+    let resource_owners: Value = serde_json::from_slice(RESOURCE_OWNERS)
+        .map_err(|error| contract_error("invalid resource-owner contract", error))?;
+    let issued_credential_adapters: Value = serde_json::from_slice(ISSUED_CREDENTIAL_ADAPTERS)
+        .map_err(|error| contract_error("invalid issued-credential adapter contract", error))?;
+    let oid4vci_authorization: Value = serde_json::from_slice(OID4VCI_AUTHORIZATION)
+        .map_err(|error| contract_error("invalid OID4VCI authorization contract", error))?;
+    require(
+        surface["schema"] == "marty.issuance-runtime-surface/v1",
+        "unexpected issuance surface schema",
+    )?;
+    require(
+        discovery.schema == "marty.issuance-static-discovery/v1"
+            && discovery.cases.len() == 6
+            && discovery.transport["request_id"]["generated_pattern"] == "^[0-9a-f]{8}$"
+            && discovery.transport["cors"]["environment_variable"] == "CORS_ALLOWED_ORIGINS"
+            && discovery.transport["cors"]["default_allowed_origins"]
+                == serde_json::json!(["http://localhost:3000"])
+            && discovery.transport["cors"]["wildcard_simple_request"]["configured_origin"] == "*"
+            && discovery.transport["cors"]["preflight"]["status_code"] == 200
+            && discovery.transport["cors"]["denied_preflight"]["status_code"] == 400
+            && discovery.transport["cors"]["denied_method_preflight"]["status_code"] == 400
+            && discovery.rejected_paths
+                == [
+                    "/.well-known/openid-credential-issuer/org/org-a/spruce",
+                    "/.well-known/oauth-authorization-server/org/org-a/spruce",
+                ]
+            && discovery.remaining_tenant_backed_operations
+                == [
+                    "get_org_issuer_metadata",
+                    "get_org_issuer_metadata_credential_manager",
+                    "get_org_issuer_metadata_apple_wallet",
+                ],
+        "unexpected static discovery behavior contract",
+    )?;
+    require(
+        tenant_discovery.schema == "marty.issuance-tenant-discovery/v1"
+            && tenant_discovery.inputs["organization_id"] == "org-a"
+            && tenant_discovery.variants.len() == 3
+            && tenant_discovery.failure["resolver_unavailable"]["status_code"] == 503
+            && tenant_discovery.failure["resolver_unavailable"]["body"]
+                == serde_json::json!({
+                    "detail": "Issuer proof policy is temporarily unavailable"
+                })
+            && tenant_discovery.variants.iter().all(|variant| {
+                !variant.expected_resolver_calls.is_empty()
+                    && variant.credential_configurations_supported.is_object()
+                    && variant
+                        .path
+                        .starts_with("/.well-known/openid-credential-issuer/org/org-a")
+                    && variant.path.ends_with(&variant.issuer_suffix)
+            }),
+        "unexpected tenant discovery behavior contract",
+    )?;
+    require(
+        transaction_reads.schema == "marty.issuance-offer-transaction-reads/v1"
+            && transaction_reads.inputs["organization_id"] == "org-a"
+            && transaction_reads.cases.len() == 5
+            && transaction_reads.edge_cases.len() == 8
+            && transaction_reads.failures.len() == 7
+            && transaction_reads.cases.iter().all(|case| {
+                case.method == "GET"
+                    && case.status_code == 200
+                    && !case.repository_calls.is_empty()
+                    && (case.body.is_object() || case.body.is_array())
+            })
+            && transaction_reads
+                .edge_cases
+                .iter()
+                .chain(&transaction_reads.failures)
+                .all(|outcome| {
+                    (200..600).contains(&outcome.status_code)
+                        && (outcome.body.is_object() || outcome.body.is_array())
+                        && outcome.repository_calls.iter().all(Value::is_object)
+                }),
+        "unexpected transaction read behavior contract",
+    )?;
+    require(
+        token_exchange.schema == "marty.issuance-token-exchange/v1"
+            && token_exchange.inputs["path"] == "/v1/issuance/token"
+            && token_exchange.rate_limit.requests == 2
+            && token_exchange.rate_limit.window_seconds == 17
+            && token_exchange.rate_limit.request["form"]["grant_type"] == "unsupported"
+            && token_exchange.rate_limit.allowed_status_code == 400
+            && token_exchange.rate_limit.status_code == 429
+            && token_exchange.rate_limit.headers.get("Retry-After") == Some(&"17".to_owned())
+            && token_exchange.rate_limit.body
+                == serde_json::json!({"detail": "Rate limit exceeded"})
+            && token_exchange.dependency_failures.len() == 1
+            && token_exchange.dependency_failures.iter().all(|failure| {
+                failure.status_code == 500
+                    && failure.content_type == "text/plain"
+                    && failure.body == "Internal Server Error"
+                    && !failure.repository_calls.is_empty()
+            })
+            && token_exchange.cases.len() == 4
+            && token_exchange.failures.len() == 17
+            && token_exchange
+                .cases
+                .iter()
+                .chain(&token_exchange.failures)
+                .all(|outcome| {
+                    (200..600).contains(&outcome.status_code)
+                        && outcome.body.is_object()
+                        && outcome.repository_calls.iter().all(Value::is_object)
+                }),
+        "unexpected token exchange behavior contract",
+    )?;
+    require(
+        proof_nonce.schema == "marty.issuance-proof-nonce/v1"
+            && proof_nonce.inputs
+                == serde_json::json!({
+                    "path": "/v1/issuance/nonce",
+                    "generated_nonce": "contract-proof-nonce",
+                    "ttl_seconds": 300
+                })
+            && proof_nonce.nonce_shape
+                == serde_json::json!({
+                    "source_bytes": 32,
+                    "encoded_length": 43,
+                    "pattern": "^[A-Za-z0-9_-]{43}$"
+                })
+            && proof_nonce.persistence
+                == serde_json::json!({
+                    "digest_algorithm": "sha-256",
+                    "digest_length": 64,
+                    "plaintext_retained": false,
+                    "single_use": true
+                })
+            && proof_nonce.success
+                == serde_json::json!({
+                    "status_code": 200,
+                    "content_type": "application/json",
+                    "headers": {"Cache-Control": "no-store"},
+                    "body": {"c_nonce": "contract-proof-nonce"},
+                    "repository_calls": [{
+                        "method": "save_proof_nonce",
+                        "value": "contract-proof-nonce",
+                        "ttl_seconds": 300
+                    }]
+                })
+            && proof_nonce.failures
+                == [
+                    serde_json::json!({
+                        "name": "nonce_store_rejects_write",
+                        "setup": "store_returns_false",
+                        "status_code": 503,
+                        "content_type": "application/json",
+                        "body": {"detail": "Proof nonce storage is unavailable"}
+                    }),
+                    serde_json::json!({
+                        "name": "nonce_store_is_unavailable",
+                        "setup": "store_raises",
+                        "status_code": 503,
+                        "content_type": "application/json",
+                        "body": {"detail": "Proof nonce storage is unavailable"}
+                    }),
+                ]
+            && proof_nonce.rate_limit
+                == serde_json::json!({
+                    "requests": 2,
+                    "window_seconds": 17,
+                    "allowed_status_code": 200,
+                    "status_code": 429,
+                    "headers": {"Retry-After": "17"},
+                    "body": {"detail": "Rate limit exceeded"},
+                    "repository_call_count": 2
+                }),
+        "unexpected proof nonce behavior contract",
+    )?;
+    require(
+        credential_admission["schema"] == "marty.issuance-credential-admission/v1"
+            && credential_admission["cases"]
+                .as_array()
+                .is_some_and(|cases| cases.len() == 26)
+            && credential_admission["inputs"]["path"] == "/v1/issuance/credential",
+        "unexpected credential admission behavior contract",
+    )?;
+    require(
+        credential_signing["schema"] == "marty.issuance-credential-signing/v1"
+            && credential_signing["formats"]
+                .as_array()
+                .is_some_and(|formats| formats.len() == 4)
+            && credential_signing["critical_order"]
+                .as_array()
+                .is_some_and(|events| events.len() == 9)
+            && credential_signing["authorization_code_only"]["transaction_id"]
+                == "dca62a6b-abc0-590d-906b-2582303615e5",
+        "unexpected credential signing behavior contract",
+    )?;
+    require(
+        credential_lifecycle["schema"] == "marty.issuance-credential-lifecycle/v1"
+            && credential_lifecycle["scope"]["http"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 4)
+            && credential_lifecycle["scope"]["grpc"]
+                .as_array()
+                .is_some_and(|methods| methods.len() == 4)
+            && credential_lifecycle["request"]["reason"]["maximum_characters"] == 2000
+            && credential_lifecycle["transitions"]
+                .as_array()
+                .is_some_and(|transitions| transitions.len() == 3)
+            && credential_lifecycle["mutation_order"]
+                == serde_json::json!([
+                    "load-credential",
+                    "enforce-resource-organization-when-http",
+                    "validate-transition",
+                    "publish-revocation-profile-status",
+                    "persist-local-status",
+                    "synchronize-canvas-delivery-records",
+                    "emit-grpc-stream-event",
+                    "return-response"
+                ])
+            && credential_lifecycle["publication"]["revocation_profile"]
+                == "required-before-local-persistence"
+            && credential_lifecycle["publication"]["grpc_stream_event"]
+                == "after-canonical-handler-success"
+            && credential_lifecycle["failures"]
+                .as_array()
+                .is_some_and(|failures| failures.len() == 7)
+            && credential_lifecycle["security_invariants"]
+                .as_array()
+                .is_some_and(|invariants| invariants.len() == 4),
+        "unexpected credential lifecycle behavior contract",
+    )?;
+    require(
+        application_templates["schema"] == "marty.issuance-application-templates/v1"
+            && application_templates["surface"]["base_path"] == "/v1/application-templates"
+            && application_templates["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 8)
+            && application_templates["security"]["authentication"]
+                == "X-API-Key management key on every route"
+            && application_templates["security"]["trusted_tenant_header"] == "X-Organization-ID"
+            && application_templates["native_cutover_repairs"]["atomic_lifecycle"]["required"]
+                == true
+            && application_templates["native_cutover_repairs"]["catalog_lookup"]
+                == "validation uses strict authenticated credential-template gRPC and does not fall back to HTTP",
+        "unexpected application template behavior contract",
+    )?;
+    require(
+        internal_applications["schema"] == "marty.issuance-internal-applications/v1"
+            && internal_applications["surface"]["base_path"] == "/internal/applications"
+            && internal_applications["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 14)
+            && internal_applications["coverage"]["rust_implementation_authorized"] == true
+            && internal_applications["coverage"]["required_before_rust_implementation"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            && internal_applications["source_revision"]["approved_repairs"]
+                == serde_json::json!([
+                    "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
+                    "843c0e5: restore name, email, then generated applicant identifier precedence",
+                    "073b177: redact provider transport exception details from external evidence API responses",
+                    "877253d: reserve replayed application offers idempotently",
+                    "1dda8ac: map invalid status filters to a stable validation response",
+                    "3bee6f7: fail closed on missing offer dependencies and issuer context",
+                    "validate active tenant-owned revocation bindings before ordinary approval",
+                    "commit manual lifecycle transitions and ordinary issuance reservations atomically",
+                    "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
+                    "reject unsupported integration context before ordinary approval or offer creation",
+                    "retain secret-safe structured diagnostics for external evidence, issuer-context, and wallet-catalog failures"
+                ]),
+        "unexpected internal application behavior contract",
+    )?;
+    require(
+        coverage.behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
+            && coverage.behavior_contract.commit.len() == 40
+            && coverage
+                .behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid static discovery provenance",
+    )?;
+    require(
+        coverage.tenant_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.tenant_behavior_contract.path == "contracts/issuance-tenant-discovery.json"
+            && coverage.tenant_behavior_contract.commit.len() == 40
+            && coverage
+                .tenant_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid tenant discovery provenance",
+    )?;
+    require(
+        coverage.transaction_read_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.transaction_read_behavior_contract.path
+                == "contracts/issuance-offer-transaction-reads.json"
+            && coverage.transaction_read_behavior_contract.commit.len() == 40
+            && coverage
+                .transaction_read_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid transaction read provenance",
+    )?;
+    require(
+        coverage.token_exchange_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.token_exchange_behavior_contract.path
+                == "contracts/issuance-token-exchange.json"
+            && coverage.token_exchange_behavior_contract.commit.len() == 40
+            && coverage
+                .token_exchange_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid token exchange provenance",
+    )?;
+    require(
+        coverage.proof_nonce_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.proof_nonce_behavior_contract.path == "contracts/issuance-proof-nonce.json"
+            && coverage.proof_nonce_behavior_contract.commit.len() == 40
+            && coverage
+                .proof_nonce_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid proof nonce provenance",
+    )?;
+    require(
+        coverage.credential_admission_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_admission_behavior_contract.path
+                == "contracts/issuance-credential-admission.json"
+            && coverage.credential_admission_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_admission_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential admission provenance",
+    )?;
+    require(
+        coverage.credential_signing_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_signing_behavior_contract.path
+                == "contracts/issuance-credential-signing.json"
+            && coverage.credential_signing_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_signing_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential signing provenance",
+    )?;
+    require(
+        coverage.credential_lifecycle_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_lifecycle_behavior_contract.path
+                == "contracts/issuance-credential-lifecycle.json"
+            && coverage.credential_lifecycle_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_lifecycle_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential lifecycle provenance",
+    )?;
+    require(
+        coverage.initiation_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.initiation_behavior_contract.path == "contracts/issuance-initiation.json"
+            && coverage.initiation_behavior_contract.commit.len() == 40
+            && coverage
+                .initiation_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid initiation provenance",
+    )?;
+    require(
+        coverage.application_template_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.application_template_behavior_contract.path
+                == "contracts/issuance-application-templates.json"
+            && coverage.application_template_behavior_contract.commit.len() == 40
+            && coverage
+                .application_template_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid application template provenance",
+    )?;
+    require(
+        coverage.internal_application_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.internal_application_behavior_contract.path
+                == "contracts/issuance-internal-applications.json"
+            && coverage.internal_application_behavior_contract.commit.len() == 40
+            && coverage
+                .internal_application_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid internal application provenance",
+    )?;
+    require(
+        coverage.retention_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.retention_behavior_contract.path
+                == "contracts/issuance-retention-management.json"
+            && coverage.retention_behavior_contract.commit
+                == "3d54a96cdd88b8c83cae138149ad5217d8d251f8",
+        "invalid retention management provenance",
+    )?;
+    require(
+        coverage.schema == "marty.issuance-native-coverage/v1",
+        "unexpected issuance coverage schema",
+    )?;
+    require(
+        coverage.upstream.repository == "ElevenID/marty-credentials"
+            && coverage.upstream.path == "contracts/issuance-runtime-surface.json"
+            && coverage.upstream.commit.len() == 40
+            && coverage
+                .upstream
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid issuance surface provenance",
+    )?;
+    let canonical_surface = canonical_lf(SURFACE);
+    let actual_hash = format!("{:x}", Sha256::digest(&canonical_surface));
+    require(
+        actual_hash == coverage.upstream.sha256,
+        "issuance surface hash does not match provenance",
+    )?;
+    let canonical_discovery = canonical_lf(STATIC_DISCOVERY);
+    let actual_discovery_hash = format!("{:x}", Sha256::digest(&canonical_discovery));
+    require(
+        actual_discovery_hash == coverage.behavior_contract.sha256,
+        "static discovery hash does not match provenance",
+    )?;
+    let canonical_tenant_discovery = canonical_lf(TENANT_DISCOVERY);
+    let actual_tenant_discovery = format!("{:x}", Sha256::digest(&canonical_tenant_discovery));
+    require(
+        actual_tenant_discovery == coverage.tenant_behavior_contract.sha256,
+        "tenant discovery hash does not match provenance",
+    )?;
+    let canonical_transaction_reads = canonical_lf(TRANSACTION_READS);
+    let actual_transaction_reads = format!("{:x}", Sha256::digest(&canonical_transaction_reads));
+    require(
+        actual_transaction_reads == coverage.transaction_read_behavior_contract.sha256,
+        "transaction read hash does not match provenance",
+    )?;
+    let canonical_token_exchange = canonical_lf(TOKEN_EXCHANGE);
+    let actual_token_exchange = format!("{:x}", Sha256::digest(&canonical_token_exchange));
+    require(
+        actual_token_exchange == coverage.token_exchange_behavior_contract.sha256,
+        "token exchange hash does not match provenance",
+    )?;
+    let canonical_proof_nonce = canonical_lf(PROOF_NONCE);
+    let actual_proof_nonce = format!("{:x}", Sha256::digest(&canonical_proof_nonce));
+    require(
+        actual_proof_nonce == coverage.proof_nonce_behavior_contract.sha256,
+        "proof nonce hash does not match provenance",
+    )?;
+    let canonical_credential_admission = canonical_lf(CREDENTIAL_ADMISSION);
+    let actual_credential_admission =
+        format!("{:x}", Sha256::digest(&canonical_credential_admission));
+    require(
+        actual_credential_admission == coverage.credential_admission_behavior_contract.sha256,
+        "credential admission hash does not match provenance",
+    )?;
+    let canonical_credential_signing = canonical_lf(CREDENTIAL_SIGNING);
+    let actual_credential_signing = format!("{:x}", Sha256::digest(&canonical_credential_signing));
+    require(
+        actual_credential_signing == coverage.credential_signing_behavior_contract.sha256,
+        "credential signing hash does not match provenance",
+    )?;
+    let canonical_credential_lifecycle = canonical_lf(CREDENTIAL_LIFECYCLE);
+    let actual_credential_lifecycle =
+        format!("{:x}", Sha256::digest(&canonical_credential_lifecycle));
+    require(
+        actual_credential_lifecycle == coverage.credential_lifecycle_behavior_contract.sha256,
+        "credential lifecycle hash does not match provenance",
+    )?;
+    let canonical_initiation = canonical_lf(INITIATION);
+    let actual_initiation = format!("{:x}", Sha256::digest(&canonical_initiation));
+    require(
+        actual_initiation == coverage.initiation_behavior_contract.sha256,
+        "initiation hash does not match provenance",
+    )?;
+    let canonical_application_templates = canonical_lf(APPLICATION_TEMPLATES);
+    let actual_application_templates =
+        format!("{:x}", Sha256::digest(&canonical_application_templates));
+    require(
+        actual_application_templates == coverage.application_template_behavior_contract.sha256,
+        "application template hash does not match provenance",
+    )?;
+    let canonical_internal_applications = canonical_lf(INTERNAL_APPLICATIONS);
+    let actual_internal_applications =
+        format!("{:x}", Sha256::digest(&canonical_internal_applications));
+    require(
+        actual_internal_applications
+            == coverage
+                .internal_application_behavior_contract
+                .effective_sha256()?,
+        "internal application hash does not match provenance",
+    )?;
+    let canonical_retention = canonical_lf(RETENTION);
+    let actual_retention = format!("{:x}", Sha256::digest(&canonical_retention));
+    require(
+        actual_retention == coverage.retention_behavior_contract.sha256,
+        "retention management hash does not match provenance",
+    )?;
+    let retention: Value = serde_json::from_slice(&canonical_retention)
+        .map_err(|error| contract_error("invalid retention management contract", error))?;
+    require(
+        retention["schema"] == "marty.issuance-retention-management/v1"
+            && retention["routes"]
+                == json!([
+                    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention", "operation": "get_organization_retention_summary"},
+                    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge", "operation": "purge_organization_retention_data"}
+                ])
+            && retention["boundary"]
+                == json!({
+                    "missing_api_key": 401,
+                    "invalid_api_key": 401,
+                    "missing_trusted_organization": 403,
+                    "different_trusted_organization": 403,
+                    "authorized": 200
+                })
+            && retention["retention_days"]
+                == json!({
+                    "default": 30, "minimum": 1, "maximum": 3650, "invalid": 422
+                })
+            && retention["tracked_scope"]
+                == json!([
+                    "applications",
+                    "submitted_evidence",
+                    "issuance_transactions",
+                    "issued_credentials",
+                    "authorization_sessions",
+                    "issuance_events"
+                ])
+            && retention["record_count_fields"]
+                == json!([
+                    "issuance_transactions",
+                    "applications",
+                    "authorization_sessions",
+                    "issuance_events",
+                    "issued_credentials",
+                    "total"
+                ]),
+        "unexpected retention management behavior contract",
+    )?;
+    let canonical_resource_owners = canonical_lf(RESOURCE_OWNERS);
+    let actual_resource_owners = format!("{:x}", Sha256::digest(&canonical_resource_owners));
+    require(
+        actual_resource_owners == coverage.resource_owner_behavior_contract.sha256
+            && coverage.resource_owner_behavior_contract.path
+                == "contracts/issuance-resource-owner-lookups.json"
+            && coverage.resource_owner_behavior_contract.source_repository
+                == "ElevenID/marty-credentials"
+            && coverage.resource_owner_behavior_contract.source_path
+                == "services/issuance/infrastructure/api/routes.py"
+            && coverage.resource_owner_behavior_contract.source_commit
+                == "15af5232df376bb9596b5aed3703110bf890fce5"
+            && resource_owners["schema"] == "marty.issuance-resource-owner-lookups/v1"
+            && resource_owners["authentication"]["order"]
+                == serde_json::json!([
+                    "authenticate",
+                    "unscoped_lookup",
+                    "not_found",
+                    "project_owner"
+                ])
+            && resource_owners["authentication"]["trusted_tenant_header"] == "ignored"
+            && resource_owners["authentication"]["header"] == "X-API-Key"
+            && resource_owners["authentication"]["server_setting"] == "ISSUANCE_API_KEY"
+            && resource_owners["persistence"]
+                == serde_json::json!({
+                    "read_only": true,
+                    "projection": ["organization_id"],
+                    "id_scope": "unscoped"
+                })
+            && resource_owners["responses"]
+                == serde_json::json!({
+                    "found": {"status_code": 200, "body": {"organization_id": "org-owner"}},
+                    "not_found": {"status_code": 404, "body": {"detail": "Resource not found"}},
+                    "api_key_unconfigured": {"status_code": 503, "body": {"detail": "ISSUANCE_API_KEY not configured on server"}},
+                    "api_key_missing": {"status_code": 401, "body": {"detail": "X-API-Key header is missing"}},
+                    "api_key_invalid": {"status_code": 401, "body": {"detail": "Invalid API Key"}},
+                    "repository_unavailable": {"status_code": 500, "body": {"detail": "Issuance transaction data is temporarily unavailable"}, "cause_disclosed": false}
+                })
+            && resource_owners["intentional_native_corrections"]
+                == serde_json::json!([{
+                    "id": "RESOURCE-OWNER-001:sanitized-repository-failure",
+                    "legacy": {"status_code": 500, "content_type": "text/plain", "body": "Internal Server Error"},
+                    "native": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Issuance transaction data is temporarily unavailable"}},
+                    "rationale": "Reuse the already-native issuance-transaction owner failure boundary so all three owner kinds expose one sanitized, DRY internal error without a repository cause.",
+                    "gateway_invariant": {"status_code": 500, "content_type": "application/json", "body": {"detail": "Authorization service unavailable"}, "upstream_body_disclosed": false, "proxy_continues": false}
+                }])
+            && resource_owners["gateway"]
+                == serde_json::json!({
+                    "service": "issuance-native",
+                    "api_key_source": "ISSUANCE_API_KEY",
+                    "foreign_owner_result": 403,
+                    "missing_owner_result": "continue ordinary authorization and upstream 404 semantics",
+                    "provider_failure_result": {"status_code": 500, "detail": "Authorization service unavailable"}
+                })
+            && resource_owners["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.len() == 3),
+        "resource-owner contract or provenance is invalid",
+    )?;
+    let actual_issued_credential_adapters = format!(
+        "{:x}",
+        Sha256::digest(canonical_lf(ISSUED_CREDENTIAL_ADAPTERS))
+    );
+    require(
+        actual_issued_credential_adapters
+            == coverage.issued_credential_adapter_behavior_contract.sha256
+            && coverage.issued_credential_adapter_behavior_contract.path
+                == "contracts/issuance-issued-credential-adapters.json"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_repository
+                == "ElevenID/marty-credentials"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_path
+                == "services/issuance/infrastructure/api/routes.py"
+            && coverage
+                .issued_credential_adapter_behavior_contract
+                .source_commit
+                == "15af5232df376bb9596b5aed3703110bf890fce5"
+            && issued_credential_adapters["schema"]
+                == "marty.issuance-issued-credential-adapters/v1"
+            && issued_credential_adapters["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.len() == 5)
+            && issued_credential_adapters["projection"]["credential_formats"]
+                == serde_json::json!(["MDOC", "VDS_NC", "SD_JWT_VC", "VC_JWT", "JSON_LD"])
+            && issued_credential_adapters["lifecycle_request"]["reason"]["max_unicode_scalars"]
+                == 2000
+            && issued_credential_adapters["lifecycle_request"]["comments"]["max_unicode_scalars"]
+                == 4000
+            && issued_credential_adapters["lifecycle_audit"]["atomic_with_status_compare_and_set"]
+                == true
+            && issued_credential_adapters["tracked_follow_ups"]
+                .as_array()
+                .is_some_and(|follow_ups| follow_ups.len() == 2),
+        "issued-credential adapter contract or provenance is invalid",
+    )?;
+    let actual_oid4vci_authorization =
+        format!("{:x}", Sha256::digest(canonical_lf(OID4VCI_AUTHORIZATION)));
+    let frozen_oid4vci_correction_ids = oid4vci_authorization["intentional_native_corrections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|correction| correction["id"].as_str())
+        .collect::<Vec<_>>();
+    require(
+        actual_oid4vci_authorization == coverage.oid4vci_authorization_behavior_contract.sha256,
+        "OID4VCI authorization contract checksum is invalid",
+    )?;
+    require(
+        coverage.oid4vci_authorization_behavior_contract.path
+            == "contracts/issuance-oid4vci-authorization.json",
+        "OID4VCI authorization contract path is invalid",
+    )?;
+    require(
+        coverage
+            .oid4vci_authorization_behavior_contract
+            .source_repository
+            == "ElevenID/marty-credentials"
+            && coverage
+                .oid4vci_authorization_behavior_contract
+                .source_commit
+                == "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+            && coverage.oid4vci_authorization_behavior_contract.source_tree
+                == "819b7458a31c75d28043a4660643b029c5ec4567",
+        "OID4VCI authorization source provenance is invalid",
+    )?;
+    require(
+        coverage
+            .oid4vci_authorization_behavior_contract
+            .intentional_native_corrections
+            == [
+                "OID4VCI-AUTH-002:validate-and-bind-bearer",
+                "OID4VCI-ERROR-001:structured-sanitized-internal-errors",
+                "OID4VCI-MGMT-001:registered-client-tenant-binding",
+                "OID4VCI-NOTIFY-001:validate-notification-request",
+                "SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry",
+                "OID4VCI-REDIRECT-002:http-or-https-only-localhost",
+            ]
+            && frozen_oid4vci_correction_ids.contains(&"OID4VCI-AUTH-002:validate-and-bind-bearer")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-ERROR-001:structured-sanitized-internal-errors")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-MGMT-001:registered-client-tenant-binding")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-NOTIFY-001:validate-notification-request")
+            && frozen_oid4vci_correction_ids
+                .contains(&"SECURITY-ACCESS-TOKEN-001:exact-1800-second-expiry")
+            && frozen_oid4vci_correction_ids
+                .contains(&"OID4VCI-REDIRECT-002:http-or-https-only-localhost"),
+        "OID4VCI authorization correction inventory is invalid",
+    )?;
+    require(
+        oid4vci_authorization["schema"] == "marty.issuance-oid4vci-authorization/v1"
+            && oid4vci_authorization["source"]["protected_main_commit"]
+                == coverage
+                    .oid4vci_authorization_behavior_contract
+                    .source_commit
+            && oid4vci_authorization["source"]["protected_main_tree"]
+                == coverage.oid4vci_authorization_behavior_contract.source_tree
+            && oid4vci_authorization["routes"]
+                .as_array()
+                .is_some_and(|routes| routes.len() == 7),
+        "OID4VCI authorization document is invalid",
+    )?;
+
+    let routes = surface["http"]["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance HTTP routes are missing"))?;
+    let route_count = surface["http"]["route_count"]
+        .as_u64()
+        .ok_or_else(|| invalid("issuance HTTP route count is missing"))?;
+    require(
+        route_count == routes.len() as u64,
+        "issuance HTTP route count is inconsistent",
+    )?;
+    let grpc_count = surface["grpc"]["method_count"]
+        .as_u64()
+        .ok_or_else(|| invalid("issuance gRPC method count is missing"))?;
+    let grpc_methods = surface["grpc"]["methods"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance gRPC methods are missing"))?;
+    require(
+        grpc_count == grpc_methods.len() as u64,
+        "issuance gRPC method count is inconsistent",
+    )?;
+    let frozen_grpc_methods = grpc_methods
+        .iter()
+        .filter_map(|method| method["method"].as_str())
+        .collect::<BTreeSet<_>>();
+    let native_grpc_methods = coverage
+        .native_grpc
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    require(
+        native_grpc_methods.len() == coverage.native_grpc.len()
+            && native_grpc_methods.is_subset(&frozen_grpc_methods),
+        "native issuance gRPC coverage is invalid",
+    )?;
+
+    let mut native = BTreeSet::new();
+    let mut native_behavior_cases = BTreeSet::new();
+    let mut native_tenant_behavior_cases = BTreeSet::new();
+    let mut native_transaction_read_cases = BTreeSet::new();
+    let mut native_token_exchange_cases = BTreeSet::new();
+    let mut native_proof_nonce_cases = BTreeSet::new();
+    let mut native_credential_contract = false;
+    let mut native_credential_lifecycle_operations = BTreeSet::new();
+    let mut native_didcomm_contract = false;
+    let mut native_initiation_contract = false;
+    let mut native_renewal_contract = false;
+    require(
+        coverage.renewal_behavior_contract.path
+            == "contracts/credential-renewal-python-reference.json"
+            && coverage.renewal_behavior_contract.sha256
+                == "136b046f08c58d2a7fa70982404dabd7265164d91f49ee184cfbc63eb49b3f0f"
+            && format!("{:x}", Sha256::digest(canonical_lf(RENEWAL_REFERENCE)))
+                == coverage.renewal_behavior_contract.sha256
+            && coverage
+                .renewal_behavior_contract
+                .intentional_native_corrections
+                == [
+                    "RENEWAL-001:links-before-delivery",
+                    "RENEWAL-002:pending-uri-on-unsent-delivery",
+                    "RENEWAL-003:atomic-canvas-successor-association",
+                ],
+        "renewal reference or governed native corrections changed",
+    )?;
+    let renewal_reference: Value = serde_json::from_slice(RENEWAL_REFERENCE)
+        .map_err(|error| contract_error("invalid renewal reference", error))?;
+    let mut native_application_template_cases = BTreeSet::new();
+    let mut native_internal_application_cases = BTreeSet::new();
+    let mut native_resource_owner_operations = BTreeSet::new();
+    let mut native_issued_credential_adapter_operations = BTreeSet::new();
+    let mut native_oid4vci_operations = BTreeSet::new();
+    for operation in &coverage.native_http {
+        require(
+            native.insert((operation.method.as_str(), operation.path.as_str())),
+            "duplicate native issuance operation",
+        )?;
+        require(
+            routes.iter().any(|route| {
+                route["method"] == operation.method
+                    && route["path"] == operation.path
+                    && route["operation"] == operation.operation
+            }),
+            "native issuance operation is absent from the frozen surface",
+        )?;
+        require(
+            operation.behavior_selector_count() == 1,
+            "native issuance operation must select exactly one behavior contract",
+        )?;
+        if operation.operation == "health_check" {
+            let response = operation
+                .response
+                .as_ref()
+                .ok_or_else(|| invalid("native issuance health response is missing"))?;
+            require(
+                operation.behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && response.status_code == 200
+                    && response.body
+                        == serde_json::json!({
+                            "status": "healthy",
+                            "service": "issuance-service"
+                        }),
+                "native issuance health response diverges from the legacy contract",
+            )?;
+        } else if let Some(behavior_case) = operation.behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && behavior_case == operation.operation
+                    && native_behavior_cases.insert(behavior_case)
+                    && discovery.cases.iter().any(|case| {
+                        let expected_case_path = operation
+                            .path
+                            .replace("{credential_type:path}", "access_badge")
+                            .replace("{org_id}", "org-a");
+                        case.operation == behavior_case
+                            && case.method == operation.method
+                            && case.status_code == 200
+                            && case.content_type == "application/json"
+                            && case.path == expected_case_path
+                            && case.body.is_object()
+                    }),
+                "native issuance operation diverges from its behavior case",
+            )?;
+        } else if let Some(behavior_case) = operation.tenant_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && behavior_case == operation.operation
+                    && native_tenant_behavior_cases.insert(behavior_case)
+                    && tenant_discovery.variants.iter().any(|variant| {
+                        let expected_case_path = operation.path.replace("{org_id}", "org-a");
+                        variant.operation == behavior_case
+                            && variant.path == expected_case_path
+                            && variant.credential_configurations_supported.is_object()
+                    }),
+                "native issuance operation diverges from its tenant behavior case",
+            )?;
+        } else if let Some(behavior_case) = operation.transaction_read_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && native_transaction_read_cases.insert(behavior_case)
+                    && transaction_reads.cases.iter().any(|case| {
+                        let expected_path = match behavior_case {
+                            "get_credential_offer" => "/v1/issuance/offers/tx-pending",
+                            "list_transactions" => {
+                                "/v1/issuance/transactions?organization_id=org-a"
+                            }
+                            "get_transaction" => "/v1/issuance/transactions/tx-revoked",
+                            "get_transaction_revocation_status" => {
+                                "/v1/issuance/transactions/tx-revoked/revocation-status"
+                            }
+                            "get_issuance_transaction_owner" => {
+                                "/internal/v1/resource-owners/issuance-transactions/tx-pending"
+                            }
+                            _ => return false,
+                        };
+                        case.operation == behavior_case
+                            && case.method == operation.method
+                            && case.path == expected_path
+                            && case.status_code == 200
+                            && !case.repository_calls.is_empty()
+                            && (case.body.is_object() || case.body.is_array())
+                    }),
+                "native issuance operation diverges from its transaction read case",
+            )?;
+        } else if let Some(behavior_case) = operation.token_exchange_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && behavior_case == "exchange_token"
+                    && operation.operation == behavior_case
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/token"
+                    && native_token_exchange_cases.insert(behavior_case)
+                    && token_exchange.cases.len() == 4
+                    && token_exchange.failures.len() == 17,
+                "native issuance operation diverges from its token exchange contract",
+            )?;
+        } else if let Some(behavior_case) = operation.proof_nonce_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && behavior_case == "nonce_endpoint"
+                    && operation.operation == behavior_case
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/nonce"
+                    && native_proof_nonce_cases.insert(behavior_case)
+                    && proof_nonce.success["status_code"] == 200
+                    && proof_nonce.failures.len() == 2,
+                "native issuance operation diverges from its proof nonce contract",
+            )?;
+        } else if operation.retention_behavior_contract {
+            let frozen = retention["routes"]
+                .as_array()
+                .ok_or_else(|| invalid("retention routes are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    }),
+                "native retention operation diverges from its behavior contract",
+            )?;
+        } else if operation.resource_owner_behavior_contract {
+            let frozen = resource_owners["operations"]
+                .as_array()
+                .ok_or_else(|| invalid("resource-owner operations are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_resource_owner_operations.insert(operation.operation.as_str()),
+                "native resource-owner operation diverges from its behavior contract",
+            )?;
+        } else if operation.issued_credential_adapter_behavior_contract {
+            let frozen = issued_credential_adapters["operations"]
+                .as_array()
+                .ok_or_else(|| invalid("issued-credential adapter operations are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_issued_credential_adapter_operations
+                        .insert(operation.operation.as_str()),
+                "native issued-credential adapter diverges from its behavior contract",
+            )?;
+        } else if operation.oid4vci_authorization_behavior_contract {
+            let frozen = oid4vci_authorization["routes"]
+                .as_array()
+                .ok_or_else(|| invalid("OID4VCI authorization routes are missing"))?;
+            require(
+                operation.response.is_none()
+                    && frozen.iter().any(|candidate| {
+                        candidate["method"] == operation.method
+                            && candidate["path"] == operation.path
+                            && candidate["operation"] == operation.operation
+                    })
+                    && native_oid4vci_operations.insert(operation.operation.as_str()),
+                "native OID4VCI operation diverges from its behavior contract",
+            )?;
+        } else if operation.renewal_behavior_contract {
+            require(
+                !native_renewal_contract,
+                "duplicate native renewal contract",
+            )?;
+            validate_renewal_operation(operation, &renewal_reference)?;
+            native_renewal_contract = true;
+        } else if operation.initiation_behavior_contract {
+            require(
+                !native_initiation_contract,
+                "duplicate native initiation contract",
+            )?;
+            validate_initiation_operation(operation, &initiation)?;
+            native_initiation_contract = true;
+        } else if operation.didcomm_behavior_contract {
+            require(
+                !native_didcomm_contract,
+                "duplicate native DIDComm contract",
+            )?;
+            validate_didcomm_operation(operation, &didcomm)?;
+            native_didcomm_contract = true;
+        } else if operation.credential_behavior_contract {
+            require(
+                !native_credential_contract
+                    && operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && operation.operation == "issue_credential"
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/credential"
+                    && credential_admission["cases"]
+                        .as_array()
+                        .is_some_and(|cases| cases.len() >= 20)
+                    && credential_signing["formats"]
+                        .as_array()
+                        .is_some_and(|formats| formats.len() == 4),
+                "native credential endpoint diverges from its admission or signing contract",
+            )?;
+            native_credential_contract = true;
+        } else if operation.credential_lifecycle_behavior_contract {
+            validate_credential_lifecycle_operation(operation, &credential_lifecycle)?;
+            require(
+                native_credential_lifecycle_operations.insert(operation.operation.as_str()),
+                "duplicate native credential lifecycle operation",
+            )?;
+        } else if let Some(behavior_case) = operation.application_template_behavior_case.as_deref()
+        {
+            validate_application_template_operation(operation, &application_templates)?;
+            require(
+                native_application_template_cases.insert(behavior_case),
+                "duplicate native application template behavior case",
+            )?;
+        } else if let Some(behavior_case) = operation.internal_application_behavior_case.as_deref()
+        {
+            validate_internal_application_operation(operation, &internal_applications)?;
+            require(
+                native_internal_application_cases.insert(behavior_case),
+                "duplicate native internal application behavior case",
+            )?;
+        } else {
+            return Err(invalid("native issuance behavior case is missing"));
+        }
+    }
+    let frozen_behavior_cases = discovery
+        .cases
+        .iter()
+        .map(|case| case.operation.as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_behavior_cases == frozen_behavior_cases,
+        "native issuance behavior coverage is incomplete",
+    )?;
+    let frozen_tenant_behavior_cases = tenant_discovery
+        .variants
+        .iter()
+        .map(|variant| variant.operation.as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_tenant_behavior_cases == frozen_tenant_behavior_cases,
+        "native tenant issuance behavior coverage is incomplete",
+    )?;
+    let frozen_application_template_cases = application_templates["surface"]["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("application template routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_application_template_cases == frozen_application_template_cases,
+        "native application template behavior coverage is incomplete",
+    )?;
+    let frozen_internal_application_cases = internal_applications["surface"]["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("internal application routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_internal_application_cases == frozen_internal_application_cases,
+        "native internal application behavior coverage is incomplete",
+    )?;
+    let frozen_resource_owner_operations = resource_owners["operations"]
+        .as_array()
+        .ok_or_else(|| invalid("resource-owner operations are missing"))?
+        .iter()
+        .filter_map(|operation| operation["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_resource_owner_operations == frozen_resource_owner_operations,
+        "native resource-owner behavior coverage is incomplete",
+    )?;
+    let frozen_issued_credential_adapter_operations = issued_credential_adapters["operations"]
+        .as_array()
+        .ok_or_else(|| invalid("issued-credential adapter operations are missing"))?
+        .iter()
+        .filter_map(|operation| operation["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_issued_credential_adapter_operations == frozen_issued_credential_adapter_operations,
+        "native issued-credential adapter behavior coverage is incomplete",
+    )?;
+    let frozen_oid4vci_operations = oid4vci_authorization["routes"]
+        .as_array()
+        .ok_or_else(|| invalid("OID4VCI authorization routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        frozen_oid4vci_operations.len() == 7
+            && native_oid4vci_operations == frozen_oid4vci_operations,
+        "native OID4VCI behavior coverage is incomplete",
+    )?;
+    let frozen_transaction_read_cases = transaction_reads
+        .cases
+        .iter()
+        .map(|case| case.operation.as_str())
+        .filter(|operation| *operation != "get_issuance_transaction_owner")
+        .collect::<BTreeSet<_>>();
+    require(
+        native_transaction_read_cases == frozen_transaction_read_cases,
+        "native transaction read behavior coverage is incomplete",
+    )?;
+    require(
+        native_token_exchange_cases == BTreeSet::from(["exchange_token"]),
+        "native token exchange behavior coverage is incomplete",
+    )?;
+    require(
+        native_proof_nonce_cases == BTreeSet::from(["nonce_endpoint"]),
+        "native proof nonce behavior coverage is incomplete",
+    )?;
+    require(
+        native_credential_contract,
+        "native credential endpoint behavior coverage is incomplete",
+    )?;
+    let frozen_credential_lifecycle_operations = credential_lifecycle["scope"]["http"]
+        .as_array()
+        .ok_or_else(|| invalid("credential lifecycle HTTP routes are missing"))?
+        .iter()
+        .filter_map(|route| route["operation"].as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_credential_lifecycle_operations == frozen_credential_lifecycle_operations,
+        "native credential lifecycle behavior coverage is incomplete",
+    )?;
+    require(
+        native_didcomm_contract,
+        "native DIDComm endpoint behavior coverage is incomplete",
+    )?;
+    require(
+        native_initiation_contract,
+        "native initiation endpoint behavior coverage is incomplete",
+    )?;
+    require(
+        native_renewal_contract,
+        "native renewal contract is missing",
+    )?;
+    for operation in &coverage.platform_additive_http {
+        require(
+            operation.owner == "mmf-runtime",
+            "additive system route must be owned by mmf-runtime",
+        )?;
+        require(
+            !routes.iter().any(|route| {
+                route["method"] == operation.method && route["path"] == operation.path
+            }),
+            "additive system route collides with the legacy issuance surface",
+        )?;
+    }
+    require(
+        coverage.remaining.http
+            + coverage.native_http.len() as u64
+            + coverage.retired_legacy.http_routes.len() as u64
+            == route_count,
+        "native and remaining issuance HTTP counts are inconsistent",
+    )?;
+    require(
+        coverage.remaining.grpc + coverage.native_grpc.len() as u64 == grpc_count,
+        "native and remaining issuance gRPC counts are inconsistent",
+    )?;
+    let environment_count = surface["configuration"]["environment_variable_count"]
+        .as_u64()
+        .ok_or_else(|| invalid("issuance environment count is missing"))?;
+    let frozen_environment_variables = surface["configuration"]["environment_variables"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance environment variables are missing"))?
+        .iter()
+        .filter_map(|variable| variable.as_str())
+        .collect::<BTreeSet<_>>();
+    let dynamic_count = surface["configuration"]["dynamic_lookups"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance dynamic lookups are missing"))?
+        .len() as u64;
+    let migration_count = surface["migrations"]["revision_count"]
+        .as_u64()
+        .ok_or_else(|| invalid("issuance migration count is missing"))?;
+    let migration_heads = surface["migrations"]["heads"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance migration heads are missing"))?
+        .len() as u64;
+    require(
+        coverage.native_environment_variables
+            == [
+                "CORS_ALLOWED_ORIGINS",
+                "APP_ENV",
+                "CREDENTIAL_TEMPLATE_SERVICE_URL",
+                "CT_GRPC_TARGET",
+                "DATABASE_URL",
+                "DIDCOMM_ALLOW_PRIVATE_IPS",
+                "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+                "DIDCOMM_ENCRYPTION_POLICY_FILE",
+                "DIDCOMM_TLS_CA_FILE",
+                "DIDCOMM_UNIVERSAL_RESOLVER_URL",
+                "ENVIRONMENT",
+                "GRPC_CA_CERT",
+                "GRPC_SERVICE_TOKEN",
+                "GRPC_SERVICE_TOKEN_FILE",
+                "GRPC_TLS_CA_CERT",
+                "INTEGRATION_SECRET_MASTER_KEY_ENV",
+                "ISSUANCE_GRPC_ENABLED",
+                "ISSUANCE_GRPC_PORT",
+                "ISSUANCE_SERVICE_PORT",
+                "ISSUANCE_API_KEY",
+                "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+                "ALLOWED_REDIRECT_URIS",
+                "ISSUANCE_OFFER_TTL_MINUTES",
+                "ISSUER_BASE_URL",
+                "ISSUER_DISPLAY_NAME",
+                "LOG_LEVEL",
+                "ORG_GRPC_TARGET",
+                "REVOCATION_PROFILE_SERVICE_URL",
+                "RP_GRPC_TARGET",
+                "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_INTERNAL_URL",
+                "TOKEN_RATE_LIMIT",
+                "TOKEN_RATE_WINDOW",
+                "UI_BASE_URL",
+                "UNIVERSAL_RESOLVER_URL",
+                "VCDM_RELATED_RESOURCE_MAX_BYTES",
+                "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS",
+                "VCDM_RELATED_RESOURCE_URLS",
+            ]
+            && coverage.platform_additive_environment_variables
+                == [
+                    "GRPC_INSECURE_ALLOWED",
+                    "GRPC_TLS_CLIENT_CERT",
+                    "GRPC_TLS_CLIENT_KMS_ADDR",
+                    "GRPC_TLS_CLIENT_KMS_CA_CERT",
+                    "GRPC_TLS_CLIENT_KMS_KEY_NAME",
+                    "GRPC_TLS_CLIENT_KMS_KEY_VERSION",
+                    "GRPC_TLS_CLIENT_KMS_TOKEN_FILE",
+                ]
+            && coverage
+                .native_environment_variables
+                .iter()
+                .all(|variable| frozen_environment_variables.contains(variable.as_str()))
+            && coverage
+                .platform_additive_environment_variables
+                .iter()
+                .all(|variable| !frozen_environment_variables.contains(variable.as_str()))
+            && coverage.remaining.literal_environment_variables
+                + coverage.native_environment_variables.len() as u64
+                + coverage.retired_legacy.environment_variables.len() as u64
+                == environment_count
+            && coverage.remaining.dynamic_configuration_lookups == dynamic_count
+            && coverage.remaining.migration_revisions == migration_count
+            && coverage.remaining.migration_heads == migration_heads,
+        "issuance configuration or migration coverage is inconsistent",
+    )?;
+    let modes = surface["runtime"]["modes"]
+        .as_array()
+        .ok_or_else(|| invalid("issuance runtime modes are missing"))?;
+    let frozen_modes = modes
+        .iter()
+        .filter_map(|mode| mode["name"].as_str())
+        .collect::<BTreeSet<_>>();
+    let remaining_modes = coverage
+        .remaining
+        .runtime_modes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let retired_modes = coverage
+        .retired_legacy
+        .runtime_modes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    require(
+        retired_modes == BTreeSet::from(["canvas-sync-worker"])
+            && remaining_modes.is_disjoint(&retired_modes)
+            && frozen_modes == remaining_modes.union(&retired_modes).copied().collect(),
+        "issuance runtime mode disposition is incomplete",
+    )?;
+    validate_retired_scope(&coverage, routes, &frozen_environment_variables)?;
+    require(
+        coverage.deployment == "beta-rust-only-candidate",
+        "issuance candidate deployment selector differs",
+    )?;
+
+    Ok(CoverageSummary {
+        native_http: coverage.native_http.len(),
+        remaining_http: coverage.remaining.http,
+        remaining_grpc: coverage.remaining.grpc,
+    })
+}
+
+fn validate_retired_scope(
+    coverage: &Coverage,
+    routes: &[Value],
+    frozen_environment: &BTreeSet<&str>,
+) -> Result<(), MmfError> {
+    let mut retired = BTreeSet::new();
+    for operation in &coverage.retired_legacy.http_routes {
+        require(
+            operation.behavior_selector_count() == 0
+                && (operation.path.starts_with("/v1/integrations/canvas/")
+                    || operation.path.contains("/canvas-"))
+                && retired.insert((operation.method.as_str(), operation.path.as_str()))
+                && routes.iter().any(|route| {
+                    route["method"] == operation.method
+                        && route["path"] == operation.path
+                        && route["operation"] == operation.operation
+                })
+                && !coverage.native_http.iter().any(|native| {
+                    native.method == operation.method && native.path == operation.path
+                }),
+            "retired provider route is invalid, duplicate or still native",
+        )?;
+    }
+    let retired_environment = coverage
+        .retired_legacy
+        .environment_variables
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    require(
+        retired_environment.len() == coverage.retired_legacy.environment_variables.len()
+            && retired_environment
+                .iter()
+                .all(|name| name.starts_with("CANVAS_") && frozen_environment.contains(name))
+            && coverage
+                .native_environment_variables
+                .iter()
+                .all(|name| !retired_environment.contains(name.as_str())),
+        "retired provider configuration is invalid or still native",
+    )
+}
+
+fn validate_application_template_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.application_template_behavior_case.as_deref()
+                == Some(operation.operation.as_str())
+            && contract["schema"] == "marty.issuance-application-templates/v1"
+            && contract["surface"]["base_path"] == "/v1/application-templates"
+            && contract["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| {
+                    routes.len() == 8
+                        && routes
+                            .iter()
+                            .filter(|route| {
+                                route["method"] == operation.method
+                                    && route["path"] == operation.path
+                                    && route["operation"] == operation.operation
+                            })
+                            .count()
+                            == 1
+                }),
+        "native application template operation diverges from its exact behavior contract",
+    )
+}
+
+fn validate_credential_lifecycle_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.credential_lifecycle_behavior_contract
+            && contract["schema"] == "marty.issuance-credential-lifecycle/v1"
+            && contract["scope"]["authentication"]["http"]
+                == "management-api-key-and-trusted-organization"
+            && contract["scope"]["http"].as_array().is_some_and(|routes| {
+                routes.len() == 4
+                    && routes
+                        .iter()
+                        .filter(|route| {
+                            route["method"] == operation.method
+                                && route["path"] == operation.path
+                                && route["operation"] == operation.operation
+                        })
+                        .count()
+                        == 1
+            }),
+        "native credential lifecycle operation diverges from its exact behavior contract",
+    )
+}
+
+fn validate_internal_application_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.behavior_selector_count() == 1
+            && operation.internal_application_behavior_case.as_deref()
+                == Some(operation.operation.as_str())
+            && contract["schema"] == "marty.issuance-internal-applications/v1"
+            && contract["surface"]["base_path"] == "/internal/applications"
+            && contract["coverage"]["rust_implementation_authorized"] == true
+            && contract["coverage"]["required_before_rust_implementation"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+            && contract["surface"]["routes"]
+                .as_array()
+                .is_some_and(|routes| {
+                    routes.len() == 14
+                        && routes
+                            .iter()
+                            .filter(|route| {
+                                route["method"] == operation.method
+                                    && route["path"] == operation.path
+                                    && route["operation"] == operation.operation
+                            })
+                            .count()
+                            == 1
+                }),
+        "native internal application operation diverges from its exact behavior contract",
+    )
+}
+
+fn validate_renewal_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.renewal_behavior_contract
+            && operation.behavior_selector_count() == 1
+            && operation.operation == "renew_issued_credential"
+            && operation.method == "POST"
+            && operation.path == "/v1/issued-credentials/{credential_id}/renew"
+            && contract["schema"] == "marty.credential-renewal-python-reference/v1"
+            && contract["reference"]["source_commit"] == "87eae30788924921a42848425d315e2f33f7ae41"
+            && contract["reference"]["source_blobs"]
+                ["services/issuance/infrastructure/api/routes.py"]
+                == "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a"
+            && contract["cases"].as_array().is_some_and(|cases| {
+                cases.len() == 31
+                    && [
+                        ("missing-key", 401),
+                        ("missing-tenant", 403),
+                        ("foreign-tenant", 404),
+                        ("anoncrypt-keyed-rejection", 422),
+                        ("authcrypt-keyed-rejection", 422),
+                        ("anoncrypt-mixed-keyed-rejection", 422),
+                        ("authcrypt-mixed-keyed-rejection", 422),
+                    ]
+                    .iter()
+                    .all(|(name, status)| {
+                        cases.iter().any(|case| {
+                            case["case"] == *name && case["responses"][0]["status"] == *status
+                        })
+                    })
+            }),
+        "native renewal operation diverges from its exact governed contract",
+    )
+}
+
+fn validate_initiation_operation(
+    operation: &HttpOperation,
+    contract: &Value,
+) -> Result<(), MmfError> {
+    require(
+        operation.initiation_behavior_contract
+            && operation.behavior_selector_count() == 1
+            && operation.operation == "initiate_issuance"
+            && operation.method == "POST"
+            && operation.path == "/v1/issuance/initiate"
+            && contract["schema"] == "marty.issuance-initiation/v1"
+            && contract["surface"]["http"]
+                == serde_json::json!({
+                    "method": "POST", "path": "/v1/issuance/initiate",
+                    "operation": "initiate_issuance", "authentication": "management-api-key",
+                    "content_type": "application/json"
+                })
+            && contract["idempotency"]["http_source"] == "Idempotency-Key header"
+            && contract["idempotency"]["plaintext_persisted"] == false
+            && contract["idempotency"]["recovery_order"]
+                == "after-organization-and-client-validation-before-template-resolution"
+            && contract["idempotency"]["same_request"] == "return-committed-transaction-snapshot"
+            && contract["idempotency"]["different_request"]
+                == serde_json::json!({"http_status": 409, "grpc_status": "ALREADY_EXISTS"})
+            && contract["idempotency"]["didcomm_push_with_idempotency"]
+                == serde_json::json!({"http_status": 422, "grpc_status": "INVALID_ARGUMENT"})
+            && contract["transaction"]["atomic_reservation"] == true
+            && contract["response"]["source"] == "committed-transaction-snapshot"
+            && contract["response"]["pre_auth_code_visibility"]
+                == "internal-only-gateway-removes-publicly"
+            && contract["response"]["didcomm"]["native_rust_target"]
+                == "same-delivery-semantics-as-http",
+        "native initiation operation diverges from its admission contract",
+    )
+}
+
+fn validate_didcomm_operation(operation: &HttpOperation, contract: &Value) -> Result<(), MmfError> {
+    require(
+        operation.didcomm_behavior_contract
+            && operation.operation == "didcomm_deliver"
+            && operation.method == "POST"
+            && operation.path == "/v1/issuance/didcomm/deliver"
+            && contract["schema_version"] == 1
+            && contract["expected_response"]["status"] == "delivered"
+            && contract["transport_claim"]["single_active_attempt"] == true
+            && contract["transport_claim"]["automatic_resend_from_delivery_unknown"] == false
+            && contract["transport_claim"]["automatic_resend_from_transport_retryable"] == true
+            && contract["transport_claim"]["completion_fenced_by_attempt_id"] == true,
+        "native DIDComm operation diverges from its delivery contract",
+    )
+}
+
+fn canonical_lf(bytes: &[u8]) -> Vec<u8> {
+    let mut canonical = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            index += 1;
+        }
+        canonical.push(bytes[index]);
+        index += 1;
+    }
+    canonical
+}
+
+fn require(condition: bool, message: &'static str) -> Result<(), MmfError> {
+    if condition {
+        Ok(())
+    } else {
+        Err(invalid(message))
+    }
+}
+
+fn invalid(message: &'static str) -> MmfError {
+    MmfError::new(ErrorCode::InvalidState, message)
+}
+
+fn contract_error(message: &'static str, error: serde_json::Error) -> MmfError {
+    invalid(message).with_detail("cause", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        canonical_lf, validate_application_template_operation,
+        validate_credential_lifecycle_operation, validate_didcomm_operation,
+        validate_embedded_contract, validate_initiation_operation,
+        validate_internal_application_operation, validate_renewal_operation, Coverage,
+        HttpOperation, APPLICATION_TEMPLATES, COVERAGE, CREDENTIAL_ADMISSION, CREDENTIAL_LIFECYCLE,
+        CREDENTIAL_SIGNING, DIDCOMM, INITIATION, INTERNAL_APPLICATIONS, ISSUED_CREDENTIAL_ADAPTERS,
+        OID4VCI_AUTHORIZATION, RENEWAL_REFERENCE, RESOURCE_OWNERS, RETENTION,
+    };
+
+    #[test]
+    fn application_template_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(APPLICATION_TEMPLATES).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation
+                    .get("application_template_behavior_case")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(selected.len(), 8);
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_application_template_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for (field, value) in [
+                ("method", serde_json::json!("OPTIONS")),
+                (
+                    "path",
+                    serde_json::json!("/v1/application-templates/sibling"),
+                ),
+                ("operation", serde_json::json!("unknown_operation")),
+                (
+                    "application_template_behavior_case",
+                    serde_json::json!("unknown_operation"),
+                ),
+                ("initiation_behavior_contract", serde_json::json!(true)),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(validate_application_template_operation(
+                    &parse(changed).unwrap(),
+                    &contract
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["surface"]["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(original.clone());
+            assert!(validate_application_template_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn internal_application_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(INTERNAL_APPLICATIONS).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation
+                    .get("internal_application_behavior_case")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(selected.len(), 14);
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_internal_application_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for (field, value) in [
+                ("method", serde_json::json!("OPTIONS")),
+                (
+                    "path",
+                    serde_json::json!("/internal/applications/sibling/unknown"),
+                ),
+                ("operation", serde_json::json!("unknown_operation")),
+                (
+                    "internal_application_behavior_case",
+                    serde_json::json!("unknown_operation"),
+                ),
+                ("initiation_behavior_contract", serde_json::json!(true)),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(validate_internal_application_operation(
+                    &parse(changed).unwrap(),
+                    &contract
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["surface"]["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(original.clone());
+            assert!(validate_internal_application_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn credential_lifecycle_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(CREDENTIAL_LIFECYCLE).unwrap();
+        let selected: Vec<_> = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("credential_lifecycle_behavior_contract") == Some(&Value::Bool(true))
+            })
+            .collect();
+        assert_eq!(selected.len(), 4);
+        for original in selected {
+            let parse = |value: Value| serde_json::from_value::<HttpOperation>(value);
+            validate_credential_lifecycle_operation(&parse(original.clone()).unwrap(), &contract)
+                .unwrap();
+            for (field, value) in [
+                ("method", serde_json::json!("OPTIONS")),
+                (
+                    "path",
+                    serde_json::json!("/v1/issued-credentials/{credential_id}/revoke"),
+                ),
+                ("operation", serde_json::json!("unknown_operation")),
+                (
+                    "credential_lifecycle_behavior_contract",
+                    serde_json::json!(false),
+                ),
+                ("credential_behavior_contract", serde_json::json!(true)),
+            ] {
+                let mut changed = original.clone();
+                changed[field] = value;
+                assert!(validate_credential_lifecycle_operation(
+                    &parse(changed).unwrap(),
+                    &contract
+                )
+                .is_err());
+            }
+            let mut duplicate = contract.clone();
+            duplicate["scope"]["http"]
+                .as_array_mut()
+                .unwrap()
+                .push(original.clone());
+            assert!(validate_credential_lifecycle_operation(
+                &parse(original.clone()).unwrap(),
+                &duplicate
+            )
+            .is_err());
+        }
+
+        let mut unknown_selector = coverage["native_http"][0].clone();
+        unknown_selector["future_behavior_contract"] = Value::Bool(true);
+        assert!(serde_json::from_value::<HttpOperation>(unknown_selector).is_err());
+    }
+
+    #[test]
+    fn resource_owner_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(RESOURCE_OWNERS).unwrap();
+        let selected = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("resource_owner_behavior_contract") == Some(&Value::Bool(true))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 3);
+        for original in selected {
+            let parsed: HttpOperation = serde_json::from_value(original.clone()).unwrap();
+            assert_eq!(parsed.behavior_selector_count(), 1);
+            assert!(contract["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|frozen| {
+                    frozen["method"] == parsed.method
+                        && frozen["path"] == parsed.path
+                        && frozen["operation"] == parsed.operation
+                }));
+
+            let mut missing = original.clone();
+            missing
+                .as_object_mut()
+                .unwrap()
+                .remove("resource_owner_behavior_contract");
+            let missing: HttpOperation = serde_json::from_value(missing).unwrap();
+            assert_eq!(missing.behavior_selector_count(), 0);
+
+            let mut multiple = original.clone();
+            multiple["renewal_behavior_contract"] = Value::Bool(true);
+            let multiple: HttpOperation = serde_json::from_value(multiple).unwrap();
+            assert_eq!(multiple.behavior_selector_count(), 2);
+
+            let mut unknown = original.clone();
+            unknown["future_resource_owner_selector"] = Value::Bool(true);
+            assert!(serde_json::from_value::<HttpOperation>(unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn issued_credential_adapter_selectors_are_closed_exact_and_exclusive() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let contract: Value = serde_json::from_slice(ISSUED_CREDENTIAL_ADAPTERS).unwrap();
+        let selected = coverage["native_http"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|operation| {
+                operation.get("issued_credential_adapter_behavior_contract")
+                    == Some(&Value::Bool(true))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 5);
+        for original in selected {
+            let parsed: HttpOperation = serde_json::from_value(original.clone()).unwrap();
+            assert_eq!(parsed.behavior_selector_count(), 1);
+            assert!(contract["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|frozen| {
+                    frozen["method"] == parsed.method
+                        && frozen["path"] == parsed.path
+                        && frozen["operation"] == parsed.operation
+                }));
+
+            let mut missing = original.clone();
+            missing
+                .as_object_mut()
+                .unwrap()
+                .remove("issued_credential_adapter_behavior_contract");
+            assert_eq!(
+                serde_json::from_value::<HttpOperation>(missing)
+                    .unwrap()
+                    .behavior_selector_count(),
+                0
+            );
+
+            let mut multiple = original.clone();
+            multiple["resource_owner_behavior_contract"] = Value::Bool(true);
+            assert_eq!(
+                serde_json::from_value::<HttpOperation>(multiple)
+                    .unwrap()
+                    .behavior_selector_count(),
+                2
+            );
+
+            let mut unknown = original.clone();
+            unknown["future_issued_credential_selector"] = Value::Bool(true);
+            assert!(serde_json::from_value::<HttpOperation>(unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn renewal_coverage_is_exact_and_rejects_missing_malformed_or_multiple_selectors() {
+        let entry = serde_json::json!({
+            "method":"POST", "path":"/v1/issued-credentials/{credential_id}/renew",
+            "operation":"renew_issued_credential", "renewal_behavior_contract":true
+        });
+        let contract: Value = serde_json::from_slice(RENEWAL_REFERENCE).unwrap();
+        let parse = |value| serde_json::from_value::<HttpOperation>(value);
+        validate_renewal_operation(&parse(entry.clone()).unwrap(), &contract).unwrap();
+        for malformed in [Value::Null, serde_json::json!("true"), serde_json::json!(1)] {
+            let mut changed = entry.clone();
+            changed["renewal_behavior_contract"] = malformed;
+            assert!(parse(changed).is_err());
+        }
+        for (field, value) in [
+            ("renewal_behavior_contract", serde_json::json!(false)),
+            ("initiation_behavior_contract", serde_json::json!(true)),
+            ("didcomm_behavior_contract", serde_json::json!(true)),
+            ("method", serde_json::json!("GET")),
+            ("operation", serde_json::json!("revoke_issued_credential")),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/revoke"),
+            ),
+            (
+                "path",
+                serde_json::json!("/v1/issued-credentials/{credential_id}/renew/extra"),
+            ),
+        ] {
+            let mut changed = entry.clone();
+            changed[field] = value;
+            assert!(validate_renewal_operation(&parse(changed).unwrap(), &contract).is_err());
+        }
+        let mut missing = entry.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("renewal_behavior_contract");
+        assert!(validate_renewal_operation(&parse(missing).unwrap(), &contract).is_err());
+        for name in [
+            "missing-key",
+            "missing-tenant",
+            "foreign-tenant",
+            "anoncrypt-keyed-rejection",
+            "authcrypt-mixed-keyed-rejection",
+        ] {
+            let mut changed = contract.clone();
+            let case = changed["cases"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|case| case["case"] == name)
+                .unwrap();
+            case["responses"][0]["status"] = serde_json::json!(200);
+            assert!(validate_renewal_operation(&parse(entry.clone()).unwrap(), &changed).is_err());
+        }
+    }
+
+    #[test]
+    fn initiation_coverage_rejects_malformed_or_multiple_behavior_selectors() {
+        let entry = serde_json::json!({
+            "method":"POST", "path":"/v1/issuance/initiate", "operation":"initiate_issuance",
+            "initiation_behavior_contract":true
+        });
+        let contract: Value = serde_json::from_slice(INITIATION).unwrap();
+        let operation: HttpOperation = serde_json::from_value(entry.clone()).unwrap();
+        validate_initiation_operation(&operation, &contract).unwrap();
+        for malformed in [
+            Value::Null,
+            Value::String("true".into()),
+            serde_json::json!(1),
+        ] {
+            let mut changed = entry.clone();
+            changed["initiation_behavior_contract"] = malformed;
+            assert!(serde_json::from_value::<HttpOperation>(changed).is_err());
+        }
+        let mut changed = entry.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .remove("initiation_behavior_contract");
+        let missing: HttpOperation = serde_json::from_value(changed).unwrap();
+        assert_eq!(missing.behavior_selector_count(), 0);
+        assert!(validate_initiation_operation(&missing, &contract).is_err());
+        let mut changed = entry;
+        changed["didcomm_behavior_contract"] = Value::Bool(true);
+        let multiple: HttpOperation = serde_json::from_value(changed).unwrap();
+        assert_eq!(multiple.behavior_selector_count(), 2);
+        assert!(validate_initiation_operation(&multiple, &contract).is_err());
+    }
+
+    #[test]
+    fn initiation_coverage_cannot_select_siblings_or_relax_admission() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).unwrap();
+        let mut operation = coverage
+            .native_http
+            .into_iter()
+            .find(|operation| operation.initiation_behavior_contract)
+            .unwrap();
+        let contract: Value = serde_json::from_slice(INITIATION).unwrap();
+        validate_initiation_operation(&operation, &contract).unwrap();
+        for path in [
+            "/v1/issuance",
+            "/v1/issuance/initiate/extra",
+            "/v1/issuance/didcomm/deliver",
+        ] {
+            operation.path = path.into();
+            assert!(validate_initiation_operation(&operation, &contract).is_err());
+        }
+        operation.path = "/v1/issuance/initiate".into();
+        operation.method = "GET".into();
+        assert!(validate_initiation_operation(&operation, &contract).is_err());
+        operation.method = "POST".into();
+        for (pointer, value) in [
+            ("/surface/http/authentication", serde_json::json!("none")),
+            ("/idempotency/plaintext_persisted", serde_json::json!(true)),
+            (
+                "/idempotency/recovery_order",
+                serde_json::json!("after-template-resolution"),
+            ),
+            (
+                "/idempotency/same_request",
+                serde_json::json!("create-new-transaction"),
+            ),
+            (
+                "/idempotency/different_request/http_status",
+                serde_json::json!(200),
+            ),
+            (
+                "/idempotency/didcomm_push_with_idempotency/http_status",
+                serde_json::json!(200),
+            ),
+            ("/transaction/atomic_reservation", serde_json::json!(false)),
+            ("/response/source", serde_json::json!("request")),
+            (
+                "/response/pre_auth_code_visibility",
+                serde_json::json!("public"),
+            ),
+        ] {
+            let mut changed = contract.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_initiation_operation(&operation, &changed).is_err(),
+                "{pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn didcomm_coverage_cannot_select_siblings_or_relax_send_fencing() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).unwrap();
+        let mut operation = coverage
+            .native_http
+            .into_iter()
+            .find(|operation| operation.didcomm_behavior_contract)
+            .unwrap();
+        let contract: Value = serde_json::from_slice(DIDCOMM).unwrap();
+        validate_didcomm_operation(&operation, &contract).unwrap();
+        for path in [
+            "/v1/issuance/initiate",
+            "/v1/issuance/didcomm/deliver/extra",
+        ] {
+            operation.path = path.into();
+            assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        }
+        operation.path = "/v1/issuance/didcomm/deliver".into();
+        operation.method = "GET".into();
+        assert!(validate_didcomm_operation(&operation, &contract).is_err());
+        operation.method = "POST".into();
+        for (field, value) in [
+            ("single_active_attempt", false),
+            ("automatic_resend_from_delivery_unknown", true),
+            ("automatic_resend_from_transport_retryable", false),
+            ("completion_fenced_by_attempt_id", false),
+        ] {
+            let mut changed = contract.clone();
+            changed["transport_claim"][field] = Value::Bool(value);
+            assert!(validate_didcomm_operation(&operation, &changed).is_err());
+        }
+    }
+
+    #[test]
+    fn provenance_hash_is_independent_of_checkout_line_endings() {
+        let coverage: Coverage = serde_json::from_str(COVERAGE).expect("coverage contract");
+
+        assert_eq!(canonical_lf(b"first\r\nsecond\n"), b"first\nsecond\n");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_ADMISSION))),
+            "8eb5135252e7c809f9805636e0e9a1726c2295faa299389355fe8ec17e49da81"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_SIGNING))),
+            "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_LIFECYCLE))),
+            coverage.credential_lifecycle_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INITIATION))),
+            coverage.initiation_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(APPLICATION_TEMPLATES))),
+            coverage.application_template_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(INTERNAL_APPLICATIONS))),
+            coverage
+                .internal_application_behavior_contract
+                .effective_sha256()
+                .unwrap()
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(RETENTION))),
+            coverage.retention_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(canonical_lf(ISSUED_CREDENTIAL_ADAPTERS))
+            ),
+            coverage.issued_credential_adapter_behavior_contract.sha256
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(OID4VCI_AUTHORIZATION))),
+            coverage.oid4vci_authorization_behavior_contract.sha256
+        );
+    }
+
+    #[test]
+    fn embedded_surface_and_native_coverage_are_consistent() {
+        let summary = validate_embedded_contract().expect("contract");
+        assert_eq!(summary.native_http, 63);
+        assert_eq!(summary.remaining_http, 9);
+        assert_eq!(summary.remaining_grpc, 0);
+    }
+    #[test]
+    fn platform_adaptation_cannot_relabel_upstream_provenance() {
+        let coverage: Value = serde_json::from_str(COVERAGE).unwrap();
+        let original = coverage["internal_application_behavior_contract"].clone();
+        let parsed: super::Upstream = serde_json::from_value(original.clone()).unwrap();
+        assert_ne!(parsed.effective_sha256().unwrap(), parsed.sha256);
+        for (key, value) in [
+            ("owner", json!("unowned-repository")),
+            ("base_sha256", json!("0".repeat(64))),
+            ("sha256", json!("not-a-digest")),
+            ("reason", json!("   ")),
+        ] {
+            let mut changed = original.clone();
+            changed["platform_adaptation"][key] = value;
+            let parsed: super::Upstream = serde_json::from_value(changed).unwrap();
+            assert!(parsed.effective_sha256().is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn retired_scope_cannot_hide_platform_routes_or_live_configuration() {
+        let surface: Value = serde_json::from_slice(super::SURFACE).unwrap();
+        let routes = surface["http"]["routes"].as_array().unwrap();
+        let environment = surface["configuration"]["environment_variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let original: Value = serde_json::from_str(COVERAGE).unwrap();
+        let mut variants = Vec::new();
+        let mut changed = original.clone();
+        changed["retired_legacy"]["http_routes"][0] =
+            json!({"method":"POST","path":"/v1/issuance/initiate","operation":"initiate_issuance"});
+        variants.push(changed);
+        let mut changed = original.clone();
+        let duplicate = changed["retired_legacy"]["http_routes"][0].clone();
+        changed["retired_legacy"]["http_routes"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["retired_legacy"]["http_routes"][0]["initiation_behavior_contract"] = json!(true);
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["native_http"]
+            .as_array_mut()
+            .unwrap()
+            .push(original["retired_legacy"]["http_routes"][0].clone());
+        variants.push(changed);
+        let mut changed = original.clone();
+        changed["retired_legacy"]["environment_variables"][0] = json!("ISSUANCE_API_KEY");
+        variants.push(changed);
+        let mut changed = original.clone();
+        let duplicate = changed["retired_legacy"]["environment_variables"][0].clone();
+        changed["retired_legacy"]["environment_variables"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        variants.push(changed);
+        for changed in variants {
+            let parsed: Coverage = serde_json::from_value(changed).unwrap();
+            assert!(super::validate_retired_scope(&parsed, routes, &environment).is_err());
+        }
+    }
+}

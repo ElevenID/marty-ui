@@ -1,0 +1,279 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  buildCredentialApplicationNavigationState,
+  extractExistingApplicationIds,
+  filterCredentialCatalogItems,
+  getCredentialCatalogCategories,
+  loadCredentialCatalogItems,
+  loadExistingCredentialApplications,
+  mapCredentialTemplateToCatalogItem,
+  resolveCredentialApplicationPath,
+} from './credentialCatalog';
+
+describe('credentialCatalog helpers', () => {
+  it('routes preview through the resolved application, scoped to its owner, without live launch state', () => {
+    const result = buildCredentialApplicationNavigationState({ id: 'credential-1', application_template_id: 'application-1',
+      application_template: { id: 'application-1', organization_id: 'org-1', credential_template_id: 'credential-1' } }, {
+      isPreview: true, organizationId: 'org-1', canvasLtiContext: { state: 'stale-launch' }, canvasLtiSession: { state: 'stale-launch' },
+    });
+    expect(result.path).toBe('/applicant/preview/applications/application-1?organization_id=org-1');
+    expect(result.state.applicationTemplate.id).toBe('application-1');
+    expect(result.state).not.toHaveProperty('canvasLtiSession');
+  });
+
+  it.each(['missing', 'foreign', 'wrong-credential'])('rejects a %s preview application binding', (kind) => {
+    const application = { id: 'application-1', organization_id: kind === 'foreign' ? 'org-2' : 'org-1',
+      credential_template_id: kind === 'wrong-credential' ? 'credential-2' : 'credential-1' };
+    expect(() => buildCredentialApplicationNavigationState({ id: 'credential-1',
+      application_template: kind === 'missing' ? null : application }, { isPreview: true, organizationId: 'org-1' })).toThrow(/Application Template/);
+    expect(() => resolveCredentialApplicationPath({ credentialId: 'credential-1', isPreview: true })).toThrow(/Application Template is required/);
+  });
+
+  it('builds translated categories', () => {
+    const t = vi.fn((key) => key);
+    expect(getCredentialCatalogCategories(t)).toEqual([
+      { value: 'all', label: 'catalog.categories.all' },
+      { value: 'travel', label: 'catalog.categories.travel' },
+      { value: 'identity', label: 'catalog.categories.identity' },
+      { value: 'enterprise', label: 'catalog.categories.enterprise' },
+      { value: 'education', label: 'catalog.categories.education' },
+    ]);
+  });
+
+  it('maps templates into catalog cards', () => {
+    expect(mapCredentialTemplateToCatalogItem({
+      id: 'tpl-1',
+      credential_type: 'MemberCredential',
+      name: 'Member Login Credential',
+      claims: [{ name: 'email', required: true }],
+      status: 'ACTIVE',
+      version: '1.0.0',
+    }, 'Acme')).toMatchObject({
+      id: 'tpl-1',
+      credentialType: 'MemberCredential',
+      category: 'identity',
+      requirements: ['email'],
+      vendorName: 'Acme',
+      available: true,
+    });
+  });
+
+  it('maps open badge templates as identity membership credentials', () => {
+    const catalogItem = mapCredentialTemplateToCatalogItem({
+      id: 'tpl-ob',
+      credential_type: 'open_badge',
+      name: 'Marty Verified Member Badge',
+      description: 'Open Badge 3.0 membership badge for passwordless login/sign-in with your wallet.',
+      claims: [{ name: 'email', required: true }, { name: 'role', required: true }],
+      status: 'ACTIVE',
+      credential_payload_format: 'SD_JWT_VC',
+      issuance_protocol: 'OID4VCI_PRE_AUTH',
+    }, 'Acme');
+
+    expect(catalogItem).toMatchObject({
+      id: 'tpl-ob',
+      name: 'Marty Verified Member Badge',
+      credentialType: 'open_badge',
+      category: 'identity',
+      requirements: ['email', 'role'],
+      format: 'SD-JWT VC',
+      issuanceProtocol: 'OID4VCI_PRE_AUTH',
+      walletRequirements: 'Wallet support required: SD-JWT VC with OID4VCI_PRE_AUTH.',
+      available: true,
+      searchAliases: expect.arrayContaining(['open badge login', 'achievement credential']),
+    });
+
+    expect(filterCredentialCatalogItems([catalogItem], {
+      searchTerm: 'open badge login',
+      categoryFilter: 'all',
+    })).toEqual([catalogItem]);
+  });
+
+  it('uses the API format, required claims and actual lifetime even when the type suggests another wallet', () => {
+    const item = mapCredentialTemplateToCatalogItem({ id: 'actual', name: 'Tenant membership',
+      credential_type: 'org.iso.18013.5.1.mDL', credential_payload_format: 'SD_JWT_VC',
+      issuance_protocol: 'OID4VCI_PRE_AUTH', claims: [{ name: 'member_id', required: true, display: { label: 'Member ID' } }],
+      validity_rules: { ttl_seconds: 86400, default_validity_days: 999 }, status: 'ACTIVE' });
+    expect(item).toMatchObject({ description: 'Tenant membership', format: 'SD-JWT VC',
+      requirements: ['Member ID'], validityLabel: '1 day', issuanceProtocol: 'OID4VCI_PRE_AUTH' });
+    expect(item.standard).toBeNull();
+    expect(item.worksWithLabel).toBeUndefined();
+    expect(item.processingTime).toBeUndefined();
+    expect(JSON.stringify(item)).not.toMatch(/Apple|Google|Instant|business days/);
+  });
+
+  it.each([undefined, 0, -1, '86400', NaN])('does not invent missing requirements or lifetime for ttl_seconds=%s', (ttl_seconds) => {
+    const item = mapCredentialTemplateToCatalogItem({ id: 'sparse', name: 'Passport', credential_type: 'passport',
+      claims: [], validity_rules: { ttl_seconds }, status: 'ACTIVE' });
+    expect(item).toMatchObject({ description: 'Passport', requirements: [], format: null,
+      standard: null, issuanceProtocol: null, walletRequirements: null, validityLabel: null });
+    expect(item.processingTime).toBeUndefined();
+  });
+
+  it('keeps physical document configuration distinct from wallet requirements', () => {
+    expect(mapCredentialTemplateToCatalogItem({ id: 'physical', name: 'Passport',
+      credential_type: 'passport', credential_payload_format: 'ICAO_EMRTD', issuance_protocol: 'PHYSICAL_DOCUMENT',
+      validity_rules: { ttl_seconds: 3600 }, claims: [] })).toMatchObject({
+      format: 'ICAO_EMRTD', issuanceProtocol: 'PHYSICAL_DOCUMENT', walletRequirements: null, validityLabel: '3600 seconds',
+    });
+  });
+
+  it('extracts existing application ids and filters credentials', () => {
+    expect(extractExistingApplicationIds([
+      { credential_template_id: 'cfg-1' },
+      { credential_template_id: null },
+      { credential_template_id: 'cfg-2' },
+    ])).toEqual(['cfg-1', 'cfg-2']);
+
+    expect(filterCredentialCatalogItems([
+      { name: 'Passport', description: 'Travel credential', category: 'travel' },
+      { name: 'Member Login Credential', description: 'Identity', category: 'identity' },
+    ], {
+      searchTerm: 'pass',
+      categoryFilter: 'travel',
+    })).toEqual([
+      { name: 'Passport', description: 'Travel credential', category: 'travel' },
+    ]);
+  });
+
+
+
+  it('builds serializable navigation payloads', () => {
+    const payload = buildCredentialApplicationNavigationState({
+      id: 'cfg-1',
+      name: 'Passport',
+      icon: () => null,
+      processingFee: 0,
+    });
+
+    expect(payload).toEqual({
+      path: '/apply/cfg-1',
+      state: {
+        credential: {
+          id: 'cfg-1',
+          name: 'Passport',
+          processingFee: 0,
+        },
+      },
+    });
+  });
+
+  it('promotes the active Application Template into form navigation state', () => {
+    const applicationTemplate = {
+      id: 'app-tpl-1',
+      approval_strategy: 'auto',
+      form_fields: [{ field_id: 'email', required: true }],
+    };
+
+    const payload = buildCredentialApplicationNavigationState({
+      id: 'cfg-1',
+      name: 'Member Login Credential',
+      application_template: applicationTemplate,
+    }, {
+      currentPathname: '/console/applicant/catalog',
+    });
+
+    expect(payload).toEqual({
+      path: '/console/applicant/apply/cfg-1',
+      state: {
+        credential: {
+          id: 'cfg-1',
+          name: 'Member Login Credential',
+        },
+        applicationTemplate,
+      },
+    });
+  });
+
+
+
+  it('resolves direct application paths for console and preview contexts', () => {
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/console/applicant/catalog',
+    })).toBe('/console/applicant/apply/cfg-1');
+
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/applicant/preview/catalog',
+      applicationTemplateId: 'application-1',
+      isPreview: true,
+    })).toBe('/applicant/preview/applications/application-1');
+
+    expect(resolveCredentialApplicationPath({
+      credentialId: 'cfg-1',
+      currentPathname: '/catalog',
+    })).toBe('/apply/cfg-1');
+  });
+
+  it('loads catalog items and existing application ids safely', async () => {
+    await expect(loadCredentialCatalogItems({
+      organizationId: 'org-1',
+      organizationName: 'Acme',
+      listCredentialTemplates: vi.fn().mockResolvedValue([
+        { id: 'tpl-1', credential_type: 'MemberCredential', name: 'Member Login Credential', claims: [], status: 'active', revocation_profile_id: 'rp-1' },
+      ]),
+    })).resolves.toMatchObject({
+      credentials: [expect.objectContaining({ id: 'tpl-1', vendorName: 'Acme' })],
+      error: null,
+    });
+
+    const incomplete = await loadCredentialCatalogItems({
+      organizationId: 'org-1',
+      organizationName: 'Acme',
+      listCredentialTemplates: vi.fn().mockResolvedValue([
+        { id: 'tpl-incomplete', credential_type: 'MemberCredential', name: 'Incomplete', status: 'active' },
+      ]),
+    });
+    expect(incomplete.credentials).toEqual([]);
+
+    await expect(loadExistingCredentialApplications({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      getApplicantByUser: vi.fn().mockResolvedValue({ id: 'app-1' }),
+      listApplicantApplications: vi.fn().mockResolvedValue([
+        { credential_template_id: 'cfg-1' },
+      ]),
+    })).resolves.toEqual(['cfg-1']);
+
+    await expect(loadExistingCredentialApplications({
+      organizationId: null,
+      userId: 'user-1',
+      getApplicantByUser: vi.fn(),
+      listApplicantApplications: vi.fn(),
+    })).resolves.toEqual([]);
+  });
+
+  it('does not call the template API without a real organization id', async () => {
+    const listCredentialTemplates = vi.fn();
+
+    const result = await loadCredentialCatalogItems({
+      organizationId: '   ',
+      organizationName: 'Acme',
+      listCredentialTemplates,
+    });
+
+    expect(listCredentialTemplates).not.toHaveBeenCalled();
+    expect(result.credentials).toEqual([]);
+    expect(result.missingOrganization).toBe(true);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error?.message).toMatch(/organization/i);
+  });
+
+  it('preserves template API failures for callers to display', async () => {
+    const error = new Error('Gateway unavailable');
+    const listCredentialTemplates = vi.fn().mockRejectedValue(error);
+
+    const result = await loadCredentialCatalogItems({
+      organizationId: 'org-1',
+      organizationName: 'Acme',
+      listCredentialTemplates,
+    });
+
+    expect(listCredentialTemplates).toHaveBeenCalledWith('org-1');
+    expect(result.credentials).toEqual([]);
+    expect(result.missingOrganization).toBe(false);
+    expect(result.error).toBe(error);
+  });
+});

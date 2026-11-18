@@ -1,0 +1,23 @@
+{
+  "state": "VC_API_AUTH_BINDING_POSTCHECK_PASS",
+  "release_marker": "beta-v259-vc-api-auth-1e6d88b82163",
+  "source_revision": "1e6d88b82163f1de19a4b9e948c3415a5cb707e5",
+  "manifest_sha256": "7f4965015a6c0dff5575d62d1cf756ba89785a1768a26b96450dbfa112a5bf15",
+  "beta_containers": 42,
+  "images": {
+    "gateway": {
+      "image_id": "sha256:49fd714a0d87362b3760b7cc5a0dec3e5abe5fa525a6b6c44e63582d42c3774c",
+      "build_sha256": "1cefc6e36183551a604ff15fab4580dcc969fd778eba05d7ef65a77ca9b422b1"
+    },
+    "ui-prod": {
+      "image_id": "sha256:0f4b5c90528270644224f48e5afdf71e1cce105eeba698ec2e226a9c09ac8a58",
+      "build_sha256": "9751ff4e223a5ada1b89e00f030b2a19fd26084659f4dd78aef955c5b293d8c6"
+    }
+  },
+  "public_binding": true,
+  "container_and_oci_binding": true,
+  "maintenance_preflight": "PASS",
+  "scope": "Selected beta Gateway/UI and beta binding; unrelated projects are not a stability invariant.",
+  "functional_qualification_claimed": false,
+  "script_sha256": "7d821c4b0c1d97cf87148b0cd1236a3ff20bcc5bee233cf8d3b63b727f82b9cf"
+}

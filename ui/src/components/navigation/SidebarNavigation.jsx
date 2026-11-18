@@ -1,0 +1,585 @@
+/**
+ * SidebarNavigation Component
+ * 
+ * Collapsible sidebar navigation for authenticated users.
+ * Supports console mode switching and nested navigation items.
+ */
+
+import { useState, useMemo, useCallback } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router';
+import {
+  Drawer,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Collapse,
+  Box,
+  Typography,
+  IconButton,
+  Tooltip,
+  Divider,
+  useTheme,
+  useMediaQuery,
+  ToggleButtonGroup,
+  ToggleButton,
+  Alert,
+  Button,
+  CircularProgress,
+} from '@mui/material';
+import ExpandLess from '@mui/icons-material/ExpandLess';
+import ExpandMore from '@mui/icons-material/ExpandMore';
+import MenuIcon from '@mui/icons-material/Menu';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import StarIcon from '@mui/icons-material/Star';
+import PersonIcon from '@mui/icons-material/Person';
+import BusinessIcon from '@mui/icons-material/Business';
+import LogoutIcon from '@mui/icons-material/Logout';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import Badge from '@mui/material/Badge';
+import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
+import { usePermissions } from '../../hooks/usePermissions';
+import { useConsole } from '../../contexts/ConsoleContext';
+import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
+import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
+
+const DRAWER_WIDTH = 260;
+const DRAWER_WIDTH_COLLAPSED = 72;
+const HEADER_HEIGHT = 64;
+
+/**
+ * Navigation Item Component
+ * Renders a single nav item with optional children
+ * Supports visual hierarchy: primary items, badges, and section-specific styling
+ */
+function NavItem({ item, isActive, isChildActive, expanded, onToggle, onNavigate, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
+  const theme = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const hasChildren = item.children && item.children.length > 0;
+  const Icon = item.icon;
+  
+  // Visual hierarchy rules
+  const isPrimary = item.primary;
+  const isDesignSection = parentId === 'design' || item.id === 'design';
+  const isDeploySection = parentId === 'deploy' || item.id === 'deploy';
+  const hasBadge = item.badge;
+  const badgeCount = badgeCounts[item.id] || 0;
+
+  const handleClick = useCallback(() => {
+    if (hasChildren) {
+      if (collapsed && item.path) {
+        onNavigate();
+        navigate(item.path);
+        return;
+      }
+
+      onToggle(item.id);
+    } else {
+      onNavigate();
+      navigate(item.path);
+    }
+  }, [collapsed, hasChildren, item.id, item.path, navigate, onNavigate, onToggle]);
+
+  const isItemActive = isActive || isChildActive;
+
+  // Determine colors based on section and primary status
+  const getItemColors = () => {
+    if (isPrimary) {
+      return {
+        iconColor: isItemActive ? 'primary.main' : 'primary.light',
+        textColor: isItemActive ? 'primary.main' : 'primary.dark',
+        bgColor: isItemActive ? 'action.selected' : 'transparent',
+        borderColor: isItemActive ? theme.palette.primary.main : 'transparent',
+      };
+    }
+    
+    if (isDesignSection && depth > 0) {
+      return {
+        iconColor: isItemActive ? 'text.primary' : 'text.disabled',
+        textColor: isItemActive ? 'text.primary' : 'text.secondary',
+        bgColor: isItemActive ? 'action.selected' : 'transparent',
+        borderColor: isItemActive ? theme.palette.grey[400] : 'transparent',
+      };
+    }
+    
+    return {
+      iconColor: isItemActive ? 'primary.main' : 'text.secondary',
+      textColor: isItemActive ? 'primary.main' : 'text.primary',
+      bgColor: isItemActive ? 'action.selected' : 'transparent',
+      borderColor: isItemActive ? theme.palette.primary.main : 'transparent',
+    };
+  };
+
+  const colors = getItemColors();
+
+  return (
+    <>
+      <ListItem disablePadding sx={{ display: 'block' }}>
+        <Tooltip title={collapsed ? item.label : ''} placement="right" arrow>
+          <ListItemButton
+            onClick={handleClick}
+            aria-label={item.label}
+            data-testid={`sidebar.nav.${item.id}`}
+            sx={{
+              minHeight: isPrimary ? 52 : 48,
+              justifyContent: collapsed ? 'center' : 'initial',
+              px: 2.5,
+              pl: depth > 0 ? 4 : 2.5,
+              bgcolor: colors.bgColor,
+              borderLeft: `3px solid ${colors.borderColor}`,
+              '&:hover': {
+                bgcolor: 'action.hover',
+              },
+            }}
+          >
+            {Icon && (
+              <ListItemIcon
+                sx={{
+                  minWidth: 0,
+                  mr: collapsed ? 0 : 3,
+                  justifyContent: 'center',
+                  color: colors.iconColor,
+                  position: 'relative',
+                }}
+              >
+                <Icon />
+                {isPrimary && !collapsed && (
+                  <StarIcon
+                    sx={{
+                      position: 'absolute',
+                      top: -4,
+                      right: -4,
+                      fontSize: 12,
+                      color: 'primary.main',
+                    }}
+                  />
+                )}
+              </ListItemIcon>
+            )}
+            {!collapsed && (
+              <>
+                <ListItemText
+                  primary={
+                    hasBadge ? (
+                      <Badge badgeContent={badgeCount} color="error" sx={{ '& .MuiBadge-badge': { position: 'relative', transform: 'none', ml: 1 } }}>
+                        {item.label}
+                      </Badge>
+                    ) : (
+                      item.label
+                    )
+                  }
+                  sx={{
+                    opacity: 1,
+                    '& .MuiTypography-root': {
+                      fontWeight: isItemActive || isPrimary ? 600 : 400,
+                      fontSize: isPrimary ? '0.95rem' : '0.875rem',
+                      color: colors.textColor,
+                    },
+                  }}
+                />
+                {hasChildren && (expanded ? <ExpandLess /> : <ExpandMore />)}
+              </>
+            )}
+          </ListItemButton>
+        </Tooltip>
+      </ListItem>
+
+      {/* Child items */}
+      {hasChildren && !collapsed && (
+        <Collapse in={expanded} timeout="auto" unmountOnExit>
+          <List component="div" disablePadding>
+            {item.children.map((child) => {
+              const childActive = isChildActive
+                && (child.path === location.pathname || location.pathname.startsWith(`${child.path}/`));
+              const childColors = child.primary 
+                ? {
+                    textColor: childActive ? 'primary.main' : 'primary.dark',
+                  }
+                : isDesignSection
+                ? {
+                    textColor: childActive ? 'text.primary' : 'text.secondary',
+                  }
+                : {
+                    textColor: childActive ? 'primary.main' : 'text.secondary',
+                  };
+
+              return (
+                <ListItem key={child.id} disablePadding>
+                  <ListItemButton
+                    component={Link}
+                    to={child.path}
+                    onClick={onNavigate}
+                    aria-current={childActive ? 'page' : undefined}
+                    data-testid={`sidebar.nav.${child.id}`}
+                    sx={{
+                      pl: 6,
+                      minHeight: child.primary ? 44 : 40,
+                      bgcolor: childActive ? 'action.selected' : 'transparent',
+                      borderLeft: childActive ? `3px solid ${child.primary ? theme.palette.primary.main : theme.palette.grey[400]}` : '3px solid transparent',
+                      '&:hover': {
+                        bgcolor: 'action.hover',
+                      },
+                    }}
+                  >
+                    <ListItemText
+                      primary={child.label}
+                      sx={{
+                        '& .MuiTypography-root': {
+                          fontSize: child.primary ? '0.875rem' : '0.8125rem',
+                          fontWeight: childActive || child.primary ? 600 : 400,
+                          color: childColors.textColor,
+                        },
+                      }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+        </Collapse>
+      )}
+    </>
+  );
+}
+
+/**
+ * Sidebar Navigation Component
+ */
+function SidebarNavigation({ mobileOpen, onMobileClose }) {
+  const beginAction = useAsyncActionScope();
+  const theme = useTheme();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const { isAdministrator, isVendor, isApplicant, logout } = useAuth();
+  const { mode, setMode, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
+  const isJoinOnlyMode = memberships.length === 0;
+  const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
+
+  // Collapsed state for desktop — persisted so mode switches don't reset it
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar-collapsed') === 'true'; } catch { return false; }
+  });
+  const collapsed = !isMobile && desktopCollapsed;
+
+  // Track which parent items are expanded
+  const [expandedItems, setExpandedItems] = useState({});
+
+  const { can, isLoading: permissionsLoading, error: permissionError, refresh: refreshPermissions } = usePermissions();
+
+  const handleDestinationSelection = useCallback(() => {
+    if (isMobile) onMobileClose();
+  }, [isMobile, onMobileClose]);
+
+  // Console mode switching
+  const handleModeChange = useCallback(async (event, newMode) => {
+    if (newMode && newMode !== mode) {
+      handleDestinationSelection();
+      const action = beginAction();
+      try {
+        await action.run(setMode, newMode);
+      } catch (error) {
+        if (!action.isCurrent() || error?.name === 'AbortError') return;
+        console.error('[SidebarNavigation] Failed to switch console:', error);
+      }
+    }
+  }, [beginAction, handleDestinationSelection, mode, setMode]);
+
+  // Get nav items based on console mode, filtered by permissions
+  const navItems = useMemo(() => {
+    const items = mode === 'org' ? ADMIN_VENDOR_NAV : APPLICANT_NAV;
+
+    // Filter items and their children by requiredPermission
+    const filterByPermission = (list) =>
+      list
+        .filter((item) => {
+          if (!item.requiredPermission) return true;
+          const { resource, action } = item.requiredPermission;
+          return !permissionsLoading && !permissionError && can(resource, action);
+        })
+        .map((item) => {
+          if (!item.children) return item;
+          const filteredChildren = filterByPermission(item.children);
+          return { ...item, children: filteredChildren };
+        });
+
+    return filterByPermission(items);
+  }, [mode, can, permissionsLoading, permissionError]);
+
+  // Find active item
+  const activeItem = useMemo(() => {
+    return findActiveNavItem(navItems, location.pathname);
+  }, [navItems, location.pathname]);
+
+  // Auto-expand parent of active child
+  useMemo(() => {
+    if (activeItem.parent && activeItem.child) {
+      setExpandedItems((prev) => ({
+        ...prev,
+        [activeItem.parent.id]: true,
+      }));
+    }
+  }, [activeItem]);
+
+  const handleToggle = useCallback((itemId) => {
+    setExpandedItems((prev) => ({
+      ...prev,
+      [itemId]: !prev[itemId],
+    }));
+  }, []);
+
+  const handleCollapseToggle = useCallback(() => {
+    setDesktopCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sidebar-collapsed', String(next));
+      } catch {
+        // Storage can be unavailable in privacy-restricted browser contexts.
+      }
+      if (next) setExpandedItems({});
+      return next;
+    });
+  }, []);
+
+  const drawerContent = (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        bgcolor: 'background.paper',
+      }}
+    >
+      {/* Section A - Console Switcher */}
+      {!collapsed && showConsoleSwitcher && (
+        <Box sx={{ p: 2 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+            Console
+          </Typography>
+          <ToggleButtonGroup
+            value={mode}
+            exclusive
+            onChange={handleModeChange}
+            size="small"
+            fullWidth
+            sx={{ mb: 1 }}
+          >
+            <ToggleButton value="applicant" disabled={!isApplicantConsoleAvailable} sx={{ textTransform: 'none', minWidth: 0, px: 1 }}>
+              <PersonIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
+              <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Applicant</Box>
+            </ToggleButton>
+            {isOrgConsoleAvailable && (
+              <ToggleButton value="org" sx={{ textTransform: 'none', minWidth: 0, px: 1 }}>
+                <BusinessIcon fontSize="small" sx={{ mr: 0.5, flexShrink: 0 }} />
+                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Org</Box>
+              </ToggleButton>
+            )}
+          </ToggleButtonGroup>
+        </Box>
+      )}
+
+      {/* Collapsed console switcher icons */}
+      {collapsed && showConsoleSwitcher && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 1, gap: 0.5 }}>
+          <Tooltip title="Applicant Console" placement="right">
+            <IconButton
+              size="small"
+              onClick={(event) => handleModeChange(event, 'applicant')}
+              disabled={!isApplicantConsoleAvailable}
+              sx={{
+                bgcolor: mode === 'applicant' ? 'action.selected' : 'transparent',
+                '&:hover': { bgcolor: 'action.hover' },
+              }}
+            >
+              <PersonIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {isOrgConsoleAvailable && (
+            <Tooltip title="Organization Console" placement="right">
+              <IconButton
+                size="small"
+                onClick={(event) => handleModeChange(event, 'org')}
+                sx={{
+                  bgcolor: mode === 'org' ? 'action.selected' : 'transparent',
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}
+              >
+                <BusinessIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      )}
+
+      <Divider />
+
+      {/* Collapse toggle for desktop */}
+      {!isMobile && !collapsed && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 2, py: 1 }}>
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Collapse navigation" aria-expanded={true}>
+            <ChevronLeftIcon />
+          </IconButton>
+        </Box>
+      )}
+
+      {!isMobile && collapsed && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Expand navigation" aria-expanded={false}>
+            <MenuIcon />
+          </IconButton>
+        </Box>
+      )}
+
+      {mode === 'org' && permissionsLoading && (
+        <Box role="status" aria-label="Loading navigation permissions"
+          sx={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 1, px: 2, pb: 1 }}>
+          <CircularProgress size={18} aria-hidden="true" />
+          {!collapsed && <Typography variant="body2">Loading navigation...</Typography>}
+        </Box>
+      )}
+      {mode === 'org' && !permissionsLoading && permissionError && (
+        collapsed ? (
+          <Box role="alert" aria-label="Navigation permissions could not be loaded" sx={{ textAlign: 'center', pb: 1 }}>
+            <Tooltip title="Navigation permissions could not be loaded. Retry.">
+              <IconButton color="error" aria-label="Retry navigation permissions" onClick={refreshPermissions}>
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        ) : (
+          <Alert severity="error" icon={false} sx={{ mx: 2, mb: 1 }}
+            action={<Button color="inherit" size="small" aria-label="Retry navigation permissions" onClick={refreshPermissions}>Retry</Button>}>
+            Navigation permissions could not be loaded.
+          </Alert>
+        )
+      )}
+
+      {/* Section C - Navigation Items */}
+      <List
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          pt: 1,
+          // Disable navigation when org console is blocked
+          opacity: isOrgBlocked ? 0.5 : 1,
+          pointerEvents: isOrgBlocked ? 'none' : 'auto',
+        }}
+      >
+        {navItems.map((item) => (
+          <NavItem
+            key={item.id}
+            item={item}
+            isActive={activeItem.parent?.id === item.id && !activeItem.child}
+            isChildActive={activeItem.parent?.id === item.id && !!activeItem.child}
+            expanded={expandedItems[item.id] || false}
+            onToggle={handleToggle}
+            onNavigate={handleDestinationSelection}
+            collapsed={collapsed}
+            parentId={null}
+          />
+        ))}
+      </List>
+
+      {/* Footer - Help link */}
+      {!collapsed && (
+        <>
+          <Divider />
+          <Box sx={{ p: 2 }}>
+            {isMobile && (
+              <Box sx={{ display: 'grid', gap: 1, mb: 2 }}>
+                <Button
+                  startIcon={<LogoutIcon />}
+                  variant="contained"
+                  fullWidth
+                  onClick={() => {
+                    onMobileClose();
+                    logout();
+                  }}
+                  sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                >
+                  Sign out
+                </Button>
+              </Box>
+            )}
+            {SHOW_PUBLIC_DOCUMENTATION_NAV && (
+              <Typography variant="caption" color="text.secondary">
+                Need help?{' '}
+                <Link to="/docs" onClick={handleDestinationSelection} style={{ color: theme.palette.primary.main }}>
+                  View API Docs
+                </Link>
+              </Typography>
+            )}
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+
+  // Mobile drawer
+  if (isMobile) {
+    return (
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={onMobileClose}
+        ModalProps={{ keepMounted: true }}
+        slotProps={{
+          paper: {
+            sx: {
+            boxSizing: 'border-box',
+            width: DRAWER_WIDTH,
+            top: HEADER_HEIGHT,
+            height: `calc(100% - ${HEADER_HEIGHT}px)`,
+            },
+          },
+        }}
+        sx={{
+          display: { xs: 'block', md: 'none' },
+        }}
+      >
+        {drawerContent}
+      </Drawer>
+    );
+  }
+
+  // Desktop drawer
+  return (
+    <Drawer
+      variant="permanent"
+      sx={{
+        width: collapsed ? DRAWER_WIDTH_COLLAPSED : DRAWER_WIDTH,
+        position: 'sticky',
+        top: HEADER_HEIGHT,
+        alignSelf: 'flex-start',
+        height: `calc(100vh - ${HEADER_HEIGHT}px)`,
+        minHeight: 0,
+        flexShrink: 0,
+        '&.MuiDrawer-docked': {
+          height: `calc(100vh - ${HEADER_HEIGHT}px)`,
+        },
+        '& .MuiDrawer-paper': {
+          width: collapsed ? DRAWER_WIDTH_COLLAPSED : DRAWER_WIDTH,
+          boxSizing: 'border-box',
+          position: 'static',
+          height: '100%',
+          minHeight: 0,
+          transition: theme.transitions.create('width', {
+            easing: theme.transitions.easing.sharp,
+            duration: theme.transitions.duration.enteringScreen,
+          }),
+          overflowX: 'hidden',
+          overflowY: 'hidden',
+        },
+      }}
+    >
+      {drawerContent}
+    </Drawer>
+  );
+}
+
+export default SidebarNavigation;

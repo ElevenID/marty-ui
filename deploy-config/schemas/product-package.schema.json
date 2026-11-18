@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elevenidllc.com/schemas/product-package.schema.json",
+  "title": "Unqualified independent Marty product package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "product", "version", "tag", "source", "api", "platforms", "images", "build_plan_sha256", "producer", "support_state", "qualification"],
+  "properties": {
+    "schema": {"const": "marty.product-package/v1"},
+    "product": {"enum": ["marty-server", "marty-console"]},
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "tag": {"type": "string"},
+    "source": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "commit"],
+      "properties": {"repository": {"const": "ElevenID/marty-ui"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+    },
+    "api": {
+      "type": "object", "additionalProperties": false, "required": ["http", "mip"],
+      "properties": {"http": {"const": "v1"}, "mip": {"const": "0.5.0"}}
+    },
+    "platforms": {"const": ["linux/amd64"]},
+    "images": {"type": "array", "items": {"$ref": "#/$defs/image"}},
+    "build_plan_sha256": {"$ref": "#/$defs/digest"},
+    "producer": {
+      "type": "object", "additionalProperties": false, "required": ["workflow", "run_id", "run_attempt"],
+      "properties": {
+        "workflow": {"const": ".github/workflows/product-packages.yml"},
+        "run_id": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+        "run_attempt": {"type": "string", "pattern": "^[1-9][0-9]*$"}
+      }
+    },
+    "support_state": {"const": "experimental"},
+    "qualification": {"const": "unqualified"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"product": {"const": "marty-server"}}},
+      "then": {"properties": {
+        "tag": {"pattern": "^server-v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "images": {
+          "minItems": 4, "maxItems": 4,
+          "allOf": [
+            {"contains": {"properties": {"role": {"const": "services"}}}},
+            {"contains": {"properties": {"role": {"const": "migrations"}}}},
+            {"contains": {"properties": {"role": {"const": "openbao-didcomm"}}}},
+            {"contains": {"properties": {"role": {"const": "keycloak"}}}}
+          ]
+        }
+      }}
+    },
+    {
+      "if": {"properties": {"product": {"const": "marty-console"}}},
+      "then": {"properties": {
+        "tag": {"pattern": "^console-v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "images": {"minItems": 1, "maxItems": 1, "items": {"properties": {"role": {"const": "ui"}}}}
+      }}
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["role", "uri", "digest", "platform"],
+      "properties": {
+        "role": {"enum": ["services", "migrations", "openbao-didcomm", "keycloak", "ui"]},
+        "uri": {"type": "string"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "platform": {"const": "linux/amd64"}
+      },
+      "allOf": [
+        {"if": {"properties": {"role": {"const": "services"}}}, "then": {"properties": {"uri": {"const": "ghcr.io/elevenid/marty-server/services"}}}},
+        {"if": {"properties": {"role": {"const": "migrations"}}}, "then": {"properties": {"uri": {"const": "ghcr.io/elevenid/marty-server/migrations"}}}},
+        {"if": {"properties": {"role": {"const": "openbao-didcomm"}}}, "then": {"properties": {"uri": {"const": "ghcr.io/elevenid/marty-server/openbao-didcomm"}}}},
+        {"if": {"properties": {"role": {"const": "keycloak"}}}, "then": {"properties": {"uri": {"const": "ghcr.io/elevenid/marty-server/keycloak"}}}},
+        {"if": {"properties": {"role": {"const": "ui"}}}, "then": {"properties": {"uri": {"const": "ghcr.io/elevenid/marty-console/ui"}}}}
+      ]
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "welcome": {
+    "title": "Welkom bij {{appName}}",
+    "subtitle": "Laten we u instellen",
+    "getStarted": "Aan de slag"
+  },
+  "roleSelection": {
+    "title": "Kies uw rol",
+    "subtitle": "Wat brengt u hier?",
+    "promptTitle": "Kies de optie die u het beste beschrijft",
+    "administrator": "Beheerder",
+    "administratorDesc": "Beheer het platform en de vertrouwensinfrastructuur",
+    "vendor": "Leverancier / Organisatie",
+    "vendorDesc": "Ik geef documenten uit voor mijn organisatie",
+    "vendorFeatures": [
+      "Digitale reisdocumenten uitgeven",
+      "Aanvragers en aanvragen beheren",
+      "Toegang tot API voor integraties",
+      "Webhooks en automatiseringen configureren"
+    ],
+    "applicant": "Aanvrager",
+    "applicantDesc": "Ik vraag digitale reisdocumenten aan",
+    "applicantFeatures": [
+      "Aanvragen voor digitale reisdocumenten",
+      "Referenties opslaan in uw portemonnee",
+      "Documenten veilig delen",
+      "Aanvraagstatus volgen"
+    ]
+  },
+  "organization": {
+    "title": "Lid worden van organisatie",
+    "subtitle": "Voer uw organisatiegegevens in",
+    "organizationName": "Organisatienaam",
+    "organizationCode": "Organisatiecode",
+    "createNew": "Nieuwe organisatie aanmaken",
+    "joinExisting": "Lid worden van bestaande organisatie"
+  },
+  "profile": {
+    "title": "Uw profiel",
+    "subtitle": "Vertel ons over uzelf",
+    "firstName": "Voornaam",
+    "lastName": "Achternaam",
+    "email": "E-mail",
+    "phone": "Telefoonnummer"
+  },
+  "trustSetup": {
+    "title": "Vertrouwensprofiel",
+    "subtitle": "Definieer welke referentie-uitgiftes u vertrouwt",
+    "addIssuers": "Vertrouwde uitgiftes toevoegen",
+    "configurePolicies": "Beleid configureren"
+  },
+  "completion": {
+    "title": "Klaar!",
+    "subtitle": "Uw account is klaar voor gebruik",
+    "goToDashboard": "Ga naar dashboard"
+  },
+  "steps": {
+    "role": "Rol",
+    "organization": "Organisatie",
+    "profile": "Profiel",
+    "trust": "Vertrouwen",
+    "complete": "Voltooid"
+  },
+  "domainMatch": {
+    "title": "Organisaties gevonden voor uw e-maildomein",
+    "info": "We hebben {{count}} organisatie gevonden die gebruikers accepteert van het",
+    "info_other": "We hebben {{count}} organisaties gevonden die gebruikers accepteren van het",
+    "domain": "<strong>{{domain}}</strong> domein.",
+    "policies": {
+      "auto": "Direct toegang",
+      "approval": "Vereist goedkeuring",
+      "closed": "Gesloten"
+    },
+    "autoDescription": "U wordt automatisch toegevoegd als <strong>{{role}}</strong>",
+    "approvalDescription": "Uw verzoek wordt beoordeeld door een beheerder. U wordt op de hoogte gesteld zodra het is goedgekeurd.",
+    "buttons": {
+      "joinNow": "Nu lid worden",
+      "requestToJoin": "Verzoek om lid te worden",
+      "closed": "Gesloten",
+      "processing": "Bezig met verwerken..."
+    },
+    "skipWarning": "U kunt deze stap ook overslaan en later handmatig lid worden van organisaties met een uitnodigingscode.",
+    "skipButton": "Nu overslaan"
+  },
+  "confirmOrg": {
+    "title": "Bevestig organisatieselectie",
+    "warning": "Controleer of u lid wilt worden van de volgende organisatie:",
+    "approvalInfo": "Deze organisatie vereist goedkeuring. Uw verzoek wordt beoordeeld door een beheerder.",
+    "cancel": "Annuleren",
+    "confirm": "Bevestigen & lid worden",
+    "processing": "Bezig met verwerken..."
+  },
+  "membershipMode": {
+    "inviteOnly": "Alleen op uitnodiging",
+    "approval": "Verzoek om lid te worden",
+    "open": "Open"
+  }
+}

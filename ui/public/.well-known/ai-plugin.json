@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "ElevenID",
+  "name_for_model": "elevenid",
+  "description_for_human": "Verifiable identity infrastructure for issuing and verifying credentials, Open Badges, and identity documents.",
+  "description_for_model": "ElevenID provides APIs for verifying and issuing verifiable credentials, Open Badges, and identity documents. Use this plugin to verify credential authenticity, issue digital badges, query trust registries, and manage identity verification workflows using standards like W3C Verifiable Credentials, OID4VCI, OID4VP, ISO 18013-5 mDoc, and SD-JWT.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://elevenidllc.com/openapi.yaml"
+  },
+  "logo_url": "https://elevenidllc.com/logo512.png",
+  "contact_email": "sales@elevenidllc.com",
+  "legal_info_url": "https://elevenidllc.com/terms"
+}

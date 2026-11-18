@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "waltid": {
+    "wallet_api_image": "docker.io/waltid/wallet-api:latest@sha256:81aed55138ddfadaf2cbc5c42e04840fb5dd0787acbff15d17d2bb5f9ac130c8",
+    "web_wallet_image": "docker.io/waltid/waltid-demo-wallet:latest@sha256:54eba235f8158223c3b6ae02d4e1f7086f55ef9ffe8cb0597000b1b113f4d8ff",
+    "advertised": false,
+    "required_capabilities": [],
+    "unsupported_capabilities": [
+      "oid4vci_issuance",
+      "oid4vp_dcql_verification",
+      "credential_login"
+    ],
+    "issuance_blocker": "The pinned July 10 community build sends the removed Draft 13 proof field instead of OID4VCI 1.0 proofs",
+    "oid4vp_blocker": "The pinned July 10 community build requires Presentation Exchange and cannot resolve a DCQL-only request"
+  },
+  "marty_test_wallet": {
+    "repository": "ElevenID/marty-core",
+    "revision_variable": "MARTY_CORE_REF",
+    "test_only": true,
+    "required_capabilities": [
+      "oid4vci_issuance",
+      "oid4vp_dcql_verification",
+      "credential_login"
+    ]
+  }
+}

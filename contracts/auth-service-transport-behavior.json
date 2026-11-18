@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "flow_verification": {
+    "rpc": "StartVerification",
+    "response_type": "vp_token",
+    "request_transport": "request_uri",
+    "required_response_fields": ["instance_id", "request_uri_or_qr_code_data"]
+  },
+  "organization_provisioning": {
+    "ensure_rpc": "AddMember",
+    "context_rpcs": ["GetMember", "GetOrganization"],
+    "already_exists_is_success": true,
+    "member_not_found_is_absent": true,
+    "organization_detail_failure_preserves_membership": true
+  },
+  "applicant_profile": {
+    "method": "PATCH",
+    "path": "/v1/me/applicant-profile",
+    "required_headers": ["content-type", "x-user-id", "x-user-email", "x-organization-id"],
+    "body_fields": ["email", "given_name", "family_name"],
+    "jit_patch_field": "vetting_data_patch",
+    "maximum_response_bytes": 65536,
+    "canvas_failure_mode": "best_effort_at_application_boundary",
+    "jit_failure_mode": "fail_closed",
+    "identity_keys": ["oidc_subject", "email"],
+    "preserve_existing_names_when_claims_missing": true,
+    "merge_vetting_data": true,
+    "fail_on_split_identity": true
+  },
+  "auth_events": {
+    "topic": "auth.events",
+    "delivery_guarantee": "at_least_once",
+    "message_types": ["user_authenticated", "session_created", "logout", "session_revoked"]
+  }
+}

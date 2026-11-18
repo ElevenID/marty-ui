@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "topic": "Applicant withdrawal while issuance may remain active",
+  "recordedAt": "2026-10-20T07:21:08.316033+00:00",
+  "status": "LOCAL_SOURCE_VERIFIED",
+  "sourceRepository": "ElevenID/marty-ui",
+  "branch": "audit/demo-runtime-integrity-2026-10-20",
+  "baseRevision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+  "implementationCommit": "0a2b100c8202e2ebfb2870377df95f2981da5042",
+  "observedProblem": [
+    "Organization withdrawal unconditionally changed approved, offered and credentialed applications to WITHDRAWN while leaving issuance tokens and credentials untouched.",
+    "A reserved Flow request could remain in flight while organization withdrawal masked its application; applying the eventual offer then failed at the application boundary.",
+    "An early or previously withdrawn application carrying retained or uncertain issuance data could also be accepted by the self-service withdrawal path."
+  ],
+  "contractReview": {
+    "reviewedContract": "contracts/applicant-service-behavior.json",
+    "contractPromises": "Withdrawal decisions and fail_closed behavior; no token cancellation or credential revocation guarantee.",
+    "organizationPermission": "application:review",
+    "credentialRevocationPermissionIsNotGranted": true,
+    "legacyPythonApplicantRuntime": "Removed by existing native cutover; historical Python implementation unavailable in this shallow base.",
+    "preservedBroaderOrganizationStates": [
+      "DRAFT",
+      "SUBMITTED",
+      "UNDER_REVIEW",
+      "PENDING_INFORMATION",
+      "REJECTED",
+      "WITHDRAWN"
+    ],
+    "preservedSelfServiceStates": [
+      "DRAFT",
+      "SUBMITTED",
+      "PENDING_INFORMATION",
+      "WITHDRAWN"
+    ]
+  },
+  "implementation": {
+    "sharedRustMutation": true,
+    "guardAndMutationUnderSameStoreWriteLock": true,
+    "blockedStates": [
+      "APPROVED",
+      "OFFERED",
+      "CREDENTIALED",
+      "SUSPENDED"
+    ],
+    "approvedBoundary": "Approval commits an application.approved event; absence of a returned offer is not proof that issuance has not started.",
+    "blockedEvidence": "Offer/claim state, issued_at, an active attempt, or retained/nonempty issuance transaction, attempt, Flow, offer, expiry or issuance status data. Malformed non-null bindings are refused.",
+    "denialHttpStatus": 409,
+    "denialDetail": "Issuance must be reconciled before withdrawing this application",
+    "denialsPreserveWholeStoreAndSkipPersistence": true,
+    "credentialRevocationOrTokenCancellationPerformed": false,
+    "existingOrganizationApplicantProfileProjectionPreserved": true
+  },
+  "verification": [
+    {
+      "phase": "regression before production change",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/rust",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test -p marty-applicant --locked --offline -j2 --test application_behavior withdrawal_ -- --nocapture",
+      "log": "applicant-withdrawal-before.log",
+      "exitCode": 101,
+      "passed": 1,
+      "failed": 3,
+      "ignored": 0,
+      "boundary": "New tests were run against unchanged baseline applicant production source. The final test file was subsequently formatted; this record does not claim its final byte hash was the pre-change test input."
+    },
+    {
+      "phase": "final focused verification",
+      "workingDirectory": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+      "command": "env PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --manifest-path rust/Cargo.toml -p marty-applicant --locked --offline -j2 --test application_behavior --test http_behavior --test issuance_behavior --test domain_behavior",
+      "log": "applicant-withdrawal-after.log",
+      "exitCode": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "suites": {
+        "application_behavior": 13,
+        "http_behavior": 6,
+        "issuance_behavior": 6,
+        "domain_behavior": 6
+      },
+      "newNamedCases": 7,
+      "existingNamedCases": 24
+    },
+    {
+      "phase": "source whitespace",
+      "command": "git diff --check -- rust/services/applicant",
+      "exitCode": 0
+    }
+  ],
+  "logFiles": {
+    "applicant-withdrawal-before.log": {
+      "sha256": "612450349b3bb1d7e89d93a2bcf200d240884684ba5fdbccbe3ce69e37e9a312",
+      "bytes": 3983
+    },
+    "applicant-withdrawal-after.log": {
+      "sha256": "4a855dd1e62c27873d6c849ee926243d4eb21250fe0f381ba7f8e3ec6eef6846",
+      "bytes": 3533
+    }
+  },
+  "sourceFiles": [
+    {
+      "path": "rust/services/applicant/src/service.rs",
+      "sha256": "c7434652a505629ee67581753f305c1050e9b5c5d2afe9676b0930d99ff21d65",
+      "gitBlob": "833cb58001ea2ffdc9cd3a03962c6cc7bcff1b4c"
+    },
+    {
+      "path": "rust/services/applicant/src/http.rs",
+      "sha256": "29dc5ce98e7816461ed953a22166b8afe526825c4066a6312a13067493fa972f",
+      "gitBlob": "9729d768b18fb03343ab1f330eb1b5f42e959c78"
+    },
+    {
+      "path": "rust/services/applicant/tests/application_behavior.rs",
+      "sha256": "7fbdd00f43c76991ffd4d936b8388d2d791d720e385f52cf3da5162f917ccac2",
+      "gitBlob": "3d3720e2f9263ce71b8fc9cef3a99074aec529ac"
+    },
+    {
+      "path": "rust/services/applicant/tests/http_behavior.rs",
+      "sha256": "1b907d3507515256ef555db7b72ddec15dca9acaf848baf9e0139d7f0e694135",
+      "gitBlob": "c096f9ece6893b7cc22dc2bd4c01dc02388c93c1"
+    },
+    {
+      "path": "rust/services/applicant/tests/issuance_behavior.rs",
+      "sha256": "13255c116bdf5761c8f64106c7308e9442557348175ba65ab08076626e4cc060",
+      "gitBlob": "22c9635a3f4deecf22e05b5e337a6c75d5f78bd1"
+    },
+    {
+      "path": "rust/services/applicant/tests/domain_behavior.rs",
+      "sha256": "48692c7b21e57e5f4f57aab323e03798a83d2bbf23c4ffd16c9438c2efbb477f",
+      "gitBlob": "1b87a9b42222fefdfb839503a39a99998c7a2df0"
+    },
+    {
+      "path": "rust/services/applicant/Cargo.toml",
+      "sha256": "c8c90c533bc7d2edb85a9d147a69e68b0bbee08028e6adc087e41395f1e655e7",
+      "gitBlob": "5a64670964fa870d7e5f46243c62ee58b8d0e530"
+    },
+    {
+      "path": "rust/Cargo.toml",
+      "sha256": "a2407d78f8577263f5963270557da8063f93c23a8d1a452b35f6a2b78e68a6a5",
+      "gitBlob": "e137dcd100ef913a687e5b93811565432f3f2df9"
+    },
+    {
+      "path": "rust/Cargo.lock",
+      "sha256": "27053750b90bc41a547b3300734ab40745c35ea5b9cef9c075af767489c45750",
+      "gitBlob": "a51d4bbfcad18aaa25592aeeaefc6439ac9897e5"
+    },
+    {
+      "path": "contracts/applicant-service-behavior.json",
+      "sha256": "d11fe61311b03b2b9dd668acda48d53733273656824f4ff5dcd6020e48895998",
+      "gitBlob": "b112665a18f753929e27d878aacbfb6018a2f105"
+    }
+  ],
+  "remainingBoundaries": [
+    "No live beta, native wallet capture, deployed Rust service, or physical device was exercised.",
+    "Withdrawal remains an application decision. Automatic server resource retirement is not implemented or claimed.",
+    "Previously inconsistent WITHDRAWN records are preserved for exact-ID reconciliation; this change does not scan, repair, revoke or delete them.",
+    "The native recorder retirement result remains NOT_PERFORMED.",
+    "Expired/revoked issuance history also requires reconciliation because the applicant projection cannot prove all remote credentials and tokens were retired.",
+    "No Cargo manifest, dependency, lockfile or frozen route-inventory changes were made."
+  ]
+}

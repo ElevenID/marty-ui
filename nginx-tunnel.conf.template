@@ -1,0 +1,420 @@
+# Nginx Configuration Template for Cloudflare Tunnel
+# ==================================================
+# This template uses environment variables that are substituted at runtime
+#
+# Variables:
+#   PUBLIC_DOMAIN    - The public domain (e.g., beta.elevenidllc.com)
+#   UI_DEV_PORT      - The port where the UI runs on the host (default: 3000)
+#   GATEWAY_UPSTREAM - The backend gateway upstream reachable from Docker
+#   NORTHSTAR_ADMISSIONS_PUBLIC_HOST - Public hostname for the D-11 partner app
+
+# Use variable to force DNS resolution at runtime (IPv4 only)
+resolver 127.0.0.11 valid=30s ipv6=off;
+
+server {
+    listen 80;
+    server_name ${PUBLIC_DOMAIN};
+
+    # Increase buffer sizes for large requests
+    client_max_body_size 50M;
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # API routes - proxy to gateway on the compose network.
+    location /api/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        
+        # CORS headers
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Authorization, Content-Type" always;
+        
+        # Handle OPTIONS requests
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Auth routes - proxy to gateway
+    location /auth/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/auth/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # Readiness and health checks. Keep readiness out of the UI SPA fallback.
+    location = /ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health/ready {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /health {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    # AI discovery - serve static ai-plugin.json from UI
+    location = /.well-known/ai-plugin.json {
+        root /usr/share/nginx/html;
+        try_files /.well-known/ai-plugin.json =404;
+        add_header Content-Type application/json;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # OID4VCI discovery + well-known endpoints - proxy to gateway (no auth required by wallets)
+    location /.well-known/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Compatibility: some wallets still try the *appended* discovery form:
+    #   https://issuer.example.com/org/<id>/.well-known/openid-credential-issuer
+    # OID4VCI v1 requires the *inserted* form:
+    #   https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>
+    # If we don't catch this, it falls through to the UI and returns HTML.
+
+    # Google CredentialManager appended form: /org/<id>/credential-manager/.well-known/openid-credential-issuer
+    # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/credential-manager
+    location ~ "^/org/([0-9a-fA-F-]{36})/credential-manager/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/credential-manager;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Apple Wallet appended form: /org/<id>/apple-wallet/.well-known/openid-credential-issuer
+    # → rewrite to: /.well-known/openid-credential-issuer/org/<id>/apple-wallet
+    location ~ "^/org/([0-9a-fA-F-]{36})/apple-wallet/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/apple-wallet;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Standard appended form: /org/<id>/.well-known/openid-credential-issuer
+    # → rewrite to: /.well-known/openid-credential-issuer/org/<id>
+    # walt.id browser wallet appended form: /org/<id>/waltid/.well-known/openid-credential-issuer
+    location ~ "^/org/([0-9a-fA-F-]{36})/waltid/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1/waltid;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location ~ "^/org/([0-9a-fA-F-]{36})/\.well-known/(openid-credential-issuer|oauth-authorization-server)$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/.well-known/$2/org/$1;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # /org/... is a protocol metadata namespace, not a React route. If a more
+    # specific compatibility route above does not match, fail closed instead
+    # of handing the request to the UI SPA fallback as text/html.
+    location /org/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
+    }
+
+    # OID4VP verifier did:web resolution - /oid4vp/did.json
+    # Serves did:web:{domain}:oid4vp for wallets that cannot resolve did:key/did:jwk.
+    location = /oid4vp/did.json {
+        set $flow_upstream flow:8011;
+        proxy_pass http://$flow_upstream/oid4vp/did.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # Keep the OID4VP machine-readable namespace out of the UI SPA fallback.
+    location /oid4vp/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
+    }
+
+    # did:web path-scoped resolution — /orgs/{slug}/did.json
+    # Serves DID documents for did:web:{domain}:orgs:{slug} identifiers.
+    location ~ "^/orgs/[a-zA-Z0-9._-]+/did\.json$" {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+        add_header Cache-Control "public, max-age=300" always;
+    }
+
+    # /orgs/... is also a protocol namespace. Only explicit routes should
+    # return data; unknown paths must not become the app shell.
+    location /orgs/ {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+        return 404 '{"error":"not_found"}';
+    }
+
+    # SD-JWT VC type metadata and badge assets. Wallets dereference the
+    # credential vct URL (for example /credentials/marty-verified-member-badge)
+    # to find holder-facing display names; route this before the UI SPA fallback.
+    location ^~ /credentials/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Keycloak routes - for OIDC authentication
+    location /realms/ {
+        set $keycloak keycloak:8080;
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+    }
+
+    # Keycloak resources - static assets (themes, CSS, JS)
+    location /resources/ {
+        set $keycloak keycloak:8080;
+        proxy_pass http://$keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        
+        # Cache static resources
+        proxy_cache_valid 200 1h;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # Auth API routes - always use tunnel auth service so beta keeps beta redirects
+    location /v1/auth/ {
+        set $auth_upstream auth:8001;
+        proxy_pass http://$auth_upstream;
+        proxy_http_version 1.1;
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # V1 API routes (including auth endpoints)
+    location /v1/ {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api;
+        proxy_http_version 1.1;
+        proxy_redirect off;  # Never rewrite Location headers — backend sends absolute URLs
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # OpenAPI schema for API documentation (ReDoc on /docs page)
+    location = /openapi.yaml {
+        absolute_redirect off;
+        return 308 /openapi.json;
+    }
+
+    location = /openapi.json {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/openapi.json;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # Developer documentation — redirect to docs subdomain
+    location /developer-docs/ {
+        return 301 https://${DOCS_DOMAIN}$request_uri;
+    }
+
+    # UI routes - proxy to Vite dev server on host
+    location = /console {
+        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
+        proxy_pass http://$ui_upstream/console;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    location ^~ /console/ {
+        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
+        proxy_pass http://$ui_upstream/console;
+        proxy_http_version 1.1;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    # UI routes - proxy to Vite dev server on host
+    location / {
+        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
+        proxy_pass http://$ui_upstream;
+        proxy_http_version 1.1;
+
+        # Required for Vite HMR websocket
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+
+        # Vite pre-bundles large deps (e.g. MUI icons) on first request — allow extra time
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}
+
+# ==========================================================================
+# Developer documentation (Starlight) — docs.elevenidllc.com
+# ==========================================================================
+# Requires a Cloudflare tunnel public hostname entry:
+#   ${DOCS_DOMAIN} → http://tunnel-nginx-proxy:80
+# ==========================================================================
+server {
+    listen 80;
+    server_name ${DOCS_DOMAIN};
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    location / {
+        set $docs_upstream docs:80;
+        proxy_pass http://$docs_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# ==========================================================================
+# D-11 external partner application - ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST}
+# ==========================================================================
+# Requires a Cloudflare tunnel public hostname entry:
+#   ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST} -> http://tunnel-nginx-proxy:80
+# The upstream is a separately branded application. It is not a Marty UI or
+# gateway route and receives only Marty's outbound webhook plus browser traffic.
+# ==========================================================================
+server {
+    listen 80;
+    server_name ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST};
+
+    client_max_body_size 64k;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        set $northstar_upstream northstar-admissions:4175;
+        proxy_pass http://$northstar_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+}

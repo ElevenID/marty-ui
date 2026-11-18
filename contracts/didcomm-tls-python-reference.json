@@ -1,0 +1,16 @@
+{
+  "schema": "marty.didcomm-tls-python-reference/v1",
+  "reference": {
+    "repository": "ElevenID/marty-credentials",
+    "source_path": "services/issuance/infrastructure/api/routes.py",
+    "source_blob": "6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a",
+    "setup_blob": "f373c4d1762f916b616e4b83a38101112ec78e85",
+    "capture": "scripts/capture_didcomm_tls_reference.py; executed unchanged delivery helper with existing controlled signing/resolution/repository setup and real ssl verifier. Same-path rotation uses two freshly generated local synthetic certificates.",
+    "scope": "TLS configuration phase, exact public failure and real SSLContext reload/bundle semantics. Controlled allocation/signing/crypto and repository; no wallet, PostgreSQL, KMS or native durable-state parity claim. The Python save is prior issuer-context persistence, not credential finalization."
+  },
+  "cases": [
+    {"case":"missing_ca","status":503,"body":{"detail":"DIDComm TLS trust configuration is unavailable"},"allocation_calls":1,"signing_calls":1,"packing_calls":1,"encryption_calls":1,"http_client_calls":0,"save_calls":1,"status_after":"pending"},
+    {"case":"malformed_ca","status":503,"body":{"detail":"DIDComm TLS trust configuration is unavailable"},"allocation_calls":1,"signing_calls":1,"packing_calls":1,"encryption_calls":1,"http_client_calls":0,"save_calls":1,"status_after":"pending"},
+    {"case":"same_path_valid_rotation_bundle","new_context_each_attempt":true,"additional_certificate_count":1,"verification_required":true,"hostname_validation":true,"blank_path_uses_default_web_pki":true}
+  ]
+}

@@ -1,0 +1,872 @@
+#!/usr/bin/env node
+/* eslint-disable no-console */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { randomUUID, createHash } = require('node:crypto');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
+const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
+const { chromium } = require('@playwright/test');
+const { acquireWalletSession } = require('./demo-wallet-session');
+
+const {
+  ensureActiveRevocationProfile,
+  login,
+  receiveCredential,
+  selectOrg,
+  verify,
+  waitFor,
+} = require('./audit-beta-credential-lifecycle');
+const {
+  DEFAULT_BETA_ORGANIZATION_ID,
+  DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+} = require('./beta-credential-contract');
+const {
+  DEFAULT_CREDENTIAL_RANKING_STRATEGY,
+  browserJson,
+  cleanupApplicationCredential,
+  compactObject,
+  createOwnedApplication,
+  ensureActiveResource,
+  ensureApplicantProfile,
+  ensureGovernedIssuer,
+  findCurrentCredential,
+  governedIssuerTrustProfilePayload,
+  issueOwnedApplication,
+  requestedClaim,
+  requireJson,
+  requireActiveComplianceProfile,
+  requireNoConflictingApplications,
+  requireOwnedApplication,
+  resolveActiveIssuerDid,
+  submitOwnedApplication,
+} = require('./beta-demo-resource-helpers');
+const {
+  PASSPORT_EVIDENCE_SHA256,
+  passportClearanceBehaviorAssertions,
+  subjectClaimsHash,
+  validEvidenceDigest,
+} = require('./beta-passport-clearance-contract');
+const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
+const { approveThroughConsole, issueThroughConsole, requireVerificationDecision } = require('./beta-demo-review-ui');
+const {
+  VIDEO_SIZE,
+  createArtifactDir,
+  createActionRecording,
+  finalizeVideo,
+  showStep,
+  showVerificationResult,
+} = require('./demo-recording');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
+loadEnvFile(path.join(ROOT, '.env'));
+
+const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
+const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
+const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
+const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID
+  || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
+const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
+const HEADLESS = process.env.HEADED !== '1';
+const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const ADMIN_API_FUNCTIONAL = process.env.D01_ADMIN_API_FUNCTIONAL === '1';
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
+const RESOURCE_NAMES = Object.freeze({
+  trust: 'D-01 Pre-Boarding Issuer Trust',
+  credential: 'D-01 Pre-Boarding Clearance Credential',
+  application: 'D-01 Passport Pre-Boarding Clearance',
+  policy: 'D-01 Rapid Gate Clearance',
+  flow: 'D-01 Pre-Boarding Credential Issuance',
+});
+
+function clearanceClaims() {
+  return [
+    ['traveler_id', 'Traveler ID'],
+    ['flight_number', 'Flight number'],
+    ['departure_airport', 'Departure airport'],
+    ['arrival_airport', 'Arrival airport'],
+    ['boarding_group', 'Boarding group'],
+    ['clearance_status', 'Clearance status'],
+    ['passport_evidence_sha256', 'Passport evidence SHA-256'],
+  ].map(([name, displayName]) => ({
+    name,
+    display_name: displayName,
+    description: null,
+    claim_type: 'STRING',
+    required: true,
+    selectively_disclosable: true,
+    derivable: false,
+    derived_from: null,
+    pattern: name === 'passport_evidence_sha256' ? PASSPORT_EVIDENCE_SHA256.source : null,
+    enum_values: name === 'clearance_status' ? ['CLEARED'] : null,
+    min_value: null,
+    max_value: null,
+    mdoc_namespace: null,
+    mdoc_element_identifier: null,
+    display_icon: null,
+  }));
+}
+
+function clearanceCredentialPayload(
+  source,
+  issuerDid = source.issuer_did,
+  revocationProfileId = source.revocation_profile_id,
+  trustProfileId = source.trust_profile_id,
+) {
+  const claims = clearanceClaims();
+  return compactObject({
+    organization_id: ORG_ID,
+    name: RESOURCE_NAMES.credential,
+    description: 'Application-bound pre-boarding clearance issued only after D-01 passport validation.',
+    credential_type: 'PreBoardingClearanceCredential',
+    vct: `${BETA_ORIGIN}/credentials/pre-boarding-clearance`,
+    doctype: null,
+    claims,
+    privacy_posture: source.privacy_posture || 'SELECTIVE_DISCLOSURE',
+    selective_disclosure_fields: claims.map(({ name }) => name),
+    zk_predicate_claims: [],
+    derived_attributes: [],
+    display_style: source.display_style || null,
+    validity_rules: source.validity_rules,
+    supported_formats: source.supported_formats || ['SD_JWT_VC'],
+    application_template_id: null,
+    trust_profile_id: trustProfileId || null,
+    revocation_profile_id: revocationProfileId,
+    compliance_profile_id: source.compliance_profile_id,
+    issuer_did: issuerDid,
+    credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
+    issuance_protocol: 'openid4vci_pre_authorized',
+  });
+}
+
+function clearanceTrustProfilePayload(issuerDid) {
+  return governedIssuerTrustProfilePayload({
+    organizationId: ORG_ID,
+    name: RESOURCE_NAMES.trust,
+    description: 'Trust only the organization-owned issuer used by the D-01 clearance credential.',
+    issuerDid,
+  });
+}
+
+function clearanceApplicationTemplatePayload(credentialTemplateId) {
+  return {
+    organization_id: ORG_ID,
+    name: RESOURCE_NAMES.application,
+    description: 'Manual review of a cryptographically validated passport evidence binding before clearance issuance.',
+    credential_template_id: credentialTemplateId,
+    form_fields: clearanceClaims().map(({ name, display_name: label }) => ({
+      field_id: name,
+      label,
+      field_type: 'TEXT',
+      required: true,
+      claim_mapping: name,
+      ...(name === 'passport_evidence_sha256'
+        ? { validation_pattern: PASSPORT_EVIDENCE_SHA256.source }
+        : {}),
+      ...(name === 'clearance_status'
+        ? { options: [{ label: 'Cleared', value: 'CLEARED' }] }
+        : {}),
+    })),
+    evidence_requirements: [],
+    required_checks: [],
+    claim_collection_rules: [],
+    approval_strategy: 'MANUAL',
+    approval_policy_set_id: null,
+    application_validity_days: 1,
+    notification_config: {},
+    ui_config: {},
+  };
+}
+
+function clearancePolicyPayload(credentialTemplate) {
+  const clearanceClaim = {
+    claim_name: 'clearance_status',
+    credential_type: null,
+    value_constraint: 'CLEARED',
+    predicate_spec: null,
+  };
+  const clearanceRequestedClaim = requestedClaim('clearance_status', {
+    displayName: 'Clearance status',
+    description: 'A current pre-boarding clearance decision.',
+    acceptDerived: false,
+    equals: 'CLEARED',
+  });
+  return {
+    organization_id: ORG_ID,
+    name: RESOURCE_NAMES.policy,
+    description: 'Disclose only clearance status and allow a currently valid D-01 pre-boarding credential.',
+    purpose: 'Rapid pre-boarding gate clearance',
+    display_metadata: {
+      title: 'Pre-boarding clearance',
+      description: 'Present a current pre-boarding clearance credential.',
+      purpose: 'authorization',
+      purpose_description: 'Confirm that passport validation and pre-boarding review completed.',
+      verifier_name: 'ElevenID LLC',
+      verifier_logo_url: null,
+      privacy_policy_url: null,
+      terms_of_service_url: null,
+    },
+    required_claims: [clearanceClaim],
+    accepted_credential_types: ['PreBoardingClearanceCredential'],
+    trust_profile_id: credentialTemplate.trust_profile_id || null,
+    holder_binding: { required: false },
+    freshness: null,
+    issuer_constraints: null,
+    credential_ranking_strategy: DEFAULT_CREDENTIAL_RANKING_STRATEGY,
+    credential_ranking_weights: null,
+    credential_requirements: [{
+      credential_template_id: credentialTemplate.id,
+      display_name: RESOURCE_NAMES.credential,
+      description: 'Current pre-boarding clearance credential',
+      required: true,
+      credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
+      requested_claims: [clearanceRequestedClaim],
+      trust_profile_id: credentialTemplate.trust_profile_id || null,
+      max_age_seconds: null,
+      require_fresh_issuance: false,
+    }],
+    alternative_requirements: [],
+    compliance_profile_id: credentialTemplate.compliance_profile_id || null,
+    prefer_predicates: false,
+    fallback_policy: null,
+    supported_circuits: [],
+  };
+}
+
+function clearanceFlowPayload(credentialTemplateId) {
+  return {
+    organization_id: ORG_ID,
+    name: RESOURCE_NAMES.flow,
+    description: 'Issue the approved D-01 pre-boarding clearance credential.',
+    flow_type: 'oid4vci_pre_authorized',
+    approval_strategy: 'AUTO',
+    credential_template_id: credentialTemplateId,
+    trigger: {
+      trigger_type: 'WEBHOOK',
+      config: { event_type: 'APPLICATION_APPROVED' },
+    },
+  };
+}
+
+function exactArray(actual, expected) {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function requireConfigurationBinding(configuration) {
+  const expectedClaims = clearanceClaims().map(({ name }) => name);
+  const { credential, application, policy, flow } = configuration;
+  const credentialEvidence = credential.claims?.find(({ name }) => name === 'passport_evidence_sha256');
+  const credentialClearance = credential.claims?.find(({ name }) => name === 'clearance_status');
+  if (credential.credential_type !== 'PreBoardingClearanceCredential'
+      || credential.vct !== `${BETA_ORIGIN}/credentials/pre-boarding-clearance`
+      || credential.issuance_protocol !== 'OID4VCI_PRE_AUTH'
+      || !exactArray(credential.claims?.map(({ name }) => name), expectedClaims)
+      || credentialEvidence?.pattern !== PASSPORT_EVIDENCE_SHA256.source
+      || !exactArray(credentialClearance?.enum_values, ['CLEARED'])) {
+    throw new Error('D-01 Credential Template has drifted from the pre-boarding contract');
+  }
+  const evidenceField = application.form_fields?.find(({ field_id: fieldId }) => (
+    fieldId === 'passport_evidence_sha256'
+  ));
+  const clearanceField = application.form_fields?.find(({ field_id: fieldId }) => (
+    fieldId === 'clearance_status'
+  ));
+  if (application.credential_template_id !== credential.id
+      || application.approval_strategy !== 'MANUAL'
+      || !exactArray(application.form_fields?.map(({ field_id: fieldId }) => fieldId), expectedClaims)
+      || evidenceField?.validation_pattern !== PASSPORT_EVIDENCE_SHA256.source
+      || clearanceField?.options?.length !== 1
+      || clearanceField.options[0]?.value !== 'CLEARED') {
+    throw new Error('D-01 Application Template has drifted from the passport evidence contract');
+  }
+  const requirement = policy.credential_requirements?.[0];
+  const requested = requirement?.requested_claims?.[0];
+  const requestedConstraint = requested?.constraints?.[0];
+  const required = policy.required_claims?.[0];
+  if (!exactArray(policy.accepted_credential_types, ['PreBoardingClearanceCredential'])
+      || policy.display_metadata?.purpose !== 'authorization'
+      || policy.credential_ranking_strategy !== DEFAULT_CREDENTIAL_RANKING_STRATEGY
+      || policy.credential_requirements?.length !== 1
+      || requirement?.credential_template_id !== credential.id
+      || requirement?.requested_claims?.length !== 1
+      || requested?.claim_name !== 'clearance_status'
+      || requested?.required !== true
+      || requested?.selective_disclosure !== true
+      || requested?.accept_derived !== false
+      || requested?.constraints?.length !== 1
+      || requestedConstraint?.claim_name !== 'clearance_status'
+      || requestedConstraint?.constraint_type !== 'equals'
+      || requestedConstraint?.value !== 'CLEARED'
+      || policy.required_claims?.length !== 1
+      || required?.claim_name !== 'clearance_status'
+      || required?.value_constraint !== 'CLEARED') {
+    throw new Error('D-01 Presentation Policy has drifted from the minimal rapid-gate contract');
+  }
+  if (flow.credential_template_id !== credential.id
+      || flow.application_template_id
+      || flow.approval_strategy !== 'AUTO'
+      || flow.trigger?.trigger_type !== 'WEBHOOK'
+      || flow.trigger?.config?.event_type !== 'APPLICATION_APPROVED') {
+    throw new Error('D-01 issuance Flow has drifted from the approval event contract');
+  }
+  return configuration;
+}
+
+async function ensureConfiguration(page, stamp, ownedResources) {
+  const source = await requireJson(
+    page,
+    `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
+    {},
+    'Load D-01 source Credential Template',
+  );
+  if (!source.compliance_profile_id) {
+    throw new Error('D-01 source Credential Template lacks a compliance binding');
+  }
+  await requireActiveComplianceProfile(page, {
+    profileId: source.compliance_profile_id, organizationId: ORG_ID,
+  });
+  const issuerDid = await resolveActiveIssuerDid(page, { organizationId: ORG_ID });
+  const trustProfile = await ensureActiveResource(page, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/trust-profiles',
+    name: RESOURCE_NAMES.trust,
+    payload: clearanceTrustProfilePayload(issuerDid),
+    idempotencyKey: 'demo-d01-pre-boarding-trust-v1',
+  });
+  const revocationProfile = await ensureActiveRevocationProfile(page, stamp);
+  if (!revocationProfile?.id || revocationProfile.ok === false) {
+    throw new Error(`D-01 target revocation profile unavailable: ${revocationProfile?.error || 'unknown error'}`);
+  }
+  await ensureGovernedIssuer(page, {
+    organizationId: ORG_ID,
+    trustProfileId: trustProfile.id,
+    issuerDid,
+    displayName: 'D-01 Pre-Boarding Credential Issuer',
+    idempotencyKey: 'demo-d01-pre-boarding-governed-issuer-v1',
+  });
+  const credential = await createOwnedActiveConfiguration(page, ownedResources, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/credential-templates',
+    name: RESOURCE_NAMES.credential,
+    payload: clearanceCredentialPayload(
+      source,
+      issuerDid,
+      revocationProfile.id,
+      trustProfile.id,
+    ),
+    idempotencyKey: 'demo-d01-pre-boarding-credential-v2',
+  });
+  const application = await createOwnedActiveConfiguration(page, ownedResources, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/application-templates',
+    name: RESOURCE_NAMES.application,
+    payload: clearanceApplicationTemplatePayload(credential.id),
+    idempotencyKey: 'demo-d01-passport-clearance-application-v1',
+    validate: true,
+  });
+  const policy = await createOwnedActiveConfiguration(page, ownedResources, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/presentation-policies',
+    name: RESOURCE_NAMES.policy,
+    payload: clearancePolicyPayload(credential),
+    idempotencyKey: 'demo-d01-rapid-gate-policy-v1',
+  });
+  const flow = await createOwnedActiveConfiguration(page, ownedResources, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/flows/definitions',
+    name: RESOURCE_NAMES.flow,
+    payload: clearanceFlowPayload(credential.id),
+    idempotencyKey: 'demo-d01-pre-boarding-issuance-flow-v1',
+    validate: true,
+  });
+  if (credential.issuer_did !== issuerDid) {
+    throw new Error('D-01 Credential Template is not bound to the active organization issuer DID');
+  }
+  if (credential.revocation_profile_id !== revocationProfile.id) {
+    throw new Error('D-01 Credential Template is not bound to the active organization revocation profile');
+  }
+  if (credential.trust_profile_id !== trustProfile.id) {
+    throw new Error('D-01 Credential Template is not bound to the target issuer Trust Profile');
+  }
+  return requireConfigurationBinding({ credential, application, policy, flow });
+}
+
+async function createAndSubmitApplication(page, ownedResources, evidenceDigest, stamp) {
+  const formData = {
+    traveler_id: `TRAVELER-D01-${stamp}`,
+    flight_number: 'MIP101',
+    departure_airport: 'SLC',
+    arrival_airport: 'DEN',
+    boarding_group: 'A1',
+    clearance_status: 'CLEARED',
+    passport_evidence_sha256: evidenceDigest,
+  };
+  const created = await createOwnedApplication(page, ownedResources, {
+    formData,
+    integrationContext: {
+      evidence_type: 'marty_verifier_emrtd',
+      evidence_sha256: evidenceDigest,
+    },
+    label: 'Create passport clearance application',
+  });
+  if (created.form_data?.passport_evidence_sha256 !== evidenceDigest) {
+    throw new Error('Stored D-01 application is not bound to the supplied passport evidence');
+  }
+  const submitted = await submitOwnedApplication(page, ownedResources, 'Submit passport clearance application');
+  return { created, submitted, formData };
+}
+
+async function approveAndIssue(page, ownedResources, evidenceDigest, { recording } = {}) {
+  const applicationId = ownedResources.applicationId;
+  const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
+  requireOwnedApplication(await requireJson(page, root), ownedResources);
+  let lock;
+  let approved;
+  if (recording) {
+    // The detail page owns this lock for its entire mounted lifetime.
+    const identity = await requireJson(page, '/v1/auth/me');
+    const reviewerId = identity?.authenticated === true
+      ? (identity?.user?.user_id || identity?.user?.sub) : null;
+    if (!reviewerId) throw new Error('Authenticated D-01 reviewer identity is unavailable');
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      lock = await requireJson(page, `${root}/lock`);
+      if (lock?.status === 'ACTIVE') break;
+      await page.waitForTimeout(250);
+    }
+    if (!lock?.id || lock.status !== 'ACTIVE' || lock.organization_id !== ORG_ID
+        || lock.applicant_id !== applicationId || lock.holder_user_id !== reviewerId) {
+      throw new Error('Detail-page reviewer lock is not held by this authenticated reviewer');
+    }
+    approved = await approveThroughConsole(page, ownedResources, recording,
+      `Synthetic scenario: approve pre-boarding clearance after reviewing passport evidence ${evidenceDigest}.`);
+  } else {
+    let verifiedLock = false;
+    let primaryError;
+    let releaseError;
+    ownedResources.uncertainMutations ||= [];
+    ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+    try {
+      lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire passport reviewer lock');
+      if (!lock?.id || lock.organization_id !== ORG_ID || lock.applicant_id !== applicationId) {
+        throw new Error('Reviewer lock does not match the exact passport application');
+      }
+      verifiedLock = true;
+      approved = requireOwnedApplication(await requireJson(page, `${root}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ notes: `D-01 passport evidence ${evidenceDigest} approved` }),
+      }, 'Approve passport clearance application'), ownedResources);
+      if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
+    } catch (error) { primaryError = error; }
+    if (verifiedLock) {
+      try {
+        const released = await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release passport reviewer lock');
+        if (released?.released !== true) throw new Error('Passport reviewer lock release was not confirmed');
+        ownedResources.uncertainMutations = ownedResources.uncertainMutations
+          .filter(({ operation }) => operation !== 'reviewer_lock');
+        delete ownedResources.reviewLockReleaseFailure;
+      } catch (error) {
+        releaseError = error;
+        ownedResources.reviewLockReleaseFailure = 'REVIEWER_LOCK_RELEASE_UNCONFIRMED';
+      }
+    }
+    if (primaryError) throw primaryError;
+    if (releaseError) throw releaseError;
+  }
+  if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
+  const { issued, transaction } = await issueOwnedApplication(page, ownedResources, 'Issue pre-boarding credential', {
+    requestIssue: recording ? (endpoint) => issueThroughConsole(page, recording, endpoint) : undefined,
+  });
+  return { lock, approved, issued, transaction };
+}
+
+function reviewerActionMode(apiOnly) {
+  return apiOnly
+    ? { boundary: 'AUTHENTICATED_PUBLIC_API', qualifiesUiReview: false }
+    : { boundary: 'REAL_ADMIN_UI', qualifiesUiReview: true };
+}
+
+async function confirmUiReviewerLockReleased(page, applicationId) {
+  const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
+  // Navigate while the authenticated browser still exists, then verify the
+  // detail page released its own lock. Closing the context cannot prove this.
+  await page.goto(`${BETA_ORIGIN}/console/org/operate/applications`, {
+    waitUntil: 'domcontentloaded', timeout: 60_000,
+  });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const lock = await requireJson(page, `${root}/lock`);
+    if (lock?.status === 'AVAILABLE' && !lock.id && !lock.holder_user_id
+        && lock.organization_id === ORG_ID && lock.applicant_id === applicationId) return true;
+    await page.waitForTimeout(250);
+  }
+  throw new Error('Detail-page reviewer lock release remains unconfirmed');
+}
+
+async function cleanup(page, ownedResources) {
+  const result = await cleanupApplicationCredential(page, ownedResources, 'D-01 release qualification cleanup', { cancelPendingOffer: true });
+  if (!result.ok) return result;
+  try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
+  catch (error) { result.configuration = { ok: false, error: redact(error.message) }; }
+  result.ok = result.configuration.ok === true;
+  return result;
+}
+
+async function showClearanceStep(page, title, detail) {
+  return showStep(page, title, detail, {
+    enabled: RECORD_VIDEO,
+    eyebrow: 'Passport validation to pre-boarding clearance',
+  });
+}
+
+function observePage(page, report) {
+  page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
+  page.on('response', (response) => {
+    if (!response.url().startsWith(BETA_ORIGIN) || response.status() < 400) return;
+    if (!response.url().includes('/cdn-cgi/rum')) {
+      report.unexpectedResponses.push({
+        status: response.status(),
+        method: response.request().method(),
+        url: redact(response.url()),
+      });
+    }
+  });
+}
+
+async function runPassportDemo(evidence) {
+  const adminEmail = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
+  const adminPassword = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
+  const applicantEmail = process.env.TEST_APPLICANT_EMAIL || process.env.TEST_APPLICANT1_EMAIL;
+  const applicantPassword = process.env.TEST_APPLICANT_PASSWORD || process.env.TEST_APPLICANT1_PASSWORD;
+  const evidenceDigest = process.env.D01_PASSPORT_EVIDENCE_SHA256 || '';
+  if (!adminEmail || !adminPassword || !applicantEmail || !applicantPassword) {
+    throw new Error('Missing beta administrator or applicant credentials');
+  }
+  if (!VERIFIER_DID) throw new Error('BETA_AUDIT_VERIFIER_DID is required');
+  if (!validEvidenceDigest(evidenceDigest)) {
+    throw new Error('D01_PASSPORT_EVIDENCE_SHA256 must be exactly 64 lower-case hexadecimal characters');
+  }
+  if (ADMIN_API_FUNCTIONAL && RECORD_VIDEO) {
+    throw new Error('D01 admin-API functional mode cannot record video');
+  }
+
+  const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
+  const artifactDir = createArtifactDir(ROOT, `beta-passport-clearance-${stamp}`);
+  const nativeEvidence = await evidence.readFixture('passport-validation-evidence.json');
+  if (createHash('sha256').update(nativeEvidence).digest('hex') !== evidenceDigest) {
+    throw new Error('D-01 native evidence differs from the actual parent artifact');
+  }
+  const input = await acknowledgeDemoInputs(artifactDir, 'passport-clearance-run-input.json', {
+    schemaVersion: 1, runId: stamp, organizationId: ORG_ID, sourceTemplateId: SOURCE_TEMPLATE_ID,
+    verifierDid: VERIFIER_DID, passportEvidenceSha256: evidenceDigest,
+    nativeEvidenceFile: 'passport-validation-evidence.json',
+  }, evidence);
+  const ownedResources = {
+    organizationId: ORG_ID,
+    runId: stamp,
+    applicationId: null,
+    transactionId: null,
+    credentialId: null,
+    uncertainMutations: [],
+  };
+  const report = {
+    createdAt: new Date().toISOString(),
+    organizationId: ORG_ID,
+    ownedResources,
+    passportEvidenceSha256: evidenceDigest,
+    pageErrors: [],
+    unexpectedResponses: [],
+    finalizationFailures: [],
+    releaseReady: false,
+  };
+  const browser = await chromium.launch({
+    headless: HEADLESS,
+    args: LOCAL_BETA_PROXY
+      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
+      : [],
+  });
+  let adminContext;
+  let applicantContext;
+  let adminPage;
+  let adminVideo;
+  let walletVideo;
+  let walletSession;
+  let walletAcquisitionAttempted = false;
+  let applicationId;
+  let credentialId;
+  let cleanupComplete = false;
+  let journeyComplete = false;
+  let journeyReady = false;
+  try {
+    adminContext = await browser.newContext({
+      viewport: VIDEO_SIZE,
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
+      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+    });
+    // receiveCredential uses this exact context. Establish ownership before
+    // any configuration, application or issuance mutation can begin.
+    walletAcquisitionAttempted = true;
+    walletSession = await acquireWalletSession(adminContext, { origin: TEST_WALLET_ORIGIN, runId: stamp });
+    report.walletSession = walletSession.evidence;
+    applicantContext = await browser.newContext({ viewport: VIDEO_SIZE, ignoreHTTPSErrors: LOCAL_BETA_PROXY });
+    const page = await adminContext.newPage();
+    adminPage = page;
+    const recording = createActionRecording({
+      enabled: RECORD_VIDEO, scenario: 'passport-pre-boarding-clearance', pageName: 'clearance',
+      onEvent: (events) => { report.recordingActions = events; },
+    });
+    const reviewMode = reviewerActionMode(ADMIN_API_FUNCTIONAL);
+    report.demonstrationBoundary = {
+      data: 'SYNTHETIC_TRAVELER_WITH_NATIVE_PASSPORT_EVIDENCE', setup: 'AUTHENTICATED_PUBLIC_API',
+      applicationSubmission: 'AUTHENTICATED_PUBLIC_API', reviewerActions: reviewMode.boundary,
+      verification: 'REAL_WALLET_PRESENTATION_WITH_API_RESULT',
+    };
+    const walletPage = await adminContext.newPage();
+    const applicantPage = await applicantContext.newPage();
+    adminVideo = page.video();
+    walletVideo = walletPage.video();
+    evidence.bindPage(page);
+    evidence.bindPage(walletPage);
+    evidence.bindPage(applicantPage);
+    observePage(page, report);
+    observePage(applicantPage, report);
+    observePage(walletPage, report);
+
+    await login(page, adminEmail, adminPassword);
+    report.orgSelection = await selectOrg(page);
+    if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
+    const configuration = await ensureConfiguration(page, stamp, ownedResources);
+    ownedResources.applicationTemplateId = configuration.application.id;
+    ownedResources.credentialTemplateId = configuration.credential.id;
+    report.configuration = {
+      credentialTemplateId: configuration.credential.id,
+      applicationTemplateId: configuration.application.id,
+      presentationPolicyId: configuration.policy.id,
+      flowDefinitionId: configuration.flow.id,
+      vct: configuration.credential.vct,
+      allActive: [configuration.credential, configuration.application, configuration.policy, configuration.flow]
+        .every((resource) => String(resource.status).toUpperCase() === 'ACTIVE'),
+    };
+
+    await login(applicantPage, applicantEmail, applicantPassword);
+    const applicantProfile = await ensureApplicantProfile(applicantPage, {
+      email: applicantEmail,
+      givenName: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
+      familyName: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
+    });
+    ownedResources.applicantId = applicantProfile?.id;
+    report.applicationPreflight = await requireNoConflictingApplications(applicantPage, {
+      organizationId: ORG_ID,
+      credentialTemplateId: configuration.credential.id,
+    });
+    const application = await createAndSubmitApplication(
+      applicantPage,
+      ownedResources,
+      input.passportEvidenceSha256,
+      input.runId,
+    );
+    applicationId = application.created.id;
+    report.application = {
+      created: Boolean(applicationId),
+      id: applicationId,
+      travelerId: application.formData.traveler_id,
+      submittedStatus: application.submitted.status,
+      passportEvidenceSha256: application.created.form_data.passport_evidence_sha256,
+    };
+
+    if (ADMIN_API_FUNCTIONAL) {
+      // The detail page owns an automatic reviewer lock. Keep this API-only
+      // functional run on the list page so its explicit lock has one owner.
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      report.reviewSurface = 'ADMIN_APPLICATION_LIST_WITH_EXPLICIT_API_DECISION';
+    } else {
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications/${encodeURIComponent(applicationId)}`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      await page.getByText(application.formData.traveler_id).first().waitFor({ state: 'visible', timeout: 30_000 });
+      report.reviewSurface = 'ADMIN_APPLICATION_DETAIL';
+    }
+    await showClearanceStep(page, 'Passport evidence submitted', 'The application carries the exact digest of the passport result already validated by the native Rust verifier.');
+
+    const approval = await approveAndIssue(page, ownedResources, evidenceDigest,
+      { recording: ADMIN_API_FUNCTIONAL ? undefined : recording });
+    report.application.lockAcquired = Boolean(approval.lock?.id);
+    report.application.approvedStatus = approval.approved?.status || null;
+    const offerUri = approval.issued?.credential_offer_uri
+      || Object.values(approval.issued?.credential_offer_uris || {})[0]
+      || null;
+    report.issuance = {
+      issueOk: Boolean(offerUri),
+      transactionId: approval.transaction.id,
+      vct: configuration.credential.vct,
+    };
+    if (!offerUri) throw new Error('Pre-boarding issuance returned no credential offer');
+    await showClearanceStep(page, 'Pre-boarding clearance approved', 'The administrator reviewed the passport evidence, confirmed approval, and created the traveler wallet invitation.');
+
+    const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
+    report.issuance.walletReceived = walletReceipt.ok;
+    report.issuance.walletReceiveStatus = walletReceipt.status;
+    if (!walletReceipt.ok) throw new Error('Pre-boarding wallet did not accept the credential');
+    const walletCredential = await walletPage.evaluate(async (expectedVct) => {
+      const response = await fetch('/api/credentials');
+      const credentials = await response.json().catch(() => []);
+      if (!response.ok || !Array.isArray(credentials)) return null;
+      return credentials.find(({ vct }) => vct === expectedVct) || null;
+    }, configuration.credential.vct);
+    const credential = await findCurrentCredential(page, {
+      ...ownedResources,
+      waitFor,
+    });
+    if (!credential?.id) throw new Error('Issued pre-boarding credential was not discoverable');
+    credentialId = credential.id;
+    ownedResources.credentialId = credentialId;
+    report.issuance.credentialId = credentialId;
+    report.issuance.walletEvidenceClaimPresent = Boolean(
+      walletCredential?.claim_names?.includes('passport_evidence_sha256'),
+    );
+    report.issuance.subjectClaimsHash = credential.subject_claims_hash || null;
+    report.issuance.expectedSubjectClaimsHash = subjectClaimsHash(application.formData);
+    report.issuance.subjectClaimsHashMatches = (
+      report.issuance.subjectClaimsHash === report.issuance.expectedSubjectClaimsHash
+    );
+    report.issuance.walletEvidenceBound = (
+      report.issuance.walletEvidenceClaimPresent
+      && report.issuance.subjectClaimsHashMatches
+    );
+    report.issuance.passportEvidenceSha256 = report.issuance.walletEvidenceBound
+      ? evidenceDigest
+      : null;
+    if (!report.issuance.walletEvidenceBound) throw new Error('Clearance credential is not bound to the reviewed passport evidence');
+    await showClearanceStep(page, 'Clearance credential received', 'The wallet received the credential; the issuer record matches the reviewed passport evidence.');
+
+    const verification = await verify(page, walletPage, 'D-01 rapid pre-boarding gate', {
+      organizationId: ORG_ID,
+      presentationPolicyId: configuration.policy.id,
+      issuerDid: VERIFIER_DID,
+    });
+    report.rapidGate = {
+      walletPresented: verification.wallet?.ok === true,
+      result: verification.result,
+    };
+    requireVerificationDecision(verification, 'allow');
+    await showVerificationResult(page, verification.result, {
+      enabled: RECORD_VIDEO, actor: 'Marty pre-boarding verifier', testId: 'D01-PREBOARDING-ACCESS',
+    });
+    await showClearanceStep(page, 'Rapid gate clearance allowed', 'The gate policy requested clearance status and returned an explicit allow decision.');
+
+    report.behaviorAssertions = passportClearanceBehaviorAssertions(report);
+    report.cleanup = await cleanup(page, ownedResources);
+    cleanupComplete = report.cleanup.ok === true;
+    journeyReady = Boolean(
+      reviewMode.qualifiesUiReview
+      && report.configuration.allActive
+      && Object.values(report.behaviorAssertions).every((passed) => passed === true)
+      && cleanupComplete
+      && report.cleanup.credentialRevoked
+      && report.cleanup.applicationHistoryPreserved
+      && report.pageErrors.length === 0
+      && report.unexpectedResponses.length === 0
+    );
+    journeyComplete = true;
+  } catch (error) {
+    report.error = redact(error.stack || error.message || String(error));
+    report.releaseReady = false;
+    throw error;
+  } finally {
+    if (!cleanupComplete && adminPage) {
+      await cleanup(adminPage, ownedResources)
+        .then((result) => { report.cleanup = result; })
+        .catch((error) => { report.cleanupError = redact(error.message || String(error)); });
+    }
+    if (!ADMIN_API_FUNCTIONAL && adminPage && applicationId
+        && report.reviewSurface === 'ADMIN_APPLICATION_DETAIL') {
+      try {
+        report.application.uiLockReleased = await confirmUiReviewerLockReleased(adminPage, applicationId);
+      } catch (error) {
+        ownedResources.uncertainMutations ||= [];
+        if (!ownedResources.uncertainMutations.some(({ operation }) => operation === 'reviewer_lock')) {
+          ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+        }
+        report.finalizationFailures.push({ operation: 'ui_reviewer_lock_release',
+          error: redact(error.message || String(error)) });
+      }
+    }
+    let walletClosed = false;
+    if (walletSession) {
+      try { await walletSession.close(); walletClosed = walletSession.evidence.closed === true; }
+      catch (error) {
+        report.finalizationFailures.push({ operation: 'wallet_session_close', error: redact(error.message || String(error)) });
+      }
+    } else if (walletAcquisitionAttempted) {
+      report.finalizationFailures.push({ operation: 'wallet_session_acquisition', outcome: 'UNCONFIRMED' });
+    }
+    // Session deletion needs the live browser context's cookie and run guard.
+    // Always finish it before closing contexts or finalizing their videos.
+    for (const [operation, context] of [['applicant_context_close', applicantContext], ['admin_context_close', adminContext]]) {
+      if (!context) continue;
+      try { await context.close(); }
+      catch (error) { report.finalizationFailures.push({ operation, error: redact(error.message || String(error)) }); }
+    }
+    if (RECORD_VIDEO && journeyComplete) {
+      try {
+        report.recordings = {
+          clearance: path.relative(ROOT, await finalizeVideo(adminVideo, artifactDir, 'passport-pre-boarding-clearance-beta.webm')),
+          wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'passport-pre-boarding-clearance-wallet.webm')),
+        };
+      } catch (error) {
+        report.finalizationFailures.push({ operation: 'video_finalization', error: redact(error.message || String(error)) });
+      }
+    }
+    await browser.close().catch((error) => {
+      report.closeError = redact(error.message || String(error));
+      report.finalizationFailures.push({ operation: 'browser_close', error: report.closeError });
+    });
+    report.releaseReady = Boolean(journeyReady && walletClosed
+      && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
+    applyLocalNativeReadiness(report, evidence, { ready: report.releaseReady,
+      cleanupComplete: report.cleanup?.ok === true && walletClosed && !report.cleanupError });
+    if (report.releaseReady || report.functionalReady) {
+      try { await evidence.complete(); }
+      catch (error) {
+        report.releaseReady = false;
+        if (report.localOverlayBinding) { report.functionalReady = false; report.operations_verified = false; }
+        report.finalizationFailures.push({ operation: 'live_evidence_completion', error: redact(error.message) });
+      }
+    }
+    report.finishedAt = new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const evidence = await createDemoLiveEvidence();
+  try { return await runPassportDemo(evidence); }
+  finally { evidence.close(); }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  approveAndIssue,
+  reviewerActionMode,
+  confirmUiReviewerLockReleased,
+  createAndSubmitApplication,
+  clearanceApplicationTemplatePayload,
+  clearanceCredentialPayload,
+  clearanceFlowPayload,
+  clearancePolicyPayload,
+  clearanceTrustProfilePayload,
+  main,
+  requireConfigurationBinding,
+};

@@ -1,0 +1,12 @@
+{
+  "title": "Template issuer options request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["organization_id", "compliance_profile_id"],
+  "properties": {
+    "organization_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "compliance_profile_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "credential_payload_format": {"type": ["string", "null"], "description": "Optional native credential-format name or supported alias; must agree with the compliance profile."},
+    "supported_formats": {"type": ["array", "null"], "minItems": 1, "items": {"type": "string"}, "description": "Defaults to the primary format. The DID must resolve unambiguously for every declared format and its signing purpose."}
+  }
+}

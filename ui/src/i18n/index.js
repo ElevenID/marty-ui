@@ -1,0 +1,86 @@
+import i18n from 'i18next';
+import { staticAssetHref } from '../utils/staticAssetHref';
+import { initReactI18next } from 'react-i18next';
+import LanguageDetector from 'i18next-browser-languagedetector';
+import HttpBackend from 'i18next-http-backend';
+import { I18N_NAMESPACES } from '@ui-public-config';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
+
+const publicEntry = Boolean(getPublicEntryCanonicalOrigin());
+
+i18n
+  // Load translation files
+  .use(HttpBackend)
+  // Detect user language
+  .use(LanguageDetector)
+  // Pass i18n instance to react-i18next
+  .use(initReactI18next)
+  // Initialize i18next
+  .init({
+    // Fallback language
+    fallbackLng: 'en',
+    
+    // Supported languages
+    supportedLngs: ['en', 'de', 'ja', 'es', 'fr', 'nl'],
+    
+    // Debug mode (disable in production)
+    debug: import.meta.env.DEV && import.meta.env.MODE !== 'test',
+    
+    // Namespaces
+    ns: I18N_NAMESPACES,
+    defaultNS: 'common',
+    
+    // Detection options
+    detection: {
+      // Order of detection methods
+      order: publicEntry
+        ? ['querystring', 'navigator', 'htmlTag']
+        : ['querystring', 'cookie', 'localStorage', 'navigator', 'htmlTag'],
+      
+      // Keys to look for
+      lookupQuerystring: 'lng',
+      lookupCookie: 'i18nextLng',
+      lookupLocalStorage: 'i18nextLng',
+      
+      // Cache user language
+      caches: publicEntry ? [] : ['localStorage', 'cookie'],
+      
+      // Only detect languages in supportedLngs
+      checkWhitelist: true,
+    },
+    
+    // Backend options
+    backend: {
+      // Path to load translation files
+      loadPath: staticAssetHref('/locales/{{lng}}/{{ns}}.json'),
+      
+      // Allow cross-domain requests
+      crossDomain: false,
+    },
+    
+    // Interpolation options
+    interpolation: {
+      // React already escapes values
+      escapeValue: false,
+      
+      // Format values
+      format: (value, format, lng) => {
+        if (format === 'uppercase') return value.toUpperCase();
+        if (format === 'lowercase') return value.toLowerCase();
+        if (value instanceof Date) {
+          return new Intl.DateTimeFormat(lng).format(value);
+        }
+        return value;
+      },
+    },
+    
+    // React-specific options
+    react: {
+      // Keep the application shell mounted while translations load. This also
+      // lets production prerendering wait on i18next explicitly instead of
+      // hiding the readiness signal behind the app-wide Suspense boundary.
+      useSuspense: false,
+    },
+  });
+
+export default i18n;

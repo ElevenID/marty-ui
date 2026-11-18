@@ -1,0 +1,23 @@
+# Source-build application overrides for local interoperability diagnostics.
+#
+# This profile is selected only by ``conformance_stack.py --local-build``.
+# Released and certification-grade runs continue to use immutable, attested
+# GHCR images and never consume this file.
+
+services:
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile.prod
+    restart: "no"
+    networks:
+      - marty-network
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s

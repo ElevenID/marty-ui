@@ -1,0 +1,59 @@
+{
+  "general": {
+    "unknown": "Er is een onbekende fout opgetreden",
+    "networkError": "Netwerkfout. Controleer uw verbinding.",
+    "serverError": "Serverfout. Probeer het later opnieuw.",
+    "unauthorized": "U bent niet geautoriseerd om deze actie uit te voeren",
+    "forbidden": "Toegang verboden",
+    "notFound": "De gevraagde resource is niet gevonden",
+    "timeout": "Time-out van aanvraag. Probeer het opnieuw."
+  },
+  "validation": {
+    "required": "Dit veld is verplicht",
+    "invalidEmail": "Ongeldig e-mailadres",
+    "invalidPhone": "Ongeldig telefoonnummer",
+    "invalidUrl": "Ongeldige URL",
+    "passwordTooShort": "Wachtwoord moet minimaal 8 tekens bevatten",
+    "passwordsDoNotMatch": "Wachtwoorden komen niet overeen"
+  },
+  "auth": {
+    "loginFailed": "Inloggen mislukt. Controleer uw gegevens.",
+    "sessionExpired": "Uw sessie is verlopen. Meld u opnieuw aan.",
+    "logoutFailed": "Uitloggen mislukt. Probeer het opnieuw.",
+    "invalidCredentials": "Ongeldige gebruikersnaam of wachtwoord",
+    "accountLocked": "Uw account is vergrendeld. Neem contact op met de ondersteuning."
+  },
+  "api": {
+    "fetchFailed": "Kan gegevens niet ophalen",
+    "saveFailed": "Kan wijzigingen niet opslaan",
+    "deleteFailed": "Kan item niet verwijderen",
+    "uploadFailed": "Kan bestand niet uploaden",
+    "connectionFailed": "Kan geen verbinding maken met server"
+  },
+  "errorState": {
+    "defaultTitle": "Er is iets misgegaan",
+    "operationFailed": "Bewerking mislukt",
+    "error": "Fout",
+    "unexpectedError": "Er is een onverwachte fout opgetreden",
+    "genericError": "Er is een fout opgetreden",
+    "detailsCopied": "Foutdetails gekopieerd naar klembord",
+    "errorReport": "Foutrapport: {{code}}",
+    "requestId": "Aanvraag-ID:",
+    "timestamp": "Tijdstempel:",
+    "errorCode": "Foutcode:",
+    "message": "Bericht:",
+    "technicalDetails": "Technische details:",
+    "technicalMessage": "Technisch bericht:",
+    "notAvailable": "N.v.t.",
+    "retry": "Opnieuw proberen",
+    "contactSupport": "Contact opnemen met ondersteuning",
+    "showTechnicalDetails": "Technische details",
+    "copyDetails": "Details kopiëren"
+  },
+  "messages": {
+    "tryAgain": "Probeer het opnieuw",
+    "contactSupport": "Als het probleem aanhoudt, neem dan contact op met de ondersteuning",
+    "goBack": "Ga terug naar de vorige pagina",
+    "retry": "Opnieuw proberen"
+  }
+}

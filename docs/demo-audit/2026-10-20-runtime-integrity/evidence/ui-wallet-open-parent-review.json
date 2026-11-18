@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "INDEPENDENT_SOURCE_REVIEW",
+  "reviewer": "capture_pipeline_audit",
+  "recordedAt": "2026-10-20T07:50:16.584309+00:00",
+  "repository": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity",
+  "sourceHashes": {
+    "ui/src/components/console/applicant/ClaimCredentialDialog.jsx": "6f7e1752481baac9c77dd349b39cfbe0c21e42e3f7ea977f7cdb26087cbd2a8b",
+    "ui/src/services/credentialsApi.jsx": "9007415ae93a9d9c58527fb1b67aaa0e238e66b2da7ebc798def6a6189992e14",
+    "ui/src/components/__tests__/ClaimCredentialDialog.test.tsx": "5f6cb37fb4cf13aecaad4323bb501dd459be26babd81d55041dcb2407f7c524e",
+    "ui/src/hooks/useWalletOpenLink.js": "3a556999ca80dade5adb6b365f095c094bb944f8acceb399377f65a3bf086293",
+    "ui/src/components/issuance/OID4VCIInviteDisplay.jsx": "ad55f6af1490d1e2b19e713a0550eed198ca2b94735a6163e3036fb5c1497add"
+  },
+  "result": "NO_CONCRETE_BLOCKER_FOUND_IN_REVIEWED_SCOPE",
+  "scope": [
+    "Shared guarded mobile/desktop wallet opening",
+    "Close, offer/application scope and transport invalidation",
+    "Rust application_json field normalization after read-only polling",
+    "Focused raw GET and claimed-during-pending-handoff regression assertions"
+  ],
+  "resolvedFindings": [
+    "The real OID4VCIInviteDisplay previously navigated after stale awaited registry results. Commit 0943e11 applies the shared guarded opener to the actual child and disables its pending open button.",
+    "The mobile parent previously selected response.open_uri directly and could lose the existing browser-wallet fallback. It now uses the same shared chooser through the hook.",
+    "Raw GET application_json has offer_expires_at and credential_offer_uri, unlike normalized initial claim responses. Shared normalizeApplicationOffer now normalizes both paths; alias writes follow the raw-data spread."
+  ],
+  "validationBoundary": "This review reads source and focused regression assertions. It does not claim parent test execution; the root owner performs the final parent test run. Real-child execution is separately recorded in ui-wallet-open-handoff.json."
+}

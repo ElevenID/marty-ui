@@ -1,0 +1,731 @@
+{
+  "schemaVersion": 1,
+  "scope": "Changed implementation files, before this audit documentation commit",
+  "finalDeliveryHeads": "See BASELINES.json in the Git delivery archive.",
+  "repositories": {
+    "marty-ui": {
+      "base": "bf7b11d4d9192a75881114875c5fcc33fbede1a5",
+      "implementationHead": "294ad0411901e30437a2d66fe0645bd012f5be24",
+      "branch": "audit/demo-production-gaps-2026-10-20",
+      "sources": {
+        "contracts/gateway-routes.json": {
+          "sha256": "4acca8101fa5edadb80eb928d8e64baef1c43a8d49c893f4e2d5012f66997699",
+          "gitBlob": "22724e3d1c64bf3a594304d73bf5f6a1e90c5f6e"
+        },
+        "contracts/offline-verification-ingest.json": {
+          "sha256": "146a04c03c8ceb5b78ed83db2746ceb8ff65b38be9dc0fa0eab14dae680d74db",
+          "gitBlob": "56e5cd74daae8c8a935a011f30c69029548b3f60"
+        },
+        "contracts/organization-permission-catalog.json": {
+          "sha256": "f1e73e568d7856deb52f112c66ef88a24ea2bf2f092218e3987dffc537666dbb",
+          "gitBlob": "c70131e6741372b03e77c91df0ef87fa5b9904b7"
+        },
+        "deploy-config/schemas/stack-demo-manifest.schema.json": {
+          "sha256": "1b6bb99cf00ea8bd634c7048236dbfd592ded55d0b3073c5f7cc0107f45c90a3",
+          "gitBlob": "a630cf9d09b21f51c04ecd42475ba31b73146d26"
+        },
+        "docs/rust-migrations/offline-verification-ingest.md": {
+          "sha256": "4a2b22506a79c7e1cebd1e4b97b664308acce36b9eb6dff62daf929bf3538868",
+          "gitBlob": "22abf9f9beff0dcc54a783bdd3c6857381f20175"
+        },
+        "rust/Cargo.lock": {
+          "sha256": "27053750b90bc41a547b3300734ab40745c35ea5b9cef9c075af767489c45750",
+          "gitBlob": "a51d4bbfcad18aaa25592aeeaefc6439ac9897e5"
+        },
+        "rust/Cargo.toml": {
+          "sha256": "a2407d78f8577263f5963270557da8063f93c23a8d1a452b35f6a2b78e68a6a5",
+          "gitBlob": "e137dcd100ef913a687e5b93811565432f3f2df9"
+        },
+        "rust/crates/issuer-key-resolution/Cargo.toml": {
+          "sha256": "7c449a57d353ab909876b102e3c5cfc6895910af94b3b7bd6e1a6a49845343f5",
+          "gitBlob": "250c19b874bc22943fc494a6288460ef63dad106"
+        },
+        "rust/crates/issuer-key-resolution/README.md": {
+          "sha256": "e2398db589defe4b85e08525238c235b88aebf261f5e24483fb7d4f66e012697",
+          "gitBlob": "51d4cd131de21e4650a3d8fe9b7298e1bdebaaee"
+        },
+        "rust/crates/issuer-key-resolution/src/custody.rs": {
+          "sha256": "1e5daab6a12568dbb03a4d5f50e231555d9697e49504ea7c58558ddcd2f7b506",
+          "gitBlob": "0e347aac8937c8403a8df4ffd862fdcb76bdca8e"
+        },
+        "rust/crates/issuer-key-resolution/src/lib.rs": {
+          "sha256": "e94b86766858e2070c4d261a0078a5acfdcd51d1279b06f36b31988abcda02d1",
+          "gitBlob": "5bc0029fc04546374e20d6c8ac3ebb0d74f01a30"
+        },
+        "rust/crates/release-evidence/Cargo.toml": {
+          "sha256": "96c4cb0cf9ff98258b00542b976b462c60bbf60623e5484761a5834ad4c95068",
+          "gitBlob": "c9868caf2c662d8a847085b18ae6e40cb89fb15a"
+        },
+        "rust/crates/release-evidence/src/age_proof.rs": {
+          "sha256": "cdf580de9b3ba0be0cb4ea342f9b41ac06791df9d170e90b4ed4a3600681a2a4",
+          "gitBlob": "d5c14eded08a604b9c2ef9cc25b9d6917c8d3f0e"
+        },
+        "rust/crates/release-evidence/src/age_proof_cli.rs": {
+          "sha256": "646c5563cac8b618b0074e90476d6710fbe840f7a3f585d909a1461ffc065cd7",
+          "gitBlob": "60edef65e632d369c9dd97ec68c96bf3b3d35ae2"
+        },
+        "rust/crates/release-evidence/src/lib.rs": {
+          "sha256": "cf592193348ca0349cfdb6206ebac7d6d819b505fc2d1a3e2c1596f7fe36dbda",
+          "gitBlob": "700fb7dcef943875c89dd13e4d64d22e04a8a3a1"
+        },
+        "rust/crates/release-evidence/src/signing_capability.rs": {
+          "sha256": "552567a32b7981e638d3327f1bea731a27d426a9b8674925eaaf131263eb8051",
+          "gitBlob": "c1ef2fb71df84d128ff839a3e674e469dc355664"
+        },
+        "rust/crates/release-evidence/src/signing_capability_cli.rs": {
+          "sha256": "e1d795a22d70d873dba35d65cc43b462158be54c955d6343eb8fdf37a325bb88",
+          "gitBlob": "24e844214db00f7e7189d573e84eb576f157230d"
+        },
+        "rust/crates/release-evidence/tests/age_proof.rs": {
+          "sha256": "08235b58a7a31c949ebc291882a6a7e945e7290b4760833cbd6aff607035e71c",
+          "gitBlob": "0d80bcc583457bb18c7d30227c1f990308cf42de"
+        },
+        "rust/crates/release-evidence/tests/fixtures/signing-capability-es256.json": {
+          "sha256": "0c701331ee957a978ec2ce816bac4b30115aece622b3f67bb6f350767343fda9",
+          "gitBlob": "ea7b8588c17d5cec5ceb39656c5dd0a9ba63581f"
+        },
+        "rust/crates/release-evidence/tests/signing_capability.rs": {
+          "sha256": "c00c6fa00919b2a276c9203c65893117c5875e107267dfebd59c366dc0d067bb",
+          "gitBlob": "04fbd821bb1acc00318420d5f54c7dd04286392a"
+        },
+        "rust/services/applicant/src/lib.rs": {
+          "sha256": "2f3d8c5f935940ebd0b34ad61603169a93aedc05702123eba2aab36ab59fb239",
+          "gitBlob": "f9d3265782dd59fcb6feafca0549df12b3abd5f6"
+        },
+        "rust/services/applicant/src/providers.rs": {
+          "sha256": "b6dee80c8df34a42877254b4bdb6638c58e6a2f8ffbb2ba6d97b6dcb80967977",
+          "gitBlob": "4025891eb54caaf22fe0d55770d656270409dfa5"
+        },
+        "rust/services/applicant/src/service.rs": {
+          "sha256": "a128ea46e8b6497916333c9c97fe70e995d06714038f1723548c9649dcdd754e",
+          "gitBlob": "01de93d1e239bd64784455cca79a1f049afb5889"
+        },
+        "rust/services/applicant/tests/application_behavior.rs": {
+          "sha256": "32120f905750f81925ca464668e89e39b9c67dd051594cc7f87f43efca66b3fe",
+          "gitBlob": "e67e7a470ebd66eaa1b08208f22455b3fa6ffe01"
+        },
+        "rust/services/applicant/tests/domain_behavior.rs": {
+          "sha256": "48692c7b21e57e5f4f57aab323e03798a83d2bbf23c4ffd16c9438c2efbb477f",
+          "gitBlob": "1b87a9b42222fefdfb839503a39a99998c7a2df0"
+        },
+        "rust/services/applicant/tests/http_behavior.rs": {
+          "sha256": "a443ec7cd525960ece47591001378048de32e31d0caac21ed9db332c98fccabe",
+          "gitBlob": "0f5c74570ef4875bec9fe45032d5f410666b1827"
+        },
+        "rust/services/auth/src/credential_state.rs": {
+          "sha256": "97abdd72c862dbafe91ed53f3c4a78facefbfcfb9b321c6c123963c9609f0644",
+          "gitBlob": "2fc63214e69e527bf82a93a7b91cb1ae9eb17d69"
+        },
+        "rust/services/gateway/src/authorization.rs": {
+          "sha256": "4e0ffc9ac1b41084fa694960f124a5abf8f7e6b6a06cf80d626db5cbdd6e49f1",
+          "gitBlob": "7dcc9e632de6d8ae3736c178fa783c5e998f36da"
+        },
+        "rust/services/gateway/src/contract.rs": {
+          "sha256": "29bc661c89618e425105a1cdf080597067cbaf8889cc3348d300d3451f7d174f",
+          "gitBlob": "4eaa015a8d52b7370322e1a6969b0435c16965b5"
+        },
+        "rust/services/gateway/src/flow_contract.rs": {
+          "sha256": "e01e0d48deaf75578715d65c573fa1d79ca8f98e93fc187a61ef1f816d045d17",
+          "gitBlob": "631ff03bff618bf35b134852a6ea3dce1de26e42"
+        },
+        "rust/services/issuance/src/tenant_postgres.rs": {
+          "sha256": "984093ea27057dc02c805ad1e167438b4f3abbaa2755ba439ed2ee6d106c2312",
+          "gitBlob": "2e5fe1ecaecb5c70758d0ec2270853c70cdc5ce9"
+        },
+        "rust/services/organization/migrations/0002_offline_audit_receipts.sql": {
+          "sha256": "6ade5eae58f5d8904e7930ca49d9559ac53bdf788e367853aa120dba29d3bad8",
+          "gitBlob": "c2d5b40953771fdb6c4747687db747ef32794518"
+        },
+        "rust/services/organization/src/api_keys.rs": {
+          "sha256": "d44a82f21ce4522e001e399dfd30e27986ee67501eb803ec6021fa2dd82a0443",
+          "gitBlob": "2f81aa21a904e8c38e622dfe77cd7bbd7ac11ea6"
+        },
+        "rust/services/organization/src/http_service.rs": {
+          "sha256": "349febb3650e53ad477553fad34d36ff7ead7641d0d2bff09e101e27d507357c",
+          "gitBlob": "101af8c5430b183f3cd17835b4da047ddf9385bc"
+        },
+        "rust/services/organization/src/lib.rs": {
+          "sha256": "40d60a259337ed3f6598611c96a16dde931f9a4db79f9e4ba959435456010daf",
+          "gitBlob": "5d07ddd8e30c5b5da38f12cd37bb113b41bb3677"
+        },
+        "rust/services/organization/src/migration.rs": {
+          "sha256": "60c9afc059a72228835354acfbc92cca69b8342d1ea2696876e52230e83861a7",
+          "gitBlob": "29351979d0ff80a80b2f920a6951460eb9ada18f"
+        },
+        "rust/services/organization/src/offline_audit.rs": {
+          "sha256": "2af0243538e45c8e34120479e087d17a4bbfe0d14b8494caf60e5be353c443c7",
+          "gitBlob": "d6e5744cca65e7c2608155e166508eb598a97bd3"
+        },
+        "rust/services/organization/src/offline_audit_http.rs": {
+          "sha256": "c950bdf6f213e3451c7755017eff35b88d5d22b19e36fae5283e00d67d7547d7",
+          "gitBlob": "1a53fa5d1ae512279aa4258f8b60a45bb2a9b482"
+        },
+        "rust/services/organization/src/offline_audit_store.rs": {
+          "sha256": "4a8a7f0243f21bf4566e08a9f04c061d4fe27901d21c041c7bbd1994b46d47d7",
+          "gitBlob": "cd0e301821a0f6e0b4e9b360bdf5b796c53cb03a"
+        },
+        "rust/services/organization/tests/offline_audit_http.rs": {
+          "sha256": "145b39713a03ba7d47c3429e50addc30a3aa1dea6cb6fd80b6515789f99684ef",
+          "gitBlob": "d0b88e840d6663a89aa1dcc9c599303ba91800d4"
+        },
+        "rust/services/organization/tests/offline_audit_postgres.rs": {
+          "sha256": "e27c084dad8158eebbe64cb5a962ec08079c68107b9eac0b1a2397bcdd873943",
+          "gitBlob": "d019d02e08cadb8554862759d348b313ccb40e55"
+        },
+        "rust/services/organization/tests/permission_catalog.rs": {
+          "sha256": "960ef50d74c0ce2c387acbe43d6739db6771ebd7cdc9aba244c1ace333d41872",
+          "gitBlob": "5701b78b904e0e6c1b1ad7791bb804f0bb8c56a0"
+        },
+        "rust/services/presentation-policy/Cargo.toml": {
+          "sha256": "60e3d57823d81b3ddb24b72b9837c6da4653d5a5609fdb12d37d985b996f5b6f",
+          "gitBlob": "2b405bfdffd7467fa3610f2994dce5a540a66470"
+        },
+        "rust/services/presentation-policy/src/config.rs": {
+          "sha256": "018237eaf2b353fb0fb116337f2905caac67ade4561f1891c663f83231380abe",
+          "gitBlob": "87e23d956cd9ae45bb4d763a6325e8cdd2980b3b"
+        },
+        "rust/services/presentation-policy/src/http_service.rs": {
+          "sha256": "31b4ec8eea2539a67865b6a60aeb512b2c3c2ca957710bf83228f5a7b8701239",
+          "gitBlob": "7791925df4ff351a43f168a5852a7eecd007e2cf"
+        },
+        "rust/services/presentation-policy/src/lib.rs": {
+          "sha256": "0c344cf0a0655c23f88a6a5efe232afc3657e65cb357bc4da124b9ace645b537",
+          "gitBlob": "2f01d721fefc96341bc7e242bb1c57e4619d5fc8"
+        },
+        "rust/services/presentation-policy/src/main.rs": {
+          "sha256": "d21e9e7bf227e49bed9a8806fca31bc3ae57c95c0af8ba9e56a806f1d1a4e6e6",
+          "gitBlob": "fbab792b50bd1f6d19a16870d0f1ffb2ac72dc76"
+        },
+        "rust/services/presentation-policy/src/native_kernel.rs": {
+          "sha256": "1127522e6ba2891620028d46ae0f366010a816a32c6660fdd17b1dc6f6c7197a",
+          "gitBlob": "9127d06b403c8f67d2a7865ecb540bf761d81edf"
+        },
+        "rust/services/presentation-policy/src/verification.rs": {
+          "sha256": "eae02238cc94d4e0ba592bc298d7ee944bf66ad0fcd5ebdbf6ace5f782065a43",
+          "gitBlob": "d6fb79bfd238da157a6c6e7ecb4e8f759b68ca86"
+        },
+        "rust/services/presentation-policy/tests/fixtures/foreign_ob3_jwt.json": {
+          "sha256": "9d88b796b081aee3507654ca719c058b633c689ace6b6a54cb1597ce4822a0c0",
+          "gitBlob": "276c866237234a3b4698cd49b25eff3f3f7a3916"
+        },
+        "rust/services/presentation-policy/tests/http_service_behavior.rs": {
+          "sha256": "125afb3640f7b6260bacba28d1aecb353dab7c7ca580fd9f60ea6ec502f78eb2",
+          "gitBlob": "58f578c9e47a48e7a5665fd8aa1aa77bf6f11699"
+        },
+        "rust/services/presentation-policy/tests/native_kernel_behavior.rs": {
+          "sha256": "b6f71fbc6220afedf7659619406d438d388e9ed8ca0c724a87e5391eaf0243da",
+          "gitBlob": "7adc14e18b35c9226f7809f37672a1e633c28ad9"
+        },
+        "rust/services/presentation-policy/tests/resolver_config_behavior.rs": {
+          "sha256": "5d8de5bb4764df7733d317cb973892cd0840831bb58ece8fbeb619d3022b357d",
+          "gitBlob": "153a63e2ab27de3424fc1f4eec2acbf4c67e1335"
+        },
+        "rust/services/presentation-policy/tests/verification_behavior.rs": {
+          "sha256": "39c2e76413f14269ff4cd5ddffe227d2ca6ecffd298597fc47f243c7162eb10c",
+          "gitBlob": "9e7e54c04efa43fc40e355c51399ccbdb9b1044e"
+        },
+        "rust/services/trust-profile/Cargo.toml": {
+          "sha256": "60479f4c7bc0e946e7e01406f612eca84596c7be05fa5b671184e8cac070d47f",
+          "gitBlob": "1e1d7221a5b8962c02f0c65e885b6afe91eba60b"
+        },
+        "rust/services/trust-profile/src/issuer_keys.rs": {
+          "sha256": "ba1aa6a0e24750daf36e8e6e2e96633a6264681ea06a22bca8af66dd691f255e",
+          "gitBlob": "94e9c63df2656cb8a7173a6ce546847257cc6093"
+        },
+        "rust/services/trust-profile/src/policy.rs": {
+          "sha256": "12a63a57fad1514b673279fb0e85bf97e9fa9da25da106be66853dfda847d9b4",
+          "gitBlob": "a8c448e8a8aef578bde606f5de82639a92c70c2d"
+        },
+        "scripts/beta_org_console_audit.py": {
+          "sha256": "eb7745ba19eceb40b0812995e38b29f774792c7803621de8a047043acd240f9d",
+          "gitBlob": "84c33bd18e93c10e6358ce72755e176138173d3a"
+        },
+        "scripts/validate_demo_manifests.py": {
+          "sha256": "a393616b877030fe59c379649bd4be72a196ac84b152b6e5e3c25e2d7969ef6d",
+          "gitBlob": "84b65adc0b9ddcbb9cd8cb5d59ae85692f71177f"
+        },
+        "tests/scripts/audit-beta-credential-lifecycle.js": {
+          "sha256": "6fd68013addaa9bf5dc003dcc98b27e3ffbb6dc138fa39c4d02042853e173cdf",
+          "gitBlob": "92d625e9ad0d82a96b692c6343e1c4db00ffb633"
+        },
+        "tests/scripts/audit-beta-credential-lifecycle.test.js": {
+          "sha256": "9ef9376aba7084160ebdd9e18d1558361efb41cb9a03def90a6796f50460f25d",
+          "gitBlob": "aa18af45fdaa42ebb53392e15d8c7767795aa483"
+        },
+        "tests/scripts/audit-beta-employee-access.js": {
+          "sha256": "dee62ac9d069b3b37d8802000753fe87e70aaa0048e343fdcb9e19431a42fd4e",
+          "gitBlob": "6e932ce6dfd9603a1ccd132dc129a9946fe1f7c3"
+        },
+        "tests/scripts/audit-beta-employee-access.test.js": {
+          "sha256": "7a93bfb612932209cfdf2e5bf8ba867316991bf185bbc4dea171793790979a46",
+          "gitBlob": "989d310d1f40621d2cf0ccadc267af291367ea81"
+        },
+        "tests/scripts/audit-beta-first-party-browser-wallet.js": {
+          "sha256": "0d36cdd94e0bf8165d091b17a5b60cfa5af6cf08587a2cdf510ab8aa94d75e97",
+          "gitBlob": "c50892d5059588d2bf057f7f01acf397cdcb1546"
+        },
+        "tests/scripts/audit-beta-independent-wallet-interoperability.js": {
+          "sha256": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f",
+          "gitBlob": "2e56f59f3a1091b7c6ddd5caf6c2895077fbb12f"
+        },
+        "tests/scripts/audit-beta-membership-support.js": {
+          "sha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c",
+          "gitBlob": "8751f1a46bd6bd1ce4998d4061b569ae045fd694"
+        },
+        "tests/scripts/audit-beta-membership-support.test.js": {
+          "sha256": "4e09f26f0127f7498efecd03cf7470758b428bc3b603043b2bbe60c1e8f9744d",
+          "gitBlob": "4eb84107bc4de379531132f915156e6e5641e233"
+        },
+        "tests/scripts/audit-beta-org-credential-paths.js": {
+          "sha256": "d3bcb8b73930877ee27d53f102892c57c8b92a2e42af591421a1a30caf3f4b90",
+          "gitBlob": "24f8539cdd3b89c932577a54640326f7b8110a13"
+        },
+        "tests/scripts/audit-beta-passport-clearance.js": {
+          "sha256": "5508b02b2eed0145fe7b739e221afa925345f8156684e351d50944baeabcba73",
+          "gitBlob": "933987c8d46ab022f764e59384a9bd6faabe2bff"
+        },
+        "tests/scripts/audit-beta-passport-clearance.test.js": {
+          "sha256": "4edb96719d5fe31b5dbdf9c2a6f8118b8ce9fac8f380461990fc3e1b3ac58746",
+          "gitBlob": "71c64e303d1b57f72a338f48f785b73a88fb0830"
+        },
+        "tests/scripts/audit-beta-private-age-proof.js": {
+          "sha256": "3346fae1da1810a23960f63dbd2d5bdb0b4563932a97862be3ce53e63897ad42",
+          "gitBlob": "3db1bc668b922c4c1cf985f5d5e2280ad325ee4e"
+        },
+        "tests/scripts/audit-beta-private-age-proof.test.js": {
+          "sha256": "77273710ccc025ba2816c379fffc0303bbc54eb2fbcabf82a89aabf837c1ab13",
+          "gitBlob": "5b5027f510222fbd71ece988ab60c6e552bd8fe6"
+        },
+        "tests/scripts/beta-demo-resource-helpers.js": {
+          "sha256": "f8955b3d2965093007f09bfb489936969d756970af125857f9e00a112899bf5a",
+          "gitBlob": "5864b790c3ee0da77e150f86a1501b411b1e710e"
+        },
+        "tests/scripts/beta-demo-resource-helpers.test.js": {
+          "sha256": "91761f62b09cbe13fb2443ddbf59c7c6aa021292498ad6c66a4d865b393b9fb7",
+          "gitBlob": "8f0a1cfe4c29d07e4b73c3137b3e1d760db973b7"
+        },
+        "tests/scripts/beta-membership-support-contract.js": {
+          "sha256": "8d0d37a3a62f57bc6f27e36d76f9680c7cf8b97b4b724d18bca76fe6849d8e02",
+          "gitBlob": "d92b1cbc1cbd74fc4e5c5b5d6d5a2b6a67d8579f"
+        },
+        "tests/scripts/demo-wallet-driver-test-helpers.js": {
+          "sha256": "77a91f39a5e2e8cb474a61c1efd0557856e0e85b5070b5b2dd580e4079125673",
+          "gitBlob": "7503d76b3b526d6938cc9e5b53def474caaf1574"
+        },
+        "tests/scripts/demo-wallet-session.js": {
+          "sha256": "97486b4056e2f5497cd711cb743c392bccc510fea30c192fcfe0828b3ad69a21",
+          "gitBlob": "8843fed594cb6012b8c7a744add1e15f47b905bc"
+        },
+        "tests/scripts/demo-wallet-session.test.js": {
+          "sha256": "862f8eb51fba11342081c7dac4d14451a452547fd9bc80923af5a325411eab3d",
+          "gitBlob": "d825995573869a6e246897371aed600653ae88db"
+        },
+        "tests/scripts/verify-beta-credential-login.js": {
+          "sha256": "e0a300d3ac410f20654e8dab8dce31cc42887d11c049c76603a52a786acfab24",
+          "gitBlob": "0e043a1b6ce8b0851f165bafb274784bc568077f"
+        },
+        "tests/test_beta_org_console_audit_release_checks.py": {
+          "sha256": "b38ffa8838a10c3faff8f31a69756cf48471751e83b984c9b6723a7e5bc2a02b",
+          "gitBlob": "fae52928d1579535cbb0fea95f08a872d5832e73"
+        },
+        "tests/test_beta_org_console_audit_signing.py": {
+          "sha256": "1228842ac8c6c39d32415f837e3f67b57f69422fa007aec9514f4770aaf307b2",
+          "gitBlob": "b9d1022cdc1bea6978e10959154fd03d86f82b22"
+        },
+        "tests/unit/test_demo_manifest_validation.py": {
+          "sha256": "7d7a1ad33b696452160e353ca44e0bce1888816576d7130fa900ff320efd5987",
+          "gitBlob": "a94f454cc3e081a36382a478823369b7411aaa2f"
+        },
+        "ui/public/demos/manifests/2026.08.0.json": {
+          "sha256": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1",
+          "gitBlob": "85a21429b149913605abd64ce37bb48003db0098"
+        },
+        "ui/scripts/generate-demo-manifest-module.mjs": {
+          "sha256": "fab6918abfe3a388c58230b2610d7e28332e7884ed1cfb6c497829040a500988",
+          "gitBlob": "8cdf1d9ea21f37a60e2a24c69b7df9d9faeae76e"
+        },
+        "ui/src/components/__tests__/ApplicationForm.test.tsx": {
+          "sha256": "f5bea24478d1bbef4c09c3d675ee016dffac9f68805937ff8bacb79048f32086",
+          "gitBlob": "501ef3a2ba602c0d0d8f88abc4eb021f0c383995"
+        },
+        "ui/src/components/applicant/ApplicationForm.jsx": {
+          "sha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0",
+          "gitBlob": "de4dcbcbe6ee758521d47e1215e3b6a45477dc27"
+        },
+        "ui/src/components/console/applicant/ClaimCredentialDialog.jsx": {
+          "sha256": "90974fd6391bab40b7bd14ae59fe8c7e36411a515d3836fa87d3ad8d8b5e201f",
+          "gitBlob": "eff16b34e3b8e1e08c863b3ff99ce0c3c0c90009"
+        },
+        "ui/src/components/console/deploy/keyManagementServiceCatalog.js": {
+          "sha256": "fb1f57354e74730c0de3ce377dab94c52b5f99db44f959b00f6c4986d4741675",
+          "gitBlob": "7924b1e9ec2e332f98d41a6ccb085128bdd246ca"
+        },
+        "ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts": {
+          "sha256": "c54f94678aea980bb5530c2750ec8677ba2d7c821486bcd9d2025020188bf999",
+          "gitBlob": "8b4a9ecb63f87b9dc92932b1ad346885fcd162e1"
+        },
+        "ui/src/components/pages/DemoPages.jsx": {
+          "sha256": "4b0606e644b76728bef6acf22ff5a0840c01b60a253c9a20a74c2377f21c5534",
+          "gitBlob": "0133e90ffe0a4cefe0fc4a5ebddf52ed02aba4d3"
+        },
+        "ui/src/components/pages/DemoPages.test.tsx": {
+          "sha256": "9e67521868847068244f05f95e0ccd6be9a15d5e760ca2caadd7785ad3a71569",
+          "gitBlob": "52e5f22d133b4e6dc746b9455a491f5331bec75c"
+        },
+        "ui/src/components/vendor/verification/VerificationResultSummary.jsx": {
+          "sha256": "ce56825d6e4f07072240d47fab2bd400f5a9313bb77511c2e8be1b71aeae6a8f",
+          "gitBlob": "93a10b6c7f2deee3d25c651f5d4d91302e2d607d"
+        },
+        "ui/src/components/vendor/verification/VerificationResultSummary.test.tsx": {
+          "sha256": "94d5b02fb3598b50dda237203c083a5ca2974de6d7c38ceb53f7db7fd98a2f4d",
+          "gitBlob": "798721207a96f97cf3097aa2a56eabacff2b2b08"
+        },
+        "ui/src/components/vendor/verification/VerificationSessionManager.jsx": {
+          "sha256": "5930aa7920c4d3b3380adc39e6a0b4ab80b8c76f795bbe18933ac9866631e864",
+          "gitBlob": "217c0318c3e2f7ccc9ef2aa4cf571ce724e8ad41"
+        },
+        "ui/src/components/vendor/verification/VerificationSessionManager.test.tsx": {
+          "sha256": "5f0f37cede73a2378cfc0420ae31438e88bd868ec2ed88e1d548d0b2e42b5959",
+          "gitBlob": "9caa09f3a5738f2b43150f179899723b9e17b23e"
+        },
+        "ui/src/generated/demoManifests.generated.js": {
+          "sha256": "d91a7b665be67bf8a953fd5db3b99e3647317c838c8466ae3ed69cb18776732e",
+          "gitBlob": "03b39f6dd47b97d439a15a06ecfcd433a22f345d"
+        },
+        "ui/src/generated/demoWalletSchema.generated.json": {
+          "sha256": "d9bb74797c73f6410d346e2e93646e372bef7331de8bfbbaa9c9d5ff05892bac",
+          "gitBlob": "58dd81b135c281707185927a6c48de599e100bf9"
+        },
+        "ui/src/services/demoManifestService.js": {
+          "sha256": "1e23c6b43ea70845d5f946267c411df65bdc9a60b3f2cfd7a44a7cfa4e860a57",
+          "gitBlob": "e45d591322ab31c493dfce4defb08a1ab5993931"
+        },
+        "ui/src/services/demoManifestService.test.ts": {
+          "sha256": "5f3bdd78bd4beb53b806fa04118b0d8f5b5cdd95bdedd08bdb3b356def8c4904",
+          "gitBlob": "a34d31eb29af3f17212087e04998561341461d4c"
+        },
+        "ui/src/services/zkVerificationApi.jsx": {
+          "sha256": "09d2000d18cc58bcb23d4626e52cc9b3426ae8c9c975c248b1f0afb2d3ca6acc",
+          "gitBlob": "78af1d0d585cfa014b06783175ab473a9da6ae57"
+        }
+      }
+    },
+    "marty-demo-recorder": {
+      "base": "d9e41aefdfd9b5fee5109b4d7d186929fa7106dc",
+      "implementationHead": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+      "branch": "audit/recorder-production-gaps-2026-10-20",
+      "sources": {
+        "android/README.md": {
+          "sha256": "01258c50f41b49093db9feaddbe7119c648fb762fce480a8b3485d2f0ba667fc",
+          "gitBlob": "1498fcf0d0dbde7224fac9d0f57dba444e95a7c7"
+        },
+        "android/d03-fixture.example.json": {
+          "sha256": "a9f9222c6dbc7871aa399fba3a4185ab985e6bb73a521b673f7317b6989806a8",
+          "gitBlob": "03837b2fdb9e8dbc3be094db61d6f5df1e3452c4"
+        },
+        "android/d03-release-gateway.example.json": {
+          "sha256": "df93bce49350ed09d94f1c4d6b0f7924c5ea75ddb1e9cdf2fbb8e9fc6914e938",
+          "gitBlob": "06a91a022dbcc6cb7c1a13e8b2c6a882465a22ef"
+        },
+        "android/retained-independent-fixture.example.json": {
+          "sha256": "89446741124aa2fa7ea345b7293c83cd39350147c26370ee4f11a7b9a18ec9d0",
+          "gitBlob": "4843d94c41d651a04fd2f4ab16974b57eca24f28"
+        },
+        "android/retained-independent-gateway.example.json": {
+          "sha256": "e6ed5ea0ab14005471118de82b3adf4234c23ade8cae960a15f865d25616ca00",
+          "gitBlob": "a4759f1e4067f48b9d7bc14516201df318e1d936"
+        },
+        "android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json": {
+          "sha256": "dd657471de96dbc7d1f4c16fd09f7911045026f7a56ec419cfafef8174d7f216",
+          "gitBlob": "349f7026dcbc5e14b85709c26ad3e6e62a36b0f1"
+        },
+        "android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json": {
+          "sha256": "c1a97a9abed29703ed821d71005e2db23672942e0567fb7c001052289d793993",
+          "gitBlob": "98cd5241345fe9410e98143260f27c3ff93c4c51"
+        },
+        "android/scenarios/membership-badge-login.spruceid-expired-offer.example.json": {
+          "sha256": "6827612c2aa74f7b5a18b6c9697ee2384413cad3bc55c151f85cfc526c9bd12d",
+          "gitBlob": "5bca9fecb64df5ccfe15cfe70c75bdffb114c0bb"
+        },
+        "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json": {
+          "sha256": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe",
+          "gitBlob": "37b7dd8e07eb2fb96ce30c87f7af6be53d238b06"
+        },
+        "android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json": {
+          "sha256": "417b125953882e420497b57a7cef5966c34bf10590bc5565efb2ae6d95da1637",
+          "gitBlob": "e915c01cab30b4ee6f25f9397702ab38559abc73"
+        },
+        "android/scenarios/membership-badge-login.spruceid-same-device.example.json": {
+          "sha256": "c7e698e701ced24034744478719e89e728914880bcb83f63c1c2da0fed2d297b",
+          "gitBlob": "a96af39151e65ab0dfad521954d534fdf74b7f72"
+        },
+        "android/scenarios/private-online-age-proof.runtime.example.json": {
+          "sha256": "6cd0b53bcf3bd901ab644c36ee79d3ecd25d94d14972f0be6a530b98321eaad9",
+          "gitBlob": "e77f2f9d5cb60306bf4302fb8ea2956b37d12f0e"
+        },
+        "demos/credential-lifecycle.json": {
+          "sha256": "901bf27be050a0c21f71224271e29a375479a8433e69ce518fbba69b7468c570",
+          "gitBlob": "4ede4a2baacb257e0028e323cba4c7ba8ab8efea"
+        },
+        "demos/first-party-browser-wallet.json": {
+          "sha256": "97884a5f9fe09b915a339e87c754ddd70411c3e45bd90032df7da6b029a2c3b2",
+          "gitBlob": "06a271bd35a83079fd4ce7ce5814ad523806b8e3"
+        },
+        "demos/independent-wallet-interoperability.json": {
+          "sha256": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00",
+          "gitBlob": "6c0ca617fe7f53dc6ae1a94c430b0e166f4e664d"
+        },
+        "demos/lifecycle-alignment.json": {
+          "sha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790",
+          "gitBlob": "1e691ea6f5179eef1e4c7c2adb8e28acf186950c"
+        },
+        "demos/membership-badge-login-expired-offer.json": {
+          "sha256": "655cf220a793dea6cd68a7d8da3a3b94f97ed67c95bcd5ca435c4a98ae820385",
+          "gitBlob": "44b419a101ed754e6c8eda9c93a8a1dd01071b6f"
+        },
+        "demos/membership-badge-login-untrusted-issuer.json": {
+          "sha256": "b72af313c2cf860c218ba3bf4d08552e577f43e499576eada40279308c273c72",
+          "gitBlob": "25a0807edc18a44989e5152efd4f9653100b4e23"
+        },
+        "demos/membership-badge-login.json": {
+          "sha256": "7ffcfc5b13e5c42541fb201593894229bdaf19c05f06e69a3f35d5d579181d2c",
+          "gitBlob": "45796003ef00680a8ceaf82266c7ab87b49709d0"
+        },
+        "demos/offline-audit-client.js": {
+          "sha256": "bda1bbc9b3505d2366699b1631aa959229199d0844b83bfe4248dc5485664de4",
+          "gitBlob": "e80441f7ff354de8df904cb468f8822c80f171a6"
+        },
+        "demos/offline-facility-verification.hooks.js": {
+          "sha256": "97768bc0297f4b893f95bf34991cd41a85760ec0462f412e85a646e6c692447a",
+          "gitBlob": "db2e23860b1db34a968e544913c5d713632efdac"
+        },
+        "demos/offline-facility-verification.json": {
+          "sha256": "bd633ad7981870ebeb7f90ed0fd1322c217e1b4a3bfbdf4fac0a504e65fd5113",
+          "gitBlob": "633f0311b8aaab3632cf9e9f5e87059884e24924"
+        },
+        "demos/organization-primitives.json": {
+          "sha256": "19fdc7f1171f6335876d3d0c6aa6f11a9c580358f02e07672186c5ec7177c948",
+          "gitBlob": "dd7aff335711033a5298d10908a308ffcb9c8420"
+        },
+        "demos/private-online-age-proof.json": {
+          "sha256": "77630d568b41e37c24f8c244b853fd441bb119607e2c793bd408114010cf944e",
+          "gitBlob": "2398d6a9eaebde751ce805e35698605a1269947c"
+        },
+        "demos/transcripts/first-party-browser-wallet.en.vtt": {
+          "sha256": "f3b97e99612201b46a2bdc630e28ccde8fd1e56f05a6dd073f81fee29c5f95f1",
+          "gitBlob": "cdbb93fa767ce4725fd1da183b393d4f9c55d9ef"
+        },
+        "demos/transcripts/independent-wallet-interoperability.en.vtt": {
+          "sha256": "5685635e98f48403656e5fb1ae49db1fdc698464c736a6ec7a23263704d632da",
+          "gitBlob": "0a4e3c0a2c502e29f5d4a5942824c5ce0b6a068d"
+        },
+        "demos/transcripts/offline-facility-verification.en.vtt": {
+          "sha256": "9a0cb94d0c0cad1c6da824950c20c419f88a533c94a284abc0a67094f11621bd",
+          "gitBlob": "d386b74adb91cd01660c241e4f1cb9ded327acb1"
+        },
+        "demos/transcripts/private-online-age-proof.en.vtt": {
+          "sha256": "f83ac537aea7851d3c31691b81ef1656cb02a9579d5f9bca4b4ec29b1ebdf89e",
+          "gitBlob": "86dc53e3e2d60687f6146d29af540833287f5cda"
+        },
+        "docs/d03-private-online-age-proof.md": {
+          "sha256": "af394ebe0d267ee391a9d575a36197b11fc4838a1aeb29a5adb2bc603d07c4a0",
+          "gitBlob": "1916163b3730b650b97b12d05f2cd5651e770153"
+        },
+        "docs/d05-native-lanes.md": {
+          "sha256": "c8aaa9b0999a80c3775ba3990b6a6c0b3b9d3cc865cd3f10b14084a1150244cd",
+          "gitBlob": "cfeec5faadd679d88769c01554029aa0ef1577d4"
+        },
+        "docs/d05-supporting-lanes.md": {
+          "sha256": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012",
+          "gitBlob": "667ff8ba3304cc689175b7b0a4342fe89c365a47"
+        },
+        "docs/d06-lifecycle-capture.md": {
+          "sha256": "a1493eef3bf95e132947fe0ef22d3c5345cc8bebf90d7c4f489f806d7f9dab40",
+          "gitBlob": "bbe6f35875db2224a64a716b16fb7b40496235e1"
+        },
+        "docs/d10-signing-capability.md": {
+          "sha256": "1b66c5e5e04b87157a81e5a43f0add41900ce4721b4f1dc83005bab09c7ddc6c",
+          "gitBlob": "4d233781f0da421e648375b2dcc199c0e3892500"
+        },
+        "docs/first-party-browser-wallet.md": {
+          "sha256": "984783378adf2cf504a3f2058997bf9e4ab22c6f59702347696d4d24d2f13892",
+          "gitBlob": "245d99537a8e5039bbbfd2944bf9b0d73841edb3"
+        },
+        "docs/functional-reruns.md": {
+          "sha256": "0bcf84d938fe746b05839a0eec15b5b69d6e2970bb0fb44d093e64194933668a",
+          "gitBlob": "7df6e7f7265fa00deb142194f36d9d73d9c04633"
+        },
+        "docs/independent-wallet-interoperability.md": {
+          "sha256": "0710bd439475889ca628860a2ab587bdd7b7f58f5da1e9e8cd5ec5f17155375f",
+          "gitBlob": "bc55d01b64b23e99c5d712e529a7940217fcfb62"
+        },
+        "src/androidManifestEvidence.js": {
+          "sha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb",
+          "gitBlob": "444ec2f81d11e45950d29ad87b9e2de0e4d1ff21"
+        },
+        "src/androidMembershipCancel.js": {
+          "sha256": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6",
+          "gitBlob": "2d19a8da2777768249b3236ead528e0baa854aa6"
+        },
+        "src/androidRecorder.js": {
+          "sha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2",
+          "gitBlob": "5b96ebed4ef5fb590e69eb7a4cec3bcb8ccf7dc4"
+        },
+        "src/androidReleaseGateway.js": {
+          "sha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+          "gitBlob": "5d193c4ecd344e9db37ebc0b18c77e65dcb557ab"
+        },
+        "src/androidScenarioFixture.js": {
+          "sha256": "ee9aed7cb62bd2314681f3036e9c533c469864ad21edf514ecc3fa7232b85ec6",
+          "gitBlob": "3122715345ca4ad642c66ccf7485450f6c1b1afc"
+        },
+        "src/assertionCoverage.js": {
+          "sha256": "29245c7a55d1ebff0f7a30e27ef7825db0237f010f178f6ce5d2ee3db8869efc",
+          "gitBlob": "c7d14e407599483a34646e65c756d2bb22cbb3c7"
+        },
+        "src/privateAgeProofGateway.js": {
+          "sha256": "fab9c43e0b76c1fcccd4fa249f74fe6e173748f9ee48c887b139c9835b864c35",
+          "gitBlob": "8f9aad437c02b63292b1ecbbe603bc7a754c7d59"
+        },
+        "src/retainedIndependentOverview.js": {
+          "sha256": "09026dd4cb54b989a00e9744d6b8d5ee2eb04bd3d6043592f9943d222d51f5ac",
+          "gitBlob": "6e21b09e4f54cae68274b10e98dc2bdf4be129a6"
+        },
+        "src/retainedIndependentWallet.js": {
+          "sha256": "e90c2a1dd94061c6e3340926890a900990328244c5a8fd8313532270b6eaecbc",
+          "gitBlob": "d34eeef39d6d246ecc2e684f5dc36ec5099c4e76"
+        },
+        "src/spruceMembershipBrowser.js": {
+          "sha256": "8ebe08b8f89d24c9980bf1a86eafc46e76f1f33c77a76c1212af101019b03de2",
+          "gitBlob": "5ae82c012d0737a6291ad4334ff46d4601c4a537"
+        },
+        "src/spruceMembershipFlow.js": {
+          "sha256": "4c439c14ab14e27c844f49afc1074ca9c44e24a8d73651062e83ca34f5c7a72e",
+          "gitBlob": "6fbabe4487cfddddb6ec3bbb15f117406f36c3f4"
+        },
+        "test/androidMembershipCancel.test.js": {
+          "sha256": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2",
+          "gitBlob": "31818b62e07857986c04fdc6b0974fa0f42dbd22"
+        },
+        "test/androidRecorder.test.js": {
+          "sha256": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59",
+          "gitBlob": "6f674c847bb2660c1ab33814bf23eafd1c56920b"
+        },
+        "test/assertionCoverage.test.js": {
+          "sha256": "3b66b086f1a6629c5fe70a4398252d044d3ff7890a640635639c1f293a880dc2",
+          "gitBlob": "aa796194f106023722aeac1d671a3db5db899104"
+        },
+        "test/compose.test.js": {
+          "sha256": "20c02bc6b8e4fa99f990797e8594e8fd3ac8612fd54bf3dab169156bc7e3dc76",
+          "gitBlob": "1bd7b62452d50cf9c02ad21da40bef7b3f88d616"
+        },
+        "test/firstPartyBrowserWallet.test.js": {
+          "sha256": "99d0ea0cd9c7b6a6ce7311e5f801db8a20f9a72d5acc72a5c475e09342739eee",
+          "gitBlob": "d3857c4893ed3309c0166a9a73f729317908ed8c"
+        },
+        "test/fixtures/spruceMembership.js": {
+          "sha256": "4601c0ff5a65bdcc37d35edef444e8b19b6d9668a09e697e2498c2d9ca71cf3f",
+          "gitBlob": "105e8af74d7845d820a527f109eb84cec06d5a3c"
+        },
+        "test/functionalScenarioContracts.test.js": {
+          "sha256": "c4e279f747d798594cf20c3f05c5ffece87a1fe3525d1d4bae91f119cc517fa9",
+          "gitBlob": "50cf540f67a0f106eda4623b8efc9c86958bf86a"
+        },
+        "test/nativeFixtureRetention.test.js": {
+          "sha256": "7e7a133f5fa26f86cb7ef563d03e60a9442e7b95b09d15b7e0e13e48c701515f",
+          "gitBlob": "eaba47369de93d1c8ed44c2e7297989e6799b69c"
+        },
+        "test/offlineAuditClient.test.js": {
+          "sha256": "95ea01832fc5a2c6f2c04c451221260e5164832acea29c6e4b138ee8918b1ed7",
+          "gitBlob": "26080995f458736ecfd38d41e571a07cd67cd95b"
+        },
+        "test/offlineFacilityVerification.test.js": {
+          "sha256": "cba920125ae8fe38906b28864ddfb3a19dcb05dbc6acd7080a17eeea72ea1869",
+          "gitBlob": "a118be122de18b690963b322ba56d3d76ac8aa75"
+        },
+        "test/privateAgeProofGateway.test.js": {
+          "sha256": "d768ea844a499547c5175e8413e5599e33ca2d512d837fddf6bb2757cc57ae50",
+          "gitBlob": "bbbeac3749d7df09b7c558b1b3d62ec8eac4c964"
+        },
+        "test/retainedIndependentOverview.test.js": {
+          "sha256": "c6ea618d7cd8e8b6f1b35ed09c978d92ff389aa45bfab2546af891aaea4e9d5f",
+          "gitBlob": "71835ab3919813da01d8f613ed015ef7fc303bdc"
+        },
+        "test/retainedIndependentWallet.test.js": {
+          "sha256": "73ab2fff5bd60f0bab23fd2f15a9c023afe9dda88c71ac1c12bc07aa4514c108",
+          "gitBlob": "12321c7f760847e69fdfede50e663187952bfb7f"
+        },
+        "test/spruceMembershipFlow.test.js": {
+          "sha256": "03862f7cd949f56a9c707b41be0641342f71d10d06efa2579cd9f1097572b874",
+          "gitBlob": "425423eff3421f866b567b45820254a02e4d6096"
+        }
+      }
+    },
+    "marty-core": {
+      "base": "f0819fa0a7783eaebc2efaa105908809244c75a4",
+      "implementationHead": "adbc29d2511dead6082618b1b05e7d91e089feb1",
+      "branch": "audit/demo-wallet-isolation-2026-10-20",
+      "sources": {
+        "marty-test-wallet/README.md": {
+          "sha256": "3ebf87f5fbfb1b056002f4d50352d0ba0322497a764b4fbf410811d2824dd5dc",
+          "gitBlob": "333c987d014e0a9db10f1e1e7c05cbcc33367be1"
+        },
+        "marty-test-wallet/src/lib.rs": {
+          "sha256": "c5a97ed1d6d40c00f379368b80c03c15743d525b7b233c28184f30b2454f4fa8",
+          "gitBlob": "323146139637996ff223ede66f68a6d884a8a9d2"
+        },
+        "marty-test-wallet/src/main.rs": {
+          "sha256": "6d85865cb2b7c2aa2f2a6454732f993af0d6b28572c3fb1756ad0f3b659c61aa",
+          "gitBlob": "3db67b4d8fa35c906233f5d41716610b1f1e5830"
+        },
+        "marty-test-wallet/src/wallet_sessions.rs": {
+          "sha256": "0dc0f8644a1c3e24f4e88fe2e37b59720d61d4945bffc4fda921ff06e8a69980",
+          "gitBlob": "e5846ed6748f1281b601a54417a8a795da3bb48d"
+        },
+        "marty-test-wallet/static/index.html": {
+          "sha256": "8b90916b02aa020324cc3108a685f9841bcbc8bebf4ffaa775f223d280fa7b1f",
+          "gitBlob": "495710e1c91245880cd02eec0280a17e7340861d"
+        }
+      }
+    },
+    "marty-verifier": {
+      "base": "29e35854d0a34bcd0cc943453ea5d426246b383b",
+      "implementationHead": "25d2bf22e296dfd726a0295c414efee143db0105",
+      "branch": "audit/offline-durable-ack-2026-10-20",
+      "sources": {
+        "Cargo.lock": {
+          "sha256": "cd41e46eab5d1916a3e43a11ea2fbe951ebc04126403c222733e381abfb994da",
+          "gitBlob": "c0d5f3a87a8c8bdff4e2b0b95b8fcbaf1e773943"
+        },
+        "crates/marty-reporting/Cargo.toml": {
+          "sha256": "fda1726eff9a61b847f978a0a810356f54362f62225aded4211609ecc58819f6",
+          "gitBlob": "fc313a6617735f9659f773d9085bd0910616ae55"
+        },
+        "crates/marty-reporting/README.md": {
+          "sha256": "49b68bf92cdba752866c8cc15e12f58a8d70e4bb77a3cf6295829e7fe01d00c1",
+          "gitBlob": "a129787149710aa1050e3fe1f0d0b06f7221d443"
+        },
+        "crates/marty-reporting/src/config.rs": {
+          "sha256": "f9ee7bc7627273d32cf8f8013103e6dbf28a6d740692d7ad8507c29fa484dea7",
+          "gitBlob": "450ce0d7cfe5d06dc12c17ee3426319e89e2226f"
+        },
+        "crates/marty-reporting/src/durable_ack.rs": {
+          "sha256": "c93c14752b944a84f6e56005d89c3609505f1657468bf0a11fce1000c4e5414d",
+          "gitBlob": "5ad0793853202d3906b5f500278a1d03051f1eb8"
+        },
+        "crates/marty-reporting/src/lib.rs": {
+          "sha256": "c6d56ee05541d094e30dd4d086fb2b98dd0af26b886945a8d6c739cf46d04ec3",
+          "gitBlob": "f284d11d2a1e2aae5fd3b5ce0c816bd682444ca7"
+        },
+        "crates/marty-reporting/src/reporter.rs": {
+          "sha256": "8d9779c661176c1d518ad019e34b3231d291c7ee87ef7b4d34037e36e966d31d",
+          "gitBlob": "f02653ce6d06ff467843a840ea08451c0cea90bd"
+        },
+        "crates/marty-reporting/tests/fixtures/offline-verification-ingest.json": {
+          "sha256": "146a04c03c8ceb5b78ed83db2746ceb8ff65b38be9dc0fa0eab14dae680d74db",
+          "gitBlob": "56e5cd74daae8c8a935a011f30c69029548b3f60"
+        }
+      }
+    }
+  }
+}

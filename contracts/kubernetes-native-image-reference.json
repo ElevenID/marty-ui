@@ -1,0 +1,16 @@
+{
+  "schema": "marty.kubernetes-native-image-reference/v1",
+  "source": "scripts/prepare_official_beta_release.py:image_reference",
+  "source_function_utf8_lf_sha256": "247c7c7a759b4cd2878568da675fdacc3fe649f1ee3066e7a8fcd695347ca6eb",
+  "observation": "Executed unchanged formatter with synthetic SHA256 digest. Canonical native acceptance is an intentional restriction for a new selector, not parity with permissive historical URI formatting.",
+  "cases": [
+    {"uri": "ghcr.io/elevenid/services", "legacy_formatter_accepts": true, "native_selector_accepts": true},
+    {"uri": "ghcr.io/elevenid/services/", "legacy_formatter_accepts": true, "native_selector_accepts": false},
+    {"uri": "ghcr.io/ElevenID/services", "legacy_formatter_accepts": true, "native_selector_accepts": false},
+    {"uri": "ghcr.io/a..b/services", "legacy_formatter_accepts": true, "native_selector_accepts": false},
+    {"uri": "ghcr.io/a/services:latest", "legacy_formatter_accepts": false, "native_selector_accepts": false},
+    {"uri": "http://ghcr.io/a/services", "legacy_formatter_accepts": false, "native_selector_accepts": false},
+    {"uri": "ghcr.io/a/../services", "legacy_formatter_accepts": true, "native_selector_accepts": false},
+    {"uri": "ghcr.io/a-b/nested__name/services", "legacy_formatter_accepts": true, "native_selector_accepts": true}
+  ]
+}

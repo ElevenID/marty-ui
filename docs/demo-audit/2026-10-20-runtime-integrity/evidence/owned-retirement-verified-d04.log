@@ -1,0 +1,17 @@
+✔ D-01 acquires the receiver context before configuration and closes it before browser teardown (26.030137ms)
+✔ D-01 retains unknown wallet acquisition and refuses product actions or success (2.253148ms)
+✔ D-01 reports failed owned-wallet closure while still finalizing both contexts (2.207714ms)
+✔ D-01 configuration binds one exact credential across application, flow, and policy (1.433108ms)
+✔ D-01 fresh configuration uses target-owned issuer, trust, and revocation bindings (0.329146ms)
+✔ D-01 application requires exact SHA-256 evidence and gate discloses only clearance (0.358129ms)
+✔ D-01 configuration rejects evidence, resource, policy, and trigger drift (1.120157ms)
+✔ D-01 retains its created application ID when stored passport evidence fails validation (1.175781ms)
+✔ D-01 attempts exact lock release on approval mismatch and retains unconfirmed lock outcomes (1.450394ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 71.905564

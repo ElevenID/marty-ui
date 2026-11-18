@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Validate public ElevenID LLC release demo manifests without optional dependencies."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+if __package__:
+    from .demo_asset_hashes import public_asset_sha256
+else:
+    from demo_asset_hashes import public_asset_sha256
+
+
+STACK_VERSION = re.compile(r"^\d{4}\.\d{2}\.\d+$")
+MIP_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-beta\.\d+)?$")
+GIT_REVISION = re.compile(r"^[a-f0-9]{40}$")
+SHA256 = re.compile(r"^[a-f0-9]{64}$")
+DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
+YOUTUBE_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YOUTUBE_CHANNEL_ID = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+YOUTUBE_HANDLE = re.compile(r"^@[A-Za-z0-9._-]{3,30}$")
+YOUTUBE_PLAYLIST_ID = re.compile(r"^[A-Za-z0-9_-]{10,64}$")
+
+FINAL_PROTOCOLS = {
+    "openid4vci-1.0",
+    "openid4vp-1.0",
+    "dcql-1.0",
+    "sd-jwt-vc",
+    "open-badges-3.0",
+    "lti-1.3",
+    "https-webhooks",
+}
+SENSITIVE_KEYS = {
+    "credential",
+    "credential_payload",
+    "credential_offer",
+    "credential_offer_uri",
+    "request_uri",
+    "qr_data",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "password",
+    "secret",
+    "private_key",
+    "email",
+}
+HISTORICAL_2026_07_SCENARIOS = {
+    "membership-badge-login",
+    "organization-primitives",
+    "first-party-browser-wallet",
+    "independent-wallet-interoperability",
+    "canvas-learning-achievement",
+    "credential-lifecycle",
+}
+PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
+PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
+# The archived edition must retain its original behavioral contract, independently
+# of current platform retirement. Preserve and hash-pin the original bytes.
+HISTORICAL_2026_08_PATH = PORTFOLIO_PATH.parents[2] / "contracts/demo-portfolio-2026-08-reference.json"
+_historical_portfolio_bytes = HISTORICAL_2026_08_PATH.read_bytes().replace(b"\r\n", b"\n")
+if hashlib.sha256(_historical_portfolio_bytes).hexdigest() != "871b892b1e8ea949b6d41c3ddba3335dd97429c1a1b4b7c22ba0985944baecfb":
+    raise ValueError("Historical demo portfolio reference changed")
+HISTORICAL_2026_08_PORTFOLIO = json.loads(_historical_portfolio_bytes)
+MANIFEST_SCHEMA_PATH = PORTFOLIO_PATH.parent.parent / "schemas" / "stack-demo-manifest.schema.json"
+WALLET_SCHEMA = json.loads(MANIFEST_SCHEMA_PATH.read_text(encoding="utf-8"))["$defs"]["scenario"]["properties"]["wallets"]["items"]
+PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
+CANDIDATE_SCENARIOS = {
+    scenario["slug"]: scenario for scenario in PORTFOLIO.get("candidate_scenarios", [])
+}
+CANDIDATE_SCENARIOS_BY_ID = {
+    scenario["demo_id"]: scenario for scenario in CANDIDATE_SCENARIOS.values()
+}
+PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
+SCENARIO_PUBLICATION_CHECKS = {
+    "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
+}
+RELEASE_PUBLICATION_CHECKS = {
+    "accessibility", "canonical-urls", "metadata", "navigation", "playback", "privacy",
+    "responsive-layouts", "version-selection",
+}
+PENDING_PUBLICATION_LANGUAGE = re.compile(r"\b(awaiting|must pass before|not completed|not run|pending)\b", re.IGNORECASE)
+
+
+class ManifestValidationError(ValueError):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ManifestValidationError(message)
+
+
+def reject_sensitive_keys(value: Any, path: str = "manifest") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            require(key.lower() not in SENSITIVE_KEYS, f"{path}.{key}: sensitive fields are forbidden")
+            reject_sensitive_keys(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            reject_sensitive_keys(child, f"{path}[{index}]")
+
+
+def validate_timestamp(value: Any, label: str) -> None:
+    require(isinstance(value, str) and "T" in value, f"{label} requires an ISO date-time timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ManifestValidationError(f"{label} timestamp is invalid") from error
+    require(parsed.tzinfo is not None, f"{label} timestamp requires a timezone")
+
+
+def validate_wallet_evidence(wallet: Any, label: str) -> None:
+    require(isinstance(wallet, dict), f"{label}: invalid wallet evidence")
+    require(set(WALLET_SCHEMA["required"]).issubset(wallet), f"{label}: required wallet evidence is missing")
+    # Keep the public wallet allowlist and primitive constraints in the schema.
+    # Full Android device/protocol observations belong in the evidence report.
+    for field, value in wallet.items():
+        rule = WALLET_SCHEMA["properties"].get(field)
+        require(rule is not None, f"{label}: unsupported wallet field {field}")
+        error = f"{label}: invalid wallet {field}"
+        if rule.get("$ref") == "#/$defs/stringList":
+            require(isinstance(value, list) and all(isinstance(item, str) and item for item in value), error)
+        elif "enum" in rule:
+            require(value in rule["enum"], error)
+        else:
+            types = rule["type"] if isinstance(rule["type"], list) else [rule["type"]]
+            require((value is None and "null" in types) or (isinstance(value, str) and "string" in types), error)
+            if isinstance(value, str):
+                require(len(value) >= rule.get("minLength", 0), error)
+                if "pattern" in rule:
+                    require(re.search(rule["pattern"], value) is not None, error)
+                if rule.get("format") == "date-time":
+                    validate_timestamp(value, f"{label} wallet {field}")
+
+
+def validate_publication_attestation(value: Any, expected_checks: set[str], published_at: Any, label: str) -> None:
+    require(isinstance(value, dict), f"{label} requires publication attestation evidence")
+    require(value.get("kind") == "AUTOMATED", f"{label} attestation kind must be AUTOMATED")
+    require(bool(GIT_REVISION.fullmatch(value.get("pipeline_revision", ""))), f"{label} pipeline revision is invalid")
+    validate_timestamp(value.get("published_at"), f"{label} attestation")
+    require(value.get("published_at") == published_at, f"{label} attestation time must match published_at")
+    checks = value.get("checks")
+    require(isinstance(checks, list) and len(checks) == len(set(checks)), f"{label} attestation checks must be unique")
+    require(set(checks) == expected_checks, f"{label} attestation checks are incomplete")
+    for field in ("verification_report_sha256", "result_sha256", "smoke_report_sha256"):
+        require(bool(SHA256.fullmatch(value.get(field, ""))), f"{label} {field} is invalid")
+    require(value.get("youtube_privacy_status") == "public", f"{label} YouTube privacy status must be public")
+
+
+def validate_media_evidence(value: Any, label: str) -> None:
+    require(isinstance(value, dict), f"{label} requires release-bound media evidence")
+    for field in (
+        "video_sha256", "captions_sha256", "thumbnail_sha256", "privacy_scan_sha256",
+        "publication_config_sha256",
+    ):
+        require(bool(SHA256.fullmatch(value.get(field, ""))), f"{label} {field} is invalid")
+    validate_timestamp(value.get("youtube_uploaded_at"), f"{label} YouTube upload")
+
+
+def validate_manifest(manifest: dict[str, Any]) -> None:
+    required = {
+        "schema_version", "stack_version", "release_name", "mip_version", "publication_state",
+        "coverage_state", "release_ready", "public_demo_ready", "published_at", "publication_attestation",
+        "video_distribution",
+        "deployment_release_marker", "recorder_revision", "component_revisions",
+        "image_digests", "release_evidence", "release_differences", "scenarios",
+    }
+    missing = sorted(required - manifest.keys())
+    require(not missing, f"missing required fields: {', '.join(missing)}")
+    require(manifest["schema_version"] == 2, "schema_version must be 2")
+    require(bool(STACK_VERSION.fullmatch(manifest["stack_version"])), "stack_version must use YYYY.MM.PATCH")
+    release_name = manifest["release_name"]
+    require(isinstance(release_name, str) and 3 <= len(release_name.strip()) <= 80, "release_name must be descriptive")
+    require(bool(MIP_VERSION.fullmatch(manifest["mip_version"])), "mip_version must be semantic and independent")
+    require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
+    require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
+    binding_state = manifest.get("binding_state", "BOUND")
+    require(
+        binding_state in {"BOUND", "PENDING_DEPLOYMENT", "DEPLOYED_PENDING_EVIDENCE"},
+        "invalid binding_state",
+    )
+    if not manifest["stack_version"].startswith("2026.07."):
+        require("binding_state" in manifest, "post-July manifests require an explicit binding_state")
+
+    distribution = manifest["video_distribution"]
+    require(distribution.get("provider") == "YOUTUBE", "video distribution provider must be YOUTUBE")
+    require(distribution.get("channel_name") == "ElevenID LLC", "video distribution must use the ElevenID LLC channel")
+    require(distribution.get("privacy_enhanced_embeds") is True, "privacy-enhanced YouTube embeds are required")
+    distribution_status = distribution.get("status")
+    require(distribution_status in {"PENDING_CHANNEL_SETUP", "CONFIGURED"}, "invalid video distribution status")
+    if distribution_status == "CONFIGURED":
+        channel_id = distribution.get("channel_id", "")
+        channel_handle = distribution.get("channel_handle")
+        playlist_id = distribution.get("playlist_id", "")
+        require(bool(YOUTUBE_CHANNEL_ID.fullmatch(channel_id)), "configured YouTube channel ID is invalid")
+        require(channel_handle is None or bool(YOUTUBE_HANDLE.fullmatch(channel_handle)), "configured YouTube handle is invalid")
+        expected_channel_urls = {f"https://www.youtube.com/channel/{channel_id}"}
+        if channel_handle:
+            expected_channel_urls.add(f"https://www.youtube.com/{channel_handle}")
+        require(distribution.get("channel_url") in expected_channel_urls, "configured YouTube channel URL does not match its identity")
+        require(bool(YOUTUBE_PLAYLIST_ID.fullmatch(playlist_id)), "configured YouTube playlist ID is invalid")
+        require(distribution.get("playlist_url") == f"https://www.youtube.com/playlist?list={playlist_id}", "configured YouTube playlist URL does not match its identity")
+        require(bool(distribution.get("verified_at")), "configured YouTube distribution requires verification time")
+    else:
+        for field in ("channel_id", "channel_handle", "channel_url", "playlist_id", "playlist_url", "verified_at"):
+            require(distribution.get(field) is None, f"pending YouTube distribution cannot publish {field}")
+
+    recorder = manifest["recorder_revision"]
+    require(recorder.get("kind") in {"git", "unversioned-source-snapshot"}, "invalid recorder revision kind")
+    if recorder.get("kind") == "git":
+        require(bool(GIT_REVISION.fullmatch(recorder.get("value", ""))), "recorder git revision must be a full SHA")
+    else:
+        require(not manifest["release_ready"] and manifest["publication_state"] == "DRAFT", "unversioned recorder evidence is preview-only")
+        require(bool(SHA256.fullmatch(recorder.get("value", ""))), "recorder source snapshot must be a SHA-256")
+
+    components = manifest["component_revisions"]
+    require(isinstance(components, list), "component_revisions must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or components, "component_revisions cannot be empty")
+    for component in components:
+        require(bool(GIT_REVISION.fullmatch(component.get("revision", ""))), f"{component.get('component')}: revision must be a full SHA")
+    component_names = [component.get("component") for component in components]
+    require(len(component_names) == len(set(component_names)), "component revisions must be unique")
+
+    images = manifest["image_digests"]
+    require(isinstance(images, list), "image_digests must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or images, "image_digests cannot be empty")
+    for image in images:
+        require(bool(DIGEST.fullmatch(image.get("digest", ""))), f"{image.get('component')}: immutable image digest required")
+    image_names = [image.get("component") for image in images]
+    require(len(image_names) == len(set(image_names)), "image digests must be unique")
+
+    if binding_state == "PENDING_DEPLOYMENT":
+        require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "pending deployment binding must remain a non-ready draft")
+        require(manifest.get("deployment_release_marker") is None, "pending deployment binding cannot claim a release marker")
+        require(not components and not images, "pending deployment binding cannot claim revisions or image digests")
+        evidence = manifest["release_evidence"]
+        require(evidence.get("source_marker") is None, "pending deployment binding cannot claim a source marker")
+        require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "pending deployment binding cannot claim recording times")
+        require(evidence.get("artifacts") == [], "pending deployment binding cannot claim release artifacts")
+    elif binding_state == "DEPLOYED_PENDING_EVIDENCE":
+        require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "deployed pending-evidence binding must remain a non-ready draft")
+        require(bool(manifest.get("deployment_release_marker")), "deployed binding requires a release marker")
+        require(bool(GIT_REVISION.fullmatch(manifest.get("demo_application_revision", ""))), "deployed binding requires the exact demo application revision")
+        evidence = manifest["release_evidence"]
+        require(bool(GIT_REVISION.fullmatch(evidence.get("source_marker", ""))), "deployed binding requires an exact source marker")
+        require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "deployed pending-evidence binding cannot claim recording times")
+        require(evidence.get("artifacts") == [], "deployed pending-evidence binding cannot claim release artifacts")
+    else:
+        require(bool(manifest.get("deployment_release_marker")), "bound release requires a deployment marker")
+        require(bool(GIT_REVISION.fullmatch(manifest["release_evidence"].get("source_marker", ""))), "bound release requires an exact source marker")
+        require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
+
+    scenarios = manifest["scenarios"]
+    require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
+    slugs = [scenario.get("slug") for scenario in scenarios]
+    require(len(slugs) == len(set(slugs)), "scenario slugs must be unique")
+    for scenario in scenarios:
+        slug = scenario.get("slug")
+        demo_id = scenario.get("demo_id")
+        candidate = CANDIDATE_SCENARIOS.get(slug) or CANDIDATE_SCENARIOS_BY_ID.get(demo_id)
+        if candidate is not None:
+            require(
+                slug == candidate["slug"] and demo_id == candidate["demo_id"],
+                f"{slug}: candidate demo ID and slug must match the reserved pair",
+            )
+            require(
+                not manifest["stack_version"].startswith("2026.07."),
+                f"{slug}: candidate cannot appear in a historical 2026.07 release",
+            )
+            require(
+                manifest["mip_version"] == candidate["required_mip_version"],
+                f"{slug}: candidate requires MIP {candidate['required_mip_version']}",
+            )
+    historical = manifest["stack_version"].startswith("2026.07.") or manifest["stack_version"] == "2026.08.0"
+    portfolio = HISTORICAL_2026_08_PORTFOLIO if manifest["stack_version"] == "2026.08.0" else PORTFOLIO
+    if not historical:
+        require(all(scenario.get("slug") not in {"canvas-learning-achievement", "external-evidence-to-credential"}
+                    and scenario.get("demo_id") not in {"D-07", "D-08"}
+                    and "lti-1.3" not in scenario.get("protocols", []) for scenario in scenarios),
+                "retired connector scenario cannot be promoted in the current platform catalog")
+    required_scenarios = (
+        HISTORICAL_2026_07_SCENARIOS
+        if manifest["stack_version"].startswith("2026.07.")
+        else {scenario["slug"] for scenario in portfolio["scenarios"]} | PRESERVED_LEGACY_SCENARIOS
+    )
+    require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
+    if not manifest["stack_version"].startswith("2026.07."):
+        scenario_by_slug = {scenario["slug"]: scenario for scenario in scenarios}
+        present_candidates = [
+            candidate
+            for slug, candidate in CANDIDATE_SCENARIOS.items()
+            if slug in scenario_by_slug
+        ]
+        for contract in portfolio["scenarios"] + present_candidates:
+            scenario = scenario_by_slug[contract["slug"]]
+            require(scenario.get("demo_id") == contract["demo_id"], f"{contract['slug']}: demo ID differs from the portfolio contract")
+            plan = scenario.get("recording_plan", {})
+            require(plan.get("fresh_recording_required") is True, f"{contract['slug']}: fresh recording must be required")
+            require(plan.get("happy_path") == contract["happy_path"], f"{contract['slug']}: happy path differs from the portfolio contract")
+            require(plan.get("failure_paths") == contract["failure_paths"], f"{contract['slug']}: failure paths differ from the portfolio contract")
+            assertion_ids = {assertion.get("id") for assertion in scenario.get("assertions", [])}
+            required_assertions = set(contract["happy_path"]) | set(contract["failure_paths"])
+            require(required_assertions.issubset(assertion_ids), f"{contract['slug']}: behavioral paths require explicit assertions")
+
+    for scenario in scenarios:
+        slug = scenario.get("slug", "unknown")
+        require(isinstance(scenario.get("wallets"), list), f"{slug}: wallet evidence is missing")
+        for index, wallet in enumerate(scenario["wallets"], start=1):
+            validate_wallet_evidence(wallet, f"{slug} wallet {index}")
+        require(scenario.get("mip_version") == manifest["mip_version"], f"{slug}: scenario MIP version must match release metadata")
+        protocols = set(scenario.get("protocols", []))
+        require(bool(protocols), f"{slug}: at least one protocol is required")
+        unsupported = protocols - FINAL_PROTOCOLS
+        require(not unsupported, f"{slug}: unsupported or deprecated protocol(s): {', '.join(sorted(unsupported))}")
+        require(not any("draft" in protocol.lower() or "presentation-exchange" in protocol.lower() for protocol in protocols), f"{slug}: draft and deprecated protocols are forbidden")
+
+        state = scenario.get("state")
+        require(state in {"DRAFT", "VALIDATED", "YOUTUBE_UNLISTED", "PUBLIC", "SUPERSEDED"}, f"{slug}: invalid state")
+        youtube_id = scenario.get("youtube_id")
+        if youtube_id is not None:
+            require(bool(YOUTUBE_ID.fullmatch(youtube_id)), f"{slug}: invalid YouTube ID")
+        if state in {"YOUTUBE_UNLISTED", "PUBLIC"}:
+            require(youtube_id is not None, f"{slug}: published states require a YouTube ID")
+            require(distribution_status == "CONFIGURED", f"{slug}: published states require a verified ElevenID LLC YouTube channel and release playlist")
+            validate_media_evidence(scenario.get("media_evidence"), slug)
+        if state == "PUBLIC":
+            validate_timestamp(scenario.get("published_at"), f"{slug}: PUBLIC")
+            validate_publication_attestation(
+                scenario.get("publication_attestation"),
+                SCENARIO_PUBLICATION_CHECKS,
+                scenario.get("published_at"),
+                f"{slug}: PUBLIC",
+            )
+            require(bool(scenario.get("transcript", {}).get("segments")), f"{slug}: PUBLIC requires a transcript")
+            require(bool(scenario.get("chapters")), f"{slug}: PUBLIC requires chapters")
+            assertions = scenario.get("assertions", [])
+            require(bool(assertions), f"{slug}: PUBLIC requires evidence assertions")
+            require(
+                all(item.get("result") == "PASS" and bool(SHA256.fullmatch(item.get("evidence_sha256", ""))) for item in assertions),
+                f"{slug}: every PUBLIC assertion must PASS with an evidence hash",
+            )
+            require(
+                not any(PENDING_PUBLICATION_LANGUAGE.search(item) for item in scenario.get("limitations", [])),
+                f"{slug}: PUBLIC limitations cannot contain unresolved publication language",
+            )
+        elif state != "SUPERSEDED":
+            require(scenario.get("published_at") is None, f"{slug}: non-public scenario cannot retain published_at")
+            require(scenario.get("publication_attestation") is None, f"{slug}: non-public scenario cannot retain publication attestation")
+            if state not in {"YOUTUBE_UNLISTED"}:
+                require(scenario.get("media_evidence") is None, f"{slug}: unpublished scenario cannot retain media evidence")
+
+        poster = scenario.get("poster", {})
+        require(str(poster.get("src", "")).startswith(f"/images/demos/{manifest['stack_version']}/"), f"{slug}: poster must be release-bound")
+        require(bool(SHA256.fullmatch(poster.get("sha256", ""))), f"{slug}: poster hash is required")
+
+        inheritance = scenario.get("inherited_evidence")
+        if inheritance is not None:
+            require(inheritance.get("source_stack_version") != manifest["stack_version"], f"{slug}: inherited evidence must come from another ElevenID LLC release")
+            for field in ("byte_identical_components", "unchanged_protocols", "unchanged_wallets", "unchanged_behavior"):
+                require(inheritance.get(field) is True, f"{slug}: inheritance requires {field}=true")
+            require(bool(SHA256.fullmatch(inheritance.get("attestation_sha256", ""))), f"{slug}: inheritance attestation hash required")
+
+    if manifest["coverage_state"] == "COMPLETE":
+        require(manifest["publication_state"] == "PUBLIC" and manifest["public_demo_ready"], "COMPLETE coverage must be publicly approved")
+        require(
+            all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in CANDIDATE_SCENARIOS),
+            "COMPLETE coverage requires every present candidate scenario to be PUBLIC",
+        )
+        require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in required_scenarios), "COMPLETE coverage requires all required scenarios to be PUBLIC")
+        independent = next(item for item in scenarios if item.get("slug") == "independent-wallet-interoperability")
+        require(any(wallet.get("classification") == "INDEPENDENT" and wallet.get("result") == "PASS" for wallet in independent.get("wallets", [])), "COMPLETE coverage requires passing independent-wallet evidence")
+
+    if manifest["publication_state"] == "PUBLIC":
+        require(manifest["release_ready"], "PUBLIC release evidence requires release_ready")
+        require(manifest["public_demo_ready"], "PUBLIC release evidence requires public_demo_ready")
+        validate_timestamp(manifest.get("published_at"), "PUBLIC release")
+        validate_publication_attestation(
+            manifest.get("publication_attestation"),
+            RELEASE_PUBLICATION_CHECKS,
+            manifest.get("published_at"),
+            "PUBLIC release",
+        )
+        require(any(scenario.get("state") == "PUBLIC" for scenario in scenarios), "PUBLIC release requires at least one PUBLIC scenario")
+    elif manifest["publication_state"] != "SUPERSEDED":
+        require(manifest.get("published_at") is None, "non-public release cannot retain published_at")
+        require(manifest.get("publication_attestation") is None, "non-public release cannot retain publication attestation")
+    reject_sensitive_keys(manifest)
+
+
+def validate_index(index: dict[str, Any], manifests: dict[str, dict[str, Any]]) -> None:
+    require(index.get("schema_version") == 2, "index schema_version must be 2")
+    releases = index.get("releases")
+    require(isinstance(releases, list) and releases, "index releases cannot be empty")
+    versions = [release.get("stack_version") for release in releases]
+    require(len(versions) == len(set(versions)), "index ElevenID LLC versions must be unique")
+    for release in releases:
+        version = release.get("stack_version", "")
+        require(version in manifests, f"index references missing manifest {version}")
+        require(release.get("release_name") == manifests[version]["release_name"], f"{version}: index release name mismatch")
+        require(release.get("mip_version") == manifests[version]["mip_version"], f"{version}: index MIP version mismatch")
+        require(release.get("publication_state") == manifests[version]["publication_state"], f"{version}: index publication state mismatch")
+        require(release.get("coverage_state") == manifests[version]["coverage_state"], f"{version}: index coverage mismatch")
+        require(release.get("manifest_url") == f"/demos/manifests/{version}.json", f"{version}: canonical manifest URL mismatch")
+    latest = index.get("latest_approved_stack_version")
+    if latest is not None:
+        require(latest in manifests, "latest approved ElevenID LLC release is missing")
+        require(manifests[latest]["publication_state"] == "PUBLIC", "latest approved ElevenID LLC release must be PUBLIC")
+
+
+def load_manifests(root: Path, version_file: Path | None = None) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    index_path = root / "index.json"
+    require(index_path.exists(), f"missing {index_path}")
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    manifests: dict[str, dict[str, Any]] = {}
+    for path in sorted(root.glob("*.json")):
+        if path.name == "index.json":
+            continue
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        validate_manifest(manifest)
+        require(path.stem == manifest["stack_version"], f"{path.name}: filename must match stack_version")
+        public_root = root.parent.parent
+        for scenario in manifest["scenarios"]:
+            poster_path = public_root / scenario["poster"]["src"].lstrip("/")
+            require(poster_path.exists(), f"{scenario['slug']}: poster is missing: {poster_path}")
+            poster_hash = public_asset_sha256(poster_path)
+            require(poster_hash == scenario["poster"]["sha256"], f"{scenario['slug']}: poster SHA-256 mismatch")
+        manifests[manifest["stack_version"]] = manifest
+    validate_index(index, manifests)
+    if version_file is not None and version_file.exists():
+        release_version = version_file.read_text(encoding="utf-8").strip()
+        require(index.get("latest_available_stack_version") == release_version, "latest available ElevenID LLC release must match VERSION")
+    return index, manifests
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", nargs="?", type=Path, default=Path("ui/public/demos/manifests"))
+    parser.add_argument("--version-file", type=Path, default=Path("VERSION"))
+    args = parser.parse_args()
+    try:
+        index, manifests = load_manifests(args.root, args.version_file)
+    except (ManifestValidationError, json.JSONDecodeError) as error:
+        print(f"Demo manifest validation failed: {error}", file=sys.stderr)
+        return 1
+    print(f"Validated {len(manifests)} ElevenID LLC demo manifest(s); latest approved: {index.get('latest_approved_stack_version') or 'none'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

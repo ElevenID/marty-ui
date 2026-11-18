@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "repository_variables": [
+    "MARTY_BLOG_REF",
+    "MARTY_CLI_REF",
+    "MARTY_CORE_REF",
+    "MARTY_CREDENTIALS_REF",
+    "MARTY_PROTOCOL_REF"
+  ],
+  "environments": {
+    "stack-release": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": false,
+      "require_reviewers": false,
+      "require_branch_policy": true,
+      "required_secrets": [],
+      "required_variables": []
+    },
+    "beta-lifecycle": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": false,
+      "require_reviewers": true,
+      "require_branch_policy": true,
+      "required_repository_secrets": ["DEMO_RECORDER_DISPATCH_TOKEN"],
+      "required_secrets": [
+        "TEST_APPLICANT_EMAIL",
+        "TEST_APPLICANT_PASSWORD",
+        "TEST_VENDOR_EMAIL",
+        "TEST_VENDOR_PASSWORD"
+      ],
+      "required_variables": [
+        "BETA_AUDIT_ORG_ID",
+        "BETA_ORIGIN"
+      ]
+    },
+    "wallet-conformance": {
+      "prevent_admin_bypass": true,
+      "prevent_self_review": false,
+      "require_reviewers": true,
+      "require_branch_policy": true,
+      "required_secrets": [],
+      "required_variables": []
+    }
+  }
+}

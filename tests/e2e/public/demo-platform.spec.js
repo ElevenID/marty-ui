@@ -1,0 +1,222 @@
+const { test, expect } = require('@playwright/test');
+const {
+  assertLiveDeployment,
+  referenceFromEnvironment,
+} = require('../../scripts/demo-deployment-binding');
+
+const viewports = [
+  { name: 'mobile-320', width: 320, height: 700 },
+  { name: 'mobile-390', width: 390, height: 844 },
+  { name: 'tablet-768', width: 768, height: 900 },
+  { name: 'desktop-1440', width: 1440, height: 1000 },
+];
+
+test.beforeEach(async ({ page }) => {
+  if (!process.env.BASE_URL) {
+    await page.route('**/v1/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ authenticated: false, user: null }),
+    }));
+  }
+});
+
+async function loadDemoIndex(request) {
+  const response = await request.get('/demos/manifests/index.json');
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
+async function loadDemoManifest(request, release) {
+  const response = await request.get(release.manifest_url);
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
+function literalPattern(value) {
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+function observeBrowser(page) {
+  const expectedOrigin = new URL(process.env.BASE_URL || 'http://127.0.0.1:4173').origin;
+  const failures = [];
+  const pageErrors = [];
+  const consoleErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.origin === expectedOrigin && response.status() >= 400) {
+      failures.push(`${response.status()} ${response.request().method()} ${url.pathname}`);
+    }
+  });
+  page.on('requestfailed', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === '/cdn-cgi/rum' && request.failure()?.errorText === 'net::ERR_ABORTED') return;
+    if (url.origin === expectedOrigin) {
+      failures.push(`${request.failure()?.errorText || 'failed'} ${request.method()} ${url.pathname}`);
+    }
+  });
+  return { failures, pageErrors, consoleErrors };
+}
+
+async function assertStablePage(page, telemetry) {
+  await expect(page.locator('[data-demo-render-state="settled"]')).toBeVisible();
+  await page.evaluate(async () => {
+    for (const image of document.images) {
+      image.scrollIntoView({ block: 'center' });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    window.scrollTo(0, 0);
+  });
+  await expect.poll(() => page.evaluate(() => (
+    [...document.images].every((image) => image.complete && image.naturalWidth > 0)
+  ))).toBe(true);
+  const metrics = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    images: [...document.images].map((image) => ({ src: image.currentSrc, complete: image.complete, width: image.naturalWidth })),
+    loadingShellVisible: getComputedStyle(document.querySelector('.app-loading-shell')).display !== 'none',
+  }));
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.viewportWidth);
+  expect(metrics.loadingShellVisible).toBe(false);
+  expect(metrics.images.every((image) => image.complete && image.width > 0)).toBe(true);
+  expect(telemetry.pageErrors).toEqual([]);
+  expect(telemetry.consoleErrors).toEqual([]);
+  expect(telemetry.failures).toEqual([]);
+}
+
+for (const viewport of viewports) {
+  test(`${viewport.name} renders catalog and scenario without overflow or first-paint failure`, async ({ page }) => {
+    const index = await loadDemoIndex(page.request);
+    const release = index.releases.find(({ stack_version }) => stack_version === index.latest_available_stack_version);
+    expect(release).toBeTruthy();
+    const manifest = await loadDemoManifest(page.request, release);
+    const scenario = manifest.scenarios.find(({ state, youtube_id }) => state === 'PUBLIC' && youtube_id)
+      || manifest.scenarios[0];
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(() => {
+      window.__elevenIdFirstPaint = [];
+      const sample = () => {
+        const root = document.querySelector('#root');
+        const shell = document.querySelector('.app-loading-shell');
+        if (root && shell) {
+          window.__elevenIdFirstPaint.push({
+            ready: document.documentElement.classList.contains('app-ready'),
+            rootVisibility: getComputedStyle(root).visibility,
+            shellDisplay: getComputedStyle(shell).display,
+          });
+        }
+        if (performance.now() < 1800) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const telemetry = observeBrowser(page);
+
+    await page.goto('/demos', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { level: 1, name: manifest.release_name })).toBeVisible();
+    await expect(page.getByText('ElevenID LLC Credential Platform', { exact: true })).toBeVisible();
+    await expect(page.getByText(`Version v${manifest.stack_version}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`Implements MIP ${manifest.mip_version}`)).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Platform version' })).toContainText(`v${manifest.stack_version}`);
+    await expect(page.getByText(/vendor approval is not a publication requirement/i)).toBeVisible();
+    await expect(page.getByRole('link', { name: 'request review or removal' })).toHaveAttribute('href', /sales@elevenidllc\.com/);
+    await assertStablePage(page, telemetry);
+    const firstPaint = await page.evaluate(() => window.__elevenIdFirstPaint);
+    expect(firstPaint.filter((sample) => !sample.ready).every((sample) => sample.rootVisibility === 'hidden' && sample.shellDisplay !== 'none')).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`${viewport.name}-catalog.png`), fullPage: true });
+
+    await page.getByRole('link', { name: literalPattern(scenario.title) }).click();
+    await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
+    if (scenario.state === 'PUBLIC' && scenario.youtube_id) {
+      await expect(page.getByRole('button', { name: `Load ${scenario.title} from YouTube` })).toBeVisible();
+    } else {
+      await expect(page.getByTestId('demo-video-player')).toBeVisible();
+    }
+    await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 2, name: 'Transcript' })).toBeVisible();
+    await assertStablePage(page, telemetry);
+    await page.screenshot({ path: test.info().outputPath(`${viewport.name}-scenario.png`), fullPage: true });
+  });
+}
+
+test('every release scenario has a canonical detail page and valid poster', async ({ page }) => {
+  const telemetry = observeBrowser(page);
+  const index = await loadDemoIndex(page.request);
+  for (const release of index.releases) {
+    const manifest = await loadDemoManifest(page.request, release);
+    for (const scenario of manifest.scenarios) {
+      await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
+      // Archived manifests retain provenance; retired connector scenarios have
+      // no current platform detail page or media player.
+      const retired = ['D-07', 'D-08'].includes(scenario.demo_id)
+        || ['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario.slug);
+      if (retired) {
+        await expect(page.getByText(/This scenario is not part of ElevenID LLC/)).toBeVisible();
+        await expect(page.getByTestId('demo-video-player')).toHaveCount(0);
+        await expect(page.locator('iframe')).toHaveCount(0);
+        await assertStablePage(page, telemetry);
+        continue;
+      }
+      await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
+      await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `https://elevenidllc.com/demos/${manifest.stack_version}/${scenario.slug}`);
+      await assertStablePage(page, telemetry);
+    }
+  }
+});
+
+test('public video waits for consent and uses the privacy-enhanced player', async ({ page }) => {
+  const index = await loadDemoIndex(page.request);
+  let selected;
+  for (const release of index.releases) {
+    const manifest = await loadDemoManifest(page.request, release);
+    const scenario = manifest.scenarios.find(({ state, youtube_id }) => state === 'PUBLIC' && youtube_id);
+    if (scenario) {
+      selected = { manifest, scenario };
+      break;
+    }
+  }
+  expect(selected).toBeTruthy();
+  const { manifest, scenario } = selected;
+  const youtubeRequests = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname.endsWith('youtube-nocookie.com')) youtubeRequests.push(request.url());
+  });
+  await page.route('https://www.youtube-nocookie.com/**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Privacy-enhanced YouTube player</title>',
+  }));
+
+  await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
+  const loadButton = page.getByRole('button', { name: `Load ${scenario.title} from YouTube` });
+  await expect(loadButton).toBeVisible();
+  await expect(page.locator('iframe[src*="youtube"]')).toHaveCount(0);
+  expect(youtubeRequests).toEqual([]);
+
+  await loadButton.click();
+  const player = page.getByTitle(`${scenario.title} video`);
+  await expect(player).toHaveAttribute('src', new RegExp(`https://www\\.youtube-nocookie\\.com/embed/${scenario.youtube_id}`));
+  await expect(player).toHaveAttribute('src', /cc_load_policy=1/);
+  await expect.poll(() => youtubeRequests.length).toBeGreaterThan(0);
+
+  const laterChapter = scenario.chapters.find(({ start_seconds }) => start_seconds > 0);
+  if (laterChapter) {
+    await page.getByRole('button', { name: literalPattern(laterChapter.title) }).click();
+    await expect(player).toHaveAttribute('src', new RegExp(`start=${laterChapter.start_seconds}`));
+  }
+});
+
+test('latest demo release is bound to the exact live deployment evidence', async ({ request }) => {
+  test.skip(process.env.REQUIRE_LIVE_DEMO_BINDING !== '1', 'Live release binding is required only for deployed acceptance.');
+  const index = await loadDemoIndex(request);
+  const indexedRelease = index.releases.find(({ stack_version }) => stack_version === index.latest_available_stack_version);
+  expect(indexedRelease).toBeTruthy();
+  const manifest = await loadDemoManifest(request, indexedRelease);
+  const releaseResponse = await request.get('/.well-known/marty-release', { headers: { 'Cache-Control': 'no-cache' } });
+  expect(releaseResponse.ok()).toBe(true);
+  const deployed = await releaseResponse.json();
+  assertLiveDeployment(manifest, deployed, referenceFromEnvironment());
+});

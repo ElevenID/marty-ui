@@ -1,0 +1,134 @@
+# Selected only with the installation's explicit ACME configuration. Public
+# port 80 routing to this loopback endpoint is customer-managed outside Compose.
+x-acme-job: &acme-job
+  image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+  profiles: [setup]
+  mem_limit: 256m
+  init: true
+  user: "0:0"
+  read_only: true
+  restart: "no"
+  cap_drop: [ALL]
+  cap_add: [DAC_OVERRIDE]
+  security_opt: ["no-new-privileges:true"]
+  networks: [default]
+  entrypoint: [/input/marty-deploy]
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?installation identity required}
+    com.elevenid.installer.phase: setup
+
+x-acme-operator: &acme-operator
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?}/marty-deploy
+  target: /input/marty-deploy
+  read_only: true
+  bind: {create_host_path: false}
+
+x-acme-root: &acme-root
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?}/openbao-state/root.token
+  target: /input/root.token
+  read_only: true
+  bind: {create_host_path: false}
+
+x-acme-ca: &acme-ca
+  type: bind
+  source: ${MARTY_INSTALLATION_DIR:?}/openbao-state/tls/ca.crt
+  target: /input/ca.crt
+  read_only: true
+  bind: {create_host_path: false}
+
+services:
+  installer-renewal:
+    environment:
+      MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256: ${MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256-}
+    volumes:
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/renewal-public-authority-plan.json
+        target: /input/public-renewal-authority-plan.json
+        read_only: true
+        bind: {create_host_path: false}
+
+  installer-generation:
+    environment:
+      MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256: ${MARTY_INSTALLER_PUBLIC_INGRESS_PLAN_SHA256-}
+      MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256: ${MARTY_INSTALLER_PUBLIC_RENEWAL_AUTHORITY_PLAN_SHA256-}
+    volumes:
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/generation-public-ingress-plan.json
+        target: /input/public-ingress-plan.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/renewal-public-authority-plan.json
+        target: /input/public-renewal-authority-plan.json
+        read_only: true
+        bind: {create_host_path: false}
+
+  installer-acme-custody:
+    <<: *acme-job
+    # The plan hash is supplied only when this exclusive job is selected. An
+    # empty hash is refused by the helper before reading authority or mutating.
+    command: [installer-acme-custody-provision, --installation-id, "${MARTY_INSTALLATION_ID:?}", --plan-sha256, "${MARTY_ACME_CUSTODY_PLAN_SHA256-}"]
+    volumes:
+      - *acme-operator
+      - *acme-root
+      - *acme-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/acme-custody-plan.json
+        target: /input/acme-plan.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/acme-custody-transfer
+        target: /output
+        bind: {create_host_path: false}
+
+  installer-acme-credentials:
+    <<: *acme-job
+    command: [installer-acme-credentials-provision, --installation-id, "${MARTY_INSTALLATION_ID:?}", --plan-sha256, "${MARTY_ACME_CREDENTIAL_PLAN_SHA256-}"]
+    volumes:
+      - *acme-operator
+      - *acme-root
+      - *acme-ca
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/acme-credentials-plan.json
+        target: /input/acme-plan.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/acme-credentials-transfer
+        target: /output
+        bind: {create_host_path: false}
+
+  installer-acme-http01:
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?approved services image required}
+    mem_limit: 128m
+    init: true
+    user: "10001:10001"
+    read_only: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [default]
+    entrypoint: [/usr/local/bin/marty-acme-http01]
+    environment:
+      MARTY_ACME_HTTP01_BIND: 0.0.0.0:8080
+      MARTY_ACME_HTTP01_CANONICAL_ORIGIN: ${MARTY_ACME_CANONICAL_ORIGIN:?bound DNS origin required}
+      MARTY_ACME_HTTP01_PUBLIC_ENTRY_ORIGIN: ${MARTY_ACME_PUBLIC_ENTRY_ORIGIN-}
+      MARTY_ACME_HTTP01_DIRECTORY: /run/acme-http01
+    ports:
+      - "127.0.0.1:${MARTY_ACME_HTTP01_HOST_PORT:?explicit customer HTTP-01 forwarding port required}:8080"
+    volumes:
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/acme-http01
+        target: /run/acme-http01
+        read_only: true
+        bind: {create_host_path: false}
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
+      com.elevenid.installer.phase: runtime
