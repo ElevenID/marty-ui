@@ -446,7 +446,11 @@ The reload inventory is exactly these existing Deployments: `auth`,
 `organization`, `credential-template`, `gateway`, `verification`, `notification`,
 `compliance-profile`, `presentation-policy`, `deployment-profile`, `flow`,
 `revocation-profile`, `event-stream`, `issuance-native`, `signing-keys`,
-`canvas-sync-worker` and `keycloak`. Original authenticated image references,
+and `keycloak`. This is the fifteen-workload inventory in
+[`reload_kubernetes_legacy_workloads.py`](../scripts/reload_kubernetes_legacy_workloads.py).
+The external connector is not a platform reload consumer; do not recreate its
+retired Deployment or signing origins. Historical provider receipts remain
+provenance, not a current workload list. Original authenticated image references,
 Helm ownership, release annotations, Deployment UIDs/resource versions and full
 Pod templates are admitted before the first restart. Only a unique annotation
 under each Pod template changes. OpenBao, PostgreSQL, Redis, unrelated workloads,

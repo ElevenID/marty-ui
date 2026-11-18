@@ -27,7 +27,7 @@ Existing independently maintained backend services remain independently owned. D
 - `website` and `application` build and release independently.
 - `protocol` and backend/service repositories own their implementation source.
 - Private subscription/commerce code remains in `subscriptions`.
-- Canvas extraction remains a parallel workstream. Its source, license and release boundary must be determined by the existing Canvas migration rather than assumed to belong to `application`.
+- The Canvas source split is merged into the existing [`canvas-integration`](https://github.com/ElevenID/canvas-integration) repository. Provider protocols, credentials, administration, workers and storage remain connector-owned; the public Common Gateway is its sole platform interface. Core retains canonical identity, ownership, evidence, approval, signing and audit. Existing licenses/provenance remain with their owners; production adapters and deployment/cutover qualification are separate owned TODOs, with unsupported flows disabled.
 
 ## Execution status
 
@@ -36,7 +36,7 @@ Existing independently maintained backend services remain independently owned. D
 | Naming and ownership standard | Adopted in planning | Apply consistently to new repositories |
 | Website extraction audit | Static import audit inspected 79 files at `df6ec6c4bfee803d89c54e9333297f29f378cee3`; extraction closure remains open | Resolve assets, tests, build inputs and workflow dependencies |
 | Platform extraction audit | In progress | Classify installer vs product runtime/service assets |
-| Canvas extraction | Parallel existing work | Preserve current handoff and release boundaries |
+| Canvas source extraction | Merged into `ElevenID/canvas-integration` | Preserve Gateway-only authority and source/license provenance; qualify disabled connector capabilities separately before activation |
 | New repository creation | Public `platform` and `website` exist with `main` as default; `application` is not created | Keep `marty-ui` as migration source until extraction qualification |
 | Destination branch and Actions policies | Active default-branch rulesets and restricted Actions settings verified; website requires its passing contract check | Establish platform CI before adding its required status checks |
 | Website contract bootstrap | [PR #1](https://github.com/ElevenID/website/pull/1) merged through the protected merge path; six hosted tests passed | Continue website dependency closure and independent build qualification |
@@ -87,7 +87,7 @@ Website and application producers should publish independently. Product composit
 5. Finish platform source, workflow, bundle and test ownership classification, then bootstrap its CI and required status gates in a separate PR.
 6. Migrate installer/platform in separate history-preserving batches without introducing application source dependencies.
 7. Convert `marty-ui` into `application` only after website source and release ownership have moved and the remaining application build has been proven self-contained.
-8. Reconcile Canvas extraction independently and coordinate any shared workflow edits.
+8. Preserve the completed Canvas source boundary and coordinate any future generic Gateway contract or shared workflow changes with their owners; do not move provider code back into application or platform.
 9. Introduce signed cross-repository product manifest and qualify fresh install, upgrade, rollback and recovery before production cutover.
 
 ## Checkpoint discipline

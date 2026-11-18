@@ -5,9 +5,14 @@ shorter E2E gate already exist. PR, merge-queue, unit, integration, security,
 deployment-preflight, and official-release checks remain unchanged until their
 owners and evidence consumers are migrated and tested.
 
-## Release identity and entry points
+## Historical release identity and entry points
 
-| Owner | Current entry point | Relevant constraint |
+This dated inventory predates the completed Canvas source split. The provider
+qualification requirement below is superseded as described explicitly after the
+table. Use current workflows and signed artifact contracts for present execution;
+this historical inventory does not authorize removing any retained platform gate.
+
+| Owner | Recorded entry point at the audit baseline | Relevant constraint |
 | --- | --- | --- |
 | `marty-ui` | `prepare-stack-tag.yml` and `cd.yml` | The stack transaction accepts only stable `vMAJOR.MINOR.PATCH` tags and binds a protected-main SHA, lock, images, checkpoints, and published release. Production promotion has its own approval boundary. |
 | `marty-ui` | `e2e-tests.yml` | Manual or `beta-deployed` dispatch requires a successful stack release, exact source/manifest lineage, completed private demo qualification, and maintainer review evidence before the beta lifecycle result is accepted. |
@@ -23,13 +28,20 @@ for nightly. Map every selected journey to an assertion owner and evidence
 consumer before changing execution. Recording/video is presentation evidence,
 not a substitute for independent behavioral assertions.
 
-The stable stack claim additionally requires a completed successful full Canvas
-qualification from the CI workflow's weekly schedule or manual dispatch on
-the **same protected-main commit**. If main changes after that run, dispatch CI
-again on main and wait for it to complete before preparing the stable tag.
-The routine PR/merge-group CI run is not a substitute: it deliberately omits
-the pinned historical replays. This release-time gate does not run another
-copy of the historical suite on every PR.
+The former full-Canvas qualification requirement is retired from the platform,
+along with its provider suites and workflows. Do not restore those commands or
+make connector production qualification a platform source-split gate. Provider
+adapters, end-to-end qualification and cutover remain owned TODOs in
+[canvas-integration](https://github.com/ElevenID/canvas-integration); unsupported
+flows stay disabled and use only the public Common Gateway.
+
+Current platform release claims still require their actual protected checks,
+source/lock/image lineage, security review, signed artifact admission and applicable
+installed journey/device/recovery evidence. See the
+[artifact contract](PRODUCT_ARTIFACT_CONTRACT.md) and
+[connector authority boundary](architecture/external-connector-boundary.md).
+This documentation disposition neither qualifies an artifact nor changes workflow
+admission, signing or deployment policy.
 
 ## Approved target policy
 

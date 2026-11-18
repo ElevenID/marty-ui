@@ -1,4 +1,4 @@
-// Shared Flow/Canvas acceptance fixture: direct and initiation selected-route
+// Shared platform acceptance fixture: direct and initiation selected-route
 // qualification share one gateway fixture. Gateway middleware/proxy and
 // issuance upstream HTTP are real; identity
 // and initiation control-plane preflights are controlled. Only the exact consumer
