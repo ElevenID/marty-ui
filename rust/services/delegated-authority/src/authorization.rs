@@ -447,12 +447,14 @@ mod tests {
             Ok(VerifiedConstraintEvidence { valid_until: grant.terms.valid_until })
         }
     }
-    struct Cedar { decision: CedarDecision, mutate: bool, lifecycle: Option<Arc<DelegationAuthorityService>> }
+    struct Cedar { decision: CedarDecision, mutate: bool, lifecycle: Option<Arc<DelegationAuthorityService>>, clock: Option<Arc<FixedClock>> }
     #[async_trait]
     impl DelegationCedarEvaluator for Cedar {
         async fn evaluate(&self, request: CedarEvaluationRequest, now: DateTime<Utc>)
             -> Result<CedarEvaluation, CedarEvaluationError> {
             if self.mutate {
+                let clock = self.clock.as_ref().unwrap();
+                clock.set(clock.now() + Duration::seconds(1));
                 self.lifecycle.as_ref().unwrap()
                     .suspend(request.organization_id, request.grant_id, request.grant_revision)
                     .await.map_err(|_| CedarEvaluationError)?;
@@ -494,7 +496,7 @@ mod tests {
             let proof = Arc::new(Proof { reject: false, calls: Mutex::new(0) });
             let authorizer = DelegationUseAuthorizer::with_clock(
                 lifecycle.clone(), proof.clone(), Arc::new(Constraint { reject: false }),
-                Arc::new(Cedar { decision, mutate: false, lifecycle: None }), clock.clone()
+                Arc::new(Cedar { decision, mutate: false, lifecycle: None, clock: None }), clock.clone()
             );
             let request = DelegationUseRequest {
                 organization_id: pending.organization_id, grant_id: pending.id, expected_revision: 2,
@@ -548,7 +550,7 @@ mod tests {
         let h = Harness::new(CedarDecision::Permit).await;
         let authorizer = DelegationUseAuthorizer::with_clock(
             h.lifecycle.clone(), h.proof.clone(), Arc::new(Constraint { reject: false }),
-            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: true, lifecycle: Some(h.lifecycle.clone()) }),
+            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: true, lifecycle: Some(h.lifecycle.clone()), clock: Some(h.clock.clone()) }),
             h.clock.clone()
         );
         assert_eq!(authorizer.evaluate(&h.request).await, Err(DelegationUseError::Unavailable));
@@ -564,7 +566,7 @@ mod tests {
         assert_eq!(h.authorizer.evaluate(&malformed).await, Err(DelegationUseError::InvalidRequest));
         let authorizer = DelegationUseAuthorizer::with_clock(
             h.lifecycle.clone(), h.proof.clone(), Arc::new(Constraint { reject: true }),
-            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: false, lifecycle: None }),
+            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: false, lifecycle: None, clock: None }),
             h.clock.clone()
         );
         assert_eq!(authorizer.evaluate(&h.request).await, Err(DelegationUseError::ConstraintNotVerified));
