@@ -157,6 +157,17 @@ fn valid_digest(value: Option<&str>) -> bool {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GrantStatus { Pending, Active, Suspended, Revoked, Expired }
+impl GrantStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Active => "ACTIVE",
+            Self::Suspended => "SUSPENDED",
+            Self::Revoked => "REVOKED",
+            Self::Expired => "EXPIRED",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

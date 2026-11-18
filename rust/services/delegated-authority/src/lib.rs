@@ -4,9 +4,11 @@
 //! and production signing are separate qualification milestones.
 pub mod domain;
 pub mod repository;
+pub mod postgres;
 pub mod service;
 #[cfg(test)]
 pub mod test_support;
 pub use domain::*;
 pub use repository::*;
+pub use postgres::PgDelegationGrantRepository;
 pub use service::*;
