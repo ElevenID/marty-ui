@@ -461,7 +461,7 @@ mod tests {
         async fn verify(&self, grant: &DelegationGrant, request: &DelegationUseRequest,
             _now: DateTime<Utc>) -> Result<DateTime<Utc>, DelegateProofError> {
             *self.calls.lock().unwrap() += 1;
-            if self.reject || request.actor != grant.terms.delegate || request.proof != [7,8,9] {
+            if self.reject || request.actor != grant.terms.delegate || request.proof.as_slice() != &[7,8,9] {
                 return Err(DelegateProofError);
             }
             Ok(grant.terms.valid_until)
