@@ -40,7 +40,7 @@ impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
         if current.revision != expected_revision { return Err(RepositoryError::RevisionConflict); }
         if replacement.id != grant_id || replacement.organization_id != organization_id
             || replacement.revision != expected_revision + 1 {
-            return Err(RepositoryError::Failure("invalid replacement identity or revision".into()));
+            return Err(RepositoryError::Failure("replacement changed immutable grant data or has invalid identity/revision".into()));
         }
         grants.insert(grant_id, replacement.clone()); Ok(replacement)
     }
