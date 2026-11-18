@@ -260,7 +260,10 @@ impl DelegationAuthorityService {
         organization_id: Uuid,
         grant_id: Uuid,
     ) -> Result<DelegationGrant, ServiceError> {
-        Ok(self.resolve_verified(organization_id, grant_id).await?.grant)
+        Ok(self
+            .resolve_verified(organization_id, grant_id)
+            .await?
+            .grant)
     }
 
     /// Resolve an active candidate and retain the trusted consent deadline for

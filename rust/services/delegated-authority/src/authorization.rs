@@ -285,15 +285,33 @@ pub struct DelegationUseEvaluation {
 }
 
 impl DelegationUseEvaluation {
-    pub fn organization_id(&self) -> Uuid { self.organization_id }
-    pub fn grant_id(&self) -> Uuid { self.grant_id }
-    pub fn grant_revision(&self) -> u64 { self.grant_revision }
-    pub fn terms_digest(&self) -> &str { &self.terms_digest }
-    pub fn policy_id(&self) -> &str { &self.policy_id }
-    pub fn policy_revision(&self) -> u64 { self.policy_revision }
-    pub fn policy_digest(&self) -> &str { &self.policy_digest }
-    pub fn evaluated_at(&self) -> DateTime<Utc> { self.evaluated_at }
-    pub fn valid_until(&self) -> DateTime<Utc> { self.valid_until }
+    pub fn organization_id(&self) -> Uuid {
+        self.organization_id
+    }
+    pub fn grant_id(&self) -> Uuid {
+        self.grant_id
+    }
+    pub fn grant_revision(&self) -> u64 {
+        self.grant_revision
+    }
+    pub fn terms_digest(&self) -> &str {
+        &self.terms_digest
+    }
+    pub fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+    pub fn policy_revision(&self) -> u64 {
+        self.policy_revision
+    }
+    pub fn policy_digest(&self) -> &str {
+        &self.policy_digest
+    }
+    pub fn evaluated_at(&self) -> DateTime<Utc> {
+        self.evaluated_at
+    }
+    pub fn valid_until(&self) -> DateTime<Utc> {
+        self.valid_until
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -337,7 +355,11 @@ impl DelegationUseAuthorizer {
         cedar: Arc<dyn DelegationCedarEvaluator>,
     ) -> Self {
         Self::with_clock(
-            lifecycle, proof, constraints, cedar, Arc::new(SystemDelegationClock),
+            lifecycle,
+            proof,
+            constraints,
+            cedar,
+            Arc::new(SystemDelegationClock),
         )
     }
 
@@ -348,7 +370,13 @@ impl DelegationUseAuthorizer {
         cedar: Arc<dyn DelegationCedarEvaluator>,
         clock: Arc<dyn DelegationClock>,
     ) -> Self {
-        Self { lifecycle, proof, constraints, cedar, clock }
+        Self {
+            lifecycle,
+            proof,
+            constraints,
+            cedar,
+            clock,
+        }
     }
 
     /// Evaluate one exact operation. Any unknown, stale, mismatched or
@@ -367,41 +395,52 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::RevisionConflict);
         }
         validate_exact_scope(grant, request)?;
-        let proof_deadline = self.proof.verify(grant, request, started_at)
-            .await.map_err(|_| DelegationUseError::ProofNotVerified)?;
+        let proof_deadline = self
+            .proof
+            .verify(grant, request, started_at)
+            .await
+            .map_err(|_| DelegationUseError::ProofNotVerified)?;
         let after_proof = self.now_after(started_at)?;
         if proof_deadline <= after_proof {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
-        let (constraint_deadline, constraint_context, constraint_evidence_digest) = match grant.terms.constraints.mode {
-            crate::ConstraintMode::ExactOperation => {
-                if grant.terms.constraints.request_profile.as_deref()
-                    != Some(request.operation_profile.as_str())
-                    || grant.terms.constraints.request_digest.as_deref()
-                    != Some(request.operation_digest.as_str())
-                {
-                    return Err(DelegationUseError::ConstraintNotVerified);
+        let (constraint_deadline, constraint_context, constraint_evidence_digest) =
+            match grant.terms.constraints.mode {
+                crate::ConstraintMode::ExactOperation => {
+                    if grant.terms.constraints.request_profile.as_deref()
+                        != Some(request.operation_profile.as_str())
+                        || grant.terms.constraints.request_digest.as_deref()
+                            != Some(request.operation_digest.as_str())
+                    {
+                        return Err(DelegationUseError::ConstraintNotVerified);
+                    }
+                    (
+                        grant.terms.valid_until,
+                        serde_json::json!({
+                            "mode": "EXACT_OPERATION",
+                            "request_profile": request.operation_profile,
+                            "request_digest": request.operation_digest,
+                        }),
+                        request.operation_digest.clone(),
+                    )
                 }
-                (
-                    grant.terms.valid_until,
-                    serde_json::json!({
-                        "mode": "EXACT_OPERATION",
-                        "request_profile": request.operation_profile,
-                        "request_digest": request.operation_digest,
-                    }),
-                    request.operation_digest.clone(),
-                )
-            }
-            crate::ConstraintMode::ExternalProfile => {
-                let verified = self.constraints.verify(grant, request, after_proof)
-                    .await.map_err(|_| DelegationUseError::ConstraintNotVerified)?;
-                if !valid_digest(&verified.evidence_digest) || !verified.context.is_object() {
-                    return Err(DelegationUseError::ConstraintNotVerified);
+                crate::ConstraintMode::ExternalProfile => {
+                    let verified = self
+                        .constraints
+                        .verify(grant, request, after_proof)
+                        .await
+                        .map_err(|_| DelegationUseError::ConstraintNotVerified)?;
+                    if !valid_digest(&verified.evidence_digest) || !verified.context.is_object() {
+                        return Err(DelegationUseError::ConstraintNotVerified);
+                    }
+                    (
+                        verified.valid_until,
+                        verified.context,
+                        verified.evidence_digest,
+                    )
                 }
-                (verified.valid_until, verified.context, verified.evidence_digest)
-            }
-        };
+            };
         let after_constraints = self.now_after(started_at)?;
         if constraint_deadline <= after_constraints
             || serde_json::to_vec(&constraint_context)
@@ -410,22 +449,29 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
-        let cedar_result = self.cedar.evaluate(CedarEvaluationRequest {
-            organization_id: grant.organization_id,
-            grant_id: grant.id,
-            grant_revision: grant.revision,
-            actor: request.actor.clone(),
-            grantor: grant.terms.grantor.clone(),
-            subject: grant.terms.subject.clone(),
-            delegate: grant.terms.delegate.clone(),
-            action: request.action.clone(),
-            audience: request.audience.clone(),
-            resource: request.resource.clone(),
-            operation_profile: request.operation_profile.clone(),
-            operation_digest: request.operation_digest.clone(),
-            constraint_context,
-            constraint_evidence_digest,
-        }, after_constraints).await.map_err(|_| DelegationUseError::Unavailable)?;
+        let cedar_result = self
+            .cedar
+            .evaluate(
+                CedarEvaluationRequest {
+                    organization_id: grant.organization_id,
+                    grant_id: grant.id,
+                    grant_revision: grant.revision,
+                    actor: request.actor.clone(),
+                    grantor: grant.terms.grantor.clone(),
+                    subject: grant.terms.subject.clone(),
+                    delegate: grant.terms.delegate.clone(),
+                    action: request.action.clone(),
+                    audience: request.audience.clone(),
+                    resource: request.resource.clone(),
+                    operation_profile: request.operation_profile.clone(),
+                    operation_digest: request.operation_digest.clone(),
+                    constraint_context,
+                    constraint_evidence_digest,
+                },
+                after_constraints,
+            )
+            .await
+            .map_err(|_| DelegationUseError::Unavailable)?;
         let after_policy = self.now_after(started_at)?;
         validate_cedar_result(&cedar_result, after_policy)?;
         if cedar_result.decision != CedarDecision::Permit {
@@ -446,7 +492,10 @@ impl DelegationUseAuthorizer {
             proof_deadline,
             constraint_deadline,
             cedar_result.valid_until,
-        ].into_iter().min().ok_or(DelegationUseError::EvidenceExpired)?;
+        ]
+        .into_iter()
+        .min()
+        .ok_or(DelegationUseError::EvidenceExpired)?;
         if valid_until <= final_now {
             return Err(DelegationUseError::EvidenceExpired);
         }
@@ -468,8 +517,10 @@ impl DelegationUseAuthorizer {
         &self,
         request: &DelegationUseRequest,
     ) -> Result<ResolvedDelegationGrant, DelegationUseError> {
-        self.lifecycle.resolve_verified(request.organization_id, request.grant_id)
-            .await.map_err(|_| DelegationUseError::Unavailable)
+        self.lifecycle
+            .resolve_verified(request.organization_id, request.grant_id)
+            .await
+            .map_err(|_| DelegationUseError::Unavailable)
     }
 
     fn now_after(&self, started_at: DateTime<Utc>) -> Result<DateTime<Utc>, DelegationUseError> {
@@ -505,9 +556,21 @@ fn validate_exact_scope(
         return Err(DelegationUseError::WrongDelegate);
     }
     if grant.status != GrantStatus::Active
-        || !grant.terms.actions.iter().any(|value| value == &request.action)
-        || !grant.terms.audiences.iter().any(|value| value == &request.audience)
-        || !grant.terms.resources.iter().any(|value| value == &request.resource)
+        || !grant
+            .terms
+            .actions
+            .iter()
+            .any(|value| value == &request.action)
+        || !grant
+            .terms
+            .audiences
+            .iter()
+            .any(|value| value == &request.audience)
+        || !grant
+            .terms
+            .resources
+            .iter()
+            .any(|value| value == &request.resource)
     {
         return Err(DelegationUseError::ScopeDenied);
     }
@@ -518,7 +581,8 @@ fn validate_cedar_result(
     result: &CedarEvaluation,
     now: DateTime<Utc>,
 ) -> Result<(), DelegationUseError> {
-    let maximum_deadline = result.evaluated_at
+    let maximum_deadline = result
+        .evaluated_at
         .checked_add_signed(Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS))
         .ok_or(DelegationUseError::PolicyDenied)?;
     if !valid_uri(Some(&result.policy_id))
@@ -539,7 +603,9 @@ fn validate_cedar_result(
 fn valid_digest(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
-        && value[7..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && value[7..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -547,43 +613,70 @@ mod tests {
     use super::*;
     use crate::{
         test_support::pending_grant, ApprovalEvidence, ConsentEvidenceVerifier,
-        ConsentVerificationRequest, InMemoryDelegationGrantRepository, ServiceError, VerifiedConsent,
+        ConsentVerificationRequest, InMemoryDelegationGrantRepository, ServiceError,
+        VerifiedConsent,
     };
     use std::sync::Mutex;
 
     struct FixedClock(Mutex<DateTime<Utc>>);
     impl FixedClock {
-        fn set(&self, now: DateTime<Utc>) { *self.0.lock().unwrap() = now; }
+        fn set(&self, now: DateTime<Utc>) {
+            *self.0.lock().unwrap() = now;
+        }
     }
     impl DelegationClock for FixedClock {
-        fn now(&self) -> DateTime<Utc> { *self.0.lock().unwrap() }
+        fn now(&self) -> DateTime<Utc> {
+            *self.0.lock().unwrap()
+        }
     }
     struct Consent;
     #[async_trait]
     impl ConsentEvidenceVerifier for Consent {
-        async fn verify_approval(&self, request: ConsentVerificationRequest<'_>)
-            -> Result<VerifiedConsent, crate::ConsentVerificationError> {
-            Ok(VerifiedConsent { valid_until: request.grant.terms.valid_until })
+        async fn verify_approval(
+            &self,
+            request: ConsentVerificationRequest<'_>,
+        ) -> Result<VerifiedConsent, crate::ConsentVerificationError> {
+            Ok(VerifiedConsent {
+                valid_until: request.grant.terms.valid_until,
+            })
         }
     }
-    struct Proof { reject: bool, calls: Mutex<usize> }
+    struct Proof {
+        reject: bool,
+        calls: Mutex<usize>,
+    }
     #[async_trait]
     impl DelegateProofVerifier for Proof {
-        async fn verify(&self, grant: &DelegationGrant, request: &DelegationUseRequest,
-            _now: DateTime<Utc>) -> Result<DateTime<Utc>, DelegateProofError> {
+        async fn verify(
+            &self,
+            grant: &DelegationGrant,
+            request: &DelegationUseRequest,
+            _now: DateTime<Utc>,
+        ) -> Result<DateTime<Utc>, DelegateProofError> {
             *self.calls.lock().unwrap() += 1;
-            if self.reject || request.actor != grant.terms.delegate || request.proof.as_slice() != &[7,8,9] {
+            if self.reject
+                || request.actor != grant.terms.delegate
+                || request.proof.as_slice() != &[7, 8, 9]
+            {
                 return Err(DelegateProofError);
             }
             Ok(grant.terms.valid_until)
         }
     }
-    struct Constraint { reject: bool }
+    struct Constraint {
+        reject: bool,
+    }
     #[async_trait]
     impl ExternalConstraintVerifier for Constraint {
-        async fn verify(&self, grant: &DelegationGrant, _request: &DelegationUseRequest,
-            _now: DateTime<Utc>) -> Result<VerifiedConstraintEvidence, ConstraintVerificationError> {
-            if self.reject { return Err(ConstraintVerificationError); }
+        async fn verify(
+            &self,
+            grant: &DelegationGrant,
+            _request: &DelegationUseRequest,
+            _now: DateTime<Utc>,
+        ) -> Result<VerifiedConstraintEvidence, ConstraintVerificationError> {
+            if self.reject {
+                return Err(ConstraintVerificationError);
+            }
             Ok(VerifiedConstraintEvidence {
                 valid_until: grant.terms.valid_until,
                 context: serde_json::json!({"authorized": true, "source": "test-only"}),
@@ -591,17 +684,32 @@ mod tests {
             })
         }
     }
-    struct Cedar { decision: CedarDecision, mutate: bool, lifecycle: Option<Arc<DelegationAuthorityService>>, clock: Option<Arc<FixedClock>> }
+    struct Cedar {
+        decision: CedarDecision,
+        mutate: bool,
+        lifecycle: Option<Arc<DelegationAuthorityService>>,
+        clock: Option<Arc<FixedClock>>,
+    }
     #[async_trait]
     impl DelegationCedarEvaluator for Cedar {
-        async fn evaluate(&self, request: CedarEvaluationRequest, now: DateTime<Utc>)
-            -> Result<CedarEvaluation, CedarEvaluationError> {
+        async fn evaluate(
+            &self,
+            request: CedarEvaluationRequest,
+            now: DateTime<Utc>,
+        ) -> Result<CedarEvaluation, CedarEvaluationError> {
             if self.mutate {
                 let clock = self.clock.as_ref().unwrap();
                 clock.set(clock.now() + Duration::seconds(1));
-                self.lifecycle.as_ref().unwrap()
-                    .suspend(request.organization_id, request.grant_id, request.grant_revision)
-                    .await.map_err(|_| CedarEvaluationError)?;
+                self.lifecycle
+                    .as_ref()
+                    .unwrap()
+                    .suspend(
+                        request.organization_id,
+                        request.grant_id,
+                        request.grant_revision,
+                    )
+                    .await
+                    .map_err(|_| CedarEvaluationError)?;
             }
             Ok(CedarEvaluation {
                 decision: self.decision,
@@ -626,30 +734,69 @@ mod tests {
             let now = template.created_at;
             let clock = Arc::new(FixedClock(Mutex::new(now)));
             let repository = Arc::new(InMemoryDelegationGrantRepository::default());
-            let lifecycle = Arc::new(DelegationAuthorityService::with_clock(
-                repository, Arc::new(Consent), template.authority.clone(), clock.clone()
-            ).unwrap());
-            let pending = lifecycle.propose(template.organization_id, template.terms.clone()).await.unwrap();
+            let lifecycle = Arc::new(
+                DelegationAuthorityService::with_clock(
+                    repository,
+                    Arc::new(Consent),
+                    template.authority.clone(),
+                    clock.clone(),
+                )
+                .unwrap(),
+            );
+            let pending = lifecycle
+                .propose(template.organization_id, template.terms.clone())
+                .await
+                .unwrap();
             clock.set(template.created_at + Duration::seconds(1));
-            lifecycle.approve(pending.organization_id, pending.id, 1, &pending.terms.grantor,
-                ApprovalEvidence {
-                    profile: "urn:example:consent:v1".into(),
-                    evidence_ref: "urn:example:consent:1".into(),
-                    authority_evidence_ref: "urn:example:authority:1".into(),
-                }).await.unwrap();
-            let proof = Arc::new(Proof { reject: false, calls: Mutex::new(0) });
+            lifecycle
+                .approve(
+                    pending.organization_id,
+                    pending.id,
+                    1,
+                    &pending.terms.grantor,
+                    ApprovalEvidence {
+                        profile: "urn:example:consent:v1".into(),
+                        evidence_ref: "urn:example:consent:1".into(),
+                        authority_evidence_ref: "urn:example:authority:1".into(),
+                    },
+                )
+                .await
+                .unwrap();
+            let proof = Arc::new(Proof {
+                reject: false,
+                calls: Mutex::new(0),
+            });
             let authorizer = DelegationUseAuthorizer::with_clock(
-                lifecycle.clone(), proof.clone(), Arc::new(Constraint { reject: false }),
-                Arc::new(Cedar { decision, mutate: false, lifecycle: None, clock: None }), clock.clone()
+                lifecycle.clone(),
+                proof.clone(),
+                Arc::new(Constraint { reject: false }),
+                Arc::new(Cedar {
+                    decision,
+                    mutate: false,
+                    lifecycle: None,
+                    clock: None,
+                }),
+                clock.clone(),
             );
             let request = DelegationUseRequest {
-                organization_id: pending.organization_id, grant_id: pending.id, expected_revision: 2,
-                actor: pending.terms.delegate.clone(), action: pending.terms.actions[0].clone(),
-                audience: pending.terms.audiences[0].clone(), resource: pending.terms.resources[0].clone(),
+                organization_id: pending.organization_id,
+                grant_id: pending.id,
+                expected_revision: 2,
+                actor: pending.terms.delegate.clone(),
+                action: pending.terms.actions[0].clone(),
+                audience: pending.terms.audiences[0].clone(),
+                resource: pending.terms.resources[0].clone(),
                 operation_profile: "https://commerce.example/profiles/desk-lamp-purchase/v1".into(),
-                operation_digest: format!("sha256:{}", "c".repeat(64)), proof: vec![7,8,9],
+                operation_digest: format!("sha256:{}", "c".repeat(64)),
+                proof: vec![7, 8, 9],
             };
-            Self { lifecycle, authorizer, request, proof, clock }
+            Self {
+                lifecycle,
+                authorizer,
+                request,
+                proof,
+                clock,
+            }
         }
     }
 
@@ -661,7 +808,10 @@ mod tests {
         assert_eq!(decision.grant_id(), h.request.grant_id);
         assert_eq!(decision.grant_revision(), 2);
         assert_eq!(decision.policy_revision(), 4);
-        assert_eq!(decision.policy_digest(), format!("sha256:{}", "b".repeat(64)));
+        assert_eq!(
+            decision.policy_digest(),
+            format!("sha256:{}", "b".repeat(64))
+        );
         assert!(decision.valid_until() > h.clock.now());
         assert_eq!(*h.proof.calls.lock().unwrap(), 1);
     }
@@ -671,10 +821,16 @@ mod tests {
         let h = Harness::new(CedarDecision::Permit).await;
         let mut wrong = h.request.clone();
         wrong.actor.id = "https://agents.example/agents/attacker".into();
-        assert_eq!(h.authorizer.evaluate(&wrong).await, Err(DelegationUseError::WrongDelegate));
+        assert_eq!(
+            h.authorizer.evaluate(&wrong).await,
+            Err(DelegationUseError::WrongDelegate)
+        );
         let mut wrong_scope = h.request.clone();
         wrong_scope.resource = "urn:commerce:product:other".into();
-        assert_eq!(h.authorizer.evaluate(&wrong_scope).await, Err(DelegationUseError::ScopeDenied));
+        assert_eq!(
+            h.authorizer.evaluate(&wrong_scope).await,
+            Err(DelegationUseError::ScopeDenied)
+        );
         assert_eq!(*h.proof.calls.lock().unwrap(), 0);
     }
 
@@ -682,24 +838,47 @@ mod tests {
     async fn failed_proof_and_non_permit_cedar_decisions_fail_closed() {
         let h = Harness::new(CedarDecision::Permit).await;
         h.proof.reject = true;
-        assert_eq!(h.authorizer.evaluate(&h.request).await, Err(DelegationUseError::ProofNotVerified));
+        assert_eq!(
+            h.authorizer.evaluate(&h.request).await,
+            Err(DelegationUseError::ProofNotVerified)
+        );
         let h = Harness::new(CedarDecision::Forbid).await;
-        assert_eq!(h.authorizer.evaluate(&h.request).await, Err(DelegationUseError::PolicyDenied));
+        assert_eq!(
+            h.authorizer.evaluate(&h.request).await,
+            Err(DelegationUseError::PolicyDenied)
+        );
         let h = Harness::new(CedarDecision::Abstain).await;
-        assert_eq!(h.authorizer.evaluate(&h.request).await, Err(DelegationUseError::PolicyDenied));
+        assert_eq!(
+            h.authorizer.evaluate(&h.request).await,
+            Err(DelegationUseError::PolicyDenied)
+        );
     }
 
     #[tokio::test]
     async fn concurrent_suspension_during_cedar_evaluation_is_not_authorized() {
         let h = Harness::new(CedarDecision::Permit).await;
         let authorizer = DelegationUseAuthorizer::with_clock(
-            h.lifecycle.clone(), h.proof.clone(), Arc::new(Constraint { reject: false }),
-            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: true, lifecycle: Some(h.lifecycle.clone()), clock: Some(h.clock.clone()) }),
-            h.clock.clone()
+            h.lifecycle.clone(),
+            h.proof.clone(),
+            Arc::new(Constraint { reject: false }),
+            Arc::new(Cedar {
+                decision: CedarDecision::Permit,
+                mutate: true,
+                lifecycle: Some(h.lifecycle.clone()),
+                clock: Some(h.clock.clone()),
+            }),
+            h.clock.clone(),
         );
-        assert_eq!(authorizer.evaluate(&h.request).await, Err(DelegationUseError::Unavailable));
-        assert!(matches!(h.lifecycle.resolve(h.request.organization_id, h.request.grant_id).await,
-            Err(ServiceError::Inactive)));
+        assert_eq!(
+            authorizer.evaluate(&h.request).await,
+            Err(DelegationUseError::Unavailable)
+        );
+        assert!(matches!(
+            h.lifecycle
+                .resolve(h.request.organization_id, h.request.grant_id)
+                .await,
+            Err(ServiceError::Inactive)
+        ));
     }
 
     #[tokio::test]
@@ -707,13 +886,26 @@ mod tests {
         let h = Harness::new(CedarDecision::Permit).await;
         let mut malformed = h.request.clone();
         malformed.operation_digest = "sha256:NOT-A-DIGEST".into();
-        assert_eq!(h.authorizer.evaluate(&malformed).await, Err(DelegationUseError::InvalidRequest));
-        let authorizer = DelegationUseAuthorizer::with_clock(
-            h.lifecycle.clone(), h.proof.clone(), Arc::new(Constraint { reject: true }),
-            Arc::new(Cedar { decision: CedarDecision::Permit, mutate: false, lifecycle: None, clock: None }),
-            h.clock.clone()
+        assert_eq!(
+            h.authorizer.evaluate(&malformed).await,
+            Err(DelegationUseError::InvalidRequest)
         );
-        assert_eq!(authorizer.evaluate(&h.request).await, Err(DelegationUseError::ConstraintNotVerified));
+        let authorizer = DelegationUseAuthorizer::with_clock(
+            h.lifecycle.clone(),
+            h.proof.clone(),
+            Arc::new(Constraint { reject: true }),
+            Arc::new(Cedar {
+                decision: CedarDecision::Permit,
+                mutate: false,
+                lifecycle: None,
+                clock: None,
+            }),
+            h.clock.clone(),
+        );
+        assert_eq!(
+            authorizer.evaluate(&h.request).await,
+            Err(DelegationUseError::ConstraintNotVerified)
+        );
     }
 }
 
