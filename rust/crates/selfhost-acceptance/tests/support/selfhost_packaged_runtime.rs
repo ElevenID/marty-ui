@@ -415,7 +415,8 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     // A database cloned from the current platform template retains the oracle's
     // object ownership. Production self-host databases are owned by the
     // service role, which must be able to apply additive startup migrations.
-    // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
+    // Transfer only service tables/sequences and the three exact routines
+    // replaced by migration 0013: REASSIGN OWNED also targets PostgreSQL
     // system objects owned by the bootstrap superuser and is therefore refused.
     record_database_stage("transfer-ownership");
     sqlx::query(
@@ -437,6 +438,9 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
                owned_object.relname
              );
            END LOOP;
+           ALTER FUNCTION issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text) OWNER TO marty;
+           ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty;
+           ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_authorization() OWNER TO marty;
          END
          $ownership$",
     )
@@ -444,7 +448,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     .await
     .map_err(|_| "Packaged selfhost qualification failed: database:transfer-ownership")?;
     record_database_stage("inspect-ownership");
-    let ownership: (bool, bool, bool) = sqlx::query_as(
+    let ownership: (bool, bool, bool, bool) = sqlx::query_as(
         "SELECT
            (SELECT pg_get_userbyid(datdba) = 'marty'
               FROM pg_database WHERE datname = current_database()),
@@ -455,13 +459,18 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
              JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
              WHERE namespace.nspname = 'issuance_service'
                AND object.relkind IN ('r', 'p', 'S')
-               AND pg_get_userbyid(object.relowner) <> 'marty')",
+               AND pg_get_userbyid(object.relowner) <> 'marty'),
+           (SELECT count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')
+              FROM pg_proc WHERE oid IN (
+                'issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text)'::regprocedure,
+                'issuance_service.guard_explicit_jwt_vc_transaction()'::regprocedure,
+                'issuance_service.guard_explicit_jwt_vc_authorization()'::regprocedure))",
     )
     .fetch_one(&pool)
     .await
     .map_err(|_| "Packaged selfhost qualification failed: database:inspect-ownership")?;
     record_database_stage("verify-ownership");
-    if ownership != (true, true, true) {
+    if ownership != (true, true, true, true) {
         return Err("Packaged selfhost qualification failed: database:ownership".into());
     }
     record_database_stage("grant");
@@ -490,9 +499,11 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
-    // The frozen published-schema template predates the Rust OID4VCI and
-    // explicit-profile migrations. Prepare this disposable clone once, then
-    // exercise the packaged service with its production `validate` setting.
+    // The current platform template already contains these native migrations.
+    // Reapply them as the restricted owner of this disposable clone, including
+    // the three exact profile routines transferred above. The template and
+    // other schemas retain their original owners. The packaged service still
+    // starts with its production `validate` setting.
     marty_issuance_service::migration::migrate(&check)
         .await
         .map_err(|_| "Packaged selfhost qualification failed: database:migrate-oid4vci")?;

@@ -283,7 +283,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
     ]
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in paths)
     grant_paths = list(tmp_path.glob("sign_grant_*_token"))
-    assert len(grant_paths) == 8
+    assert len(grant_paths) == 6
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in grant_paths)
     assert not list(tmp_path.glob(".openbao-token.*"))
 

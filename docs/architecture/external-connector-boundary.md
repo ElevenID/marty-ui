@@ -304,3 +304,24 @@ TODO (platform recovery owner): qualify a separate provider-neutral recovery pat
 if needed. Recover existing jobs with their retained exact source-bound operator;
 preserve private journals, credentials and original evidence. Source retirement
 neither stops jobs nor upgrades old observations or grants production readiness.
+
+
+The former provider-composite Kubernetes and Envoy executable gates are retired
+with their provider acceptance owner. Current Kubernetes executable prerequisites
+remain mandatory in the contracts lane. Envoy Compose models, mounts, keyless
+bridge and TLS identity checks remain, and CI still requires the actual Compose
+model check unconditionally. These are model/source proofs, not physical profile
+execution evidence. Frozen historical observations retain their original scope.
+
+TODO (platform deployment qualification owner): qualify a fresh provider-neutral
+Kubernetes/Envoy composite if required before a separately authorized rollout.
+The source split does not reuse old provider gate evidence or claim full cluster,
+image, proxy or deployment interoperability from model tests.
+
+The old provider-composite failure diagnostics producer and artifact uploader
+are also retired. Current platform fixture commands retain bounded stdout,
+stderr, timeouts and child reaping; the Rust workflow retains its closed
+artifact-transfer policy. These independent controls do not reproduce the
+deleted composite's physical failure capture. TODO (platform deployment
+qualification owner): qualify any replacement capture with private owned
+storage and bounded output before enabling it for a future rollout.

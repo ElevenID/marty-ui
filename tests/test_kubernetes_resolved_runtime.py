@@ -1,173 +1,50 @@
-"""Required test wiring only; these guards do not qualify Kubernetes execution."""
-
+"""Current executable prerequisites; no Kubernetes execution qualification claim."""
+from copy import deepcopy
 from pathlib import Path
-import re
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = (
-    "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
-    "kubernetes_profile_gateway_composition_isolated",
-    "kubernetes_profile_gateway_composition_child",
-)
 
 
-def inputs():
-    return (
-        (
-            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
-        ).read_text(),
-        (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(),
-        yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")),
-    )
+def workflow():
+    return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
 
 
-def required(source, runner, workflow):
-    for name in NAMES:
-        attribute = ("#[tokio::test]\n"
-                     if name == "kubernetes_profile_gateway_composition_isolated"
-                     else '#[tokio::test(flavor = "multi_thread")]\n')
-        assert re.findall(
-            r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
-        ) == [attribute]
-        assert runner.count(f"'{name}: test'") == 1
-    assert "preflight_skips=()" in runner
-    assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
-    assert '[[ -f "$evidence" ]]' in runner
-    assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
-        in runner
-    )
-    assert source.count(
-        '#[path = "support/resolved_runtime.rs"]\nmod resolved_runtime;'
-    ) == 1
-    assert source.count(
-        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
-    ) == 1
-    assert "base_runtime_container::run_kubernetes(&owned, &redis)" in source
-    assert "renewal_fresh_main::run_kubernetes(" in source
-    steps = workflow["jobs"]["test-rust-services"]["steps"]
-    prerequisites = [
-        step
-        for step in steps
-        if step.get("name") == "Require Kubernetes deployment contract executables"
-    ]
-    assert len(prerequisites) == 1
-    step = prerequisites[0]
-    assert step["if"] == "matrix.lane == 'canvas'"
+def require_prerequisites(value):
+    steps = value["jobs"]["test-rust-services"]["steps"]
+    selected = [step for step in steps if step.get("name") == "Require Kubernetes deployment contract executables"]
+    assert len(selected) == 1
+    step = selected[0]
+    assert step["if"] == "matrix.lane == 'contracts'"
     assert not step.get("continue-on-error")
-    assert step["run"].strip().splitlines() == [
-        "set -euo pipefail",
-        "command -v bash",
-        "command -v envsubst",
-    ]
-    builds = [
-        step
-        for step in steps
-        if step.get("name") == "Prepare required rendered base executable acceptance"
-    ]
-    assert (
-        len(builds) == 1
-        and builds[0].get("if") == "matrix.lane == 'canvas'"
-        and not builds[0].get("continue-on-error")
-    )
-    assert "test -x rust/target/debug/marty-gateway" in builds[0]["run"]
-    assert "test -x rust/target/debug/marty-issuance-service" in builds[0]["run"]
+    assert step["run"].strip().splitlines() == ["set -euo pipefail", "command -v bash", "command -v envsubst"]
 
 
-def test_kubernetes_executable_gates_reuse_required_artifact_and_renderer_prerequisites():
-    required(*inputs())
+def test_current_contract_lane_keeps_required_kubernetes_executables():
+    require_prerequisites(workflow())
 
 
-@pytest.mark.parametrize("name", NAMES)
-@pytest.mark.parametrize(
-    "fault",
-    ["missing", "ignored", "conditional", "duplicate", "unlisted", "disconnected"],
-)
-def test_missing_or_disconnected_kubernetes_gates_fail(name, fault):
-    source, runner, workflow = inputs()
+@pytest.mark.parametrize("fault", ["missing", "optional", "wrong-lane", "missing-bash", "missing-envsubst"])
+def test_missing_or_weakened_executable_prerequisite_is_rejected(fault):
+    value = deepcopy(workflow())
+    steps = value["jobs"]["test-rust-services"]["steps"]
+    step = next(step for step in steps if step.get("name") == "Require Kubernetes deployment contract executables")
     if fault == "missing":
-        source = source.replace(f"async fn {name}", "async fn removed")
-    elif fault in {"ignored", "conditional"}:
-        annotation = "#[ignore]" if fault == "ignored" else "#[cfg(any())]"
-        source = source.replace(f"async fn {name}", f"{annotation}\nasync fn {name}")
-    elif fault == "duplicate":
-        source += f"\n#[tokio::test]\nasync fn {name}() {{}}"
-    elif fault == "unlisted":
-        runner = runner.replace(f"'{name}: test'", "'removed: test'")
+        steps.remove(step)
+    elif fault == "optional":
+        step["continue-on-error"] = True
+    elif fault == "wrong-lane":
+        step["if"] = "false"
     else:
-        runner = runner.replace(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
-            "echo disconnected",
-        )
+        step["run"] = step["run"].replace("command -v " + fault.removeprefix("missing-"), "true")
     with pytest.raises(AssertionError):
-        required(source, runner, workflow)
+        require_prerequisites(value)
 
 
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "missing-envsubst",
-        "optional-envsubst",
-        "missing-gateway",
-        "disconnected-resolver",
-    ],
-)
-def test_missing_runtime_dependencies_fail(fault):
-    source, runner, workflow = inputs()
-    steps = workflow["jobs"]["test-rust-services"]["steps"]
-    if fault in {"missing-envsubst", "optional-envsubst"}:
-        step = next(
-            v
-            for v in steps
-            if v.get("name") == "Require Kubernetes deployment contract executables"
-        )
-        if fault == "missing-envsubst":
-            step["run"] = step["run"].replace("command -v envsubst", "true")
-        else:
-            step["continue-on-error"] = True
-    elif fault == "missing-gateway":
-        step = next(
-            v
-            for v in steps
-            if v.get("name") == "Prepare required rendered base executable acceptance"
-        )
-        step["run"] = step["run"].replace(
-            "test -x rust/target/debug/marty-gateway", "true"
-        )
-    else:
-        source = source.replace("mod resolved_kubernetes_runtime;", "mod disconnected;")
-    with pytest.raises(AssertionError):
-        required(source, runner, workflow)
-
-
-@pytest.mark.parametrize("fault", [None, "missing", "ignored", "unlisted"])
-def test_prepared_model_cleanup_control_is_required(fault):
-    name = (
-        "prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored"
-    )
-    source = (
-        ROOT / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
-    ).read_text()
-    runner = inputs()[1]
-
-    def check(source, runner):
-        assert re.findall(
-            r"((?:#\[[^\n]+\]\s*)+)fn " + name + r"\(\)\s*\{", source
-        ) == ["#[test]\n"]
-        assert runner.count(f"'resolved_kubernetes_runtime::{name}: test'") == 1
-
-    check(source, runner)
-    if fault == "missing":
-        source = source.replace(f"fn {name}", "fn removed")
-    elif fault == "ignored":
-        source = source.replace(f"fn {name}", f"#[ignore]\nfn {name}")
-    elif fault == "unlisted":
-        runner = runner.replace(
-            f"'resolved_kubernetes_runtime::{name}: test'", "'removed: test'"
-        )
-    if fault:
-        with pytest.raises(AssertionError):
-            check(source, runner)
+def test_retired_provider_composite_is_not_a_current_kubernetes_gate():
+    assert not (ROOT / "rust/crates/canvas-acceptance").exists()
+    assert not (ROOT / "scripts/ci/run-published-canvas-contracts.sh").exists()
+    # The retained native publication/model tests own their exact contracts.
+    # Full cluster/profile execution requires separately owned qualification.

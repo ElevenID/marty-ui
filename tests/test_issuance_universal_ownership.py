@@ -33,8 +33,12 @@ def test_exact_runtime_remainder_stays_on_python_without_hiding_migrated_routes(
     retained = _route_keys(CONTRACT["retained_legacy_http"])
 
     assert len(complete) == 131
-    assert len(native) == 122
-    assert retained == complete - native
+    assert len(native) == 63
+    retired = _route_keys(coverage["retired_legacy"]["http_routes"])
+    assert len(retired) == 59
+    assert retired.isdisjoint(native | retained)
+    assert complete == native | retained | retired
+    assert retained == complete - native - retired
     assert len(retained) == coverage["remaining"]["http"] == 9
     runtime_grpc = {row["method"] for row in surface["grpc"]["methods"]}
     assert set(coverage["native_grpc"]) == runtime_grpc
@@ -200,33 +204,15 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     retirement = CONTRACT["rust_owned_python_retirement"]
     assert retirement == {
         "authorized": True,
-        "scope": [
-            "oid4vci-public-and-management-http",
-            "canvas-mirror-http",
-            "canvas-mirror-automation-loop",
-        ],
+        "scope": ["oid4vci-public-and-management-http"],
         "retained_http_route_count": 9,
-        "packaged_main_lifecycle_gate": (
-            "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly"
-        ),
+        "packaged_main_lifecycle_gate": "selfhost_public_image_loader_isolated",
         "full_python_service_deletion_authorized": False,
     }
-    published = (
-        ROOT
-        / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
-    ).read_text(encoding="utf-8")
-    lifecycle = (
-        ROOT
-        / "rust/services/issuance/tests/support/canvas_status_runtime_contract.rs"
-    ).read_text(encoding="utf-8")
-    assert retirement["packaged_main_lifecycle_gate"] in published
-    for evidence in (
-        'env("CANVAS_MIRROR_WORKER_ENABLED", "true")',
-        'args(["-TERM", &child.0.id().to_string()])',
-        'external_credential_id=\'automation-external\'',
-        '.stdout(Stdio::piped())',
-        'let logs = format!("{stdout}\\n{stderr}")',
-        'logs.contains("Issuance shutdown requested")',
-    ):
-        assert evidence in lifecycle
+    published = (ROOT / "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts/ci/run-selfhost-acceptance-contracts.sh").read_text(encoding="utf-8")
+    assert "fn " + retirement["packaged_main_lifecycle_gate"] + "(" in published
+    assert "'" + retirement["packaged_main_lifecycle_gate"] + ": test'" in runner
+    # This current loader proves its retained platform startup/custody contract.
+    # It does not replace the retired provider worker or qualify connector flows.
     assert CONTRACT["deferred"] == ["DIDCOMM-KMS-001"]

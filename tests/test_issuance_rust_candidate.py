@@ -844,19 +844,19 @@ def test_candidate_uses_rust_runtime_across_compose_surfaces() -> None:
     assert "marty-issuance-service" in entrypoint
     assert "issuance-native:" in beta
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in beta
-    assert "CANVAS_LTI_STATE_TTL_MINUTES:" in beta
-    assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
-    assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
-    assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" in beta
+    assert "CANVAS_LTI_STATE_TTL_MINUTES:" not in beta
+    assert "CANVAS_LTI_JWKS_TTL_MINUTES:" not in beta
+    assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in beta
+    assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" not in beta
     assert "INTEGRATION_SECRET_MASTER_KEY:" not in beta
-    assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
-    assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
-    assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta
-    assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" in beta
-    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED:" in beta
-    assert "CANVAS_CREDENTIALS_SHARED_SECRET:" in beta
-    assert "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:" in beta
-    assert "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS:" in beta
+    assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" not in beta
+    assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" not in beta
+    assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" not in beta
+    assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" not in beta
+    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED:" not in beta
+    assert "CANVAS_CREDENTIALS_SHARED_SECRET:" not in beta
+    assert "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST:" not in beta
+    assert "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS:" not in beta
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in production
     assert "ISSUANCE_SERVICE_URL: http://issuance:8005" in production
     assert "file: docker-compose.service.issuance-native-runtime.yml" in production

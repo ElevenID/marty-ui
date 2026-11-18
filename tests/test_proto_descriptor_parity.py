@@ -47,6 +47,7 @@ def test_public_field_numbers_remain_wire_compatible():
 
     auth = fields("auth_service.proto", "ValidateSessionResponse")
     assert auth["authentication_time_unix"] == 4
+    assert auth["non_impersonated_session"] == 5
     policy = fields("presentation_policy_service.proto", "EvaluatePresentationRequest")
     assert policy["oid4vp_transport"] == 7
     assert policy["expected_policy_revision"] == 8

@@ -85,14 +85,9 @@ def test_target_observer_is_readonly_bounded_and_retires_same_known_helper(tmp_p
     assert counts == ["census", "synthetic-known", "census"]
 
 
-def test_latest_release_cache_input_is_distinct_from_old_seed(monkeypatch):
+def test_retired_full_service_profile_refuses_before_cache_reuse(monkeypatch):
     seen = []
     monkeypatch.setattr(seed, "validate_cache_reuse", lambda dto: seen.append(dto))
-    scope = build.build_scope(build.LATEST_OFFICIAL_PROFILE)
-    dto = dict(targetVolume=scope["volumes"][1])
-    freeze = dict(productRevision=scope["uiRevision"], coreRevision=scope["coreRevision"], imagesBuilt=False, releaseQualified=False)
-    script = " ".join("--bin " + binary for binary in scope["roles"].values())
-    build.verify_official_inputs(freeze, dto, script, scope, script)
-    assert seen == [dto]
-    with pytest.raises(ValueError):
-        build.verify_official_inputs(freeze, dto, script.replace("--bin marty-flow", "--bin foreign"), scope, script)
+    with pytest.raises(ValueError, match="RETIRED_BUILD_PROFILE_USE_CURRENT_PLATFORM_BUILD"):
+        build.build_scope(build.LATEST_OFFICIAL_PROFILE)
+    assert seen == []

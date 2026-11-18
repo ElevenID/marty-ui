@@ -45,14 +45,14 @@ def synthetic_base():
         name: deepcopy(common)
         for name in (
             "issuance",
-            "canvas-sync-worker",
+            "notification",
             "verification",
             "signing-keys",
             "issuance-migrations",
         )
     }
-    services["canvas-sync-worker"]["command"] = [
-        "/usr/local/bin/marty-canvas-sync-worker",
+    services["notification"]["command"] = [
+        "/usr/local/bin/marty-notification",
     ]
     services["issuance"]["build"] = {
         "context": ".", "dockerfile": "services/Dockerfile",
@@ -121,7 +121,7 @@ def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
             projected["command"] = original["command"]
             assert projected["environment"].pop("SERVICE_NAME") == "issuance_native"
             assert projected["environment"].pop("MARTY_SCHEMA_STARTUP_MODE") == "validate"
-            assert projected["environment"].pop("CANVAS_MIRROR_WORKER_ENABLED") == "false"
+            assert "CANVAS_MIRROR_WORKER_ENABLED" not in projected["environment"]
         if mode == "official" and name not in gate["EXTERNAL"]:
             if name != "issuance":
                 assert projected["environment"].pop("SERVICE_NAME") == name.replace("-", "_")
@@ -148,13 +148,13 @@ def test_complete_model_comparison_rejects_worker_field_loss_without_private_out
 ):
     expected = synthetic_base()
     actual = deepcopy(expected)
-    del actual["services"]["canvas-sync-worker"][field]
+    del actual["services"]["notification"][field]
     with pytest.raises(AssertionError) as error:
         gate["assert_model"](actual, expected)
     assert str(error.value).startswith(
         "Generated beta overlay changed the complete runtime model"
     )
-    assert "canvas-sync-worker" in str(error.value)
+    assert "notification" in str(error.value)
     assert "synthetic-private-value" not in str(error.value)
 
 
@@ -176,17 +176,17 @@ def test_environment_list_mapping_equivalence_preserves_absent_null_and_duplicat
     gate,
 ):
     expected = synthetic_base()
-    expected["services"]["canvas-sync-worker"]["environment"] = {
+    expected["services"]["notification"]["environment"] = {
         "SELECTOR": None,
         "OTHER": "",
     }
     actual = deepcopy(expected)
-    actual["services"]["canvas-sync-worker"]["environment"] = ["SELECTOR", "OTHER="]
+    actual["services"]["notification"]["environment"] = ["SELECTOR", "OTHER="]
     gate["assert_model"](actual, expected)
-    actual["services"]["canvas-sync-worker"]["environment"] = ["OTHER="]
+    actual["services"]["notification"]["environment"] = ["OTHER="]
     with pytest.raises(AssertionError):
         gate["assert_model"](actual, expected)
-    actual["services"]["canvas-sync-worker"]["environment"] = [
+    actual["services"]["notification"]["environment"] = [
         "SELECTOR",
         "SELECTOR=",
         "OTHER=",
@@ -213,8 +213,8 @@ def test_prepared_local_images_are_pinned_complete_and_never_official(tmp_path):
 $ErrorActionPreference='Stop'
 function docker { throw 'Docker is forbidden in a pure projection' }
 $id='sha256:'+('a'*64)
-$common=@{Services=@('issuance','canvas-sync-worker'); ReleaseVersion='developer'; OfficialStackRelease=$false}
-$valid=@{'issuance'=$id; 'canvas-sync-worker'=$id}
+$common=@{Services=@('issuance','notification'); ReleaseVersion='developer'; OfficialStackRelease=$false}
+$valid=@{'issuance'=$id; 'notification'=$id}
 $plan=@(New-BetaApplicationImagePlan @common -PreparedImages $valid)
 if ($plan.Count -ne 2) { throw 'missing service' }
 foreach ($entry in $plan) {
@@ -224,10 +224,10 @@ foreach ($entry in $plan) {
     }
 }
 $lines=@(ConvertTo-BetaApplicationImageLines -Plan $plan)
-if ('      SERVICE_NAME: canvas_sync_worker' -notin $lines -or
+if ('      SERVICE_NAME: notification' -notin $lines -or
     '      SERVICE_NAME: issuance_native' -notin $lines) { throw 'shared selectors lost' }
 $rejected=0
-foreach ($bad in @(@{'issuance'=$id}, @{'issuance'=$id; 'canvas-sync-worker'='mutable:tag'})) {
+foreach ($bad in @(@{'issuance'=$id}, @{'issuance'=$id; 'notification'='mutable:tag'})) {
     try { $null=New-BetaApplicationImagePlan @common -PreparedImages $bad }
     catch { $rejected++ }
 }
@@ -262,12 +262,12 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
     assert report["caught"] is False, report
     gate["assert_report"](report, mode)
     names = report["services"]
-    assert len(names) == len(set(names)) == 19
+    assert len(names) == len(set(names)) == 18
     assert {item["service"] for item in report["plan"]} == set(names)
     native = set(names) - gate["EXTERNAL"]
-    assert len(native) == 19
+    assert len(native) == 18
     assert gate["EXTERNAL"] == set()
-    assert "canvas-sync-worker" in native
+    assert "notification" in native
     assert set(report["build_services"]) == (native if mode == "local" else set())
     for item in report["plan"]:
         if mode == "official":
@@ -302,7 +302,7 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
         assert (
             f"elevenid-local/verification:{gate['RELEASE']}" not in report["inspected"]
         )
-        assert len(report["inspected"]) == 18
+        assert len(report["inspected"]) == 17
         originals = {item["service"]: item for item in report["plan"]}
         finals = {item["service"]: item for item in report["final_plan"]}
         for name in names:
@@ -357,11 +357,11 @@ def test_independent_projection_rejects_retagged_evidence_and_missing_build(
         ("services_digest", "sha256:" + "f" * 64),
         (
             "services",
-            ["issuance", "canvas-sync-worker", "verification", "verification"],
+            ["issuance", "notification", "verification", "verification"],
         ),
         (
             "services",
-            ["issuance", "canvas-sync-worker", "synthetic-private-value\nservice"],
+            ["issuance", "notification", "synthetic-private-value\nservice"],
         ),
         ("services", []),
     ],

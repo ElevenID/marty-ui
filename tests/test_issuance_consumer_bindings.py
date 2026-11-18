@@ -184,7 +184,6 @@ def assert_kubernetes_bindings(documents, config):
             "FLOW_GRPC_TARGET": {"value": "https://flow:9011"},
             "ES_GRPC_TARGET": {"value": "https://event-stream:9015"},
             "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
-            "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
         },
         "applicant": {
             "ES_GRPC_TARGET": {"value": "https://event-stream:9015"},

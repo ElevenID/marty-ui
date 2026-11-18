@@ -15,19 +15,21 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "PublishedDatabase::start_for_current_issuance()" in body
     assert "OwnedRedis::start()" in body
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
-    script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    script = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     assert f"'{NAME}: test'" in inventory
-    assert "Flow executable changed its exact nine-case owner inventory" in inventory
-    assert "preflight_skips=()" in script
-    assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
+    assert "Flow executable changed its exact sixteen-case owner inventory" in inventory
+    assert '[[ $# == 0 && "${MARTY_PLATFORM_FULL_QUALIFICATION:-0}" == 0 ]] || exit 2' in script
+    assert "--name flow_acceptance --owner flow-pr --" in script
     assert (
         '"$flow_executable" --nocapture --test-threads=4'
         in script
     )
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "test -x rust/target/debug/marty-flow" in workflow
+    assert "cargo build --locked --offline -p marty-flow" in workflow
+    assert "--bin marty-flow --message-format=json" in workflow
+    assert 'find_artifact marty-flow-acceptance flow_published_schema_contract true' in script
 
 
 def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
@@ -41,7 +43,7 @@ def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
     assert "legacy.attempts()" in helper
     assert "FlowServiceClient::new" in helper
     assert '"/v1/flows/instances"' in helper
-    script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    script = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     for existing in [

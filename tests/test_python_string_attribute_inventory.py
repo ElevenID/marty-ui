@@ -35,21 +35,12 @@ def test_frozen_builtin_inventory_covers_metaclass_and_absent_attribute_boundari
             assert "repr" not in item and "value" not in item
 
 
-def test_native_formatter_is_private_and_connected_to_canvas_urls():
+def test_retired_provider_formatter_has_no_platform_runtime_adapter():
     library = (ROOT / "rust/services/issuance/src/lib.rs").read_text(encoding="utf-8")
-    assert "mod python_format;" in library
-    assert "#[cfg(test)]\nmod python_format;" not in library
-    assert "pub mod python_format;" not in library
-    canvas_urls = (
-        ROOT / "rust/services/issuance/src/canvas_credentials_urls.rs"
-    ).read_text(encoding="utf-8")
-    assert "python_format::{format_named, PythonFormatError" in canvas_urls
-    formatter = (ROOT / "rust/services/issuance/src/python_format.rs").read_text(
-        encoding="utf-8"
-    )
-    assert "UnmodeledCapability" in formatter and "ResourceFailure" in formatter
-    assert "representation_points(ReprText(value))" in formatter
-    assert "parse::<PythonConfigInteger>()" in formatter
+    assert "mod python_format;" not in library
+    assert not (ROOT / "rust/services/issuance/src/python_format.rs").exists()
+    assert not (ROOT / "rust/services/issuance/src/canvas_credentials_urls.rs").exists()
+    # Frozen language observations below remain evidence, not a runtime adapter.
 
 
 def test_pairwise_reference_is_frozen_and_complete():
