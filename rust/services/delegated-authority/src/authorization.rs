@@ -16,10 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use mmf_security::cedar::{CedarAuthorizationRequest, CedarEntityTypes, CedarPolicyEngine};
 use uuid::Uuid;
-use mmf_security::cedar::{
-    CedarAuthorizationRequest, CedarEntityTypes, CedarPolicyEngine,
-};
 
 use crate::{
     domain::valid_uri, DelegationAuthorityService, DelegationClock, DelegationGrant, GrantStatus,
@@ -108,7 +106,6 @@ pub struct VerifiedConstraintEvidence {
 #[error("external constraint evidence verification failed")]
 pub struct ConstraintVerificationError;
 
-
 /// A validated organization-owned active policy snapshot returned by the
 /// platform policy repository. The provider must load the active policy and
 /// schema together and bind `policy_digest` to both immutable documents.
@@ -165,8 +162,11 @@ impl DelegationCedarEvaluator for MmfCedarEvaluator {
         request: CedarEvaluationRequest,
         now: DateTime<Utc>,
     ) -> Result<CedarEvaluation, CedarEvaluationError> {
-        let policy = self.source.resolve_active(&request, now)
-            .await.map_err(|_| CedarEvaluationError)?;
+        let policy = self
+            .source
+            .resolve_active(&request, now)
+            .await
+            .map_err(|_| CedarEvaluationError)?;
         if policy.organization_id != request.organization_id
             || !valid_uri(Some(&policy.policy_id))
             || policy.revision == 0
@@ -192,21 +192,28 @@ impl DelegationCedarEvaluator for MmfCedarEvaluator {
             "delegate_proof_verified": true,
             "consent_and_authority_verified": true,
         });
-        let decision = policy.engine.authorize_request(CedarAuthorizationRequest {
-            principal_type: policy.entity_types.principal.clone(),
-            principal_id: request.actor.id,
-            action_type: policy.entity_types.action.clone(),
-            action_id: request.action,
-            resource_type: policy.entity_types.resource.clone(),
-            resource_id: request.resource,
-            context,
-            entities: policy.entities,
-        }).map_err(|_| CedarEvaluationError)?;
+        let decision = policy
+            .engine
+            .authorize_request(CedarAuthorizationRequest {
+                principal_type: policy.entity_types.principal.clone(),
+                principal_id: request.actor.id,
+                action_type: policy.entity_types.action.clone(),
+                action_id: request.action,
+                resource_type: policy.entity_types.resource.clone(),
+                resource_id: request.resource,
+                context,
+                entities: policy.entities,
+            })
+            .map_err(|_| CedarEvaluationError)?;
         if !decision.errors.is_empty() {
             return Err(CedarEvaluationError);
         }
         Ok(CedarEvaluation {
-            decision: if decision.allowed { CedarDecision::Permit } else { CedarDecision::Forbid },
+            decision: if decision.allowed {
+                CedarDecision::Permit
+            } else {
+                CedarDecision::Forbid
+            },
             policy_id: policy.policy_id,
             policy_revision: policy.revision,
             policy_digest: policy.policy_digest,
@@ -969,7 +976,8 @@ namespace Delegation {
             ..CedarConfig::default()
         };
         let organization = organization_id.to_string();
-        let policy_source = format!(r#"
+        let policy_source = format!(
+            r#"
 @id("delegated-commerce-member-permit")
 permit (
   principal is Delegation::User,
@@ -985,7 +993,8 @@ when {{
   && context.delegate_proof_verified
   && context.consent_and_authority_verified
 }};
-"#);
+"#
+        );
         let engine = CedarPolicyEngine::from_human_schema(&policy_source, SCHEMA, config).unwrap();
         ResolvedCedarPolicy {
             organization_id,
@@ -1045,7 +1054,10 @@ when {{
         let organization_id = Uuid::new_v4();
         let now = Utc::now();
         let evaluator = MmfCedarEvaluator::new(Arc::new(Source(policy(organization_id, now))));
-        let allowed = evaluator.evaluate(request(organization_id), now).await.unwrap();
+        let allowed = evaluator
+            .evaluate(request(organization_id), now)
+            .await
+            .unwrap();
         assert_eq!(allowed.decision, CedarDecision::Permit);
         assert_eq!(allowed.policy_id, "urn:example:policies:delegated-commerce");
         assert_eq!(allowed.policy_revision, 7);
@@ -1061,7 +1073,11 @@ when {{
         let configured_organization = Uuid::new_v4();
         let other_organization = Uuid::new_v4();
         let now = Utc::now();
-        let evaluator = MmfCedarEvaluator::new(Arc::new(Source(policy(configured_organization, now))));
-        assert!(evaluator.evaluate(request(other_organization), now).await.is_err());
+        let evaluator =
+            MmfCedarEvaluator::new(Arc::new(Source(policy(configured_organization, now))));
+        assert!(evaluator
+            .evaluate(request(other_organization), now)
+            .await
+            .is_err());
     }
 }
