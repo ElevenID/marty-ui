@@ -1,4 +1,13 @@
-# Rust build and feedback audit (2026-10-01)
+# Rust build and feedback audit (2026-10-01) — historical source snapshot
+
+> Historical pre-split measurements and recommendations. Canvas provider workers,
+> scripts and suites named below are retired from the platform; these commands
+> are not current operator instructions or a plan to restore them. Current
+> executable owners are the workflow and Cargo manifests. See the
+> [connector boundary](architecture/external-connector-boundary.md) and
+> [current CI execution guide](ci-release-execution.md). Preserve the original
+> measurements as provenance; remeasure current lanes before performance claims.
+
 
 Follow-on architecture work is coordinated in the [architecture and development-feedback improvement tracker](architecture-feedback-improvement-plan.md). This audit retains its original evidence snapshot; the tracker records the newer baseline, implementation sequence, review requirements, and regression safeguards.
 
