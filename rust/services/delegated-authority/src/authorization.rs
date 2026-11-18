@@ -24,6 +24,7 @@ use crate::{
 };
 
 const MAX_PROOF_BYTES: usize = 16_384;
+const MAX_CONSTRAINT_CONTEXT_BYTES: usize = 16_384;
 const MAX_POLICY_OBSERVATION_AGE_SECONDS: i64 = 30;
 
 #[derive(Clone)]
@@ -291,7 +292,10 @@ impl DelegationUseAuthorizer {
             }
         };
         let after_constraints = self.now_after(started_at)?;
-        if constraint_deadline <= after_constraints {
+        if constraint_deadline <= after_constraints
+            || serde_json::to_vec(&constraint_context)
+                .map_or(true, |bytes| bytes.len() > MAX_CONSTRAINT_CONTEXT_BYTES)
+        {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
@@ -403,13 +407,16 @@ fn validate_cedar_result(
     result: &CedarEvaluation,
     now: DateTime<Utc>,
 ) -> Result<(), DelegationUseError> {
+    let maximum_deadline = result.evaluated_at
+        .checked_add_signed(Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS))
+        .ok_or(DelegationUseError::PolicyDenied)?;
     if !valid_uri(Some(&result.policy_id))
         || result.policy_revision == 0
         || !valid_digest(&result.policy_digest)
         || result.evaluated_at > now
         || result.valid_until <= now
         || result.valid_until <= result.evaluated_at
-        || result.valid_until > result.evaluated_at + Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS)
+        || result.valid_until > maximum_deadline
         || now.signed_duration_since(result.evaluated_at)
             > Duration::seconds(MAX_POLICY_OBSERVATION_AGE_SECONDS)
     {
@@ -429,7 +436,7 @@ mod tests {
     use super::*;
     use crate::{
         test_support::pending_grant, ApprovalEvidence, ConsentEvidenceVerifier,
-        ConsentVerificationRequest, InMemoryDelegationGrantRepository, ServiceError,
+        ConsentVerificationRequest, InMemoryDelegationGrantRepository, ServiceError, VerifiedConsent,
     };
     use std::sync::Mutex;
 
