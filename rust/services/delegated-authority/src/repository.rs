@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use crate::{DelegationGrant, GrantStatus};
+use crate::{validate_transition, DelegationGrant, GrantStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RepositoryError {
