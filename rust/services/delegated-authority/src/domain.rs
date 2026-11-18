@@ -289,6 +289,34 @@ impl DelegationGrant {
             && (self.terms.valid_until <= now || self.authority.source_expires_at.is_some_and(|expiry| expiry <= now)) { GrantStatus::Expired } else { self.status }
     }
 }
+pub fn validate_transition(previous: &DelegationGrant, current: &DelegationGrant) -> Result<(), GrantValidationError> {
+    previous.validate()?;
+    current.validate()?;
+    let immutable_changed = previous.profile != current.profile
+        || previous.id != current.id
+        || previous.organization_id != current.organization_id
+        || previous.authority != current.authority
+        || previous.terms != current.terms
+        || previous.terms_digest != current.terms_digest
+        || previous.created_at != current.created_at
+        || previous.approval.as_ref().is_some_and(|approval| current.approval.as_ref() != Some(approval));
+    if immutable_changed { return Err(GrantValidationError::ImmutableGrantDataChanged); }
+    if current.revision != previous.revision.checked_add(1).ok_or(GrantValidationError::RevisionOverflow)? {
+        return Err(GrantValidationError::InvalidRevision);
+    }
+    if current.updated_at <= previous.updated_at {
+        return Err(GrantValidationError::TransitionTimeDidNotAdvance);
+    }
+    let allowed = match previous.status {
+        GrantStatus::Pending => matches!(current.status, GrantStatus::Active | GrantStatus::Revoked | GrantStatus::Expired),
+        GrantStatus::Active => matches!(current.status, GrantStatus::Suspended | GrantStatus::Revoked | GrantStatus::Expired),
+        GrantStatus::Suspended => matches!(current.status, GrantStatus::Active | GrantStatus::Revoked | GrantStatus::Expired),
+        GrantStatus::Revoked | GrantStatus::Expired => false,
+    };
+    if !allowed { return Err(GrantValidationError::InvalidStatusTransition); }
+    Ok(())
+}
+
 fn validate_authority(a: &Authority) -> Result<(), GrantValidationError> {
     validate_principal(&a.issuer)?;
     if !a.status_ref.starts_with("https://") || !valid_uri(Some(&a.status_ref)) {
@@ -325,4 +353,9 @@ pub enum GrantValidationError {
     #[error("grant creation/update timestamps are inconsistent")] InvalidTemporalOrdering,
     #[error("activation timestamp is outside the grant validity interval")] InvalidActivationTime,
     #[error("grant was marked expired before its validity ended")] PrematureExpiration,
+    #[error("immutable grant identity, authority, terms, or approval changed")] ImmutableGrantDataChanged,
+    #[error("grant revision did not advance exactly once")] InvalidRevision,
+    #[error("grant lifecycle transition timestamp did not advance")] TransitionTimeDidNotAdvance,
+    #[error("grant lifecycle status transition is not permitted")] InvalidStatusTransition,
+    #[error("grant revision overflow")] RevisionOverflow,
 }
