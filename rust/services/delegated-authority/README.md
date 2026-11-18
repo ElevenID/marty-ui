@@ -19,4 +19,4 @@ Cedar evaluation, authenticated agent proof verification, production JWS signing
 The serialized grant model follows schemas/delegated-authority/v1/delegation-grant.json in marty-protocol. Semantic validation is additional to JSON Schema validation. The terms digest uses deterministic serialization of the fixed v1 struct; cross-language canonicalization must be frozen before interoperability qualification.
 
 ## Qualification status
-Initial lifecycle/domain implementation. Not production-qualified and not yet exposed through the public Gateway.
+Initial lifecycle/domain and PostgreSQL repository implementation. Not production-qualified and not yet exposed through the public Gateway. Consent evidence, current external-authority resolution, Cedar, signed receipts, and final-use proof checks remain unimplemented.
