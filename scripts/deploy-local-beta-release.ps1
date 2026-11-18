@@ -1239,7 +1239,7 @@ $runningCanvasBridge = @(& docker ps `
     --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0) { throw "Could not inspect optional Canvas localhost bridge before beta release" }
 if ($runningCanvasBridge.Count -ne 0) {
-    throw "Stop the optional Canvas localhost bridge before beta release; this public-Canvas deployment does not recreate it with issuance"
+    throw "The retired Canvas localhost bridge is still running; resolve it through the separately reviewed deployment migration before retrying this platform release"
 }
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference

@@ -5,16 +5,39 @@ references, not inputs to this runtime. Maintained behavior belongs here:
 
 | Retired Credentials reference | Current executable owner |
 | --- | --- |
-| `issuance-canvas-lti-foundation.json` | `contracts/issuance-canvas-lti-foundation.json` and issuance's Canvas LTI behavior suites |
+| `issuance-canvas-lti-foundation.json` | Historical provider migration evidence; no current platform LTI runtime. Provider protocol ownership belongs to [canvas-integration](https://github.com/ElevenID/canvas-integration). |
 | `physical-passport-provider-reference.json` | `passport_bureau.rs`, `passport_signer.rs`, `passport_provider_ingress.rs` tests and `contracts/issuance-physical-passport-native.json` |
 | `physical-passport-python-route-reference.json` | `passport_http.rs`, `passport_postgres_contract.rs` and the native passport contract |
 
-The native LTI contract preserves all 16 forbidden private-key fields from the
-retired copy. `private_key_aliases_never_reach_signing_or_public_jwks` exercises
-active-key resolution, signing refusal before provider calls, and filtering of
-retiring assertion methods for populated, empty and null members. The shared
-metadata policy keeps its separate null semantics; no KMS-provider policy is
-changed here. Existing session-cache and non-JSON exchange requirements remain.
+## Provider retirement references
+
+The [external connector boundary](architecture/external-connector-boundary.md)
+supersedes the earlier UI-owned Canvas/LTI migration plan. Provider protocol,
+credentials, callbacks and storage belong to the connector; the public Common
+Gateway is its only platform interface. Core retains canonical identity,
+ownership, evidence, approval and signing. Old parity observations do not
+authorize restoring removed provider APIs or workers.
+
+| Retained reference | Current purpose |
+| --- | --- |
+| `issuance-canvas-mirror.json` | `tests/test_base_native_issuance_compose.py` checks that all six historical provider routes are absent. |
+| `issuance-canvas-operations.json` | Native `executable_smoke.rs` rejects retired CLI entrypoints before authority or configuration reads. |
+| `issuance-canvas-lti-foundation.json`, `issuance-canvas-oauth-lifecycle.json`, `issuance-canvas-management.json` | Frozen migration observations and cross-references, not executable platform protocol owners. |
+| `issuance-canvas-sync-worker.json`, `issuance-canvas-worker-process-signals.json` | Historical worker behavior/provenance; no supported platform worker. |
+| `fixtures/canvas_review_recovery_claim.py` | Historical schema source named in `issuance-runtime-surface.json`; not a migration to apply to the current baseline. |
+
+These observations remain unchanged. Some have no direct filename consumer;
+that alone does not establish that provenance or dynamic inventory references
+are disposable. The unreferenced test-child CA override
+`fixtures/canvas_worker_test_trust.py` is retired; its last source remains in
+[the pre-cleanup tree](https://github.com/ElevenID/marty-ui/blob/958615920f7b9d10829e175f1e275cf2ea579e22/contracts/fixtures/canvas_worker_test_trust.py).
+It has no current transport consumer and is not a deployment trust mechanism.
+
+Keep negative route/authority tests, byte-pinned codec oracles and generic
+credential safeguards. Do not relabel old provider behavior as a current
+capability or regenerate frozen observations from the new implementation.
+
+## Retained native issuance owners
 
 Passport coverage retains all nine operations, strict request validation,
 sanitized projections, bureau status mapping and auth/payload/poll/batch behavior.
