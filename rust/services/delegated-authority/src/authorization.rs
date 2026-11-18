@@ -750,23 +750,6 @@ namespace Delegation {
 }
 "#;
 
-    const POLICY: &str = r#"
-@id("delegated-commerce-member-permit")
-permit (
-  principal is Delegation::User,
-  action == Delegation::Action::"urn:commerce:action:purchase.complete",
-  resource is Delegation::Resource
-)
-when {
-  principal in Delegation::Role::"delegate"
-  && principal.status == "ACTIVE"
-  && resource in Delegation::Organization::"org-1"
-  && context.constraint_context.authorized
-  && context.delegate_proof_verified
-  && context.consent_and_authority_verified
-};
-"#;
-
     struct Source(ResolvedCedarPolicy);
     #[async_trait]
     impl CedarPolicySource for Source {
@@ -793,7 +776,25 @@ when {
             },
             ..CedarConfig::default()
         };
-        let engine = CedarPolicyEngine::from_human_schema(POLICY, SCHEMA, config).unwrap();
+        let organization = organization_id.to_string();
+        let policy_source = format!(r#"
+@id("delegated-commerce-member-permit")
+permit (
+  principal is Delegation::User,
+  action == Delegation::Action::"urn:commerce:action:purchase.complete",
+  resource is Delegation::Resource
+)
+when {{
+  principal in Delegation::Role::"delegate"
+  && principal.status == "ACTIVE"
+  && resource in Delegation::Organization::"{organization}"
+  && context.organization_id == "{organization}"
+  && context.constraint_context.authorized
+  && context.delegate_proof_verified
+  && context.consent_and_authority_verified
+}};
+"#);
+        let engine = CedarPolicyEngine::from_human_schema(&policy_source, SCHEMA, config).unwrap();
         ResolvedCedarPolicy {
             organization_id,
             policy_id: "urn:example:policies:delegated-commerce".into(),
@@ -806,13 +807,13 @@ when {
                 resource: "Delegation::Resource".into(),
             },
             entities: serde_json::json!([
-                {"uid":{"type":"Delegation::Organization","id":"org-1"},"attrs":{},"parents":[]},
-                {"uid":{"type":"Delegation::Role","id":"delegate"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":"org-1"}]},
+                {"uid":{"type":"Delegation::Organization","id":organization},"attrs":{},"parents":[]},
+                {"uid":{"type":"Delegation::Role","id":"delegate"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":organization}]},
                 {"uid":{"type":"Delegation::User","id":"https://agents.example/agents/shopper-1"},"attrs":{"status":"ACTIVE"},"parents":[
-                    {"type":"Delegation::Organization","id":"org-1"},
+                    {"type":"Delegation::Organization","id":organization},
                     {"type":"Delegation::Role","id":"delegate"}
                 ]},
-                {"uid":{"type":"Delegation::Resource","id":"urn:commerce:product:lamp-001"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":"org-1"}]}
+                {"uid":{"type":"Delegation::Resource","id":"urn:commerce:product:lamp-001"},"attrs":{},"parents":[{"type":"Delegation::Organization","id":organization}]}
             ]),
             engine: Arc::new(engine),
         }
