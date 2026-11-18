@@ -157,6 +157,24 @@ not transfer application, backend or composition signing authority, and it does
 not accept unsigned qualification artifacts. Omitting it retains the existing
 public producer selection.
 
+Cross-repository artifact download requires a separate credential authorized for
+`ElevenID/website` with **Actions: read**. Before live standalone composition,
+configure the `WEBSITE_RELEASE_READ_TOKEN` Actions secret using an authorized
+token restricted to that repository and permission (for example, a GitHub App
+installation token or fine-grained personal access token). GitHub's
+[`GITHUB_TOKEN` is scoped to its workflow repository](https://docs.github.com/en/actions/concepts/security/github_token);
+public artifact metadata access does not establish permission to
+[download its archive](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
+
+The workflow supplies that credential only to the standalone website-intake
+step. It rejects a missing credential before any intake request and does not
+fall back to the application job token. The next application/backend/composition
+step receives the original job token, and legacy website selection continues to
+use it. The CLI already accepts an explicitly selected `GH_TOKEN` for its fixed
+Actions GET endpoints. Configuring the secret and proving a real original
+artifact download remain live-qualification prerequisites; this source change
+does neither.
+
 For full production, use `production-ui-release.yml` in
 `ElevenID/marty-subscriptions` and also supply `ui_source_sha` for the reviewed
 public **tooling checkout**. That tooling source is explicit; a receipt cannot
