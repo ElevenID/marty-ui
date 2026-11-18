@@ -45,7 +45,7 @@ class SigningResponseReferenceTests(unittest.TestCase):
                 len(REFERENCE[section]),
             )
         original = (
-            (ROOT / "contracts/canvas-worker-privacy-reference.json")
+            (ROOT / "contracts/signing-error-privacy-reference.json")
             .read_bytes()
             .replace(b"\r\n", b"\n")
         )

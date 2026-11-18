@@ -132,8 +132,8 @@ class D12ReadOnlyHost:
         if args == ["info", "--format", "{{.ID}}"]:
             return self._docker(args)
         ids = {row["containerId"] for row in self.before.values()}
-        full = isinstance(args, list) and len(args) == 23 and args[0] == "inspect" \
-            and len(set(args[1:])) == 22 and set(args[1:]) == ids
+        full = isinstance(args, list) and len(args) == len(ids) + 1 and args[0] == "inspect" \
+            and len(set(args[1:])) == len(ids) and set(args[1:]) == ids
         one = isinstance(args, list) and len(args) == 2 and args[0] == "inspect" and args[1] in ids
         require(full or one,
                 "D12_READONLY_DOCKER_COMMAND_REQUIRED")
@@ -147,7 +147,7 @@ class D12ReadOnlyHost:
         require(isinstance(engine, str) and engine.strip() == self.engine_id, "D12_ENGINE_CHANGED")
         ids = [self.before[role]["containerId"] for role in sorted(self.before)]
         actual = _json(self.docker_read(["inspect", *ids]))
-        require(isinstance(actual, list) and len(actual) == 22
+        require(isinstance(actual, list) and len(actual) == len(self.before)
                 and {row.get("Id") for row in actual} == set(ids), "D12_ROLE_CID_SET_CHANGED")
         for row in actual:
             expected = next(value for value in self.before.values() if value["containerId"] == row["Id"])

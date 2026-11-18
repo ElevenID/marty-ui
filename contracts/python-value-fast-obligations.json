@@ -48,7 +48,7 @@
     "target": "signing_error_detail_contract",
     "source": "rust/services/issuance/tests/signing_error_detail_contract.rs",
     "shared_projection_source": "rust/services/issuance/src/signing_error_detail.rs",
-    "fixture": "contracts/canvas-worker-privacy-reference.json",
+    "fixture": "contracts/signing-error-privacy-reference.json",
     "oracle_role": "Digest-checked frozen Python signing-context observations for 45 detail and six operation cases; the remaining tests prove pure helper boundaries, not HTTP execution.",
     "role": "Pure signing diagnostic, operation ordering, frozen corpus and error-boundary assertions; does not execute HTTP or signing adapters. Twelve distinct test names run in this integration target, but one included projection test also executes in the issuance library target.",
     "duplicated_execution": {

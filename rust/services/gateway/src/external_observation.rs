@@ -8,8 +8,45 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub const PATH: &str = "/v1/evidence/observations";
+pub const OWNERSHIP_PATHS: [&str; 5] = [
+    "/v1/organizations/{organization_id}/application-ownerships/{application_id}/propose",
+    "/v1/organizations/{organization_id}/application-ownerships/{application_id}/confirm",
+    "/v1/organizations/{organization_id}/application-ownerships/{application_id}/revoke",
+    "/v1/organizations/{organization_id}/application-ownerships/{application_id}/inspect",
+    "/v1/organizations/{organization_id}/application-ownerships/{application_id}/receipt",
+];
 pub const MAX_BODY_BYTES: usize = 65_536;
 pub type Rejection = (StatusCode, &'static str);
+pub fn ownership_operation(action: &str) -> serde_json::Value {
+    use serde_json::json;
+    let mut properties = json!({});
+    let mut required = Vec::new();
+    if action != "inspect" {
+        properties["operation_id"] = json!({"type":"string","format":"uuid"});
+        required.push("operation_id");
+    }
+    if matches!(action, "propose" | "confirm" | "revoke") {
+        properties["expected_revision"] = json!({"type":"integer","minimum":if action=="propose" {0} else {1},"maximum":9007199254740990_u64});
+        properties["expected_application_revision"] =
+            json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64});
+        required.extend(["expected_revision", "expected_application_revision"]);
+    }
+    if action == "propose" {
+        properties["user_id"] = json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9_-]*$"});
+        required.push("user_id");
+    }
+    json!({"operationId":format!("{action}_application_ownership"),"tags":["applications"],
+      "summary":format!("{action} canonical application ownership"),
+      "description":"Session-only with exact active tenant and allowed Origin. Producer API keys are rejected. Propose/revoke require current canonical application:manage-ownership; confirmation is restricted to the proposed authenticated user. Original JSON is bounded to4096bytes and rejects duplicate/unknown fields. Core derives subject from the current issuance application. Reconcile unknown outcomes using the original operation; no automatic retries. Receipt results are historical and confer no current ownership; inspect returns separately revalidated current state. This grants no evidence scope, verification, approval, signing, issuance or provider association.",
+      "security":[{"sessionCookie":[]}],
+      "parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+        {"name":"application_id","in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}},
+        {"name":"Origin","in":"header","required":true,"schema":{"type":"string","format":"uri"}}],
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":properties,"required":required}}}},
+      "responses":{"200":{"description":"No-store original operation receipt or current ownership result"},"400":{"description":"Invalid original request"},
+        "401":{"description":"Session required"},"403":{"description":"Current tenant, permission or intended learner denied"},
+        "409":{"description":"Revision conflict"},"503":{"description":"Unavailable or uncertain commit; reconcile original operation"}}})
+}
 const INVALID: Rejection = (StatusCode::BAD_REQUEST, "invalid_observation_request");
 
 pub fn openapi_operation() -> serde_json::Value {
@@ -256,7 +293,7 @@ mod tests {
     }
 }
 
-/// Only this canonical path is eligible for the session administrator guard.
+/// Canonical namespaces eligible for session-only Core administration/consent.
 pub const ADMIN_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/revoke";
 pub const APPROVE_PATH: &str =
@@ -304,6 +341,7 @@ pub fn is_admin_namespace(path: &str) -> bool {
             "external-observation-producers"
                 | "external-observation-bindings"
                 | "external-observation-receipts"
+                | "application-ownerships"
         )
     )
 }
@@ -348,6 +386,17 @@ pub fn admin_organization(path: &str) -> Option<&str> {
                         | "audit"
                 )
         }
+        "application-ownerships" => {
+            !parts[5].is_empty()
+                && parts[5].len() <= 128
+                && parts[5]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && matches!(
+                    parts[6],
+                    "propose" | "confirm" | "revoke" | "inspect" | "receipt"
+                )
+        }
         "external-observation-receipts" => {
             !parts[5].is_empty()
                 && parts[5].len() <= 128
@@ -360,8 +409,8 @@ pub fn admin_organization(path: &str) -> Option<&str> {
     };
     valid.then_some(parts[3])
 }
-/// Permissions are reloaded and locked by core for every mutation. This guard
-/// requires an authenticated session, canonical active tenant and allowed Origin.
+/// Permissions or intended-learner ownership are reloaded and locked by Core.
+/// This guard requires a session, canonical active tenant and allowed Origin.
 pub async fn admit_admin(
     request: Request,
     session_identity: bool,
@@ -869,6 +918,69 @@ mod materialization_openapi_tests {
                 .unwrap()
                 .iter()
                 .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
+    }
+}
+#[cfg(test)]
+mod ownership_guard_tests {
+    use super::*;
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    #[tokio::test]
+    async fn ownership_operations_require_session_origin_and_exact_tenant() {
+        for action in ["propose", "confirm", "revoke", "inspect", "receipt"] {
+            let path = format!("/v1/organizations/{ORG}/application-ownerships/app-one/{action}");
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap()
+            };
+            assert!(is_admin_namespace(&path));
+            assert_eq!(admin_organization(&path), Some(ORG));
+            assert!(admit_admin(request(), true, Some(ORG), "learner-one", true)
+                .await
+                .is_ok());
+            assert_eq!(
+                admit_admin(request(), false, Some(ORG), "learner-one", true)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                admit_admin(request(), true, Some(ORG), "learner-one", false)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                admit_admin(
+                    request(),
+                    true,
+                    Some("20000000-0000-4000-8000-000000000002"),
+                    "learner-one",
+                    true
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::FORBIDDEN
+            );
+        }
+    }
+    #[test]
+    fn malformed_ownership_aliases_still_enter_the_guard() {
+        for path in [
+            format!("/v1/organizations/{ORG}/application-ownerships/app-one/delete"),
+            format!("/v1/organizations/{ORG}/application-ownerships/app-one/confirm/"),
+            format!("/v1/organizations/{ORG}/application-ownerships/%2e%2e/confirm"),
+            "/v1/organizations/wrong/application-ownerships/app-one/confirm".into(),
+        ] {
+            assert!(is_admin_namespace(&path));
+            assert_eq!(admin_organization(&path), None);
         }
     }
 }

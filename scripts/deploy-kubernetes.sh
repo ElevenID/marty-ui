@@ -387,11 +387,15 @@ cmd_update_images() {
       return 1
     fi
   fi
-  # Image-only updates cannot replace a legacy command or inherited selector.
-  # This read-only snapshot is not a lock against concurrent operator changes.
-  if ! kubectl get deployment canvas-sync-worker -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \
-    | "$PYTHON_BIN" "$REPO_ROOT/scripts/check_canvas_worker_kubernetes_update.py" --namespace "$NAMESPACE"; then
-    error "Canvas worker image update refused; apply the reviewed full-manifest cutover first."
+  # Retired connector workloads need a separately reviewed migration. An empty
+  # --ignore-not-found result proves absence; an API error never means absent.
+  local retired_workload
+  if ! retired_workload="$(kubectl get deployment canvas-sync-worker -n "$NAMESPACE" --ignore-not-found -o name --request-timeout=10s)"; then
+    error "Could not verify retired connector workload absence; image update refused."
+    return 1
+  fi
+  if [[ -n "$retired_workload" ]]; then
+    error "Retired connector workloads require a separate migration; image update refused."
     return 1
   fi
   if ! kubectl get deployment keycloak -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \

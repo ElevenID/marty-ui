@@ -67,7 +67,7 @@ const offer = {
   claim_state: 'OFFER_READY',
   claim_capabilities: {
     oid4vci_wallet: true, delivery_destination_selection: false,
-    canvas_credentials_mirror: false, offer_reuse: 'pending_until_consumed_or_expired',
+    offer_reuse: 'pending_until_consumed_or_expired',
   },
 };
 const rawApplication = {
@@ -102,7 +102,7 @@ describe('ClaimCredentialDialog', () => {
     mockWalletPreferenceState.walletIds = [];
     mockListWallets.mockResolvedValue(wallets);
     mockListDeliveryDestinations.mockResolvedValue([
-      { id: 'dd-canvas-credentials-institutional', provider: 'canvas_credentials', mode: 'organization_mirror', is_enabled: true },
+      { id: 'dd-external-publication', provider: 'custom', mode: 'organization_mirror', is_enabled: true },
     ]);
     mockBuildWalletOpenLink.mockResolvedValue({ open_uri: 'marty-authenticator://open?inner=spruce-specific' });
     mockGenerateIssuanceOffer.mockResolvedValue(offer);
@@ -455,7 +455,7 @@ describe('ClaimCredentialDialog', () => {
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
   });
 
-  it('uses the Canvas adapter for both offer creation and read-only completion polling', async () => {
+  it('uses the supplied adapter for both offer creation and read-only completion polling', async () => {
     const generate = vi.fn().mockResolvedValue(offer);
     const read = vi.fn().mockResolvedValue({ id: 'app-1', organization_id: 'org-1', claim_state: 'CLAIMED' });
     render(<ClaimCredentialDialog {...props} generateOffer={generate} readApplication={read} />);

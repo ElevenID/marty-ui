@@ -126,8 +126,6 @@ class LoginLab(base.ApplicationLab):
         grant_names = {
             "grant-flow": "marty-sign-grant-flow-wallet-v1",
             "grant-issuance-credential": "marty-sign-grant-issuance-credential-v1",
-            "grant-issuance-canvas": "marty-sign-grant-issuance-canvas-v1",
-            "grant-issuance-readiness": "marty-sign-grant-issuance-readiness-v1",
             "grant-issuance-passport": "marty-sign-grant-issuance-passport-v1",
             "grant-gateway-service": "marty-sign-grant-gateway-service-v1",
             "grant-gateway-issuer": "marty-sign-grant-gateway-issuer-did-v1",

@@ -44,13 +44,9 @@
   "python_deletion_authorized": false,
   "rust_owned_python_retirement": {
     "authorized": true,
-    "scope": [
-      "oid4vci-public-and-management-http",
-      "canvas-mirror-http",
-      "canvas-mirror-automation-loop"
-    ],
+    "scope": ["oid4vci-public-and-management-http"],
     "retained_http_route_count": 9,
-    "packaged_main_lifecycle_gate": "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
+    "packaged_main_lifecycle_gate": "selfhost_public_image_loader_isolated",
     "full_python_service_deletion_authorized": false
   },
   "deferred": ["DIDCOMM-KMS-001"]

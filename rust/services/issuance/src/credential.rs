@@ -1644,7 +1644,7 @@ pub enum CredentialIssuanceError {
     #[error("the credential template has no revocation profile")]
     RevocationProfileRequired,
     #[error("credential eligibility requirements are not satisfied")]
-    CanvasEligibilityDenied,
+    ApplicationEligibilityDenied,
     #[error("credential repository is unavailable")]
     RepositoryUnavailable,
 }

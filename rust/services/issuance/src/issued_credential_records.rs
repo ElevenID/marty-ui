@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    canvas_award_candidate::python_canonical_json,
+    canonical_json::python_canonical_json,
     credential_management::{
         CredentialLifecycleAction, CredentialLifecycleAuditContext, CredentialManagementError,
         CredentialManagementService,

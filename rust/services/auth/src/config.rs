@@ -36,8 +36,6 @@ pub struct AuthServiceConfig {
     pub credential_login_webhook_secret: String,
     pub auth_service_internal_url: String,
     pub applicant_service_url: String,
-    pub issuance_native_service_url: String,
-    pub canvas_lti_session_ttl_seconds: u64,
     pub impersonation_handoff_cookie_name: String,
     pub credential_login_require_existing_keycloak_user: bool,
     pub credential_login_create_users: bool,
@@ -380,18 +378,6 @@ impl AuthServiceConfig {
                 get("APPLICANT_SERVICE_URL").unwrap_or("http://applicant:8006"),
                 "APPLICANT_SERVICE_URL",
             )?,
-            issuance_native_service_url: origin(
-                get("ISSUANCE_NATIVE_SERVICE_URL")
-                    .or_else(|| get("ISSUANCE_SERVICE_URL"))
-                    .unwrap_or("http://issuance-native:8005"),
-                "ISSUANCE_NATIVE_SERVICE_URL",
-            )?,
-            canvas_lti_session_ttl_seconds: number(
-                get("CANVAS_LTI_SESSION_TTL_SECONDS"),
-                u64::try_from(session_ttl_seconds)
-                    .map_err(|_| invalid("SESSION_TTL_SECONDS is out of range"))?,
-                "CANVAS_LTI_SESSION_TTL_SECONDS",
-            )?,
             impersonation_handoff_cookie_name: get("IMPERSONATION_HANDOFF_COOKIE_NAME")
                 .unwrap_or("marty_impersonation_handoff")
                 .into(),
@@ -466,7 +452,6 @@ impl AuthServiceConfig {
         };
         if config.http_addr == config.grpc_addr
             || config.database_max_connections == 0
-            || config.canvas_lti_session_ttl_seconds == 0
             || config.impersonation_handoff_cookie_name.trim().is_empty()
             || config.credential_callback_timestamp_skew_seconds <= 0
             || config.credential_login_pending_ttl_seconds == 0

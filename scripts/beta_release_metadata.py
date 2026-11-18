@@ -4,6 +4,7 @@ import copy
 import json
 import re
 import tomllib
+from scoped_native_runtime import reject_retired_runtime_roles
 
 TARGET = "/opt/marty-ui-static/demos/manifests/2026.08.0.json"
 KEYS = ("ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")
@@ -34,6 +35,7 @@ def marker_maps(source, cargo_lock_bytes, signed_images, runtime_roles):
         )
         components[name] = revision
     roles = [row["role"] for row in runtime_roles]
+    reject_retired_runtime_roles(roles)
     require(
         len(roles) == 22 and len(set(roles)) == 22, "EXACT_PRODUCT_ROLE_SET_REQUIRED"
     )

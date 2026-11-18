@@ -182,7 +182,7 @@ write_grant_token() {
     fi
     write_private_token "$grant_file" "$grant_token"
 }
-for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport; do
+for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-passport; do
     grant_file_origin="$(printf "%s" "$grant_origin" | tr "-" "_")"
     write_grant_token "sign-grant-mint-$grant_origin" "$GRANT_TOKEN_OUTPUT_DIR/sign_grant_mint_${grant_file_origin}_token"
 done
@@ -258,4 +258,4 @@ echo "Wrote scoped HAIP workload token to ${HAIP_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the notification_openbao_token secret in the self-host stack."
 echo "Wrote scoped passport callback HMAC token to ${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}"
-echo "Wrote eight scoped signing-grant tokens to ${SELFHOST_SECRET_DIR}"
+echo "Wrote six scoped signing-grant tokens to ${SELFHOST_SECRET_DIR}"

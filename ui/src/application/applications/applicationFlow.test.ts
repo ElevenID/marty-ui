@@ -162,27 +162,16 @@ describe('applicationFlow helpers', () => {
     })
   })
 
-  it('marks Canvas LTI applications for demo auto-approval', () => {
-    expect(buildStandardApplicationPayload({
+  it('does not propagate legacy provider authority from application callers', () => {
+    const payload = buildStandardApplicationPayload({
       organizationId: 'org-1',
       credentialConfig: { id: 'cfg-1', application_template_id: 'app-template-1' },
       formData: {},
-      canvasLtiContext: {
-        state: 'state-1',
-        canvas_account_id: 'canvas-real-account-1',
-      },
-    })).toEqual({
-      organization_id: 'org-1',
-      application_template_id: 'app-template-1',
-      form_data: {},
-      integration_context: {
-        canvas_lti: {
-          state: 'state-1',
-          canvas_account_id: 'canvas-real-account-1',
-        },
-      },
-    })
-  })
+      canvasLtiContext: { state: 'retired', organization_id: 'foreign-org' },
+    });
+    expect(payload.organization_id).toBe('org-1');
+    expect(payload.integration_context).toEqual({});
+  });
 
   it('builds auto-apply form data only from canonical template fields', () => {
     const applicationTemplate = {

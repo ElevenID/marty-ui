@@ -36,7 +36,7 @@ function functionalBinding(client, environment) {
     environment.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
   const directory = path.dirname(helper);
   const {validateFunctionalRuntimeContext, functionalRuntimeContext} = require(regularSource(path.join(directory, 'externalLiveEvidence.js')));
-  const {loadFunctionalRuntimeObservation} = require(regularSource(path.join(directory, 'canvasNativeRuntime.js')));
+  const {loadFunctionalRuntimeObservation} = require(regularSource(path.join(directory, 'platformNativeRuntime.js')));
   const acknowledged = validateFunctionalRuntimeContext(binding);
   const runtime = loadFunctionalRuntimeObservation(receipt,
     environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true});

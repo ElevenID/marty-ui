@@ -93,7 +93,7 @@ SCALAR_CREDENTIALS = (
     "GRPC_SERVICE_TOKEN", "DEVICE_REGISTRATION_GATEWAY_KEY",
     "DEVICE_REGISTRATION_SIGNING_KEYS_KEY", "NOTIFICATION_WEBHOOK_SECRET",
     "NOTIFICATION_APPLICANT_EVENT_TOKEN", "FLOW_WEBHOOK_SECRET",
-    "FLOW_APPLICATION_EVENT_HMAC_KEY", "CANVAS_CREDENTIALS_SHARED_SECRET",
+    "FLOW_APPLICATION_EVENT_HMAC_KEY",
 )
 # Policy contents remain owned by the signed initializer. The native token
 # catalog is the sole inventory of ordinary inputs, policies and lifetimes.

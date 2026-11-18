@@ -224,12 +224,7 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
                     deployed_demo_manifest='deployed-demo-manifest.json',
                     deployed_demo_manifest_sha256=sha(artifacts / 'deployed-demo-manifest.json'),
                     services_marker=markers['local'], issuance_native_marker=native, ui_marker=ui_marker,
-                    images=records, canvas_portable_configuration=dict(enabled=bool(simulator),
-                        canvas_origin='https://canvas-test.elevenidllc.com' if simulator else None,
-                        pilot_organization_id='00000000-0000-0000-0000-000000000001' if simulator else None,
-                        lti_issuer_did='did:web:beta.elevenidllc.com:orgs:marty' if simulator else None,
-                        signing_resolution='organization-scoped-issuer-did' if simulator else None,
-                        legacy_event_ingest_enabled=False), deployed_at=datetime.now(timezone.utc).isoformat())
+                    images=records, deployed_at=datetime.now(timezone.utc).isoformat())
     if alias_repair:
         manifest['forward_configuration_repair'] = dict(file=alias_repair[2].name,
             sha256=sha(alias_repair[2]), operator_script_sha256=sha(Path(__file__)),
@@ -284,7 +279,7 @@ def refresh_runtime_evidence(root, artifacts, completed_proof_file, completed_pr
     rows = original.get('images')
     require(isinstance(rows, list) and len(rows) == len(images)
             and {row.get('service') for row in rows} == set(images), 'Exact selected runtime inventory required')
-    from check_canvas_oss_portability import REQUIRED_BETA_RUNTIME_IMAGES
+    from beta_runtime_binding import REQUIRED_BETA_RUNTIME_IMAGES
     expected = dict(MARTY_UI_SHA=source['marty_ui_sha'], MARTY_RELEASE_VERSION=source['release_version'],
                     ELEVENID_STACK_VERSION=(root / 'VERSION').read_text(encoding='utf8').strip(),
                     ELEVENID_COMPONENT_REVISIONS_JSON=components, ELEVENID_IMAGE_DIGESTS_JSON=images)
@@ -302,7 +297,7 @@ def refresh_runtime_evidence(root, artifacts, completed_proof_file, completed_pr
                 value = json.loads(value)
             require(value == expected[key], 'Observed release marker differs from frozen source: ' + role + ':' + key)
         if role in REQUIRED_BETA_RUNTIME_IMAGES:
-            require({'MARTY_UI_SHA', 'MARTY_RELEASE_VERSION'} <= set(markers), 'Required Canvas runtime markers missing: ' + role)
+            require({'MARTY_UI_SHA', 'MARTY_RELEASE_VERSION'} <= set(markers), 'Required platform runtime markers missing: ' + role)
         require('runtime_marker_environment' not in old or old['runtime_marker_environment'] == markers,
                 'Existing marker evidence differs from actual observation: ' + role)
         row['runtime_marker_environment'] = markers

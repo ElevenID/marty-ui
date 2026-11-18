@@ -65,13 +65,10 @@ BINDINGS = {
     "flow": {"FLOW_SIGN_GRANT_MINT_TOKEN": ("FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "/var/run/secrets/marty/flow-sign-grant/token")},
     "issuance-native": {
         "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN": ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE", "/run/secrets/issuance-sign-grants/credential"),
-        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN": ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "/run/secrets/issuance-sign-grants/canvas"),
-        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN": ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "/run/secrets/issuance-sign-grants/readiness"),
         "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN": ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "/run/secrets/issuance-sign-grants/passport"),
     },
-    "canvas-sync-worker": {"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN": ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "/var/run/secrets/marty/issuance-canvas-sign-grant/token")},
 }
-REQUIRED = set(BINDINGS) - {"canvas-sync-worker"}
+REQUIRED = set(BINDINGS)
 RUNTIME_KEYS = set().union(*(set(value) for value in BINDINGS.values()))
 # These aliases take precedence in the signed runtime or its entrypoint. The
 # probe also checks the resolved container environment because envFrom can
@@ -359,7 +356,7 @@ def preflight_resources(value: dict, namespace: str, images: dict, runtime: dict
     entries = list_items(value)
     deployments = {item["metadata"]["name"]: item for item in entries if item.get("kind") == "Deployment"}
     bootstrap.require(REQUIRED <= set(deployments), "required application Deployment is missing")
-    names = REQUIRED | ({"canvas-sync-worker"} if "canvas-sync-worker" in deployments else set())
+    names = REQUIRED
     targets, releases = {}, set()
     for name in sorted(names):
         release_name, target = deployment_snapshot(deployments[name], namespace, image, runtime)
@@ -420,7 +417,7 @@ def activation_contract(publication: dict, application: dict) -> dict:
         keys = [key for key, field in secrets[0]["fields"].items() if field.get("env") == token["input"]]
         bootstrap.require(len(keys) == 1 and keys[0] == token["input"], "native application Secret mapping differs")
         inputs.append({"input": token["input"], "file": token["file"], "key": keys[0]})
-    bootstrap.require(len(inputs) == 11 and {entry["key"] for entry in inputs} == RUNTIME_KEYS,
+    bootstrap.require(len(inputs) == 9 and {entry["key"] for entry in inputs} == RUNTIME_KEYS,
                       "native application consumption inventory differs")
     return {"schema": "marty.kubernetes-application-activation/v1", "destination": "marty-secrets",
             "activationAnnotation": ANNOTATION, "minimumTtlSeconds": MINIMUM_TTL,
@@ -498,7 +495,7 @@ def native_publication(context: dict, command: dict) -> dict:
         [str(context["operator"]), "operator", "kubernetes-application-publication"],
         data=bootstrap.encoded(command), env={}, timeout=120)
     result = json_bytes(raw, 4096)
-    expected = {"ready": True, "secret": "marty-secrets", "count": 11}
+    expected = {"ready": True, "secret": "marty-secrets", "count": 9}
     if command["operation"] == "verify":
         expected["state"] = result.get("state")
         bootstrap.require(expected["state"] in {"candidate", "unchanged"}, "native publication state differs")
@@ -559,7 +556,7 @@ def fresh_proof(context: dict, current: dict, candidate: dict) -> float:
             data=bootstrap.encoded({"current": REMOTE_CURRENT, "candidate": REMOTE_CANDIDATE,
                                    "output": REMOTE_PROOF, "binding": context["binding"]}), timeout=600)
         result = json_bytes(raw, 4096)
-        bootstrap.require(result == {"ready": True, "count": 11, "minimumTtlSeconds": MINIMUM_TTL}
+        bootstrap.require(result == {"ready": True, "count": 9, "minimumTtlSeconds": MINIMUM_TTL}
                           and result.get("ready") is True
                           and type(result.get("count")) is int
                           and type(result.get("minimumTtlSeconds")) is int,
@@ -854,7 +851,7 @@ def activate(args: argparse.Namespace) -> None:
         candidate = staging.current_snapshot(operation / "candidate")
         staging.verify_result(staging.native_generation(context["transport"], str(context["operator"]), {
             "operation": "application-verify", "current": str(selected.directory),
-            "candidate": str(operation / "candidate")}), len(current), 11)
+            "candidate": str(operation / "candidate")}), len(current), 9)
         bootstrap.check_application_binding(context["transport"], binding)
         if not args.reconcile:
             secret = observe(context, operation / "secret-before.json", secret=True)

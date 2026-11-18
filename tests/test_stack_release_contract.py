@@ -1479,11 +1479,12 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
         "path": ".github/workflows/ci.yml",
         "events": ["schedule", "workflow_dispatch"],
     }
-    assert (
-        "MARTY_CANVAS_FULL_QUALIFICATION: "
-        "${{ (github.event_name == 'workflow_dispatch' || "
-        "github.event_name == 'schedule') && '1' || '0' }}"
-    ) in ci
+    # The old provider-composite qualification is retired. The release policy
+    # still requires fresh trusted-main qualification evidence; this source
+    # split does not manufacture that evidence or relax release eligibility.
+    assert "MARTY_CANVAS_FULL_QUALIFICATION" not in ci
+    events = yaml.safe_load(ci)["on"] if "on" in yaml.safe_load(ci) else yaml.safe_load(ci)[True]
+    assert "schedule" in events and "workflow_dispatch" in events
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare
     assert "git tag -a" not in prepare

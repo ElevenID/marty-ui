@@ -108,35 +108,6 @@
       }
     },
     {
-      "username": "canvas.admin@marty.demo",
-      "email": "canvas.admin@marty.demo",
-      "emailVerified": true,
-      "enabled": true,
-      "firstName": "Canvas",
-      "lastName": "Demo Admin",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "CanvasAdmin123!",
-          "temporary": false
-        }
-      ],
-      "realmRoles": [
-        "administrator"
-      ],
-      "attributes": {
-        "user_type": [
-          "administrator"
-        ],
-        "demo_context": [
-          "canvas"
-        ],
-        "onboarding_completed": [
-          "true"
-        ]
-      }
-    },
-    {
       "username": "vendor@marty.demo",
       "email": "vendor@marty.demo",
       "emailVerified": true,
@@ -869,7 +840,7 @@
   "authenticationFlows": [
     {
       "alias": "11id-first-broker-login",
-      "description": "First broker login flow for 11id \u2014 auto-links existing accounts by email, otherwise registers a new user",
+      "description": "First broker login flow for 11id — auto-links existing accounts by email, otherwise registers a new user",
       "providerId": "basic-flow",
       "topLevel": true,
       "builtIn": false,

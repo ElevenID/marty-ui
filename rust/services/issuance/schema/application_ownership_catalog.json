@@ -1,0 +1,641 @@
+{
+  "rules": [],
+  "tables": [
+    {
+      "rls": false,
+      "kind": "r",
+      "name": "application_ownership_operations",
+      "force_rls": false,
+      "persistence": "p",
+      "public_privileges": false
+    },
+    {
+      "rls": false,
+      "kind": "r",
+      "name": "application_ownerships",
+      "force_rls": false,
+      "persistence": "p",
+      "public_privileges": false
+    }
+  ],
+  "columns": [
+    {
+      "name": "operation_id",
+      "type": "uuid",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "organization_id",
+      "type": "uuid",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "application_id",
+      "type": "character varying",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "actor_id",
+      "type": "text",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "action",
+      "type": "text",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "intent",
+      "type": "jsonb",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "receipt",
+      "type": "jsonb",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "created_at",
+      "type": "timestamp with time zone",
+      "table": "application_ownership_operations",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "organization_id",
+      "type": "uuid",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "application_id",
+      "type": "character varying",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "user_id",
+      "type": "text",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "subject_id",
+      "type": "text",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "application_revision",
+      "type": "bigint",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "status",
+      "type": "text",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "revision",
+      "type": "bigint",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "proposed_by",
+      "type": "text",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "confirmed_at",
+      "type": "timestamp with time zone",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": false,
+      "generated": "",
+      "public_privileges": false
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamp with time zone",
+      "table": "application_ownerships",
+      "default": null,
+      "identity": "",
+      "not_null": true,
+      "generated": "",
+      "public_privileges": false
+    }
+  ],
+  "indexes": [
+    {
+      "name": "application_ownership_operation_lookup",
+      "ready": true,
+      "table": "application_ownership_operations",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "definition": "CREATE INDEX application_ownership_operation_lookup ON issuance_service.application_ownership_operations USING btree (organization_id, application_id, created_at, operation_id)"
+    },
+    {
+      "name": "application_ownership_operations_pkey",
+      "ready": true,
+      "table": "application_ownership_operations",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "definition": "CREATE UNIQUE INDEX application_ownership_operations_pkey ON issuance_service.application_ownership_operations USING btree (operation_id)"
+    },
+    {
+      "name": "application_ownership_user_lookup",
+      "ready": true,
+      "table": "application_ownerships",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "definition": "CREATE INDEX application_ownership_user_lookup ON issuance_service.application_ownerships USING btree (user_id, organization_id, application_id)"
+    },
+    {
+      "name": "application_ownerships_pkey",
+      "ready": true,
+      "table": "application_ownerships",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "definition": "CREATE UNIQUE INDEX application_ownerships_pkey ON issuance_service.application_ownerships USING btree (organization_id, application_id)"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "application_ownership_operation_immutable",
+      "table": "application_ownership_operations",
+      "enabled": "O",
+      "arguments": "",
+      "definition": "CREATE TRIGGER application_ownership_operation_immutable BEFORE DELETE OR UPDATE ON issuance_service.application_ownership_operations FOR EACH ROW EXECUTE FUNCTION issuance_service.keep_application_ownership_operation()"
+    },
+    {
+      "name": "application_ownership_revision",
+      "table": "application_ownerships",
+      "enabled": "O",
+      "arguments": "",
+      "definition": "CREATE TRIGGER application_ownership_revision BEFORE DELETE OR UPDATE ON issuance_service.application_ownerships FOR EACH ROW EXECUTE FUNCTION issuance_service.guard_application_ownership()"
+    }
+  ],
+  "functions": [
+    {
+      "body": "\n SELECT m.id FROM organization_service.organizations o\n JOIN organization_service.members m ON m.organization_id=o.id\n JOIN organization_service.member_roles mr ON mr.member_id=m.id\n JOIN organization_service.roles r ON r.id=mr.role_id AND r.organization_id=o.id\n JOIN organization_service.role_permissions rp ON rp.role_id=r.id\n JOIN organization_service.permissions p ON p.id=rp.permission_id\n WHERE o.id=org AND o.status='active' AND m.user_id=actor AND m.status='active'\n  AND p.resource='application' AND p.action='manage-ownership'\n ORDER BY m.id,r.id,p.id FOR SHARE OF o,m,mr,r,rp,p;\n",
+      "kind": "f",
+      "name": "application_ownership_lock_administrator",
+      "result": "TABLE(id uuid)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "org uuid, actor text",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT a.id,a.organization_id,a.applicant_identifier,a.status::text,a.updated_at,a.expires_at\n    FROM issuance_service.applications a\n    WHERE a.id=requested_application AND a.organization_id=requested_organization FOR UPDATE OF a;\n",
+      "kind": "f",
+      "name": "external_observation_lock_application",
+      "result": "TABLE(id text, organization_id text, applicant_identifier text, status text, updated_at timestamp with time zone, expires_at timestamp with time zone)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_application text, requested_organization text",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT o.status::text FROM organization_service.organizations o\n    WHERE o.id=requested_organization FOR SHARE OF o;\n",
+      "kind": "f",
+      "name": "external_observation_lock_organization",
+      "result": "TABLE(status text)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_organization uuid",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'Application ownership is retained' USING ERRCODE='23514'; END IF;\n IF NEW.organization_id IS DISTINCT FROM OLD.organization_id OR NEW.application_id IS DISTINCT FROM OLD.application_id\n   OR NEW.revision IS DISTINCT FROM OLD.revision+1 OR NEW.updated_at<OLD.updated_at THEN\n  RAISE EXCEPTION 'Invalid application ownership revision' USING ERRCODE='23514'; END IF;\n RETURN NEW;\nEND;\n",
+      "kind": "f",
+      "name": "guard_application_ownership",
+      "result": "trigger",
+      "strict": false,
+      "definer": false,
+      "language": "plpgsql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "",
+      "volatility": "v",
+      "returns_set": false,
+      "public_privileges": false
+    },
+    {
+      "body": "\nBEGIN RAISE EXCEPTION 'Application ownership history is immutable' USING ERRCODE='23514'; END;\n",
+      "kind": "f",
+      "name": "keep_application_ownership_operation",
+      "result": "trigger",
+      "strict": false,
+      "definer": false,
+      "language": "plpgsql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "",
+      "volatility": "v",
+      "returns_set": false,
+      "public_privileges": false
+    },
+    {
+      "body": "\nDECLARE prior issuance_service.application_ownership_operations; before_row issuance_service.application_ownerships;\n saved issuance_service.application_ownerships; actual issuance_service.application_ownerships;\n canonical record; wanted_intent jsonb; answer jsonb; stamp timestamptz; org_status text;\nBEGIN\n IF org IS NULL OR org='00000000-0000-0000-0000-000000000000' OR app IS NULL OR app !~ '^[A-Za-z0-9_-]{1,128}$' OR actor IS NULL\n  OR actor !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$' OR op IS NULL OR op='00000000-0000-0000-0000-000000000000'\n  OR requested_action IS NULL OR requested_action NOT IN ('propose','confirm','revoke')\n  OR expected_revision IS NULL OR expected_revision NOT BETWEEN 0 AND 9007199254740990\n  OR expected_application_revision IS NULL OR expected_application_revision NOT BETWEEN 1 AND 9007199254740991\n  OR (requested_action='propose' AND (proposed_user IS NULL OR proposed_user !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'))\n  OR (requested_action<>'propose' AND proposed_user IS NOT NULL) THEN RETURN NULL; END IF;\n SELECT status INTO org_status FROM issuance_service.external_observation_lock_organization(org);\n IF org_status IS DISTINCT FROM 'active' THEN RETURN NULL; END IF;\n IF requested_action<>'confirm' AND NOT EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor))\n  THEN RETURN NULL; END IF;\n wanted_intent:=jsonb_build_object('expected_revision',expected_revision,\n  'expected_application_revision',expected_application_revision,'proposed_user',proposed_user);\n -- Serialize the original operation even when it races against another application.\n PERFORM pg_advisory_xact_lock(hashtextextended('application-ownership:'||op::text,0));\n SELECT * INTO prior FROM issuance_service.application_ownership_operations WHERE operation_id=op;\n IF FOUND THEN\n  IF prior.organization_id=org AND prior.application_id=app AND prior.actor_id=actor\n   AND prior.action=requested_action AND prior.intent=wanted_intent THEN RETURN prior.receipt; END IF;\n  RETURN NULL;\n END IF;\n SELECT * INTO canonical FROM issuance_service.external_observation_lock_application(app,org::text);\n IF NOT FOUND THEN RETURN NULL; END IF;\n SELECT * INTO before_row FROM issuance_service.application_ownerships WHERE organization_id=org AND application_id=app FOR UPDATE;\n IF (FOUND AND before_row.revision<>expected_revision) OR (NOT FOUND AND (expected_revision<>0 OR requested_action<>'propose')) THEN RETURN NULL; END IF;\n IF requested_action<>'revoke' AND (canonical.applicant_identifier IS NULL OR octet_length(canonical.applicant_identifier) NOT BETWEEN 1 AND 1024\n  OR canonical.status NOT IN ('pending','under_review') OR canonical.expires_at IS NULL OR canonical.expires_at<=clock_timestamp()\n  OR (extract(epoch FROM canonical.updated_at)*1000000)::bigint<>expected_application_revision) THEN RETURN NULL; END IF;\n IF requested_action='confirm' AND (before_row.status IS DISTINCT FROM 'proposed' OR before_row.user_id IS DISTINCT FROM actor\n  OR before_row.subject_id IS DISTINCT FROM canonical.applicant_identifier\n  OR before_row.application_revision IS DISTINCT FROM expected_application_revision) THEN RETURN NULL; END IF;\n IF requested_action='revoke' AND before_row.revision IS NULL THEN RETURN NULL; END IF;\n stamp:=clock_timestamp();\n IF requested_action='propose' THEN\n  INSERT INTO issuance_service.application_ownerships(organization_id,application_id,user_id,subject_id,application_revision,status,revision,proposed_by,confirmed_at,updated_at)\n   VALUES(org,app,proposed_user,canonical.applicant_identifier,expected_application_revision,'proposed',expected_revision+1,actor,NULL,stamp)\n   ON CONFLICT(organization_id,application_id) DO UPDATE SET user_id=EXCLUDED.user_id,subject_id=EXCLUDED.subject_id,\n    application_revision=EXCLUDED.application_revision,status='proposed',revision=EXCLUDED.revision,proposed_by=EXCLUDED.proposed_by,confirmed_at=NULL,updated_at=stamp\n   RETURNING * INTO saved;\n ELSE\n  UPDATE issuance_service.application_ownerships SET status=CASE WHEN requested_action='confirm' THEN 'confirmed' ELSE 'revoked' END,\n   revision=expected_revision+1,confirmed_at=CASE WHEN requested_action='confirm' THEN stamp ELSE NULL END,updated_at=stamp\n   WHERE organization_id=org AND application_id=app RETURNING * INTO saved;\n END IF;\n IF saved.organization_id IS DISTINCT FROM org OR saved.application_id IS DISTINCT FROM app\n  OR saved.revision IS DISTINCT FROM expected_revision+1 OR saved.updated_at IS DISTINCT FROM stamp\n  OR (requested_action='propose' AND (saved.user_id IS DISTINCT FROM proposed_user OR saved.subject_id IS DISTINCT FROM canonical.applicant_identifier\n    OR saved.application_revision IS DISTINCT FROM expected_application_revision OR saved.status IS DISTINCT FROM 'proposed'\n    OR saved.proposed_by IS DISTINCT FROM actor OR saved.confirmed_at IS NOT NULL))\n  OR (requested_action<>'propose' AND ((to_jsonb(saved)-ARRAY['status','revision','confirmed_at','updated_at']) IS DISTINCT FROM\n    (to_jsonb(before_row)-ARRAY['status','revision','confirmed_at','updated_at'])\n    OR saved.status IS DISTINCT FROM (CASE WHEN requested_action='confirm' THEN 'confirmed' ELSE 'revoked' END)\n    OR saved.confirmed_at IS DISTINCT FROM (CASE WHEN requested_action='confirm' THEN stamp ELSE NULL::timestamptz END))) THEN\n   RAISE EXCEPTION 'Application ownership postimage changed' USING ERRCODE='23514'; END IF;\n answer:=jsonb_build_object('operation_id',op,'application_id',app,'action',requested_action,\n  'revision',saved.revision,'status',saved.status);\n INSERT INTO issuance_service.application_ownership_operations(operation_id,organization_id,application_id,actor_id,action,intent,receipt,created_at)\n  VALUES(op,org,app,actor,requested_action,wanted_intent,answer,stamp);\n -- Recheck after audit triggers. No partial success or adoption of trigger rewrites.\n SELECT * INTO actual FROM issuance_service.application_ownerships WHERE organization_id=org AND application_id=app;\n SELECT * INTO prior FROM issuance_service.application_ownership_operations WHERE operation_id=op;\n IF to_jsonb(actual) IS DISTINCT FROM to_jsonb(saved) OR prior.organization_id IS DISTINCT FROM org OR prior.application_id IS DISTINCT FROM app\n  OR prior.actor_id IS DISTINCT FROM actor OR prior.action IS DISTINCT FROM requested_action OR prior.intent IS DISTINCT FROM wanted_intent\n  OR prior.receipt IS DISTINCT FROM answer OR prior.created_at IS DISTINCT FROM stamp THEN\n   RAISE EXCEPTION 'Application ownership audit changed' USING ERRCODE='23514'; END IF;\n IF requested_action<>'revoke' AND NOT EXISTS(SELECT 1 FROM issuance_service.applications a WHERE a.id=app AND a.organization_id=org::text\n  AND a.applicant_identifier=saved.subject_id AND (extract(epoch FROM a.updated_at)*1000000)::bigint=expected_application_revision\n  AND a.status IN ('pending','under_review') AND a.expires_at>clock_timestamp()) THEN\n   RAISE EXCEPTION 'Application ownership authority changed' USING ERRCODE='23514'; END IF;\n IF NOT EXISTS(SELECT 1 FROM issuance_service.external_observation_lock_organization(org) WHERE status='active') THEN\n  RAISE EXCEPTION 'Application ownership organization changed' USING ERRCODE='23514'; END IF;\n IF requested_action<>'confirm' AND NOT EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor)) THEN\n  RAISE EXCEPTION 'Application ownership administrator changed' USING ERRCODE='23514'; END IF;\n RETURN answer;\nEND;\n",
+      "kind": "f",
+      "name": "mutate_application_ownership",
+      "result": "jsonb",
+      "strict": false,
+      "definer": false,
+      "language": "plpgsql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "org uuid, app text, actor text, op uuid, requested_action text, expected_revision bigint, expected_application_revision bigint, proposed_user text",
+      "volatility": "v",
+      "returns_set": false,
+      "public_privileges": false
+    },
+    {
+      "body": "\nDECLARE saved issuance_service.application_ownerships; original issuance_service.application_ownership_operations;\n canonical record; administrator boolean;\nBEGIN\n IF org IS NULL OR org='00000000-0000-0000-0000-000000000000' OR app IS NULL OR app !~ '^[A-Za-z0-9_-]{1,128}$'\n  OR actor IS NULL OR actor !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'\n  OR requested_operation='00000000-0000-0000-0000-000000000000' THEN RETURN NULL; END IF;\n IF NOT EXISTS(SELECT 1 FROM issuance_service.external_observation_lock_organization(org) WHERE status='active') THEN RETURN NULL; END IF;\n IF requested_operation IS NOT NULL THEN\n  SELECT * INTO original FROM issuance_service.application_ownership_operations WHERE operation_id=requested_operation\n   AND organization_id=org AND application_id=app AND actor_id=actor;\n  IF NOT FOUND OR (original.action<>'confirm' AND NOT EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor))) THEN RETURN NULL; END IF;\n  RETURN jsonb_build_object('kind','receipt','receipt',original.receipt);\n END IF;\n administrator:=EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor));\n SELECT * INTO canonical FROM issuance_service.external_observation_lock_application(app,org::text);\n IF NOT FOUND THEN RETURN NULL; END IF;\n SELECT * INTO saved FROM issuance_service.application_ownerships WHERE organization_id=org AND application_id=app FOR SHARE;\n IF NOT FOUND THEN\n  IF administrator THEN RETURN jsonb_build_object('kind','current','record',NULL); END IF;\n  RETURN NULL;\n END IF;\n IF NOT administrator AND saved.user_id<>actor THEN RETURN NULL; END IF;\n RETURN jsonb_build_object('kind','current','record',jsonb_build_object('application_id',app,'user_id',saved.user_id,\n  'revision',saved.revision,'status',saved.status,'application_revision',(extract(epoch FROM canonical.updated_at)*1000000)::bigint,\n  'proposal_application_revision',saved.application_revision,\n  'current',COALESCE(saved.status='confirmed' AND saved.subject_id=canonical.applicant_identifier\n   AND saved.application_revision=(extract(epoch FROM canonical.updated_at)*1000000)::bigint\n   AND canonical.status IN ('pending','under_review') AND canonical.expires_at>clock_timestamp(),false)));\nEND;\n",
+      "kind": "f",
+      "name": "read_application_ownership",
+      "result": "jsonb",
+      "strict": false,
+      "definer": false,
+      "language": "plpgsql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "org uuid, app text, actor text, requested_operation uuid",
+      "volatility": "v",
+      "returns_set": false,
+      "public_privileges": false
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "c",
+      "name": "application_ownership_operations_action_check",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((action = ANY (ARRAY['propose'::text, 'confirm'::text, 'revoke'::text])))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownership_operations_actor_id_check",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((actor_id ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'::text))"
+    },
+    {
+      "kind": "f",
+      "name": "application_ownership_operations_application_id_fkey",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE RESTRICT"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownership_operations_intent_check",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((jsonb_typeof(intent) = 'object'::text))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownership_operations_operation_id_check",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((operation_id <> '00000000-0000-0000-0000-000000000000'::uuid))"
+    },
+    {
+      "kind": "f",
+      "name": "application_ownership_operations_organization_id_fkey",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id) REFERENCES organization_service.organizations(id) ON DELETE RESTRICT"
+    },
+    {
+      "kind": "p",
+      "name": "application_ownership_operations_pkey",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (operation_id)"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownership_operations_receipt_check",
+      "table": "application_ownership_operations",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((jsonb_typeof(receipt) = 'object'::text))"
+    },
+    {
+      "kind": "f",
+      "name": "application_ownerships_application_id_fkey",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE RESTRICT"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_application_revision_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((application_revision >= 1) AND (application_revision <= '9007199254740991'::bigint)))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((status = 'confirmed'::text) = (confirmed_at IS NOT NULL)))"
+    },
+    {
+      "kind": "f",
+      "name": "application_ownerships_organization_id_fkey",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id) REFERENCES organization_service.organizations(id) ON DELETE RESTRICT"
+    },
+    {
+      "kind": "p",
+      "name": "application_ownerships_pkey",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (organization_id, application_id)"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_proposed_by_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((proposed_by ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'::text))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_revision_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((revision >= 1) AND (revision <= '9007199254740991'::bigint)))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_status_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((status = ANY (ARRAY['proposed'::text, 'confirmed'::text, 'revoked'::text])))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_subject_id_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((octet_length(subject_id) >= 1) AND (octet_length(subject_id) <= 1024)))"
+    },
+    {
+      "kind": "c",
+      "name": "application_ownerships_user_id_check",
+      "table": "application_ownerships",
+      "deferred": false,
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((user_id ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'::text))"
+    }
+  ],
+  "internal_triggers": [
+    {
+      "type": 5,
+      "table": "application_ownership_operations",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_ins\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownership_operations_application_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "issuance_service.applications"
+    },
+    {
+      "type": 17,
+      "table": "application_ownership_operations",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_upd\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownership_operations_application_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "issuance_service.applications"
+    },
+    {
+      "type": 5,
+      "table": "application_ownership_operations",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_ins\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownership_operations_organization_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "organization_service.organizations"
+    },
+    {
+      "type": 17,
+      "table": "application_ownership_operations",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_upd\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownership_operations_organization_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "organization_service.organizations"
+    },
+    {
+      "type": 5,
+      "table": "application_ownerships",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_ins\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownerships_application_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "issuance_service.applications"
+    },
+    {
+      "type": 17,
+      "table": "application_ownerships",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_upd\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownerships_application_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "issuance_service.applications"
+    },
+    {
+      "type": 5,
+      "table": "application_ownerships",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_ins\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownerships_organization_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "organization_service.organizations"
+    },
+    {
+      "type": 17,
+      "table": "application_ownerships",
+      "enabled": "O",
+      "function": "\"RI_FKey_check_upd\"()",
+      "arguments": "",
+      "qualifier": null,
+      "attributes": "",
+      "constraint": "application_ownerships_organization_id_fkey",
+      "deferrable": false,
+      "initially_deferred": false,
+      "referenced_relation": "organization_service.organizations"
+    }
+  ]
+}

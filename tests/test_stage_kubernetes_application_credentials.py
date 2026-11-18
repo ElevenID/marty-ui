@@ -281,7 +281,7 @@ def test_stages_candidate_only_with_native_proofs_private_captures_and_preserved
     assert flow.creates[0]["spec"]["volumes"][0]["emptyDir"]["medium"] == "Memory"
     receipt = json.loads((flow.args.operation_dir / "application-stage-complete.json").read_bytes())
     assert receipt["activation"] is False and receipt["status"] == "candidate-staged-not-activated"
-    assert len(receipt["replacedInputs"]) == 11
+    assert len(receipt["replacedInputs"]) == 9
     evidence = flow.args.operation_dir / "native-operation-evidence.tar"
     assert b"PRIVATE_NATIVE_RESPONSE_CAPTURE_CANARY" in evidence.read_bytes()
     assert stat.S_IMODE(evidence.stat().st_mode) == 0o600

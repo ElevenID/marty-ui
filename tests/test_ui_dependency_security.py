@@ -56,7 +56,7 @@ def test_security_job_rejects_a_stale_bun_lock_before_auditing() -> None:
     workflow = _text(".github/workflows/ci.yml")
 
     assert (
-        "bun install --frozen-lockfile --ignore-scripts && bun audit"
+        "bun install --frozen-lockfile --ignore-scripts && python3 ../scripts/ci/audit-ui-dependencies.py"
         in workflow
     )
 

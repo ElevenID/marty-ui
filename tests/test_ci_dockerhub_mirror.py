@@ -260,24 +260,21 @@ def test_image_smokes_use_the_same_pinned_cache_fallback() -> None:
             assert '"$redis_image"' in source
 
 
-def test_packaged_worker_startup_uses_the_exact_oracle_postgres_digest() -> None:
-    source = (ROOT / "scripts/test_canvas_worker_image_startup.py").read_text(
-        encoding="utf-8"
-    )
-    assert 'pins["observed_postgres_image"]' in source
-    assert '"scripts/ci/pull-pinned-dockerhub-image.sh"' in source
-    assert "selected_postgres" in source
+def test_retired_packaged_provider_worker_is_not_a_ci_dependency() -> None:
+    path = "scripts/test_canvas_worker_image_startup.py"
+    assert not (ROOT / path).exists()
+    assert path not in (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
 
-def test_published_canvas_and_flow_acceptance_keep_frozen_digest_with_mirror() -> None:
+def test_platform_selfhost_and_flow_acceptance_keep_pinned_digest_with_mirror() -> None:
     for path in (
-        "scripts/ci/run-published-canvas-contracts.sh",
+        "scripts/ci/run-selfhost-acceptance-contracts.sh",
         "scripts/ci/run-flow-acceptance-contracts.sh",
     ):
         source = (ROOT / path).read_text(encoding="utf-8")
         assert "pull-pinned-dockerhub-image.sh" in source
-        assert "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE" in source
-        assert "observed_postgres_image" in source
+        assert "MARTY_PLATFORM_TEST_POSTGRES_IMAGE" in source
+        assert "../contracts/platform-test-database.json" in source
     flow = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text(
         encoding="utf-8"
     )
@@ -290,13 +287,13 @@ def test_selfhost_isolated_child_inherits_the_selected_oracle_postgres_image() -
         encoding="utf-8"
     )
     assert '.env_clear()' in source
-    assert 'std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE")' in source
-    assert 'command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);' in source
-    fixture = (ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs").read_text(
+    assert 'std::env::var_os("MARTY_PLATFORM_TEST_POSTGRES_IMAGE")' in source
+    assert 'command.env("MARTY_PLATFORM_TEST_POSTGRES_IMAGE", image);' in source
+    fixture = (ROOT / "rust/services/issuance/tests/support/platform_test_database.rs").read_text(
         encoding="utf-8"
     )
-    assert 'Some(value) if value == canonical || value == mirrored' in fixture
-    assert 'Some(_) => Err("Published PostgreSQL image differs from pinned oracle"' in fixture
+    assert 'Ok(value) if value == POSTGRES_IMAGE || value == mirrored' in fixture
+    assert '_ => Err("Platform PostgreSQL image differs from its fixed pin"' in fixture
 
 
 def test_both_supply_chain_workflows_run_the_same_pinned_native_audit() -> None:

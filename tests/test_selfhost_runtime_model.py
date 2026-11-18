@@ -147,14 +147,14 @@ def assert_public_image_loader_connected(reader):
     assert '#[path = "support/selfhost_packaged_runtime.rs"]' in source
     assert '#[path = "support/selfhost_runtime_sidecar.rs"]' in source
     main = reader("rust/services/issuance/src/main.rs")
-    runner = reader("scripts/ci/run-published-canvas-contracts.sh")
+    runner = reader("scripts/ci/run-selfhost-acceptance-contracts.sh")
     workflow = yaml.safe_load(reader(".github/workflows/ci.yml"))
     for name in [
         "selfhost_public_image_loader_isolated",
         "selfhost_public_image_loader_child",
     ]:
         assert source.count(f"fn {name}()") == 1
-        line = f"  printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
+        line = f"  '{name}: test' " + chr(92)
         assert runner.splitlines().count(line) == 1
     assert 'require_selfhost_tests "$("$selfhost_executable" --list)"' in runner
     assert "17 passed; 0 failed; 0 ignored" in runner
@@ -177,6 +177,10 @@ def assert_public_image_loader_connected(reader):
         "'ALTER %s %I.%I OWNER TO marty'",
         "pg_get_userbyid(datdba) = 'marty'",
         "pg_get_userbyid(nspowner) = 'marty'",
+        "ALTER FUNCTION issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text) OWNER TO marty",
+        "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty",
+        "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_authorization() OWNER TO marty",
+        "count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
         "object.relkind IN ('r', 'p', 'S')",
         'record_database_stage("transfer-ownership")',
         'record_database_stage("inspect-ownership")',
@@ -324,6 +328,8 @@ def test_log_boundary_connectivity_rejects_weakened_retry_paths(
         "pending",
         "ownership",
         "ownership-proof",
+        "routine-ownership",
+        "routine-proof",
         "ownership-seed",
         "ownership-stage",
         "migration-owned-projection",
@@ -344,8 +350,8 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
                 "selfhost_packaged_runtime::run_isolated_child()",
             ),
             "runner": (
-                "scripts/ci/run-published-canvas-contracts.sh",
-                "printf '%s\\n' \"$all_test_names\" | grep -Fx 'selfhost_public_image_loader_isolated: test'",
+                "scripts/ci/run-selfhost-acceptance-contracts.sh",
+                "'selfhost_public_image_loader_isolated: test'",
             ),
             "workflow": (
                 ".github/workflows/ci.yml",
@@ -365,6 +371,14 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             "ownership-proof": (
                 PACKAGED,
                 "pg_get_userbyid(datdba) = 'marty'",
+            ),
+            "routine-ownership": (
+                PACKAGED,
+                "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty",
+            ),
+            "routine-proof": (
+                PACKAGED,
+                "count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
             ),
             "ownership-seed": (
                 PACKAGED,
@@ -396,7 +410,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             ),
             "log-boundary-call": (PACKAGED, "service.verify_log_boundary("),
             "log-boundary-summary": (
-                "scripts/ci/run-published-canvas-contracts.sh",
+                "scripts/ci/run-selfhost-acceptance-contracts.sh",
                 "17 passed; 0 failed; 0 ignored",
             ),
         }

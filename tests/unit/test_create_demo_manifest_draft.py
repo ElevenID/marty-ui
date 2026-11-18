@@ -121,3 +121,27 @@ def test_passport_simulator_draft_matches_recorder_evidence_boundary() -> None:
                for segment in scenario["transcript"]["segments"])
     assert any("no booklet" in limitation.lower()
                for limitation in scenario["limitations"])
+
+
+def test_current_draft_retires_provider_demo_without_rewriting_archives():
+    from scripts import create_demo_manifest_draft as generator
+    from scripts.validate_demo_manifests import load_manifests
+    manifest = generator.build_manifest()
+    assert manifest["stack_version"] == "2026.08.1"
+    assert all(item.get("demo_id") not in {"D-07", "D-08"} and "lti-1.3" not in item["protocols"]
+               for item in manifest["scenarios"])
+    assert "canvas" not in json.dumps(manifest).lower()
+    index, archives = load_manifests(generator.ROOT / "ui/public/demos/manifests", generator.ROOT / "VERSION")
+    assert index["latest_available_stack_version"] == "2026.08.0"
+    assert any(item["slug"] == "canvas-learning-achievement" for item in archives["2026.08.0"]["scenarios"])
+
+
+def test_generator_refuses_to_overwrite_an_existing_edition(tmp_path, monkeypatch):
+    import pytest
+    from scripts import create_demo_manifest_draft as generator
+    target = tmp_path / "2026.08.0.json"
+    target.write_text("immutable existing edition")
+    monkeypatch.setattr(generator, "OUTPUT_PATH", target)
+    with pytest.raises(ValueError, match="Refusing to overwrite"):
+        generator.main()
+    assert target.read_text() == "immutable existing edition"

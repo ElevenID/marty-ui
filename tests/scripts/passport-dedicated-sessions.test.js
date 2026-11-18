@@ -25,9 +25,9 @@ function fixture(t,mode){
  const loadEnvFile=vm.runInNewContext('('+envFunction+')',{fs,process});
  const source=fs.readFileSync(path.join(__dirname,'passport-dedicated-sessions.js'),'utf8'),module={exports:{}};
  const sourceFailure=()=>{throw Error('SOURCE_CHANGED');};
- const contract=fs.readFileSync(path.join(__dirname,'run-canvas-oss-standard-contract.js'),'utf8');
+ const contract=fs.readFileSync(path.join(__dirname,'platform-session-custody.js'),'utf8');
  const commonContext={DEFAULT_MARTY_ORIGIN:'https://beta.elevenidllc.com',requireCondition(value,code){if(!value)throw Object.assign(Error(code),{code});}};
- const common={};for(const name of ['retireCanvasBetaSession','createOriginalCookieSessionContext']){
+ const common={};for(const name of ['retirePlatformSession','createOriginalCookieSessionContext']){
   const expression=contract.match(new RegExp('async function '+name+'\\([^]*?\\n}'))[0];
   common[name]=vm.runInNewContext('('+expression+')',commonContext);
  }
@@ -42,10 +42,10 @@ function fixture(t,mode){
   if(name.endsWith('src'+path.sep+'windowsJob'))return {requireNativeJob({memoryBytes}){counts.jobs++;assert.equal(memoryBytes,640*1024**2);if(mode==='job')throw Error('ACTUAL_JOB_REQUIRED');},watchAbortInput(_stream,callback){onAbort=callback;return ()=>counts.disposed++;}};
   if(name.endsWith('src'+path.sep+'localNativeLiveBinding'))return {verifyFunctionalLiveBinding(args){counts.observations++;assert.equal(args.receipt,input.runtimeReceipt.path);assert.equal(args.profile,input.runtimeProfile.path);const value=structuredClone(binding);if(mode==='runtime-drift'&&counts.observations>1)value.roles[0].hostPid++;return {profileSha256:input.runtimeProfile.sha256,binding:value};}};
   if(name.endsWith('src'+path.sep+'recordingLock'))return {acquireRecordingLock:()=>({release(){counts.released++;return true;}})};
-  if(name.endsWith('src'+path.sep+'canvasCaptureHost'))return {canonicalArtifacts:()=>path.join(root,'artifacts')};
+  if(name.endsWith('src'+path.sep+'captureFiles'))return {canonicalArtifacts:()=>path.join(root,'artifacts')};
   if(name.endsWith('src'+path.sep+'ownedNativeWallet'))return {protectOwnedDirectory:()=>{}};
   if(name==='./verify-beta-waltid-acceptance')return {loadEnvFile};
-  if(name==='./run-canvas-oss-standard-contract')return common;
+  if(name==='./platform-session-custody')return common;
   if(name==='./audit-beta-credential-lifecycle')return {login:async()=>{counts.logins++;if(mode==='abort')onAbort();if(mode==='login')throw Error('PRIVATE_LOGIN_CONTENT');}};
   if(name==='@playwright/test')return {request:{newContext:async()=>{
    let retired=false;return {post:async(url,options)=>{assert(url.endsWith('/v1/auth/logout'));assert(options.headers.Cookie.startsWith('sessionId='));retired=true;counts.retired++;return {status:()=>mode==='logout-ack'?200:302};},

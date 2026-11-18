@@ -61,19 +61,6 @@ pub(crate) fn lifecycle_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Credential repository is temporarily unavailable",
         ),
-        CredentialManagementError::CanvasRetryUnavailable(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canvas lifecycle retry could not be recorded",
-        ),
-        CredentialManagementError::CanvasTextEncoding => match surface {
-            LifecycleSurface::Transaction => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
-            }
-            LifecycleSurface::IssuedCredential => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Canvas lifecycle status text could not be encoded",
-            ),
-        },
     };
     (status, Json(json!({"detail": detail}))).into_response()
 }
@@ -188,20 +175,6 @@ mod tests {
                 "application/json",
                 r#"{"detail":"Issued credential not found"}"#,
             ),
-            (
-                LifecycleSurface::Transaction,
-                CredentialManagementError::CanvasTextEncoding,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "text/plain; charset=utf-8",
-                "Internal Server Error",
-            ),
-            (
-                LifecycleSurface::IssuedCredential,
-                CredentialManagementError::CanvasTextEncoding,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "application/json",
-                r#"{"detail":"Canvas lifecycle status text could not be encoded"}"#,
-            ),
         ] {
             let response = lifecycle_error(error, surface);
             assert_eq!(response.status(), status);
@@ -230,10 +203,6 @@ mod tests {
                 (
                     CredentialManagementError::PublicationUnavailable("private diagnostic".into()),
                     "Revocation service unavailable",
-                ),
-                (
-                    CredentialManagementError::CanvasRetryUnavailable("private diagnostic".into()),
-                    "Canvas lifecycle retry could not be recorded",
                 ),
             ] {
                 let response = lifecycle_error(error, surface);

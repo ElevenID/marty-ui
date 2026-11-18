@@ -344,80 +344,30 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
 @pytest.mark.parametrize(
     "old,new",
     [
-        (
-            "lane: >-\n          ${{ fromJSON(github.event_name == 'pull_request' &&",
-            "lane: [canvas]",
-        ),
-        (
-            "github.event_name == 'pull_request' &&",
-            "github.event_name == 'merge_group' &&",
-        ),
-        (
-            "contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&",
-            "true &&",
-        ),
-        (
-            "contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&",
-            "true &&",
-        ),
-        (
-            "contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&",
-            "true &&",
-        ),
-        (
-            '\'["canvas","contracts","worker","selfhost","renewal-unit"]\' ||',
-            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
-        ),
-        (
-            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
-            '\'["renewal-unit"]\' ||',
-        ),
-        (
-            "needs.changes.outputs.rust_runtime == 'true' &&",
-            "true &&",
-        ),
-        (
-            '\'["canvas","contracts","worker","selfhost"]\' ||',
-            "'[\"worker\"]' ||",
-        ),
-        (
-            '\'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}',
-            "'[\"selfhost\"]' || needs.changes.outputs.rust_matrix) }}",
-        ),
-        ("needs: [changes, release-preflight]", "needs: changes"),
-        ("needs: [changes, release-preflight]", "needs: release-preflight"),
-        ("source scripts/ci/affected_components.sh", "true"),
-        ("rust_matrix: ${{ steps.classify.outputs.rust_matrix }}", "rust_matrix: '[\"canvas\"]'"),
-        ("plan: ${{ steps.classify.outputs.plan }}", "plan: '{}'"),
-        (
-            "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance",
-            "cargo test --locked -p marty-canvas-acceptance",
-        ),
-        (
-            "python3 -m scripts.ci.check_public_vector_execution",
-            "python3 -m scripts.ci.missing_vector_execution_check",
-        ),
-        (
-            "      - name: Require public protocol vector test execution\n"
-            "        if: matrix.lane == 'contracts'",
-            "      - name: Require public protocol vector test execution\n"
-            "        if: matrix.lane == 'canvas'",
-        ),
-        ('\'true:true:["canvas","contracts","selfhost"]\'', "'true:true:[\"contracts\"]'"),
-        (
-            '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]',
-            '"$RUST_MATRIX" == \'["contracts"]\' ]]',
-        ),
-        (
-            'if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then',
-            'if false; then',
-        ),
-        ("CI_PLAN: ${{ needs.changes.outputs.plan }}", "CI_PLAN: '{}'"),
-        ("CI_NEEDS_JSON: ${{ toJSON(needs) }}", "CI_NEEDS_JSON: '{}'"),
-        ("run: python3 scripts/ci/affected_components.py gate", "run: true"),
+        ("lane: >-\n          ${{ fromJSON(github.event_name == 'pull_request' &&", 'lane: [flow]'),
+        ("github.event_name == 'pull_request' &&", "github.event_name == 'merge_group' &&"),
+        ("contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&", 'true &&'),
+        ("contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&", 'true &&'),
+        ('\'["contracts","flow","selfhost","renewal-unit"]\' ||', '\'["renewal-unit"]\' ||'),
+        ("needs.changes.outputs.rust_runtime == 'true' &&", 'true &&'),
+        ('\'["contracts","flow","selfhost"]\' || needs.changes.outputs.rust_matrix) }}', '\'["selfhost"]\' || needs.changes.outputs.rust_matrix) }}'),
+        ('needs: [changes, release-preflight]', 'needs: changes'),
+        ('needs: [changes, release-preflight]', 'needs: release-preflight'),
+        ('source scripts/ci/affected_components.sh', 'true'),
+        ('rust_matrix: ${{ steps.classify.outputs.rust_matrix }}', 'rust_matrix: \'["flow"]\''),
+        ('plan: ${{ steps.classify.outputs.plan }}', "plan: '{}'"),
+        ('cargo test --locked --workspace --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance', 'cargo test --locked -p marty-flow-acceptance'),
+        ('python3 -m scripts.ci.check_public_vector_execution', 'python3 -m scripts.ci.missing_vector_execution_check'),
+        ("      - name: Require public protocol vector test execution\n        if: matrix.lane == 'contracts'", "      - name: Require public protocol vector test execution\n        if: matrix.lane == 'flow'"),
+        ('\'true:true:["contracts","flow","selfhost"]\'', '\'true:true:["contracts"]\''),
+        ('"$RUST_MATRIX" == \'["contracts","flow","selfhost"]\' ]]', '"$RUST_MATRIX" == \'["contracts"]\' ]]'),
+        ('if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then', 'if false; then'),
+        ('CI_PLAN: ${{ needs.changes.outputs.plan }}', "CI_PLAN: '{}'"),
+        ('CI_NEEDS_JSON: ${{ toJSON(needs) }}', "CI_NEEDS_JSON: '{}'"),
+        ('run: python3 scripts/ci/affected_components.py gate', 'run: true'),
     ],
 )
-def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
+def test_vector_workspace_owner_rejects_missing_contracts_or_protected_runtime(
     old: str, new: str
 ) -> None:
     workflow = (
@@ -432,8 +382,8 @@ def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
 @pytest.mark.parametrize(
     "old,new",
     [
-        ('rust_matrix=\'["canvas","contracts","selfhost"]\'', "rust_matrix='[\"canvas\"]'"),
-        ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
+        ('rust_matrix=\'["contracts","flow","selfhost"]\'', "rust_matrix='[\"flow\"]'"),
+        ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"flow\"]'"),
         ('elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true',
          'elif [[ "$EVENT_NAME" == pull_request ]]; then\n  all=true'),
         ('elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true',

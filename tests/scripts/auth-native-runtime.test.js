@@ -13,7 +13,7 @@ const save=value=>{const file=path.join(temp,`${++sequence}.json`),bytes=Buffer.
 const read=ref=>{const bytes=fs.readFileSync(ref.path);assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),ref.sha256);return JSON.parse(bytes);};
 const old={role:'auth',kind:'SIGNED_NIGHTLY_IMAGE',requiredContainerId:oldId,requiredStartedAt:started,imageId,
  source:'signed-image-source',sha256:'4'.repeat(64),binary:'marty-auth',project:'elevenid-beta'};
-const prior=[old,...Array.from({length:21},(_,index)=>({role:`other${index}`,kind:'SIGNED_NIGHTLY_IMAGE',requiredContainerId:(index+10).toString(16).padStart(64,'0')}))];
+const prior=[old,...require('./platform-runtime-roles').PLATFORM_RUNTIME_ROLES.filter(role=>role!=='auth').map((role,index)=>({role,kind:'SIGNED_NIGHTLY_IMAGE',requiredContainerId:(index+10).toString(16).padStart(64,'0')}))];
 const refs={operator:{path:'/reviewed/auth-operator.py',sha256:operatorSha},binary:{path:'/host/bin',sha256:binarySha}};
 const base=save({signedImageDeployment:{}});
 function fixture(change=()=>{}){
@@ -37,7 +37,7 @@ const deps={boundJson:read,verifyBoundFile:()=>{},expectedRuntime:()=>prior,
  signedAuthority:()=>({engineId:'engine'})};
 test('only Auth becomes a source-bound read-only binary overlay',()=>{
  const rows=expected(fixture(),deps);
- assert.equal(rows.length,22);assert.equal(rows[0].kind,'SCOPED_NATIVE_FUNCTIONAL_OVERLAY');
+ assert.equal(rows.length,21);assert.equal(rows[0].kind,'SCOPED_NATIVE_FUNCTIONAL_OVERLAY');
  assert.equal(rows[0].sha256,binarySha);assert.equal(rows[0].requiredContainerId,newId);
  assert.deepEqual(rows[0].requiredBinaryMounts,[{type:'bind',source:'/host/bin',destination:'/usr/local/bin/marty-auth',writable:false}]);
  assert.deepEqual(rows.slice(1),prior.slice(1));

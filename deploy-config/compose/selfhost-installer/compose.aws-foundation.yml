@@ -267,8 +267,6 @@ services:
       BAO_ADDR: !reset 'null'
       BAO_CACERT: !reset 'null'
       ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
-      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
-      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
       ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
       BAO_TOKEN_FILE: !reset 'null'
       DIDCOMM_KMS_ADDR: !reset 'null'
@@ -289,11 +287,9 @@ services:
     - signing_keys_issuer_sign_key
     - signing_keys_integration_secret_key
     - token_hmac_key
-    - canvas_credentials_shared_secret
     - grpc_service_token
     - workload_identity_ca_cert
     - signing_grant_authorities
-    - canvas_credentials_api_token
     volumes: !override
     - type: bind
       source: ${MARTY_AWS_ISSUANCE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
@@ -307,8 +303,6 @@ services:
       BAO_ADDR: !reset 'null'
       BAO_CACERT: !reset 'null'
       ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
-      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
-      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
       ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
       DIDCOMM_KMS_ADDR: !reset 'null'
       DIDCOMM_KMS_TOKEN_FILE: !reset 'null'
@@ -336,47 +330,15 @@ services:
     - signing_keys_issuer_sign_key
     - signing_keys_integration_secret_key
     - token_hmac_key
-    - canvas_credentials_shared_secret
     - grpc_service_token
     - workload_identity_ca_cert
     - issuance_workload_server_cert
     - signing_grant_authorities
     - passport_tenant_api_keys
     - personalization_bureau_api_key
-    - canvas_credentials_api_token
     volumes:
     - type: bind
       source: ${MARTY_AWS_ISSUANCE_NATIVE_IDENTITY_DIR:?preprovisioned AWS foundation input required}
-      target: /run/aws-identity
-      read_only: true
-      bind:
-        create_host_path: false
-  canvas-sync-worker:
-    environment:
-      AWS_EC2_METADATA_DISABLED: 'true'
-      BAO_ADDR: !reset 'null'
-      BAO_CACERT: !reset 'null'
-      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: !reset 'null'
-      MARTY_SIGNING_GRANT_PROVIDER: aws-kms
-      MARTY_SIGNING_GRANT_AWS_CONFIG_FILE: /run/secrets/signing_grant_authorities
-      AWS_ROLE_ARN: ${MARTY_AWS_CANVAS_SYNC_WORKER_ROLE_ARN:?preprovisioned AWS foundation input required}
-      AWS_WEB_IDENTITY_TOKEN_FILE: /run/aws-identity/token
-    depends_on:
-      keycloak-configurator: !reset 'null'
-      keycloak: !reset 'null'
-      kms-initialize: !reset 'null'
-      openbao-unseal: !reset 'null'
-    secrets: !override
-    - marty_db_password
-    - issuance_api_key
-    - signing_keys_issuer_sign_key
-    - signing_keys_integration_secret_key
-    - token_hmac_key
-    - workload_identity_ca_cert
-    - signing_grant_authorities
-    volumes:
-    - type: bind
-      source: ${MARTY_AWS_CANVAS_SYNC_WORKER_IDENTITY_DIR:?preprovisioned AWS foundation input required}
       target: /run/aws-identity
       read_only: true
       bind:
@@ -789,8 +751,6 @@ secrets:
   sign_grant_mint_gateway_service_token: !reset 'null'
   sign_grant_mint_gateway_issuer_did_token: !reset 'null'
   sign_grant_mint_issuance_credential_token: !reset 'null'
-  sign_grant_mint_issuance_canvas_token: !reset 'null'
-  sign_grant_mint_issuance_readiness_token: !reset 'null'
   sign_grant_mint_issuance_passport_token: !reset 'null'
   keycloak_db_password: !reset 'null'
   keycloak_signing_kms_token: !reset 'null'

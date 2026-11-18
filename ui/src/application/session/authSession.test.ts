@@ -323,10 +323,11 @@ describe('authSession helpers', () => {
     })).toBe(true)
   })
 
-  it('keeps Canvas LTI learners in applicant-only access even when they have an issuer org for catalog scope', () => {
+  it('keeps explicitly restricted accounts in applicant-only access despite organization claims', () => {
     const rawUser = {
-      user_id: 'canvas-learner-1',
-      roles: ['applicant', 'canvas_lti_learner'],
+      user_id: 'applicant-1',
+      roles: ['applicant'],
+      capabilities: { 'org:view': false },
       organization_id: 'marty-org',
       organization_name: 'Marty',
     }
@@ -346,6 +347,17 @@ describe('authSession helpers', () => {
       new Set(applicant.roles.flatMap(({ permissions }) => permissions)),
     )
   })
+
+  it('distinguishes computed absence of memberships from an explicit restriction', () => {
+    const user = createEnrichedUser({ user_id: 'new-user', roles: ['applicant'] }, [], null);
+    expect(user.capabilities['org:view']).toBe(false);
+    expect(user.organization_access_restricted).toBe(false);
+    const organization = { id: 'new-org', membership: { is_owner: true } };
+    expect(updateUserActiveOrganization(user, 'new-org', organization).capabilities['org:view']).toBe(true);
+    const restricted = createEnrichedUser({ user_id: 'restricted', capabilities: { 'org:view': false } }, [], null);
+    expect(restricted.organization_access_restricted).toBe(true);
+    expect(updateUserActiveOrganization(restricted, 'new-org', organization).capabilities['org:view']).toBe(false);
+  });
 
   it('updates active organization in auth state', () => {
     const previousUser = {

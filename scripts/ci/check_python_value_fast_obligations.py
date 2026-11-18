@@ -183,7 +183,7 @@ def validate(manifest: dict, root: Path = ROOT) -> None:
         "Signing library module ownership drift",
     )
     require(
-        "canvas-worker-privacy-reference.json" in signing_source,
+        "signing-error-privacy-reference.json" in signing_source,
         "Signing fixture include drift",
     )
     expected_signing = set(declared_tests(signing_source)) | {

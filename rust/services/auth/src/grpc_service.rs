@@ -92,12 +92,14 @@ impl AuthService for AuthGrpcService {
                 user: None,
                 expires_at: String::new(),
                 authentication_time_unix: None,
+                non_impersonated_session: None,
             },
             |session| ValidateSessionResponse {
                 valid: true,
                 user: Some(user_info(&session.user)),
                 expires_at: session.expires_at.to_rfc3339(),
                 authentication_time_unix: verified_authentication_time(&session),
+                non_impersonated_session: Some(session.user.impersonation.is_none()),
             },
         );
         Ok(Response::new(response))

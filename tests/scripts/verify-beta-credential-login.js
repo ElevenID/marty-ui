@@ -11,7 +11,7 @@ const { directPostRequestReference, directPostLoginBinding, loginInstanceOwnersh
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { acquireWalletSession, openIsolatedWallet, presentWalletRequest } = require('./demo-wallet-session');
 const { chromium, request } = require('@playwright/test');
-const { createCanvasCaptureCustody, createOriginalCookieSessionContext, retireCanvasBetaSession } = require('./run-canvas-oss-standard-contract');
+const { createPlatformCaptureCustody, createOriginalCookieSessionContext, retirePlatformSession } = require('./platform-session-custody');
 const {
   collectBetaOffer,
   loadEnvFile,
@@ -224,7 +224,7 @@ function membershipSessionRetirement(runId) {
     assert.equal(session.length, 1, 'Owned membership session requires its original cookie');
     if ([...sessions.values()].some(row => row.sessionId === session[0].value)) return;
     assert.ok(!sessions.has(role), 'Owned membership session role cannot be replaced');
-    const custody = createCanvasCaptureCustody(`${runId}-${role}`);
+    const custody = createPlatformCaptureCustody(`${runId}-${role}`);
     // Publish custody before the next owned API effect, not after logout clears the jar.
     sessions.set(role, { custody, sessionId: session[0].value, cookies: JSON.parse(JSON.stringify(cookies)) });
     custody.retain('betaAdminSession', JSON.stringify(cookies));
@@ -237,7 +237,7 @@ function membershipSessionRetirement(runId) {
         const cookies = row.cookies.map(cookie => ({ ...cookie }));
         const original = await createOriginalCookieSessionContext(request, cookies);
         isolated = original.isolated;
-        const retirement = await retireCanvasBetaSession(original.session, row.custody);
+        const retirement = await retirePlatformSession(original.session, row.custody);
         await isolated.dispose(); isolated = null;
         assert.equal(row.custody.retire(), true, 'Original session custody retirement unconfirmed');
         results.push({ role, ...retirement, originalCookieVerified: true, custodyRetired: true });

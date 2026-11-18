@@ -13,32 +13,14 @@ import tempfile
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+GATE = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 APPROVED = "selfhost-kms-only-model.keyless-tls.snapshot.yml"
 APPROVED_SHA256 = (
     "6b904f625a0d6ff156a47b84de8e72b341e1d7d357bb67d600415b9995c3bac7"
 )
-PUBLICATION_SETTINGS = {
-    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
-    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
-    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL": "${CANVAS_CREDENTIALS_PROVENANCE_BASE_URL:-}",
-    "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
-    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
-}
 READY = "auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native"
 NATIVE_ADDITIVE = {
-    "CANVAS_MIRROR_WORKER_ENABLED": "${CANVAS_MIRROR_WORKER_ENABLED:-false}",
-    "CANVAS_MIRROR_WORKER_ORGANIZATION_ID": "${CANVAS_MIRROR_WORKER_ORGANIZATION_ID:-}",
-    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS": "${CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS:-300}",
-    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS": "${CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS:-900}",
-    "CANVAS_MIRROR_WORKER_BATCH_LIMIT": "${CANVAS_MIRROR_WORKER_BATCH_LIMIT:-25}",
-    "CANVAS_MIRROR_WORKER_RETRY_FAILED": "${CANVAS_MIRROR_WORKER_RETRY_FAILED:-true}",
-    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP": "${CANVAS_MIRROR_WORKER_RUN_ON_STARTUP:-true}",
-    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS": "${CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS:-3}",
-    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS": "${CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS:-5}",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_URL": "${CANVAS_MIRROR_ALERT_WEBHOOK_URL:-}",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS": "${CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS:-5}",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
     "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
@@ -71,7 +53,6 @@ PASSPORT_CONSUMER_ADDITIVE = {
 # Inputs populated by the existing file loader, not raw host interpolation.
 LOADED_INPUTS = {
     "DATABASE_URL",
-    "CANVAS_CREDENTIALS_SHARED_SECRET",
     "GRPC_SERVICE_TOKEN",
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
@@ -109,14 +90,7 @@ ALTERNATE_TLS_PROVIDER_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_ARN",
 }
 SHARED_ADDITIONS = {
-    "CANVAS_CREDENTIALS_API_TOKEN_FILE": "${CANVAS_CREDENTIALS_API_TOKEN_FILE:-}",
     "ALLOWED_REDIRECT_URIS": "${ALLOWED_REDIRECT_URIS:-}",
-    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": PUBLICATION_SETTINGS[
-        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE"
-    ],
-    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": PUBLICATION_SETTINGS[
-        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE"
-    ],
 }
 SHARED_SETTINGS = {
     **SHARED_ADDITIONS,
@@ -137,22 +111,25 @@ def rendered_additions(templates, values):
     return rendered
 
 
-# Observation ingress remains explicitly disabled in unqualified deployment profiles.
+# Observation ingress and application ownership remain disabled in unqualified profiles.
 UNFORWARDED = set(
     """
-APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
-CANVAS_CREDENTIALS_API_TOKEN
-CANVAS_CREDENTIALS_BASE_URL CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS
-CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS
-CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE
-CANVAS_LTI_DEEP_LINKING_ISSUER CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS
-CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES CANVAS_LTI_JWKS_TTL_MINUTES
-CANVAS_LTI_STATE_TTL_MINUTES CORS_ALLOWED_ORIGINS DIDCOMM_DID_WEB_INTERNAL_BASE_URL
+APP_ENV
+
+
+
+
+
+
+ CORS_ALLOWED_ORIGINS DIDCOMM_DID_WEB_INTERNAL_BASE_URL
 DIDCOMM_UNIVERSAL_RESOLVER_URL INTEGRATION_SECRET_MASTER_KEY_ENV ISSUER_DISPLAY_NAME
 MARTY_RELEASE_VERSION MARTY_UI_SHA TOKEN_RATE_LIMIT TOKEN_RATE_WINDOW
 VCDM_RELATED_RESOURCE_MAX_BYTES VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS
 VCDM_RELATED_RESOURCE_URLS
 MARTY_EXTERNAL_OBSERVATIONS_ENABLED
+MARTY_APPLICATION_OWNERSHIP_ENABLED
+MARTY_EXTERNAL_ASSOCIATIONS_ENABLED
+ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL
 ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL
 """.split()
 )
@@ -272,7 +249,7 @@ def apply_foundation_reference_representation(model):
         for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION"):
             replace(services[service]["environment"],
                     f"{runtime_prefix}_KMS_{suffix}", f"{input_prefix}_TLS_KMS_{suffix}")
-    for service in ("issuance-native", "canvas-sync-worker", "flow"):
+    for service in ("issuance-native", "flow"):
         replace(services[service]["environment"], "BAO_ADDR", "BAO_ADDR")
     for service in ("keycloak", "keycloak-configurator"):
         replace(services[service], "image", "MARTY_KEYCLOAK_KMS_IMAGE")
@@ -285,13 +262,25 @@ def apply_foundation_reference_representation(model):
     return optional_inputs
 
 
+def retired_provider_projection(value):
+    """Project only the immutable historical reference; never normalize actual input."""
+    def retired(name):
+        return isinstance(name, str) and bool(re.search(r"canvas|issuance[_-]readiness", name, re.I))
+    if isinstance(value, dict):
+        return {key: retired_provider_projection(item) for key, item in value.items() if not retired(key)}
+    if isinstance(value, list):
+        return [retired_provider_projection(item) for item in value
+                if not retired(item) and not (isinstance(item, dict) and retired(item.get("source")))]
+    return value
+
+
 def assert_models(
     approved, actual, *, interpolated=False, issuer_did="",
-    ui_enabled_sections="public,console", bureau_api_key_file="", canvas_api_token_file="",
+    ui_enabled_sections="public,console", bureau_api_key_file="",
     passkeys_enabled="", passkey_rp_id="",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
-    expected = deepcopy(approved)
+    expected = retired_provider_projection(deepcopy(approved))
     # Keep the approved snapshot and its hash frozen. Admit only the exact
     # hosting separation, memory ceilings, Keycloak heap setting and eager
     # provider startup dependencies reviewed;
@@ -460,13 +449,12 @@ def assert_models(
     token_position = next(index for index, item in enumerate(signing["secrets"])
                           if item["source"] == "signing_keys_openbao_token") + 1
     signing["secrets"].insert(token_position, {"source": didcomm_secret, "target": didcomm_path})
-    # Optional Canvas/Passport credentials are file-backed and reach only their
+    # Optional Passport credentials are file-backed and reach only their
     # existing runtime consumers. Empty files remain unused unless selected.
     secret_root = expected["secrets"]["google_client_id"]["file"].rsplit("/", 1)[0]
     for secret, owners in (
         ("passport_tenant_api_keys", ("gateway", "flow", "issuance-native")),
         ("personalization_bureau_api_key", ("issuance-native",)),
-        ("canvas_credentials_api_token", ("issuance", "issuance-native")),
     ):
         assert secret not in expected["secrets"]
         expected["secrets"][secret] = {"file": f"{secret_root}/{secret}", "name": f"{expected['name']}_{secret}"}
@@ -476,12 +464,6 @@ def assert_models(
     expected["services"]["issuance-native"]["environment"]["PERSONALIZATION_BUREAU_API_KEY_FILE"] = (
         bureau_api_key_file if interpolated else "${PERSONALIZATION_BUREAU_API_KEY_FILE:-}"
     )
-    for environment in (expected["x-issuance-application-env"],
-                        expected["services"]["issuance"]["environment"],
-                        expected["services"]["issuance-native"]["environment"]):
-        environment["CANVAS_CREDENTIALS_API_TOKEN_FILE"] = (
-            canvas_api_token_file if interpolated else "${CANVAS_CREDENTIALS_API_TOKEN_FILE:-}"
-        )
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"
@@ -532,7 +514,6 @@ def assert_models(
         "signing-keys",
         "issuance",
         "issuance-native",
-        "canvas-sync-worker",
     }
     for name, service in actual["services"].items():
         environment = service.get("environment", {})
@@ -572,16 +553,6 @@ def assert_models(
             "sign_grant_mint_issuance_credential_token",
         ),
         (
-            {"issuance", "issuance-native", "canvas-sync-worker"},
-            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
-            "sign_grant_mint_issuance_canvas_token",
-        ),
-        (
-            {"issuance", "issuance-native"},
-            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
-            "sign_grant_mint_issuance_readiness_token",
-        ),
-        (
             {"issuance", "issuance-native"},
             "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
             "sign_grant_mint_issuance_passport_token",
@@ -604,7 +575,7 @@ def assert_models(
     ]
     tls_url = "https://signing-keys:8018/internal"
     ca_path = "/run/secrets/workload_identity_ca_cert"
-    for name in ("issuance", "issuance-native", "canvas-sync-worker"):
+    for name in ("issuance", "issuance-native"):
         service = actual["services"][name]
         assert service["environment"]["INTEGRATION_SECRET_KMS_URL"] == tls_url
         assert service["environment"]["INTEGRATION_SECRET_KMS_CA_FILE"] == ca_path
@@ -617,7 +588,7 @@ def assert_models(
 
 def required_input_sets(approved, current):
     required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
-    optional_inputs = apply_foundation_reference_representation(yaml.safe_load(approved))
+    optional_inputs = apply_foundation_reference_representation(retired_provider_projection(yaml.safe_load(approved)))
     current_required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
     assert current_required == required - optional_inputs, (
         "Unreviewed required self-host inputs",
@@ -702,21 +673,11 @@ def interpolated_models():
             assert after["services"]["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == issuer_did
             assert after["services"]["flow"]["environment"]["OID4VP_ISSUER_DID"] == issuer_did
             assert after["services"]["trust-profile"]["environment"]["MARTY_ORG_SLUG"] == slug
-            expected_publication = rendered_additions(PUBLICATION_SETTINGS, values)
-            for owner in ("issuance", "issuance-native"):
-                actual_publication = {
-                    key: after["services"][owner]["environment"][key]
-                    for key in PUBLICATION_SETTINGS
-                }
-                assert actual_publication == expected_publication
-            if mode == "custom":
-                assert set(expected_publication.values()) == {"synthetic-custom"}
             assert_models(
                 render(APPROVED, values), after, interpolated=True,
                 issuer_did=values.get("MARTY_ISSUER_DID") or "",
                 ui_enabled_sections=values.get("UI_ENABLED_SECTIONS", "public,console"),
                 bureau_api_key_file=values.get("PERSONALIZATION_BUREAU_API_KEY_FILE") or "",
-                canvas_api_token_file=values.get("CANVAS_CREDENTIALS_API_TOKEN_FILE") or "",
                 passkeys_enabled=values.get("KEYCLOAK_PASSKEYS_ENABLED") or "",
                 passkey_rp_id=values.get("KEYCLOAK_PASSKEY_RP_ID") or "",
             )

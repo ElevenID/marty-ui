@@ -57,9 +57,27 @@ pub(crate) fn prepare(input: &Value) -> PolicyResult {
         previous.insert(service.unwrap().to_owned(), item["container_id"].clone());
     }
     let old: BTreeSet<&str> = previous.keys().map(String::as_str).collect();
+    // Previous containers must belong to the platform generation being planned.
+    // Unknown roles cannot silently become unsigned infrastructure restarts.
+    let supported: BTreeSet<_> = signed
+        .iter()
+        .copied()
+        .chain(ingress.iter().copied())
+        .chain([
+            "issuance",
+            "issuance-migrations",
+            "postgres",
+            "openbao",
+            "redis",
+            "keycloak",
+            "waltid-wallet-api",
+            "waltid-verifier-api",
+            "docs",
+        ])
+        .collect();
     require(
-        !old.contains("issuance-canvas-localhost-bridge"),
-        "Optional Canvas localhost bridge cannot enter signed aggregate beta generation",
+        old.is_subset(&supported),
+        "Unsupported service cannot enter signed aggregate beta generation",
     )?;
     let required: BTreeSet<_> = signed
         .difference(&new)
@@ -142,7 +160,7 @@ pub(crate) fn prepare(input: &Value) -> PolicyResult {
         "Passport callback signing network is not isolated",
     )?;
     for name in &signed {
-        if !["issuance-native", "canvas-sync-worker", "canvas-sandbox"].contains(name) {
+        if *name != "issuance-native" {
             require(
                 !truthy(&services[*name]["entrypoint"]) && !truthy(&services[*name]["command"]),
                 format!("Rendered beta service overrides signed dispatch: {name}"),
@@ -154,21 +172,6 @@ pub(crate) fn prepare(input: &Value) -> PolicyResult {
             && services["issuance-native"]["command"] == json!([]),
         "Native issuance entrypoint differs",
     )?;
-    require(
-        services["canvas-sync-worker"]["command"]
-            == json!(["/usr/local/bin/marty-canvas-sync-worker"])
-            && !truthy(&services["canvas-sync-worker"]["entrypoint"]),
-        "Canvas worker command differs",
-    )?;
-    let sandbox = &services["canvas-sandbox"];
-    require(
-        sandbox["entrypoint"] == json!(["/usr/local/bin/marty-canvas-sandbox"])
-            && sandbox["command"] == json!([])
-            && !truthy(&sandbox["build"])
-            && sandbox["healthcheck"]["test"]
-                == json!(["CMD", "curl", "-fsS", "http://localhost:8017/health"]),
-        "Rendered beta Canvas sandbox is not the signed Rust runtime",
-    )?;
     let issuance = &services["issuance"];
     let issuance_env = environment(issuance)?;
     require(
@@ -177,8 +180,7 @@ pub(crate) fn prepare(input: &Value) -> PolicyResult {
             && issuance["entrypoint"] == json!(["/usr/local/bin/marty-issuance-service"])
             && issuance["command"] == json!([])
             && issuance_env.get("SERVICE_NAME") == Some(&json!("issuance_native"))
-            && issuance_env.get("MARTY_SCHEMA_STARTUP_MODE") == Some(&json!("validate"))
-            && issuance_env.get("CANVAS_MIRROR_WORKER_ENABLED") == Some(&json!("false")),
+            && issuance_env.get("MARTY_SCHEMA_STARTUP_MODE") == Some(&json!("validate")),
         "Rendered beta issuance image differs from signed Rust release",
     )?;
     let migrations = &services["issuance-migrations"];

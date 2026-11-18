@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // Exact Signing Keys correction over the previously observed mixed service pair.
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -15,7 +16,7 @@ function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,receiptDige
  assert.deepEqual(Object.keys(profile).sort(),['baseProfile','recordingQualified','releaseQualified','schema','scope','signingPolicyNativeOverlay']);
  const base=boundJson(profile.baseProfile);
  assert(base.serviceNativeOverlay||base.signingPolicyNativeOverlay,'Exact mixed service predecessor required');
- const prior=expectedRuntime(base);assert.equal(prior.length,22);
+ const prior=expectedRuntime(base);assertPlatformRuntimeRoles(prior.map(row=>row.role));assert.equal(prior.length,PLATFORM_RUNTIME_ROLES.length);
  const previous=prior.find(row=>row.role===ROLE);assert(previous&&HASH.test(previous.sha256));
  const overlay=profile.signingPolicyNativeOverlay;
  assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource']);

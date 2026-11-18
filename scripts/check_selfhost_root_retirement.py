@@ -51,7 +51,7 @@ STATIC_KMS_TOKENS = {
             {f"sign-grant-mint-{origin}"}
         for origin in (
             "gateway-service", "gateway-issuer-did", "flow-wallet",
-            "issuance-credential", "issuance-canvas", "issuance-readiness",
+            "issuance-credential",
             "issuance-passport",
         )
     },

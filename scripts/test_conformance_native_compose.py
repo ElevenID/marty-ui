@@ -19,7 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = runpy.run_path(str(ROOT / "scripts/conformance_stack.py"))
 NATIVE = runpy.run_path(str(ROOT / "scripts/conformance_native.py"))
-MERGE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+MERGE = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 PROJECT = "marty-conformance-native-config"
 COMMON = "docker-compose.service.issuance-native.yml"
@@ -33,29 +33,11 @@ TOKEN_RATE_CASES = (
     ("1200", "1200"),
     ("0", "0"),
 )
-MIRROR_WORKER_SETTINGS = (
-    "CANVAS_MIRROR_WORKER_ENABLED",
-    "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
-    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
-    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
-    "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
-    "CANVAS_MIRROR_WORKER_RETRY_FAILED",
-    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
-    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
-)
 SHARED_SETTING_REPAIRS = (
     "ALLOWED_REDIRECT_URIS",
     "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
     "TOKEN_RATE_LIMIT",
-    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
-    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-    "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
-    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
-) + MIRROR_WORKER_SETTINGS
+)
 PASSPORT_SHARED_INPUTS = (
     "PERSONALIZATION_BUREAU_URL",
     "PERSONALIZATION_BUREAU_API_KEY",
@@ -216,11 +198,7 @@ def assert_native_inputs(common, base_source):
     )
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in shared and setting in native
-        if setting == "CANVAS_MIRROR_WORKER_ENABLED":
-            assert shared[setting] == "false"
-            assert native[setting] == "${CANVAS_MIRROR_WORKER_ENABLED:-false}"
-        else:
-            assert native[setting] == shared[setting]
+        assert native[setting] == shared[setting]
     for setting in PASSPORT_SHARED_INPUTS:
         assert setting in shared and native[setting] == shared[setting]
     for setting, (expression, _) in PASSPORT_NATIVE_ONLY.items():
@@ -278,6 +256,7 @@ def run(command):
     approved_common = yaml.safe_load(
         (ROOT / APPROVED_COMMON).read_text(encoding="utf-8")
     )
+    approved_common = MERGE["retired_provider_projection"](approved_common)
     assert common == approved_common, (
         "Shared native service changed outside the reviewed KMS-only model"
     )
@@ -332,11 +311,7 @@ def run(command):
             assert "INTEGRATION_SECRET_MASTER_KEY" not in native
             assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
             for setting in SHARED_SETTING_REPAIRS + PASSPORT_SHARED_INPUTS:
-                if setting != "CANVAS_MIRROR_WORKER_ENABLED":
-                    assert (
-                        native[setting]
-                        == actual["services"]["issuance"]["environment"][setting]
-                    )
+                assert native[setting] == actual["services"]["issuance"]["environment"][setting]
             for setting, (_, default) in PASSPORT_NATIVE_ONLY.items():
                 assert native[setting] == (effective.get(setting) or default)
         for configured, expected_rate in TOKEN_RATE_CASES:

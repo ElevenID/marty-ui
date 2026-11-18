@@ -57,12 +57,13 @@ def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
     for name in (
         "ISSUANCE_OFFER_TTL_MINUTES",
         "VCDM_RELATED_RESOURCE_URLS",
-        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
         "UNIVERSAL_RESOLVER_URL",
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         "DIDCOMM_ALLOW_PRIVATE_IPS",
     ):
         assert native[name] == legacy[name]
+    assert "CANVAS_CREDENTIALS_STATUS_SYNC_URL" not in native
+    assert "CANVAS_CREDENTIALS_STATUS_SYNC_URL" not in legacy
     assert native["DIDCOMM_ALLOW_PRIVATE_IPS"] == "${DIDCOMM_ALLOW_PRIVATE_IPS:-false}"
     assert "DIDCOMM_ENCRYPTION_POLICY_FILE" not in native
     assert "DIDCOMM_TLS_CA_FILE" not in native

@@ -5,9 +5,8 @@ use chrono::{TimeZone as _, Utc};
 use marty_auth::{
     auth_event_message, credential_verification_flow, credential_verification_request,
     domain_event, ApplicantProvisioningStore, ApplicantUpsert, AuthEvent, AuthEventPublisher,
-    AuthGrpcChannelFactories, AuthenticatedUser, CanvasApplicantProfileProvisioner,
-    MmfApplicantProfileProvisioner, MmfApplicantProvisioningStore, MmfAuthEventPublisher,
-    StartCredentialVerification, UserType,
+    AuthGrpcChannelFactories, AuthenticatedUser, MmfApplicantProfileProvisioner,
+    MmfApplicantProvisioningStore, MmfAuthEventPublisher, StartCredentialVerification, UserType,
 };
 use mmf_messaging::{
     EventFilter, MemoryTransport, MessageTransport, MessagingConfig, Subscription,

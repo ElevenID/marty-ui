@@ -30,11 +30,8 @@ def test_generated_application_image_gate_is_mandatory_and_additive():
         ),
     }
     existing = {
-        "Verify merged Canvas worker deployment configuration": (
-            "python3 scripts/test_canvas_worker_compose_render.py"
-        ),
-        "Verify captured worker rollback launch configuration": (
-            "python3 scripts/test_beta_worker_launch_compose.py"
+        "Verify self-host native owner preservation": (
+            "python3 scripts/test_selfhost_native_owner_compose.py"
         ),
     }
     for retained, command in existing.items():
@@ -42,14 +39,9 @@ def test_generated_application_image_gate_is_mandatory_and_additive():
         retained_index = names.index(retained)
         assert retained_index < index
         assert steps[retained_index] == {"name": retained, "run": command}
-    consumer = names.index("Verify complete Canvas worker consumer configurations")
+    consumer = names.index("Install pinned Compose renderer for configuration checks")
     assert consumer < index
-    assert "--suite consumers" in steps[consumer]["run"]
-    assert (
-        'compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"'
-        in steps[consumer]["run"]
-    )
-    assert "bash scripts/ci/install-compose-renderer.sh" in steps[consumer]["run"]
+    assert steps[consumer]["run"] == "bash scripts/ci/install-compose-renderer.sh"
     assert (
         "sha256sum --check --strict"
         in (ROOT / "scripts/ci/install-compose-renderer.sh").read_text()

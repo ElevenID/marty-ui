@@ -2,8 +2,6 @@
 
 pub mod application;
 pub mod cache_repository;
-pub mod canvas;
-pub mod canvas_transport;
 pub mod config;
 pub mod connections;
 pub mod credential_callback;
@@ -29,8 +27,6 @@ pub mod wallet;
 
 pub use application::*;
 pub use cache_repository::*;
-pub use canvas::*;
-pub use canvas_transport::*;
 pub use config::*;
 pub use connections::*;
 pub use credential_callback::*;

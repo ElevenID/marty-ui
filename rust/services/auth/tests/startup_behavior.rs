@@ -134,10 +134,6 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     assert_eq!(config.organization_grpc_target, "https://organization:9002");
     assert_eq!(config.event_stream_grpc_target, "https://event-stream:9015");
     assert_eq!(config.grpc_service_token, "g".repeat(32));
-    assert_eq!(
-        config.issuance_native_service_url,
-        "http://issuance-native:8005"
-    );
     assert_eq!(config.oidc.issuer_url, "http://localhost:8180/realms/marty");
     assert_eq!(
         config.oidc.redirect_uri,
@@ -231,30 +227,6 @@ fn external_oidc_rejects_missing_explicit_identity_and_keycloak_only_settings() 
     }
     let default = AuthServiceConfig::from_values(baseline("beta")).unwrap();
     assert_eq!(default.oidc.provider_mode, OidcProviderMode::Keycloak);
-}
-
-#[test]
-fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
-    let mut production = baseline("production");
-    production.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
-    production.insert("FLOW_GRPC_TARGET".into(), "https://flow:9011".into());
-    production.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
-    production.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
-    production.extend(remote_tls_values());
-    let config = AuthServiceConfig::from_values(production).unwrap();
-    assert_eq!(config.issuance_native_service_url, "http://issuance:8005");
-
-    let mut beta = baseline("beta");
-    beta.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
-    beta.insert(
-        "ISSUANCE_NATIVE_SERVICE_URL".into(),
-        "http://issuance-native:8005".into(),
-    );
-    let config = AuthServiceConfig::from_values(beta).unwrap();
-    assert_eq!(
-        config.issuance_native_service_url,
-        "http://issuance-native:8005"
-    );
 }
 
 #[test]

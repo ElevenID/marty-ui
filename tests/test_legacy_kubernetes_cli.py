@@ -153,7 +153,7 @@ def function(name):
     return matches[0]
 
 
-@pytest.mark.parametrize("failure", ["none", "app-image", "ui-image", "rollout"])
+@pytest.mark.parametrize("failure", ["none", "app-image", "ui-image", "rollout", "legacy-worker", "worker-inspection"])
 def test_update_does_not_hide_required_image_or_rollout_failure(failure, tmp_path):
     # Preflight and live selection have already passed in this harness. Exercise
     # the actual command's writes and final exit, including pipeline error paths.
@@ -168,15 +168,22 @@ success() { printf '%s\n' "$*"; }
 warn() { :; }
 error() { printf '%s\n' "$*" >&2; return 1; }
 prepare_kubernetes_native_issuance() { :; }
-catalog_services() { printf '%s\n' gateway canvas-sync-worker issuance; }
+catalog_services() { printf '%s\n' gateway auth issuance; }
 resolve_secret_input() { printf ''; }
 is_placeholder_secret() { return 0; }
 kubectl() {
   case "$1:$2" in
+    get:deployment)
+      if [[ "$3" == canvas-sync-worker ]]; then
+        [[ "$TEST_FAILURE" != worker-inspection ]] || return 97
+        if [[ "$TEST_FAILURE" == legacy-worker ]]; then printf 'deployment.apps/canvas-sync-worker'; fi
+      else
+        printf '{}'
+      fi ;;
     get:*) printf '{}';;
     set:image)
       printf 'WRITE:%s\n' "$3"
-      [[ "$TEST_FAILURE:$3" != app-image:deployment/canvas-sync-worker && "$TEST_FAILURE:$3" != ui-image:deployment/ui ]] ;;
+      [[ "$TEST_FAILURE:$3" != app-image:deployment/auth && "$TEST_FAILURE:$3" != ui-image:deployment/ui ]] ;;
     rollout:status)
       [[ "$TEST_FAILURE:$3" != rollout:deployment ]] ;;
     *) return 98;;
@@ -198,8 +205,11 @@ kubectl() {
         env=env, capture_output=True, text=True, timeout=15,
     )
     assert (result.returncode == 0) == (failure == "none"), result.stdout + result.stderr
-    if failure == "app-image":
-        assert "required deployment 'canvas-sync-worker'" in result.stderr
+    if failure in {"legacy-worker", "worker-inspection"}:
+        assert "image update refused" in result.stderr
+        assert "WRITE:" not in result.stdout
+    elif failure == "app-image":
+        assert "required deployment 'auth'" in result.stderr
         assert "WRITE:deployment/ui" not in result.stdout
     elif failure == "ui-image":
         assert "required deployment 'ui'" in result.stderr

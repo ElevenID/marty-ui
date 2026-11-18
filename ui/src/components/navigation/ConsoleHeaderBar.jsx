@@ -83,13 +83,6 @@ function getCompactLabel(label, fallback = '', maxChars = 3) {
     .toUpperCase();
 }
 
-function isCanvasLtiUser(user) {
-  return Boolean(
-    user?.user_id?.startsWith?.('canvas-lti-')
-    || (Array.isArray(user?.roles) && user.roles.includes('canvas_lti_learner'))
-  );
-}
-
 function shortenIdentifier(value, maxChars = 28) {
   const normalized = String(value || '').trim();
   if (!normalized) {
@@ -107,32 +100,11 @@ function shortenIdentifier(value, maxChars = 28) {
   return `${localPart.slice(0, headChars)}...${localPart.slice(-tailChars)}`;
 }
 
-function isOpaqueCanvasIdentifier(value) {
-  const normalized = String(value || '').trim();
-  if (!normalized) {
-    return false;
-  }
-
-  return (normalized.startsWith('canvas-lti-')
-  || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalized) || /^[0-9a-f]{24,}$/i.test(normalized));
-}
-
 function getFullName(user) {
   return [user?.given_name, user?.family_name]
     .map((value) => (typeof value === 'string' ? value.trim() : ''))
     .filter(Boolean)
     .join(' ');
-}
-
-function getFriendlyCanvasIdentifier(user) {
-  for (const value of [user?.preferred_username, user?.username]) {
-    const normalized = String(value || '').trim();
-    if (normalized && !isOpaqueCanvasIdentifier(normalized)) {
-      return shortenIdentifier(normalized);
-    }
-  }
-
-  return '';
 }
 
 export function getAccountMenuDisplayName(user) {
@@ -142,16 +114,6 @@ export function getAccountMenuDisplayName(user) {
 
   const identifier = shortenIdentifier(user.username || user.preferred_username || user.email || user.user_id);
   const fullName = getFullName(user);
-  if (isCanvasLtiUser(user)) {
-    return (
-      getFriendlyCanvasIdentifier(user)
-      || fullName
-      || shortenIdentifier(user.email)
-      || identifier
-      || 'Canvas learner'
-    );
-  }
-
   return fullName || identifier || 'User';
 }
 

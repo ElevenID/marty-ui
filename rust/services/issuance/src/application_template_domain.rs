@@ -42,7 +42,6 @@ const CLAIM_SOURCES: &[&str] = &[
     "SYSTEM",
 ];
 const SYSTEM_FIELDS: &[&str] = &[
-    "canvas.course_name",
     "applicant.user_id",
     "applicant.email",
     "applicant.given_name",

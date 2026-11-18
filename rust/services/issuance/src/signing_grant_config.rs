@@ -30,8 +30,6 @@ pub fn managed_grant_minter(
 ) -> Result<GrantMinter, IssuanceGrantConfigError> {
     let token_file_env = match origin {
         SigningOrigin::IssuanceCredential => "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
-        SigningOrigin::IssuanceCanvas => "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
-        SigningOrigin::IssuanceReadiness => "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
         SigningOrigin::IssuancePassport => "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
         _ => return Err(IssuanceGrantConfigError::InvalidOrigin),
     };

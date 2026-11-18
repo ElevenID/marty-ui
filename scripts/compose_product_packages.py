@@ -23,7 +23,6 @@ SHARED_SERVICES = {
     "trust-profile": "trust_profile",
     "issuance": "issuance_native",
     "issuance-native": "issuance_native",
-    "canvas-sync-worker": "canvas_sync_worker",
     "applicant": "applicant",
     "notification": "notification",
     "compliance-profile": "compliance_profile",
@@ -120,6 +119,10 @@ def server_composition(base: dict, package: dict, runtime_dir: Path | None = Non
     require("include" not in base, "base must resolve source includes")
     result = deepcopy(base)
     services = result.get("services", {})
+    require(
+        not any(name.replace("_", "-") == "canvas-sync-worker" for name in services),
+        "retired provider worker cannot be composed into the platform product",
+    )
     require(
         {"edge", "gateway", "auth", "keycloak", "flow"} <= set(services),
         "server base lacks required backend services",

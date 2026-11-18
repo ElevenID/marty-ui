@@ -11,18 +11,10 @@ import CredentialTemplateDetailPage from './CredentialTemplateDetailPage';
 const {
   mockGetCredentialTemplate,
   mockListDeliveryDestinations,
-  mockCreateDeliveryDestination,
-  mockUpdateDeliveryDestination,
-  mockListCanvasProgramBindings,
-  mockGetCanvasMirrorHealth,
   context, permission, can,
 } = vi.hoisted(() => ({
   mockGetCredentialTemplate: vi.fn(),
   mockListDeliveryDestinations: vi.fn(),
-  mockCreateDeliveryDestination: vi.fn(),
-  mockUpdateDeliveryDestination: vi.fn(),
-  mockListCanvasProgramBindings: vi.fn(),
-  mockGetCanvasMirrorHealth: vi.fn(),
   context: { activeOrgId: 'org-1' }, permission: { isLoading: false }, can: vi.fn(),
 }));
 
@@ -41,14 +33,9 @@ vi.mock('../../../services/presentationPolicyApi', () => ({
 
 vi.mock('../../../services/deliveryDestinationsApi', () => ({
   listDeliveryDestinations: mockListDeliveryDestinations,
-  createDeliveryDestination: mockCreateDeliveryDestination,
-  updateDeliveryDestination: mockUpdateDeliveryDestination,
 }));
 
-vi.mock('../../../services/canvasIntegrationsApi', () => ({
-  listCanvasProgramBindings: mockListCanvasProgramBindings,
-  getCanvasMirrorHealth: mockGetCanvasMirrorHealth,
-}));
+
 
 describe('CredentialTemplateDetailPage', () => {
   beforeEach(() => {
@@ -65,73 +52,9 @@ describe('CredentialTemplateDetailPage', () => {
     });
     server.use(http.get('http://localhost:8000/v1/credential-templates/template-1/wallet-compatibility', () => HttpResponse.json(walletExample)));
     mockListDeliveryDestinations.mockResolvedValue([
-      {
-        id: 'dd-canvas-credentials-institutional',
-        is_system: true,
-        name: 'Canvas Credentials',
-        description: 'Publish a public Open Badge view to Canvas Credentials after ElevenID issuance.',
-        provider: 'canvas_credentials',
-        setup_actor: 'organization_admin',
-        credential_format: 'VC_JWT',
-        claim_projection_policy: { mode: 'public_badge_provenance' },
-      },
-      {
-        id: 'dd-elevenid-wallet',
-        is_system: true,
-        name: 'ElevenID Wallet',
-        provider: 'elevenid_wallet',
-        mode: 'holder_wallet',
-        credential_format: 'VC_JWT',
-      },
+      { id: 'wallet', is_system: true, name: 'ElevenID Wallet', provider: 'elevenid_wallet', mode: 'holder_wallet', is_enabled: true },
+      { id: 'external', organization_id: 'org-1', name: 'External destination', provider: 'external', is_enabled: false },
     ]);
-    mockCreateDeliveryDestination.mockResolvedValue({
-      id: 'dd-org-canvas-credentials',
-      name: 'Canvas Credentials',
-      provider: 'canvas_credentials',
-      mode: 'organization_mirror',
-      is_system: false,
-      is_enabled: true,
-    });
-    mockUpdateDeliveryDestination.mockResolvedValue({
-      id: 'dd-org-canvas-credentials',
-      provider: 'canvas_credentials',
-      mode: 'organization_mirror',
-      is_system: false,
-      is_enabled: false,
-    });
-    mockListCanvasProgramBindings.mockResolvedValue([
-      {
-        id: 'binding-1',
-        organization_id: 'org-1',
-        display_name: 'Interoperable Credentials Foundations Quiz',
-        credential_template_id: 'template-1',
-        canvas_scope: {
-          course_id: 'course-1',
-          quiz_id: 'quiz-1',
-        },
-        canvas_credentials: {
-          provider: 'badgr_api',
-          assertion_scope: 'badgeclasses',
-          badgeclass_id: 'badgeclass-1',
-          issuer_id: 'issuer-1',
-          api_base_url: 'https://api.badgr.test',
-          api_token_secret_id: 'secret-1',
-        },
-      },
-    ]);
-    mockGetCanvasMirrorHealth.mockResolvedValue({
-      organization_id: 'org-1',
-      pending_publish_count: 2,
-      failed_publish_count: 1,
-      delivered_count: 5,
-      lifecycle_sync_failed_count: 1,
-      lifecycle_sync_ok_count: 4,
-      alert_count: 1,
-      critical_alert_count: 0,
-      warning_alert_count: 1,
-      last_successful_publish_at: '2026-05-21T16:03:54.200968+00:00',
-      last_lifecycle_sync_success_at: '2026-05-21T16:04:54.200968+00:00',
-    });
   });
 
   const page = () => <Routes><Route path="/console/org/templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} /></Routes>;
@@ -149,7 +72,6 @@ describe('CredentialTemplateDetailPage', () => {
     await screen.findByRole('heading', { name: 'Interoperable Credentials Foundations Badge' });
     expect(calls).toBe(0);
     expect(mockListDeliveryDestinations).not.toHaveBeenCalled();
-    expect(mockListCanvasProgramBindings).not.toHaveBeenCalled();
     await user.click(screen.getByRole('tab', { name: 'Wallet profile' }));
     expect(await screen.findByText('Campus Wallet')).toBeInTheDocument();
     expect(screen.getByText('Derived configuration')).toBeInTheDocument();
@@ -206,7 +128,6 @@ describe('CredentialTemplateDetailPage', () => {
     renderPage();
     expect(mockGetCredentialTemplate).not.toHaveBeenCalled();
     expect(mockListDeliveryDestinations).not.toHaveBeenCalled();
-    expect(mockGetCanvasMirrorHealth).not.toHaveBeenCalled();
   });
 
   it('does not mount wallet or destination data for a foreign owning template', async () => {
@@ -219,14 +140,13 @@ describe('CredentialTemplateDetailPage', () => {
     expect(mockListDeliveryDestinations).not.toHaveBeenCalled();
   });
 
-  it('uses existing integration grants for destination reads and mutations', async () => {
-    can.mockImplementation((resource, action) => resource === 'credential-template' || (['integration-connector', 'wallet'].includes(resource) && action === 'view'));
+  it('uses wallet view permission for destination reads', async () => {
+    can.mockImplementation((resource, action) => resource === 'credential-template' || (resource === 'wallet' && action === 'view'));
     const { user } = renderPage();
     await screen.findByRole('heading', { name: 'Interoperable Credentials Foundations Badge' });
     await user.click(screen.getByRole('tab', { name: 'Destinations' }));
-    expect(await screen.findByRole('heading', { name: 'Canvas Credentials' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'ElevenID Wallet' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add org destination/i })).not.toBeInTheDocument();
-    expect(mockCreateDeliveryDestination).not.toHaveBeenCalled();
     expect(screen.queryByText('Ready')).not.toBeInTheDocument();
   });
 
@@ -256,68 +176,18 @@ describe('CredentialTemplateDetailPage', () => {
     expect(screen.getByText('Current wallet')).toBeInTheDocument();
   });
 
-  it('shows destination readiness and Canvas bindings for a credential template', async () => {
-    const { user } = renderWithRouter(
-      <Routes>
-        <Route path="/console/org/templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
-      </Routes>,
-      {
-        initialEntries: ['/console/org/templates/credentials/template-1'],
-      },
-    );
-
-    expect(
-      await screen.findByRole('heading', { name: 'Interoperable Credentials Foundations Badge' }),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole('tab', { name: /destinations/i }));
-
-    expect(await screen.findByTestId('credential-template-destinations')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Canvas Credentials' })).toBeInTheDocument();
-    expect(screen.getByText(/Canvas Credentials is an organization-managed destination/i)).toBeInTheDocument();
-    expect(screen.getByText(/Active bindings for this template:/i)).toBeInTheDocument();
-    expect(screen.getByText('Interoperable Credentials Foundations Quiz')).toBeInTheDocument();
-    expect(screen.getByText(/Badge class:/i)).toBeInTheDocument();
-    expect(screen.getByText('badgeclass-1')).toBeInTheDocument();
-    expect(screen.getByText(/Token:/i)).toBeInTheDocument();
-    expect(screen.getByText('Pending: 2')).toBeInTheDocument();
-    expect(screen.getByText('Failed: 1')).toBeInTheDocument();
-    expect(screen.getByText('Sync failures: 1')).toBeInTheDocument();
-    expect(screen.getByText(/Canvas mirror drift needs attention/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /manage canvas platforms/i })).toHaveAttribute(
-      'href',
-      '/console/org/deploy/canvas',
-    );
-  });
-
-  it('creates an organization Canvas Credentials destination from the template destinations tab', async () => {
-    const { user } = renderWithRouter(
-      <Routes>
-        <Route path="/console/org/templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
-      </Routes>,
-      {
-        initialEntries: ['/console/org/templates/credentials/template-1'],
-      },
-    );
-
+  it('shows generic destination enablement without provider administration', async () => {
+    const { user } = renderPage();
     await screen.findByRole('heading', { name: 'Interoperable Credentials Foundations Badge' });
-    await user.click(screen.getByRole('tab', { name: /destinations/i }));
-    await user.click(await screen.findByRole('button', { name: /add org destination/i }));
-
-    expect(mockCreateDeliveryDestination).toHaveBeenCalledWith(expect.objectContaining({
-      organization_id: 'org-1',
-      provider: 'canvas_credentials',
-      mode: 'organization_mirror',
-      setup_actor: 'org_admin',
-      delivery_target: 'canvas_credentials',
-      requires_consent: true,
-      claim_projection_policy: expect.objectContaining({ mode: 'public_badge' }),
-    }));
+    await user.click(screen.getByRole('tab', { name: 'Destinations' }));
+    expect(await screen.findByRole('heading', { name: 'External destination' })).toBeInTheDocument();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+    expect(screen.getByText('Enabled')).toBeInTheDocument();
+    expect(mockListDeliveryDestinations).toHaveBeenCalledWith({ organizationId: 'org-1', activeOnly: false });
   });
 
   it('surfaces destination dependency failures instead of showing an empty destination state', async () => {
     mockListDeliveryDestinations.mockRejectedValue(new Error('Delivery service unavailable'));
-    mockListCanvasProgramBindings.mockRejectedValue(new Error('Canvas bindings unavailable'));
 
     const { user } = renderWithRouter(
       <Routes>
@@ -332,7 +202,6 @@ describe('CredentialTemplateDetailPage', () => {
     await user.click(screen.getByRole('tab', { name: /destinations/i }));
 
     expect(await screen.findByText('Delivery service unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Canvas bindings unavailable')).toBeInTheDocument();
     expect(screen.queryByText(/No delivery destinations are available/i)).not.toBeInTheDocument();
   });
 });

@@ -4,14 +4,14 @@
 )]
 #[path = "../../../services/issuance/tests/support/bounded_fixture_command.rs"]
 mod bounded_fixture_command;
+#[path = "../../../acceptance/support/owned_cleanup.rs"]
+mod owned_cleanup;
 #[expect(
     dead_code,
     reason = "shared database fixture has other acceptance owners"
 )]
-#[path = "../../../services/issuance/tests/support/canvas_published_database.rs"]
-mod canvas_published_database;
-#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]
-mod owned_cleanup;
+#[path = "../../../services/issuance/tests/support/platform_test_database.rs"]
+mod platform_test_database;
 #[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
 mod remote_integration_secret;
 #[path = "../../../services/issuance/tests/support/renewal_reference_fixture.rs"]
@@ -40,7 +40,7 @@ async fn packaged_remote_secret_fixture_requires_verified_https() {
 
 #[test]
 fn selfhost_public_image_loader_isolated() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+    if std::env::var("MARTY_PLATFORM_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Selfhost public image acceptance requires the configured Linux gate");
         return;
     }
@@ -65,7 +65,7 @@ async fn selfhost_public_image_loader_child() {
     .unwrap();
     selfhost_packaged_runtime::record_database_stage("start");
     let owned = std::mem::ManuallyDrop::new(
-        canvas_published_database::PublishedDatabase::start_with_scope(
+        platform_test_database::PublishedDatabase::start_with_scope(
             selfhost_runtime_sidecar::parent_scope().unwrap(),
         )
         .await

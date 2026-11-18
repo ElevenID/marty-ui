@@ -26,7 +26,6 @@
     "flow_grpc",
     "organization_grpc",
     "applicant_http",
-    "canvas_lti_http",
     "event_outbox",
     "event_stream_grpc",
     "http_listener",

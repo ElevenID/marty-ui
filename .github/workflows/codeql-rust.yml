@@ -75,7 +75,7 @@ jobs:
             const testOnlyCandidate = files.length > 0 && files.every(
               ({ filename, status, previous_filename }) =>
                 status === 'modified' && !previous_filename &&
-                /^(?:rust\/crates\/(?:canvas-worker|flow|selfhost|service)-acceptance|rust\/services\/signing-keys)\/tests\/[a-z0-9_/-]+\.rs$/.test(filename)
+                /^(?:rust\/crates\/(?:flow|selfhost|service)-acceptance|rust\/services\/signing-keys)\/tests\/[a-z0-9_/-]+\.rs$/.test(filename)
             );
             core.info(analyze
               ? 'Rust-relevant changes require CodeQL analysis.'
@@ -137,7 +137,6 @@ jobs:
             ).toString('utf8'));
             const verified = new Set();
             for (const flag of [
-              '--emit-verified-worker-tests',
               '--emit-verified-flow-tests',
               '--emit-verified-selfhost-tests',
               '--emit-verified-contract-tests',

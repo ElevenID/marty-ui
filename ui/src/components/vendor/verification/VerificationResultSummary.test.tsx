@@ -133,7 +133,7 @@ describe('VerificationResultSummary', () => {
     expect(screen.getByTestId('verification-result-summary')).not.toHaveAttribute('data-issuer-trusted');
   });
 
-  it('renders Open Badge verification checks, claims, and Canvas mirror provenance', () => {
+  it('renders Open Badge verification checks and claims without provider-specific panels', () => {
     render(
       <VerificationResultSummary
         session={{
@@ -168,7 +168,6 @@ describe('VerificationResultSummary', () => {
     expect(screen.getByText('Credential signature was valid')).toBeInTheDocument();
     expect(screen.getByText('Learner')).toBeInTheDocument();
     expect(screen.getByText('ElevenID Test Learner')).toBeInTheDocument();
-    expect(screen.getByTestId('verification-canvas-mirror-result')).toHaveTextContent('canvas-cred-1');
-    expect(screen.getByTestId('verification-canvas-mirror-result')).toHaveTextContent('canvas-real-account-1');
+    expect(screen.queryByTestId('verification-canvas-mirror-result')).not.toBeInTheDocument();
   });
 });

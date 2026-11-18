@@ -8,10 +8,11 @@ const SOURCE='6117cea9290f57406cf109eae56f64f7986e3783';
 const CORE='ffa24febcd0fb3fced15da7f28190af6d61ae0f9';
 const ROLES=Object.freeze({flow:'marty-flow',gateway:'marty-gateway','issuance-native':'marty-issuance-service'});
 const CURRENT10=Object.freeze({profile:'d05-membership-current-functional',source:'47e42c7f61e150e1ece953e02b4041324b6bdea4',core:'ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca',roles:Object.freeze({'presentation-policy':'marty-presentation-policy','credential-template':'marty-credential-template','trust-profile':'marty-trust-profile','compliance-profile':'marty-compliance-profile','signing-keys':'marty-signing-keys',gateway:'marty-gateway',auth:'marty-auth',flow:'marty-flow','issuance-native':'marty-issuance-service',organization:'marty-organization'})});
+const {PLATFORM_RUNTIME_ROLES:CURRENT_RUNTIME_ROLES}=require('./platform-runtime-roles');
+const ROLE_COUNT=CURRENT_RUNTIME_ROLES.length;
 const HASH=/^[a-f0-9]{64}$/;
 function observe({before:beforeRef,selection:selectionRef,created:createdRef,startAcks:acksRef,runId,engineId},{readDocker}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_TRANSPORT_REQUIRED');
- const info=JSON.parse(readDocker(['info','--format','{{json .}}']));assert.equal(info.ID,engineId,'D12_ENGINE_CHANGED');
  const before=runtime.boundJson(beforeRef),selection=runtime.boundJson(selectionRef);
  const created=runtime.boundJson(createdRef),starts=runtime.boundJson(acksRef);
  assert(['d12-passport-current-functional',CURRENT10.profile].includes(selection.profile),'UNREVIEWED_CURRENT_ROLLOUT_PROFILE');
@@ -21,14 +22,17 @@ function observe({before:beforeRef,selection:selectionRef,created:createdRef,sta
  assert.equal(selection.sourceRevision,source);assert.equal(selection.coreRevision,core);
  assert.deepEqual(selection.roleBinaries,roles);assert.deepEqual(Object.keys(selection.binaries).sort(),Object.keys(roles).sort());
  assert.equal(selection.scope,'FUNCTIONAL_ONLY');assert.equal(selection.releaseQualified,false);assert.equal(selection.recordingQualified,false);
- assert.equal(before.roles.length,22);assert.equal(new Set(before.roles.map(x=>x.role)).size,22);
- const ids=new Set(before.roles.map(x=>x.containerId));assert.equal(ids.size,22);
+ const names=before.roles.map(x=>x.role).sort();
+ assert(names.length===ROLE_COUNT&&names.every((name,index)=>name===CURRENT_RUNTIME_ROLES[index]),'D12_CURRENT_RUNTIME_ROLE_SET_REQUIRED');
+ assert.equal(before.roles.length,ROLE_COUNT);assert.equal(new Set(before.roles.map(x=>x.role)).size,ROLE_COUNT);
+ const ids=new Set(before.roles.map(x=>x.containerId));assert.equal(ids.size,ROLE_COUNT);
  assert.equal(created.runId,runId);assert.equal(starts.runId,runId);
- assert.equal(created.roles.length,22);assert.equal(new Set(created.roles.map(x=>x.role)).size,22);
+ assert.equal(created.roles.length,ROLE_COUNT);assert.equal(new Set(created.roles.map(x=>x.role)).size,ROLE_COUNT);
  assert.deepEqual(created.roles.map(x=>x.role).sort(),before.roles.map(x=>x.role).sort());
  assert.deepEqual(Object.keys(starts.acks).sort(),before.roles.map(x=>x.role).sort());
  const createdByRole=Object.fromEntries(created.roles.map(x=>[x.role,x]));
- assert.equal(new Set(created.roles.map(x=>x.containerId)).size,22);
+ assert.equal(new Set(created.roles.map(x=>x.containerId)).size,ROLE_COUNT);
+ const info=JSON.parse(readDocker(['info','--format','{{json .}}']));assert.equal(info.ID,engineId,'D12_ENGINE_CHANGED');
  const rows=before.roles.map(prior=>{
   const actual=runtime.observeDocker(prior,readDocker);
   const owned=createdByRole[prior.role],ack=starts.acks[prior.role];
@@ -44,7 +48,7 @@ function observe({before:beforeRef,selection:selectionRef,created:createdRef,sta
   assert.equal(roles[prior.role]?owned.containerId!==prior.containerId:owned.containerId===prior.containerId,
     true,'D12_CREATED_LINEAGE_CHANGED');
   assert.equal(actual.running,true);assert.equal(actual.status,'running');
-  assert(actual.health==='healthy'||prior.role==='canvas-sync-worker'&&actual.health===null,'D12_ROLE_HEALTH_NOT_ESTABLISHED');assert(HASH.test(actual.containerId));
+  assert(actual.health==='healthy','D12_ROLE_HEALTH_NOT_ESTABLISHED');assert(HASH.test(actual.containerId));
   assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(Date.parse(actual.startedAt)>Date.parse(prior.startedAt));
   if(prior.binary){assert.equal(actual.binarySha256,roles[prior.role]?selection.binaries[prior.role].sha256:prior.sha256);
    assert.equal(actual.processExecutableSha256,actual.binarySha256);
@@ -72,7 +76,7 @@ function observe({before:beforeRef,selection:selectionRef,created:createdRef,sta
   runtime.validateRuntimeObservation(prior,actual,true);
   return {...prior,startedAt:actual.startedAt,hostPid:actual.hostPid,health:actual.health};
  });
- assert.equal(new Set(rows.map(x=>x.containerId)).size,22);
+ assert.equal(new Set(rows.map(x=>x.containerId)).size,ROLE_COUNT);
  return {roles:rows,scope:'D12_CURRENT_ACTUAL_DOCKER_OBSERVATION',functionalReady:false,releaseQualified:false,recordingQualified:false};
 }
-module.exports={observe,SOURCE,CORE,ROLES,CURRENT10};
+module.exports={observe,SOURCE,CORE,ROLES,CURRENT10,CURRENT_RUNTIME_ROLES};

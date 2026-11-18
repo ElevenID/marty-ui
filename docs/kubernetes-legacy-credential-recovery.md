@@ -1,3 +1,16 @@
+> Current-source status: unavailable. The native legacy inspection, target,
+> predecessor, staging and qualification commands now refuse before credential,
+> file or network access. The original initializer hash is preserved; current
+> source does not requalify the old provider-bearing cohort. The description below
+> is historical recovery evidence, not current operational instructions.
+>
+> TODO (platform recovery owner): use the retained exact source-bound recovery
+> operator and original private evidence for an existing job. A replacement
+> provider-neutral recovery workflow requires separate source/identity/custody,
+> journal, replay and runtime qualification. Do not relabel old evidence, delete
+> its private inputs or weaken guards to make it current. Original native
+> implementation and safety tests remain in Git at `658228a4`.
+
 # Retained Kubernetes development credential recovery
 
 ## Problem and scope

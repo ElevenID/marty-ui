@@ -204,7 +204,7 @@ fi
 ensure_passport_callback
 # Signing authorization is separate from signing custody. Each producer gets
 # one HMAC key and a mint-only policy; Signing Keys receives verify-only access.
-grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport'
+grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-passport'
 for grant_origin in ${grant_origins}; do
     grant_key="marty-sign-grant-${grant_origin}-v1"
     bao write -address="${BAO_ADDR}" "transit/keys/${grant_key}" \
@@ -225,8 +225,8 @@ done
 for grant_origin in ${grant_origins}; do
     printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "${grant_origin}"
 done | bao policy write -address="${BAO_ADDR}" sign-grant-verify -
-if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ]; then
-    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ] || {
+if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ]; then
+    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ] || {
         echo 'All scoped signing grant token paths are required.' >&2
         exit 1
     }
@@ -253,8 +253,6 @@ if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FIL
         chmod 0444 "${grant_file}"
     }
     mint_issuance_grant_token credential "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE}"
-    mint_issuance_grant_token canvas "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE}"
-    mint_issuance_grant_token readiness "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE}"
     mint_issuance_grant_token passport "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE}"
     grant_verify_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-verify -no-default-policy -orphan -field=token)"
     [ -n "${grant_verify_token}" ] || { echo 'Could not mint signing grant verifier token.' >&2; exit 1; }

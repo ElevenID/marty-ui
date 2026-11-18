@@ -258,8 +258,6 @@ spec:
               value: "true"
             - name: KEYCLOAK_REPLACE_UI_ORIGINS
               value: "true"
-            - name: CANVAS_DEMO_ADMIN_ENABLED
-              value: "false"
             - name: MARTY_ORG_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:

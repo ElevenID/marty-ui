@@ -3,13 +3,23 @@
   "name": "selfhost-production",
   "description": "Open-source self-host production stack with configurable hosting and optional tunnel integration.",
   "env_file": ".env.selfhost.production.local",
-  "compose_files": ["docker-compose.selfhost.prod.yml"],
+  "compose_files": [
+    "docker-compose.selfhost.prod.yml"
+  ],
   "compose_profiles": [],
-  "domains": ["elevenidllc.com"],
+  "domains": [
+    "elevenidllc.com"
+  ],
   "primary_domain": "elevenidllc.com",
-  "required_service_groups": ["infra", "selfhost_core", "app"],
-  "required_services": ["canvas-sync-worker"],
-  "optional_services": ["device-registration"],
+  "required_service_groups": [
+    "infra",
+    "selfhost_core",
+    "app"
+  ],
+  "required_services": [],
+  "optional_services": [
+    "device-registration"
+  ],
   "required_secrets": [
     "postgres_password",
     "keycloak_db_password",
@@ -75,8 +85,6 @@
     "sign_grant_mint_gateway_service_token",
     "sign_grant_mint_gateway_issuer_did_token",
     "sign_grant_mint_issuance_credential_token",
-    "sign_grant_mint_issuance_canvas_token",
-    "sign_grant_mint_issuance_readiness_token",
     "sign_grant_mint_issuance_passport_token",
     "haip_kms_token",
     "signing_keys_workload_server_cert",
@@ -84,16 +92,40 @@
     "signing_keys_tls_kms_token"
   ],
   "artifact_profile": "oss-release",
-  "deployment_targets": ["docker-compose", "customer-bundle"],
+  "deployment_targets": [
+    "docker-compose",
+    "customer-bundle"
+  ],
   "operations": {
-    "config": ["config"],
-    "up": ["up", "-d", "--build"],
-    "down": ["down"],
-    "ps": ["ps"],
-    "logs": ["logs", "-f", "edge", "gateway", "keycloak"]
+    "config": [
+      "config"
+    ],
+    "up": [
+      "up",
+      "-d",
+      "--build"
+    ],
+    "down": [
+      "down"
+    ],
+    "ps": [
+      "ps"
+    ],
+    "logs": [
+      "logs",
+      "-f",
+      "edge",
+      "gateway",
+      "keycloak"
+    ]
   },
   "smoke_tests": {
-    "public_routes": ["/", "/login", "/console", "/v1/auth/me"],
+    "public_routes": [
+      "/",
+      "/login",
+      "/console",
+      "/v1/auth/me"
+    ],
     "auth_login_callback_host": "elevenidllc.com"
   }
 }

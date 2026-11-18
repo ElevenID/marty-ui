@@ -364,7 +364,8 @@ def test_every_rendered_private_secret_alias_is_guarded(rendered: list[dict]) ->
         and (reference["name"], reference["key"]) not in public_references
     }
     packaged = set(yaml.safe_load((CHART / "files/private-config-keys.yaml").read_text()))
-    assert {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"} <= private_aliases
+    assert {"PERSONALIZATION_BUREAU_API_KEY"} <= private_aliases
+    assert not any(name.startswith("CANVAS_") for name in private_aliases)
     assert private_aliases <= packaged
 
 
@@ -375,7 +376,7 @@ def test_every_rendered_private_secret_alias_is_guarded(rendered: list[dict]) ->
     "KC_BOOTSTRAP_ADMIN_PASSWORD", "MARTY_ORG_ADMIN_PASSWORD",
     "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "GOOGLE_CLIENT_SECRET",
     "SIGNING_KEYS_INTERNAL_API_KEY", "FLOW_WEBHOOK_SECRET",
-    "OIDC_CLIENT_SECRET", "VERIFICATION_GOVERNANCE_JSON", "CANVAS_CREDENTIALS_API_TOKEN",
+    "OIDC_CLIENT_SECRET", "VERIFICATION_GOVERNANCE_JSON",
     "PERSONALIZATION_BUREAU_API_KEY", "HAIP_KMS_TOKEN", "PASSPORT_TENANT_API_KEYS",
     "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT", "NORTHSTAR_RUN_SECRET",
 ])
@@ -404,11 +405,8 @@ def test_nonsecret_key_names_and_private_file_paths_remain_configurable(tmp_path
         "SMTP_USERNAME": "identity-mailer",
         "SIGNING_KEYS_TLS_KMS_KEY_NAME": "workload-tls-signing-keys-server",
         "SIGNING_KEYS_TLS_KMS_KEY_VERSION": "2",
-        "CANVAS_LTI_TOOL_ACTIVE_KID": "academy-lti-key-1",
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS": '{"keys":[]}',
         "FLOW_SIGN_GRANT_MINT_TOKEN_FILE": "/run/secrets/flow_sign_grant_mint_token",
         "OIDC_CLIENT_SECRET_FILE": "/run/secrets/oidc_client_secret",
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "/run/secrets/canvas_credentials_api_token",
         "HAIP_KMS_TOKEN_FILE": "/run/secrets/haip_kms_token",
     }
     values["config"] = settings
@@ -476,27 +474,45 @@ def test_keycloak_configurator_rejects_a_string_boolean(tmp_path: Path) -> None:
     assert "boolean" in result.stderr
 
 
-def test_disabling_canvas_worker_removes_only_its_deployment(
-    tmp_path: Path, rendered: list[dict],
-) -> None:
-    worker = resources(rendered, "Deployment")["canvas-sync-worker"]
-    values = installation_values()
-    values["canvasWorker"] = {"enabled": False}
-    assert render(tmp_path, values) == [doc for doc in rendered if doc is not worker]
+def test_platform_deployments_exclude_retired_connector(rendered: list[dict]) -> None:
+    assert "canvas-sync-worker" not in resources(rendered, "Deployment")
+    config = resources(rendered, "ConfigMap")["marty-config"]["data"]
+    assert not any(name.startswith("CANVAS_") for name in config)
 
 
-@pytest.mark.parametrize("enabled", ["false", "true", 0, 1, None, {}, []])
-def test_canvas_worker_requires_a_boolean_instead_of_a_truthy_string(
-    tmp_path: Path, enabled: object,
-) -> None:
+@pytest.mark.parametrize("enabled", [True, False, "false", "true", 0, 1, None, {}, []])
+def test_retired_worker_configuration_is_rejected(tmp_path: Path, enabled: object) -> None:
     values = installation_values()
     values["canvasWorker"] = {"enabled": enabled}
     values_file = tmp_path / "installation.yaml"
     values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
     result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
     assert result.returncode != 0
-    assert "canvasWorker" in result.stderr and "enabled" in result.stderr
     assert "kind:" not in result.stdout
+
+
+@pytest.mark.parametrize("key", [
+    "CANVAS_CREDENTIALS_API_TOKEN", "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+    "CANVAS_LTI_TOOL_PUBLIC_JWKS", "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+    "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN",
+    "KEYCLOAK_SEED_CANVAS_ADMIN_USER", "SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN",
+])
+@pytest.mark.parametrize("configurator_enabled", [True, False])
+def test_retired_connector_configuration_is_rejected_without_disclosure(
+    tmp_path: Path, key: str, configurator_enabled: bool,
+) -> None:
+    values = installation_values()
+    sentinel = "synthetic-retired-secret-must-never-be-disclosed"
+    values["config"] = {key: sentinel}
+    values["keycloak"] = {"configurator": {"enabled": configurator_enabled}}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert f"config.{key}" in result.stderr
+    assert sentinel not in result.stdout + result.stderr
+    assert "kind:" not in result.stdout
+
 
 
 def test_existing_ui_replay_preserves_explicit_issuer_without_setup_jobs(tmp_path: Path) -> None:
@@ -766,38 +782,21 @@ def test_wildcard_ingress_length_includes_the_wildcard_prefix(
 
 
 @pytest.mark.parametrize("public_origin", [None, "https://192.0.2.20:8443"])
-def test_canvas_worker_inherits_complete_public_urls(tmp_path: Path, public_origin: str | None) -> None:
+def test_platform_issuer_inherits_complete_public_origin(tmp_path: Path, public_origin: str | None) -> None:
     values = installation_values()
     if public_origin:
         values.update(publicHost="192.0.2.20", publicOrigin=public_origin)
-    origin = public_origin or "https://marty.example.test"
-    rendered = render(tmp_path, values)
-    config = resources(rendered, "ConfigMap")["marty-config"]["data"]
-    expected = {
-        "ISSUER_BASE_URL": origin,
-        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL": origin + "/console/org/deploy/canvas",
-    }
-    assert {name: config[name] for name in expected} == expected
-    worker = resources(rendered, "Deployment")["canvas-sync-worker"]["spec"]["template"]["spec"]["containers"][0]
-    assert {"configMapRef": {"name": "marty-config"}} in worker["envFrom"]
-    assert set(expected).isdisjoint(entry["name"] for entry in worker["env"])
-
-
-@pytest.mark.parametrize("overrides", [
-    {"ISSUER_BASE_URL": "https://issuer.example.test:9443"},
-    {"CANVAS_OAUTH_COMPLETION_REDIRECT_URL": "https://console.example.test/canvas-complete"},
-])
-def test_canvas_public_url_overrides_preserve_other_generated_defaults(tmp_path: Path, overrides: dict) -> None:
-    values = installation_values()
-    origin = "https://192.0.2.20:8443"
-    values.update(publicHost="192.0.2.20", publicOrigin=origin, config=overrides)
     config = resources(render(tmp_path, values), "ConfigMap")["marty-config"]["data"]
-    expected = {
-        "ISSUER_BASE_URL": origin,
-        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL": origin + "/console/org/deploy/canvas",
-        **overrides,
-    }
-    assert {name: config[name] for name in expected} == expected
+    assert config["ISSUER_BASE_URL"] == (public_origin or "https://marty.example.test")
+
+
+def test_explicit_issuer_url_preserves_generated_defaults(tmp_path: Path) -> None:
+    values = installation_values()
+    values.update(publicHost="192.0.2.20", publicOrigin="https://192.0.2.20:8443",
+                  config={"ISSUER_BASE_URL": "https://issuer.example.test:9443"})
+    config = resources(render(tmp_path, values), "ConfigMap")["marty-config"]["data"]
+    assert config["ISSUER_BASE_URL"] == "https://issuer.example.test:9443"
+    assert config["KC_HOSTNAME"] == "https://192.0.2.20:8443"
 
 
 @pytest.mark.parametrize("development", [False, True])
@@ -952,7 +951,8 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
 
     ordinary_locations = nginx_locations(normal)
     dev_locations = nginx_locations(development)
-    ui_locations = {"/", "= /canvas/lti/experience"}
+    ui_locations = {"/"}
+    assert not any("/canvas/" in route for route in ordinary_locations | dev_locations)
     assert len(ordinary_locations) >= 15
     for route in ordinary_locations.keys() - ui_locations:
         assert ordinary_locations[route] == dev_locations[route], route

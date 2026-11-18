@@ -296,7 +296,7 @@ impl ClaimRequest {
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({
                 "error":"CLAIM_OPTIONS_UNSUPPORTED",
-                "message":"Claim accepts an empty JSON object. Delivery destination selection and Canvas mirroring are not supported by this claim path."
+                "message":"Claim accepts an empty JSON object. Delivery destination selection is not supported by this claim path."
             }),
         )
     }

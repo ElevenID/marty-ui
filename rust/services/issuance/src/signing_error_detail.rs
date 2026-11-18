@@ -40,6 +40,7 @@ fn scalar_api_remains_a_projection_of_the_shared_owner() {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SigningOperation {
     Context,
+    #[cfg(test)]
     Resolve,
     Sign,
 }
@@ -177,6 +178,7 @@ pub(crate) fn operation_error_points<V: PythonValueView, E>(
     let detail = error_detail_points(payload, response_text, reason_phrase)?;
     let prefix = match operation {
         SigningOperation::Context => "DID issuer context resolution failed",
+        #[cfg(test)]
         SigningOperation::Resolve => "Issuer DID resolution failed",
         SigningOperation::Sign => "DID-mediated signing failed",
     };

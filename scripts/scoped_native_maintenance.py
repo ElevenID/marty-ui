@@ -1,17 +1,17 @@
-"""Closed latest-main four-role selection; executes no build or deployment.
+"""Read-only four-role selection from historical build receipts.
 
 The original d2de/three-role preparation remains a separate closed contract.
 Latest input SHA is supplied by the reviewed one-run preparation, and MUST also
 match the receipt actually read from its original durable build journal.
 """
 import json
-from scoped_native_profiles import LATEST_ALL_SERVICES
+from scoped_native_profiles import legacy_profile_reference
 from scoped_native_runtime import read_ref, require
 import scoped_passport_successor as passport
 
 PROFILE = "native-devtest-passport-four-role"
-SOURCE = LATEST_ALL_SERVICES.ui_revision
-CORE = LATEST_ALL_SERVICES.core_revision
+SOURCE = "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34"
+CORE = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"applicant": "marty-applicant", **passport.ROLE_BINARIES}
 BASE_PROFILE_SHA256 = passport.BASE_PROFILE_SHA256
 BASE_BINDING_SHA256 = passport.BASE_BINDING_SHA256
@@ -19,7 +19,7 @@ FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c
 
 
 def terminal_build(receipt, prepared, prepared_sha):
-    return passport._terminal_build(receipt, prepared, prepared_sha, LATEST_ALL_SERVICES, None)
+    return passport._terminal_build(receipt, prepared, prepared_sha, legacy_profile_reference("oid4vc-latest-maintenance-all-services"), None)
 
 
 def select_canonical_binaries(prepared_ref, receipt_ref, journal):
@@ -31,7 +31,7 @@ def select_canonical_binaries(prepared_ref, receipt_ref, journal):
             and freeze.get("imagesBuilt") is False and freeze.get("releaseQualified") is False,
             "EXACT_LATEST_SOURCE_FREEZE_REQUIRED")
     return passport._select_canonical_binaries(prepared_ref, receipt_ref, journal,
-        LATEST_ALL_SERVICES, ROLE_BINARIES, PROFILE, None)
+        legacy_profile_reference("oid4vc-latest-maintenance-all-services"), ROLE_BINARIES, PROFILE, None)
 
 
 def validate_compatibility(selection, plan_ref, result_ref):
@@ -64,9 +64,10 @@ def migration_requirements():
     required = passport.migration_requirements()
     required.update(fencedSqlSha256=operational_sql_sources(),
         catalogSqlSha256="e7972f5d018100c5288dbe4eca0df2dbaa61ce21f8a34991789a3a173ad8110c",
-        outcomeVerifier="tests/scripts/native-maintenance-runtime.js::produceLatestProfile",
+        outcomeVerifier=None, currentRuntimeProfileAvailable=False, migrationApplyAuthority=False,
+        historicalOutcomeAudit="tests/scripts/native-maintenance-runtime.js::auditHistoricalMaintenance",
         operationEvidence="ORIGINAL_JOURNAL_RUST_PSQL_CATALOG_RECEIPTS_NOT_LEGACY_FENCE_DTO",
-        scope="LATEST_NATIVE_MAINTENANCE_PLAN_ONLY",
+        scope="HISTORICAL_NATIVE_MAINTENANCE_EVIDENCE_ONLY",
         flowSchemaToolSourceRevision=SOURCE, flowCliAvailableInSelectedBuild=True,
         separateSourceBoundMigrationToolBuildRequired=False,
         flowExecutionDisposition="USE_SAME_SOURCE_BOUND_SELECTED_FLOW_ELF",

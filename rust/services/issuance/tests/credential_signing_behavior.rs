@@ -403,7 +403,7 @@ impl CredentialLifecycle for SigningHarness {
         let mut state = self.state.lock().unwrap();
         state.events.push("canvas_readiness".to_owned());
         if state.readiness_denied {
-            return Err(CredentialIssuanceError::CanvasEligibilityDenied);
+            return Err(CredentialIssuanceError::ApplicationEligibilityDenied);
         }
         if let Some(mutate) = state.mutation_before_claim {
             mutate(&mut state.transaction);

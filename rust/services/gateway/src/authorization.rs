@@ -191,21 +191,6 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "notification",
         ),
         rule(
-            r"^/v1/issuance/delivery-records/canvas-credentials/provenance$",
-            &[("GET", "integration-connector:view")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/issuance/delivery-records/canvas-credentials/(?:process-pending|process-status-sync-failures|run-automation-cycle)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/issuance/organizations/[^/]+/canvas-mirror-health$",
-            &[("GET", "integration-connector:view")],
-            "integration-connector",
-        ),
-        rule(
             r"^/v1/vc-api/credentials/issue$",
             &[("POST", "issuance:initiate")],
             "issuance",
@@ -280,56 +265,6 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         ),
         // Canonical marty-common route semantics, including all released
         // fixes through the inline policy-evaluation classifier.
-        rule(
-            r"^/v1/integrations/canvas/platforms/[^/]+/(?:registration-config|readiness)$",
-            &[("GET", "integration-connector:view")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/platforms/[^/]+/scope-discovery$",
-            &[("POST", "integration-connector:view")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/platforms/[^/]+/(?:sandbox-probe|jwks-refresh|oauth/start|oauth/authorizations)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/platforms/[^/]+/lti-installation$",
-            &[("PUT", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/program-bindings/[^/]+/(?:validate|activate|deactivate)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/applications/[^/]+/(?:approve|canvas-sync)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/canvas-sync-jobs/[^/]+/(?:retry|resolve)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/evidence-policy-reviews/[^/]+/(?:resolve|reconcile-revocation)$",
-            &[("POST", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/platforms/[^/]+/oauth$",
-            &[("DELETE", "integration-connector:edit")],
-            "integration-connector",
-        ),
-        rule(
-            r"^/v1/integrations/canvas/canvas-credentials/validate$",
-            &[("POST", "integration-connector:view")],
-            "integration-connector",
-        ),
         rule(
             r"^/v1/trust-profiles/[^/]+/activate$",
             &[("POST", "trust-profile:activate")],
@@ -683,15 +618,6 @@ static TOP_LEVEL_RESOURCE: LazyLock<Regex> =
 static FLOW_RESOURCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/v1/flows/(definitions|instances)/([^/]+)(?:/|$)").expect("flow lookup regex")
 });
-static CANVAS_PLATFORM: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^/v1/integrations/canvas/platforms/([^/]+)(?:/|$)")
-        .expect("Canvas platform lookup regex")
-});
-static CANVAS_BINDING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^/v1/integrations/canvas/program-bindings/([^/]+)(?:/|$)")
-        .expect("Canvas binding lookup regex")
-});
-
 pub fn resolve_action(method: &str, path: &str) -> Option<RequiredPermission> {
     let method = method.to_ascii_uppercase();
     for route_rule in SPECIAL_RULES.iter() {
@@ -819,18 +745,6 @@ pub fn extract_org_id(path: &str) -> Option<&str> {
 }
 
 pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
-    if let Some(id) = capture_id(&CANVAS_PLATFORM, path, 1) {
-        return Some(ResourceLookup {
-            service: "issuance",
-            path: format!("/v1/integrations/canvas/platforms/{id}"),
-        });
-    }
-    if let Some(id) = capture_id(&CANVAS_BINDING, path, 1) {
-        return Some(ResourceLookup {
-            service: "issuance",
-            path: format!("/v1/integrations/canvas/program-bindings/{id}"),
-        });
-    }
     if let Some(captures) = FLOW_RESOURCE.captures(path) {
         return Some(ResourceLookup {
             service: "flows",
@@ -947,13 +861,6 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     })
 }
 
-fn capture_id<'a>(regex: &Regex, path: &'a str, index: usize) -> Option<&'a str> {
-    regex
-        .captures(path)
-        .and_then(|captures| captures.get(index))
-        .map(|value| value.as_str())
-}
-
 static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r"^/v1/flows/capabilities$",
@@ -965,11 +872,6 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^/v1/organizations/[^/]+/join$",
         r"^/v1/organizations/invitations/",
         r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$",
-        r"^/v1/integrations/canvas/lti/jwks/?$",
-        r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
-        r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
-        r"^/v1/integrations/canvas/oauth/callback/?$",
-        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response|claim))?)/?$",
         r"^/health",
         r"^/(?:openapi\.json|docs|redoc)$",
         r"^/\.well-known/",
@@ -1154,63 +1056,6 @@ mod tests {
         for case in contract.skip_cases {
             assert_eq!(skips_tenant_authorization(&case.path), case.skipped);
         }
-    }
-
-    #[test]
-    fn canvas_review_recovery_requires_the_existing_integration_edit_permission() {
-        let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
-        let required = resolve_action("POST", path).unwrap();
-        assert_eq!(required.permission, "integration-connector:edit");
-        assert_eq!(required.resource, "integration-connector");
-        assert!(!api_key_allowed(
-            required.permission,
-            &["integrations:read".into()]
-        ));
-        assert!(api_key_allowed(
-            required.permission,
-            &["integrations:write".into()]
-        ));
-    }
-
-    #[test]
-    fn disabled_canvas_binding_application_inventory_requires_owned_integration_read() {
-        let path = "/v1/integrations/canvas/program-bindings/binding-1/applications";
-        let required = resolve_action("GET", path).expect("binding inventory read route");
-        assert_eq!(required.permission, "integration-connector:view");
-        assert_eq!(required.resource, "integration-connector");
-        let lookup = resolve_resource_lookup(path).expect("exact binding owner lookup");
-        assert_eq!(lookup.service, "issuance");
-        assert_eq!(
-            lookup.path,
-            "/v1/integrations/canvas/program-bindings/binding-1"
-        );
-        assert_eq!(
-            authorize_api_key(
-                required.permission,
-                "org-2",
-                Some("org-1"),
-                &["integrations:read".into()]
-            ),
-            Err(TenantAuthorizationFailure::ApiKeyOrganizationMismatch),
-        );
-        assert_eq!(
-            authorize_api_key(
-                required.permission,
-                "org-1",
-                Some("org-1"),
-                &["applications:read".into()]
-            ),
-            Err(TenantAuthorizationFailure::ApiKeyPermissionMissing),
-        );
-        assert_eq!(
-            authorize_api_key(
-                required.permission,
-                "org-1",
-                Some("org-1"),
-                &["integrations:read".into()]
-            ),
-            Ok(()),
-        );
     }
 
     #[test]

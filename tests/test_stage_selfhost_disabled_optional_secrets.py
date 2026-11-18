@@ -22,11 +22,6 @@ def disabled_model() -> dict:
             "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
         }},
         "notification": {"environment": {"SMTP_USERNAME": ""}},
-        "issuance": {"environment": {
-            **{name: "false" for name in journey.CANVAS_DISABLED_FLAGS},
-            **{name: "" for name in journey.CANVAS_UNUSED_SETTINGS},
-            "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
-        }},
     }}
     for owner, flags in journey.PASSPORT_DISABLED_FLAGS.items():
         model["services"][owner] = {"environment": {
@@ -35,7 +30,6 @@ def disabled_model() -> dict:
         }}
     model["services"]["issuance-native"]["environment"].update({
         **{name: "" for name in journey.BUREAU_UNUSED_SETTINGS},
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
     })
     return model
 
@@ -57,11 +51,11 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, 
     return secret_root, install_root, env_file
 
 
-def test_creates_exact_nine_empty_private_files(
+def test_creates_exact_seven_empty_private_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_root, install_root, env_file = setup(tmp_path, monkeypatch)
-    assert optional.stage(secret_root, install_root, env_file, PROJECT) == 9
+    assert optional.stage(secret_root, install_root, env_file, PROJECT) == 7
     assert {path.name for path in secret_root.iterdir()} == journey.OPTIONAL_LOCAL_SECRET_NAMES
     for path in secret_root.iterdir():
         assert path.stat().st_size == 0
@@ -142,3 +136,13 @@ def test_rejects_rendered_project_mismatch(
     )
     with pytest.raises(ValueError, match="project differs"):
         optional.render_model(install_root, env_file, PROJECT)
+
+
+def test_retired_connector_setting_is_rejected_before_file_staging(tmp_path, monkeypatch):
+    secret_root, install_root, env_file = setup(tmp_path, monkeypatch)
+    data = disabled_model()
+    data["services"]["flow"]["environment"]["CANVAS_PORTABLE_INTEGRATION_ENABLED"] = "false"
+    monkeypatch.setattr(optional, "render_model", lambda *_: data)
+    with pytest.raises(ValueError, match="retired connector configuration"):
+        optional.stage(secret_root, install_root, env_file, PROJECT)
+    assert not list(secret_root.iterdir())

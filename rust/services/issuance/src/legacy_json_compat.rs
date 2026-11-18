@@ -14,6 +14,7 @@ pub(crate) fn json_truthy(value: &Value) -> bool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn untrimmed_json_text(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(value)) => value.clone(),

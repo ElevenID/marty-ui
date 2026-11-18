@@ -80,8 +80,6 @@ def probe() -> dict:
                 "PUBLIC_DOMAIN": "probe.example.invalid", "GATEWAY_UPSTREAM": "backend:80",
                 "FLOW_UPSTREAM": "backend:80", "KEYCLOAK_UPSTREAM": "backend:80",
                 "UI_UPSTREAM": "backend:80" if enabled is None else "absent-ui:80",
-                "CANVAS_REAL_PUBLIC_HOST": "canvas.example.invalid",
-                "CANVAS_SANDBOX_PUBLIC_HOST": "sandbox.example.invalid",
             }
             if enabled is not None:
                 environment["SELFHOST_CONSOLE_ENABLED"] = enabled

@@ -11,8 +11,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    canvas_content_decoder::CanvasContentDecoder,
-    canvas_response_text::{response_text, CanvasResponseTextError},
+    http_content_decoder::HttpContentDecoder,
+    http_response_text::{response_text, HttpResponseTextError},
     lossless_json_tree::JsonTree,
     python_text::PythonText,
     python_value::PythonJsonValue as DiagnosticValue,
@@ -91,16 +91,16 @@ impl SigningResponseFailure {
         })
     }
 
-    fn text(operation: SigningOperation, error: CanvasResponseTextError) -> Self {
+    fn text(operation: SigningOperation, error: HttpResponseTextError) -> Self {
         let class = match error {
-            CanvasResponseTextError::InternalCodec => SigningExceptionClass::Runtime,
-            CanvasResponseTextError::Utf16MissingBom
-            | CanvasResponseTextError::Utf32MissingBom
-            | CanvasResponseTextError::PendingBufferOverflow => SigningExceptionClass::Unicode,
-            CanvasResponseTextError::ContinuationOrdinalLimit { .. }
-            | CanvasResponseTextError::EmbeddedNullEncoding => SigningExceptionClass::Value,
-            CanvasResponseTextError::NumberedAfterBareContinuation
-            | CanvasResponseTextError::BareAfterNumberedContinuation => SigningExceptionClass::Type,
+            HttpResponseTextError::InternalCodec => SigningExceptionClass::Runtime,
+            HttpResponseTextError::Utf16MissingBom
+            | HttpResponseTextError::Utf32MissingBom
+            | HttpResponseTextError::PendingBufferOverflow => SigningExceptionClass::Unicode,
+            HttpResponseTextError::ContinuationOrdinalLimit { .. }
+            | HttpResponseTextError::EmbeddedNullEncoding => SigningExceptionClass::Value,
+            HttpResponseTextError::NumberedAfterBareContinuation
+            | HttpResponseTextError::BareAfterNumberedContinuation => SigningExceptionClass::Type,
         };
         Self::new(
             operation,
@@ -155,7 +155,7 @@ pub(crate) async fn classify(
         })
         .collect();
     let content_type = (!content_types.is_empty()).then(|| content_types.join(", "));
-    let mut decoders = CanvasContentDecoder::from_headers(response.headers());
+    let mut decoders = HttpContentDecoder::from_headers(response.headers());
     let mut body = Vec::new();
     loop {
         let chunk = response
@@ -208,9 +208,9 @@ pub(crate) async fn success_json<T: DeserializeOwned>(
     response.json().await.map_err(|error| {
         let prefix = match operation {
             SigningOperation::Sign => "DID-mediated signer returned invalid JSON",
-            SigningOperation::Context | SigningOperation::Resolve => {
-                "DID issuer context returned invalid JSON"
-            }
+            SigningOperation::Context => "DID issuer context returned invalid JSON",
+            #[cfg(test)]
+            SigningOperation::Resolve => "DID issuer context returned invalid JSON",
         };
         SigningResponseFailure::new(
             operation,

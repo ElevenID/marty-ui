@@ -9,8 +9,9 @@ website_only=false
 python=false
 rust=false
 rust_runtime=false
-rust_matrix='["canvas","contracts","selfhost"]'
+rust_matrix='["contracts","flow","selfhost"]'
 openbao=false
+# Reserved false-only field in the v1 plan; the provider harness is retired.
 rollback_test_only=false
 didcomm_release_test_only=false
 k8s_policy_test_only=false
@@ -29,7 +30,7 @@ report_historical_input_shadow() {
     candidate=false
     for path in "$@"; do
       case "$path" in
-        scripts/*|contracts/*|rust/services/issuance/migrations/*|rust/services/issuance/tests/support/*|rust/crates/canvas-acceptance/tests/*|rust/crates/flow-acceptance/tests/*|.github/workflows/ci.yml)
+        scripts/*|contracts/*|rust/services/issuance/migrations/*|rust/services/issuance/tests/support/*|rust/crates/flow-acceptance/tests/*|.github/workflows/ci.yml)
           candidate=true
           ;;
       esac
@@ -58,14 +59,6 @@ if [[ "$website_only" == true ]]; then
 elif [[ "$EVENT_NAME" != pull_request ]]; then
   all=true
 else
-  # Only the regular rollback test leaf gets root-pytest feedback.
-  if [[ "$EVENT_NAME" == pull_request &&
-        ${#changed_files[@]} -eq 1 &&
-        "${changed_files[0]}" == tests/test_beta_worker_launch_rollback.py &&
-        -f tests/test_beta_worker_launch_rollback.py &&
-        ! -L tests/test_beta_worker_launch_rollback.py ]]; then
-    rollback_test_only=true
-  fi
   # These exact DIDComm policy tests are collected by root release
   # pytest, not by a service or image. Only one regular test source
   # may narrow a PR; moves, deletion, mixed changes and untrusted
@@ -145,7 +138,7 @@ else
     renewal_unit_test_only=true
     for path in "${changed_files[@]}"; do
       case "${path#rust/services/issuance/src/}" in
-        canvas_operation_http_prepared_tests.rs|canvas_sync_provider_http_tests.rs|canvas_sync_processor_tests.rs|canvas_sync_worker_retry_tests.rs|canvas_sync_worker_renewal_tests.rs|initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|python_format_tests.rs|signing_http_projection_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
+        initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
         *) renewal_unit_test_only=false; break ;;
       esac
     done
@@ -153,7 +146,6 @@ else
   # These exact test-source cohorts and their six-context/sole-owner
   # proofs live in one checked-out verifier. Malformed, mixed, and
   # unproved diffs keep the complete Rust matrix.
-  worker_test_only=false
   flow_test_only=false
   selfhost_test_only=false
   acceptance_candidate=true
@@ -161,7 +153,7 @@ else
         ${#changed_files[@]} -gt 0 ]]; then
     for path in "${changed_files[@]}"; do
       case "$path" in
-        rust/crates/canvas-worker-acceptance/tests/*|rust/crates/flow-acceptance/tests/*|rust/crates/selfhost-acceptance/tests/*) ;;
+        rust/crates/flow-acceptance/tests/*|rust/crates/selfhost-acceptance/tests/*) ;;
         *) acceptance_candidate=false; break ;;
       esac
     done
@@ -175,7 +167,6 @@ else
       python3 tests/test_rust_test_only_docker_context.py \
         --select-acceptance-test-lane); then
       case "$acceptance_lane" in
-        worker) worker_test_only=true ;;
         flow) flow_test_only=true ;;
         selfhost) selfhost_test_only=true ;;
       esac
@@ -201,10 +192,6 @@ else
   fi
   for path in "${changed_files[@]}"; do
     case "$path" in
-      rust/services/issuance/src/canvas_sync_processor_contract.md)
-        # include_str! makes this documentation a compiler input.
-        rust=true
-        ;;
       SELFHOST_BUNDLE.md)
         # The self-host bundle ships this file as a package asset.
         rust=true
@@ -230,29 +217,13 @@ else
         python=true
         security=true
         ;;
-      contracts/canvas-worker-provider-recovery-current-inputs.json)
-        # This overlay has only release-pytest consumers. The
-        # inherited REST record and every script/scenario
-        # input retain their existing Rust/release or broad owner.
-        release=true
-        ;;
-      contracts/canvas-*-current-inputs.json)
-        # Only immediate-child CI input records use the reviewed
-        # Docker exclusion. A nested lookalike is unknown input.
-        if [[ "$path" == contracts/*/* ]]; then
-          all=true
-        else
-          rust=true
-          release=true
-        fi
-        ;;
-      contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
+      contracts/python-value-fast-obligations.json)
         # Retain Rust qualification for contract metadata and also
         # run release-collected evidence/obligation ownership checks.
         rust=true
         release=true
         ;;
-      tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_rest_input_evidence.py|tests/test_canvas_worker_provider_signals_input_evidence.py|tests/test_canvas_worker_timeout_input_evidence.py|tests/test_canvas_worker_retry_after_input_evidence.py|tests/test_canvas_json_depth_current_inputs.py|tests/test_canvas_operations_input_current_inputs.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
+      tests/test_python_value_fast_obligations.py)
         # These exact test-only sources run in release pytest. Their
         # manifest inputs retain the Rust discovery/evidence owner;
         # implementation scripts, unknown siblings, and corpora
@@ -295,13 +266,13 @@ else
         # also run in the required release lane, not service images.
         release=true
         ;;
-      tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_canvas_published_preflight.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
+      tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
         # These test-only policy and fixture guards are collected by
         # the root release pytest step, with no other CI/image owner.
         # Their implementation inputs still retain their own lanes.
         release=true
         ;;
-      tests/test_kubernetes_resolved_runtime.py|tests/test_base_native_runtime_fixture.py|tests/test_envoy_native_configuration.py|tests/test_flow_public_startup.py|tests/test_selfhost_runtime_model.py|tests/test_passport_supported_rust_model.py|tests/test_passport_supported_compose_ownership.py|tests/test_ci_canvas_compile_scope.py)
+      tests/test_kubernetes_resolved_runtime.py|tests/test_base_native_runtime_fixture.py|tests/test_envoy_native_configuration.py|tests/test_flow_public_startup.py|tests/test_selfhost_runtime_model.py|tests/test_passport_supported_rust_model.py|tests/test_passport_supported_compose_ownership.py)
         # These exact fixture-policy test sources run in root release
         # pytest. Renderers, acceptance targets, and unknown siblings
         # retain the broad source-input selection below.
@@ -319,19 +290,11 @@ else
         # unknown test siblings keep their existing broad selection.
         release=true
         ;;
-      tests/test_signing_response_reference.py|tests/test_token_rate_reference.py|tests/test_canvas_url_template_reference.py)
+      tests/test_signing_response_reference.py|tests/test_token_rate_reference.py)
         # Frozen-reference guards are collected by root release
         # pytest only. Their corpora and native Rust consumers keep
         # the existing Rust selection; capture scripts stay broad.
         release=true
-        ;;
-      tests/test_beta_worker_launch_rollback.py)
-        if [[ "$rollback_test_only" == true ]]; then
-          release=true
-          security=true
-        else
-          all=true
-        fi
         ;;
       tests/test_didcomm_native_consumer_ownership.py)
         if [[ "$didcomm_release_test_only" == true ]]; then
@@ -340,17 +303,11 @@ else
           all=true
         fi
         ;;
-      scripts/ci/canvas_oracle_current_inputs.py)
-        # Only root release-pytest Canvas input guards import this
-        # helper. Capture scripts, manifest inputs, and unknown
-        # script siblings keep their existing broader selection.
-        release=true
-        ;;
       .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
         verification=true
         release=true
         ;;
-      scripts/register-canvas-oss-runner.ps1|scripts/runner-routing-label-policy.ps1|scripts/runner-host-capacity-policy.ps1|scripts/setup-canvas-oss-runner.ps1|tests/test_runner_routing_labels.py|tests/test_canvas_oss_runner_quarantine.py)
+      scripts/runner-routing-label-policy.ps1|scripts/runner-host-capacity-policy.ps1|tests/test_runner_routing_labels.py)
         # These host-registration inputs are checked by the root
         # release pytest suite; they are not public image inputs.
         # Manual self-hosted workflows retain their own preflights.
@@ -383,11 +340,7 @@ fi
 
 if [[ "$rust" == true ]]; then
   rust_runtime=true
-  if [[ "${worker_test_only:-false}" == true && "$all" == false &&
-        "$EVENT_NAME" == pull_request ]]; then
-    rust_runtime=false
-    rust_matrix='["worker"]'
-  elif [[ "${flow_test_only:-false}" == true && "$all" == false &&
+  if [[ "${flow_test_only:-false}" == true && "$all" == false &&
           "$EVENT_NAME" == pull_request ]]; then
     rust_runtime=false
     rust_matrix='["flow"]'

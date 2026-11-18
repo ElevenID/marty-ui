@@ -46,6 +46,7 @@ pub const MIP_API_KEY_SCOPES: &[&str] = &[
     "integrations:read",
     "integrations:write",
     "evidence:submit",
+    "identity:attest",
     "admin:full",
 ];
 
@@ -383,6 +384,13 @@ pub fn validate_create_api_key(
             "evidence:submit is restricted to organization-scoped keys",
         ));
     }
+    if command.scope_type != ApiKeyScopeType::Organization
+        && scopes.iter().any(|scope| scope == "identity:attest")
+    {
+        return Err(OrganizationApplicationError::InvalidApiKeyBinding(
+            "identity:attest is restricted to organization-scoped keys",
+        ));
+    }
     Ok(())
 }
 
@@ -616,5 +624,16 @@ mod external_evidence_scope_tests {
             .scopes
             .unwrap()
             .contains(&"evidence:submit".to_owned()));
+    }
+    #[test]
+    fn identity_attestation_scope_requires_explicit_organization_key_selection() {
+        let mut value = command(ApiKeyScopeType::Organization);
+        value.name = "External account attestation".into();
+        value.scopes = Some(vec!["identity:attest".into()]);
+        assert!(validate_create_api_key(&value).is_ok());
+        value.scope_type = ApiKeyScopeType::DeploymentProfile;
+        value.deployment_profile_id = Some(Uuid::new_v4());
+        assert!(validate_create_api_key(&value).is_err());
+        assert!(MIP_API_KEY_SCOPES.contains(&"identity:attest"));
     }
 }

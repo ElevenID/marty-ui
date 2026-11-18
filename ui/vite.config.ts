@@ -13,6 +13,7 @@ import { productionBuildContract, productionBuildContractPlugin } from './script
 import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
 import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
 import { devServerOrigin } from './scripts/dev-server-origin.mjs'
+import { platformDemoScenarios } from './src/services/platformDemoScenarios.js'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
@@ -240,9 +241,9 @@ export default defineConfig(async ({ mode }) => {
     demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
       const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
       demoRoutes.push(`/demos/${stackVersion}`)
-      manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
+      platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
       if (demoIndex.latest_approved_stack_version === stackVersion) {
-        manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
+        platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
       }
     })
   }

@@ -19,7 +19,7 @@ function fixture() {
     scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
   const helper = path.join(sourceRoot,'externalLiveEvidenceHelper.js'), bytes = Buffer.from('reviewed helper');
   fs.writeFileSync(helper,bytes);
-  for(const name of ['externalLiveEvidence.js','canvasNativeRuntime.js','ownedWalletRuntime.js']) fs.writeFileSync(path.join(sourceRoot,name),'source fixture');
+  for(const name of ['externalLiveEvidence.js','platformNativeRuntime.js','ownedWalletRuntime.js']) fs.writeFileSync(path.join(sourceRoot,name),'source fixture');
   const environment = {DEMO_EXECUTION_EVIDENCE_HELPER:helper,
     DEMO_EXECUTION_EVIDENCE_HELPER_SHA256:createHash('sha256').update(bytes).digest('hex'),
     DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT:receipt,
@@ -45,7 +45,7 @@ function fixture() {
           assert.equal(value.releaseQualified,false);assert.equal(value.recordingQualified,false);
           return value;
         }, functionalRuntimeContext:()=>binding};
-      if(path.basename(name)==='canvasNativeRuntime.js') return {loadFunctionalRuntimeObservation(file,hash,options) {
+      if(path.basename(name)==='platformNativeRuntime.js') return {loadFunctionalRuntimeObservation(file,hash,options) {
         loads++;assert.equal(file,environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT);
         assert.equal(hash,binding.receiptSha256);assert.equal(options.functionalRerun,true);
         return {};
@@ -109,7 +109,7 @@ test('outside custody, relative, traversing, directory and standalone helper lay
     f=>f.environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='relative.json',
     f=>f.environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=path.dirname(f.receipt),
     f=>f.environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=path.dirname(f.receipt)+path.sep+'..'+path.sep+'private'+path.sep+'runtime.json',
-    f=>fs.unlinkSync(path.join(path.dirname(f.helper),'canvasNativeRuntime.js')),
+    f=>fs.unlinkSync(path.join(path.dirname(f.helper),'platformNativeRuntime.js')),
   ]) {
     const f=fixture();t.after(f.close);mutate(f);
     await assert.rejects(f.api.createDemoLiveEvidence());assert.equal(f.closed(),true);

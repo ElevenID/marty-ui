@@ -1,4 +1,4 @@
-"""Internal, existing-only reload of the 16 legacy credential consumers.
+"""Internal, existing-only reload of the retained platform credential consumers.
 
 There is intentionally no CLI/main dispatch. The authenticated activation caller
 must hold the retained-state lock and provide its private stability guard and
@@ -27,7 +27,7 @@ import recover_kubernetes_legacy_credentials as recovery
 WORKLOADS = (
     "auth", "organization", "credential-template", "gateway", "verification", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "revocation-profile",
-    "event-stream", "issuance-native", "signing-keys", "canvas-sync-worker", "keycloak",
+    "event-stream", "issuance-native", "signing-keys", "keycloak",
 )
 SCHEMA = "marty.kubernetes-legacy-workload-reload/v1"
 EVIDENCE_SCHEMA = "marty.kubernetes-legacy-reload-evidence/v1"
@@ -166,8 +166,8 @@ def verify_completed_evidence(output: Path, result: dict, binding: dict, private
         bootstrap.require(set(result) == {"schema", "status", "reloadCount", "privateEvidenceWritten", "privateEvidence",
                                            "fullEnvironmentHealthAssessed", "inMemoryProviderUseProved"}
                           and result["schema"] == SCHEMA
-                          and result["status"] == "sixteen-ready-pods-with-matching-projections"
-                          and result["reloadCount"] == 16 and result["privateEvidenceWritten"] is True
+                          and result["status"] == "platform-ready-pods-with-matching-projections"
+                          and result["reloadCount"] == len(WORKLOADS) and result["privateEvidenceWritten"] is True
                           and result["fullEnvironmentHealthAssessed"] is False
                           and result["inMemoryProviderUseProved"] is False,
                           "reload returned completion summary differs")
@@ -184,7 +184,7 @@ def verify_completed_evidence(output: Path, result: dict, binding: dict, private
         bootstrap.require(completion.get("schema") == SCHEMA
                           and completion.get("status") == "new-ready-pods-with-matching-projected-credentials"
                           and completion.get("privatePlanSha256") == private_plan_sha256
-                          and completion.get("reloadCount") == 16
+                          and completion.get("reloadCount") == len(WORKLOADS)
                           and completion.get("inMemoryProviderUseProved") is False
                           and completion.get("fullEnvironmentHealthAssessed") is False,
                           "reload completion result differs")
@@ -482,7 +482,7 @@ def deployment_profile(value: dict, name: str, original: dict, binding: dict,
 
 
 def preflight_workloads(original: dict, binding: dict, transport) -> dict:
-    """GET the original 16 profiles before the caller issues any credentials.
+    """GET the retained platform profiles before the caller issues any credentials.
 
     The authenticated recovery caller holds the retained-state lock. This is
     early admission only: it creates no producer, issues no credentials, makes
@@ -997,10 +997,10 @@ def reload_workloads(request: ReloadRequest, transport, freshness: Freshness,
             "status": "new-ready-pods-with-matching-projected-credentials", "privatePlanSha256": request.qualified_plan_sha256,
             "workloads": {name: {"deploymentUid": patched[name]["metadata"]["uid"],
                 "podUid": proved[name]["admitted"]["uid"], "replicaSetUid": proved[name]["replica"]["metadata"]["uid"]} for name in WORKLOADS},
-            "reloadCount": 16, "inMemoryProviderUseProved": False, "fullEnvironmentHealthAssessed": False,
+            "reloadCount": len(WORKLOADS), "inMemoryProviderUseProved": False, "fullEnvironmentHealthAssessed": False,
             "runtimeImageIdLimit": "observed runtime imageID is bound across probes; its platform/config digest representation is not equated to the published image digest"})
         budget.timeout()
-        return {"schema": SCHEMA, "status": "sixteen-ready-pods-with-matching-projections", "reloadCount": 16,
+        return {"schema": SCHEMA, "status": "platform-ready-pods-with-matching-projections", "reloadCount": len(WORKLOADS),
                 "privateEvidenceWritten": True, "privateEvidence": private_evidence,
                 "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False}
     except Exception:

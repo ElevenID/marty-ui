@@ -281,7 +281,7 @@ async fn claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities(
     let (app, service) = app_with_issuance(before.clone(), origin);
     let expected_capabilities = json!({
         "oid4vci_wallet":true, "delivery_destination_selection":false,
-        "canvas_credentials_mirror":false, "offer_reuse":"pending_until_consumed_or_expired"
+        "offer_reuse":"pending_until_consumed_or_expired"
     });
     for body in ["", "{}"] {
         let response = app

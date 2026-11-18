@@ -391,7 +391,7 @@ def test_rejects_live_issuance_migration_ledger_drift(tmp_path, monkeypatch):
     _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
     calls = iter([
         "7|" + COMMIT + "|" + "5" * 64 + "|true|false",
-        "issuance_service_baseline_v1",
+        "issuance_service_baseline_v2",
     ])
     monkeypatch.setattr(aggregate, "beta_psql", lambda *_: next(calls))
     with pytest.raises(EvidenceError, match="Rust issuance migration ledger differs"):

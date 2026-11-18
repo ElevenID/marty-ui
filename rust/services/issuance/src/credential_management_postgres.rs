@@ -4,15 +4,13 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::credential_management::{
-    CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialLifecycleAuditRecord,
-    CredentialManagementPortError, CredentialManagementRepository, ManagedCredential,
-    ManagedCredentialStatus,
+    CredentialLifecycleAuditRecord, CredentialManagementPortError, CredentialManagementRepository,
+    ManagedCredential, ManagedCredentialStatus,
 };
 
 #[derive(Clone)]
 pub struct PostgresCredentialManagementRepository {
     pool: PgPool,
-    canvas_lifecycle: Option<crate::canvas_lifecycle_delivery::CanvasLifecycleDeliverySynchronizer>,
 }
 
 impl std::fmt::Debug for PostgresCredentialManagementRepository {
@@ -25,27 +23,7 @@ impl std::fmt::Debug for PostgresCredentialManagementRepository {
 impl PostgresCredentialManagementRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pool,
-            canvas_lifecycle: None,
-        }
-    }
-
-    /// Candidate provider adoption is explicit until whole-consumer cutover.
-    #[must_use]
-    pub fn with_canvas_lifecycle(
-        mut self,
-        provider: std::sync::Arc<
-            dyn crate::canvas_lifecycle_delivery::CanvasLifecycleStatusProvider,
-        >,
-    ) -> Self {
-        self.canvas_lifecycle = Some(
-            crate::canvas_lifecycle_delivery::CanvasLifecycleDeliverySynchronizer::new(
-                self.pool.clone(),
-                provider,
-            ),
-        );
-        self
+        Self { pool }
     }
 }
 
@@ -206,45 +184,6 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         .map_err(port_error)?;
         transaction.commit().await.map_err(port_error)?;
         Ok(updated)
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        credential: &ManagedCredential,
-        action: CredentialLifecycleAction,
-        reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        let request = json!({
-            "status_sync_state": "pending",
-            "last_status_sync_action": action.as_str(),
-            "requested_credential_status": credential.status.as_str(),
-            "requested_status_sync_reason": reason,
-            "status_sync_requested_at": credential.status_updated_at.to_rfc3339(),
-        });
-        if marty_key_material_policy::contains_private_key(&request) {
-            return Err(CanvasLifecycleSyncError::Port(
-                CredentialManagementPortError(
-                    "private key material in Canvas lifecycle request".to_owned(),
-                ),
-            ));
-        }
-        if let Some(lifecycle) = &self.canvas_lifecycle {
-            return lifecycle.synchronize(credential, action, reason).await;
-        }
-        sqlx::query(
-            "UPDATE issuance_service.credential_delivery_records
-             SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb,
-                 updated_at = clock_timestamp()
-             WHERE credential_id = $2 AND organization_id = $3
-               AND delivery_target = 'canvas_credentials'",
-        )
-        .bind(request)
-        .bind(&credential.id)
-        .bind(&credential.organization_id)
-        .execute(&self.pool)
-        .await
-        .map_err(port_error)?;
-        Ok(())
     }
 }
 

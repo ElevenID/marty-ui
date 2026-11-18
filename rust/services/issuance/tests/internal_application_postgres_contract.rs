@@ -1,7 +1,6 @@
 use chrono::{Duration, TimeZone, Utc};
 use marty_issuance_service::{
     application_template_domain::{ApplicationTemplateCreate, ApplicationTemplateStatus},
-    canvas_award_candidate_approval::CanvasApplicationApprovalSnapshot,
     credential::{CredentialTransaction, CredentialTransactionStatus},
     internal_application_approval::InternalApplicationApprovalRepository,
     internal_application_domain::{
@@ -13,10 +12,6 @@ use marty_issuance_service::{
     },
     internal_application_offer::InternalApplicationOfferRepository,
     internal_application_postgres::PostgresInternalApplicationRepository,
-    internal_application_reconciliation::{
-        EvidenceReconciliationCommitOutcome, EvidenceReconciliationSnapshot,
-        EvidenceReconciliationWrite, InternalApplicationReconciliationRepository,
-    },
     internal_application_service::{
         InternalApplicationRepository, InternalApplicationRepositoryError,
     },
@@ -699,107 +694,55 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .iter()
         .any(|event| event.event_type == "offer_viewed"));
 
-    let mut canvas_offer = application_fixture(&application, "application-canvas-offer");
-    canvas_offer.status = ApplicationStatus::Approved;
-    canvas_offer.integration_context = Map::from_iter([(
-        "canvas".to_owned(),
-        json!({"source":"Canvas LTI", "canvas_platform_id":"platform-1"}),
-    )]);
+    // A stale caller snapshot cannot bypass the current stored integration boundary.
+    sqlx::query("UPDATE issuance_service.applications SET integration_context=$1 WHERE id=$2")
+        .bind(json!({"retired_provider": {"eligible": true}}))
+        .bind(&offer_application.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(repository
+        .get_offer_transaction(&refreshed.id, &offer_application.organization_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .reserve_or_refresh_offer(
+            &offer_current,
+            &refresh,
+            observed_at + Duration::minutes(10)
+        )
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query("UPDATE issuance_service.applications SET integration_context=$1 WHERE id=$2")
+        .bind(json!(offer_current.integration_context))
+        .bind(&offer_application.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut unsupported_offer = application_fixture(&application, "application-unsupported-offer");
+    unsupported_offer.status = ApplicationStatus::Approved;
+    unsupported_offer.integration_context =
+        Map::from_iter([("retired_provider".to_owned(), json!({"eligible": true}))]);
     repository
-        .insert_application(&canvas_offer)
+        .insert_application(&unsupported_offer)
         .await
-        .expect("Canvas offer fixture must insert");
-    let mut canvas_initial =
-        approval_transaction("transaction-canvas-offer", &canvas_offer, observed_at);
-    canvas_initial.claims = Map::from_iter([
-        ("name".to_owned(), json!("Learner")),
-        ("_vct".to_owned(), json!("https://credentials.example/old")),
-    ]);
-    canvas_initial.idempotency_key_hash = Some("1".repeat(64));
-    canvas_initial.idempotency_request_hash = Some("2".repeat(64));
-    let canvas_reserved = repository
-        .reserve_or_refresh_offer(
-            &canvas_offer,
-            &canvas_initial,
-            observed_at + Duration::minutes(9),
-        )
-        .await
-        .expect("Canvas offer reservation")
-        .expect("Canvas offer transaction");
-    let canvas_current = repository
-        .get_application(&canvas_offer.id)
+        .unwrap();
+    let mut unsupported_transaction = approval_transaction(
+        "transaction-unsupported-offer",
+        &unsupported_offer,
+        observed_at,
+    );
+    unsupported_transaction.idempotency_key_hash = Some("1".repeat(64));
+    unsupported_transaction.idempotency_request_hash = Some("2".repeat(64));
+    assert!(repository
+        .reserve_or_refresh_offer(&unsupported_offer, &unsupported_transaction, observed_at,)
         .await
         .unwrap()
-        .unwrap();
-    let mut canvas_refresh = canvas_initial.clone();
-    canvas_refresh.id = "unused-canvas-refresh".to_owned();
-    canvas_refresh.credential_template_id = "credential-template-canvas-new".to_owned();
-    canvas_refresh.claims = Map::from_iter([
-        ("name".to_owned(), json!("must-not-overwrite")),
-        ("_vct".to_owned(), json!("https://credentials.example/new")),
-    ]);
-    canvas_refresh.credential_type = Some("CanvasCredential".to_owned());
-    canvas_refresh.wallet_configs = vec![json!({"wallet_id":"wallet-canvas"})];
-    canvas_refresh.selective_disclosure_claims = vec!["email".to_owned()];
-    canvas_refresh.zk_predicate_claims = vec!["age".to_owned()];
-    canvas_refresh.validity_days = 730;
-    canvas_refresh.renewable = true;
-    canvas_refresh.renewal_window_days = 60;
-    canvas_refresh.issuer_did = Some("did:web:issuer.example:canvas".to_owned());
-    let canvas_refreshed = repository
-        .reserve_or_refresh_offer(
-            &canvas_current,
-            &canvas_refresh,
-            observed_at + Duration::minutes(10),
-        )
-        .await
-        .expect("Canvas offer refresh")
-        .expect("refreshed Canvas transaction");
-    assert_eq!(canvas_refreshed.id, canvas_reserved.id);
-    assert_eq!(
-        canvas_refreshed.credential_template_id,
-        "credential-template-canvas-new"
-    );
-    assert_eq!(
-        canvas_refreshed.credential_type.as_deref(),
-        Some("CanvasCredential")
-    );
-    assert_eq!(
-        canvas_refreshed.wallet_configs,
-        vec![json!({"wallet_id":"wallet-canvas"})]
-    );
-    assert_eq!(canvas_refreshed.validity_days, 730);
-    assert!(canvas_refreshed.renewable);
-    assert_eq!(canvas_refreshed.claims.get("name"), Some(&json!("Learner")));
-    assert_eq!(
-        canvas_refreshed.claims.get("_vct"),
-        Some(&json!("https://credentials.example/new"))
-    );
-    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules=$1 WHERE id=$2")
-        .bind(json!([{"claim_name":"name","source":"SYSTEM","source_config":{"system_field":"constant","value":"Current mapped learner"}}]))
-        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
-    canvas_refresh
-        .claims
-        .insert("name".into(), json!("Current mapped learner"));
-    let mapped_offer = repository
-        .reserve_or_refresh_offer(
-            &canvas_current,
-            &canvas_refresh,
-            observed_at + Duration::minutes(11),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(mapped_offer.claims, canvas_refresh.claims);
-    assert_eq!(mapped_offer.id, canvas_reserved.id);
-    assert_eq!(
-        mapped_offer.pre_authorized_code,
-        canvas_reserved.pre_authorized_code
-    );
-    assert_eq!(mapped_offer.created_at, canvas_reserved.created_at);
-    assert_eq!(mapped_offer.expires_at, canvas_reserved.expires_at);
-    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules='[]'::json WHERE id=$1")
-        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
+        .is_none());
+    assert_eq!(transaction_count(&pool, &unsupported_offer.id).await, 0);
 
     let mut offer_rollback = application_fixture(&application, "application-offer-rollback");
     offer_rollback.status = ApplicationStatus::Approved;
@@ -1093,235 +1036,6 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
     .await
     .expect("reconciliation binding fixture must insert");
 
-    let mut reconciliation_application =
-        application_fixture(&application, "application-reconciliation-atomic");
-    reconciliation_application.integration_context = Map::from_iter([(
-        "canvas".to_owned(),
-        json!({
-            "canvas_platform_id": "platform-reconciliation",
-            "canvas_program_binding_id": "binding-reconciliation",
-            "canvas_account_id": "account-reconciliation"
-        }),
-    )]);
-    repository
-        .insert_application(&reconciliation_application)
-        .await
-        .expect("reconciliation application fixture must insert");
-    let reconciliation_time = observed_at + Duration::minutes(14);
-    let reconciliation_transaction = approval_transaction(
-        "transaction-reconciliation-atomic",
-        &reconciliation_application,
-        reconciliation_time,
-    );
-    let mut reconciliation_updated = reconciliation_application.clone();
-    reconciliation_updated.status = ApplicationStatus::Approved;
-    reconciliation_updated.review_notes =
-        Some("Recovered by MIP evidence policy reconciliation".to_owned());
-    reconciliation_updated.reviewer_id = Some("canvas:evidence-reconciliation".to_owned());
-    reconciliation_updated.reviewed_at = Some(reconciliation_time);
-    reconciliation_updated.updated_at = reconciliation_time;
-    reconciliation_updated.issuance_transaction_id = Some(reconciliation_transaction.id.clone());
-    reconciliation_updated
-        .integration_context
-        .insert("policy".to_owned(), json!({"allowed": true}));
-    let mut current_fact = None;
-    for (id, score) in [
-        ("fact-reconciliation-old", 80),
-        ("fact-reconciliation-current", 92),
-    ] {
-        let mut fact = evidence_fact_fixture(id, &reconciliation_application, reconciliation_time);
-        fact.provider = "canvas".into();
-        fact.fact_type = "canvas.assignment_score".into();
-        fact.requirement_id = Some("grade".into());
-        fact.logical_key = "reconciliation-grade".into();
-        fact.assertion = Map::from_iter([("score_percent".into(), json!(score))]);
-        // Keep both immutable observations, without a supersession edge;
-        // only the explicit head may enter projection and reservation.
-        repository
-            .commit_conflict_evidence(
-                &reconciliation_application.id,
-                &reconciliation_application.organization_id,
-                &fact,
-                &[],
-            )
-            .await
-            .unwrap();
-        current_fact = Some(fact);
-    }
-    assert_eq!(
-        repository
-            .list_evidence_facts_for_application(&reconciliation_application.id)
-            .await
-            .unwrap()
-            .len(),
-        2
-    );
-    let reconciliation_runtime = InternalApplicationReconciliationRepository::snapshot(
-        &repository,
-        &reconciliation_application,
-    )
-    .await
-    .expect("reconciliation runtime snapshot");
-    assert_eq!(reconciliation_runtime.facts, vec![current_fact.unwrap()]);
-    let reconciliation_snapshot = reconciliation_approval_snapshot(&reconciliation_runtime);
-    let reconciliation_events = ["evidence_policy_permitted", "approval_issuance_succeeded"]
-        .into_iter()
-        .enumerate()
-        .map(|(index, event_type)| {
-            evidence_event_fixture(
-                &format!("event-reconciliation-atomic-{index}"),
-                &reconciliation_application,
-                event_type,
-                reconciliation_time,
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        InternalApplicationReconciliationRepository::commit(
-            &repository,
-            &EvidenceReconciliationWrite {
-                application: reconciliation_updated,
-                expected_status: ApplicationStatus::Pending,
-                expected_updated_at: reconciliation_application.updated_at,
-                transaction: Some(reconciliation_transaction),
-                approval_snapshot: Some(reconciliation_snapshot),
-                events: reconciliation_events,
-                reconciled_at: reconciliation_time,
-            },
-        )
-        .await
-        .expect("atomic reconciliation commit"),
-        EvidenceReconciliationCommitOutcome::Committed
-    );
-    let reconciliation_stored = repository
-        .get_application(&reconciliation_application.id)
-        .await
-        .expect("reconciliation application lookup")
-        .expect("reconciliation application");
-    assert_eq!(reconciliation_stored.status, ApplicationStatus::Approved);
-    assert_eq!(
-        reconciliation_stored.reviewer_id.as_deref(),
-        Some("canvas:evidence-reconciliation")
-    );
-    assert_eq!(
-        repository
-            .list_events_for_application(&reconciliation_application.id)
-            .await
-            .expect("reconciliation events")
-            .iter()
-            .map(|event| event.event_type.as_str())
-            .collect::<Vec<_>>(),
-        ["evidence_policy_permitted", "approval_issuance_succeeded"]
-    );
-
-    let mut reconciliation_failure =
-        application_fixture(&application, "application-reconciliation-failure");
-    reconciliation_failure.integration_context =
-        reconciliation_application.integration_context.clone();
-    repository
-        .insert_application(&reconciliation_failure)
-        .await
-        .expect("reconciliation failure application fixture must insert");
-    let mut rejected_transaction = approval_transaction(
-        "transaction-reconciliation-failure",
-        &reconciliation_failure,
-        reconciliation_time,
-    );
-    rejected_transaction.pre_authorized_code = "reject-me".to_owned();
-    let mut failure_candidate = reconciliation_failure.clone();
-    failure_candidate.status = ApplicationStatus::Approved;
-    failure_candidate.reviewer_id = Some("canvas:evidence-reconciliation".to_owned());
-    failure_candidate.reviewed_at = Some(reconciliation_time);
-    failure_candidate.updated_at = reconciliation_time;
-    failure_candidate.issuance_transaction_id = Some(rejected_transaction.id.clone());
-    let failure_runtime =
-        InternalApplicationReconciliationRepository::snapshot(&repository, &reconciliation_failure)
-            .await
-            .expect("failure reconciliation runtime snapshot");
-    assert!(InternalApplicationReconciliationRepository::commit(
-        &repository,
-        &EvidenceReconciliationWrite {
-            application: failure_candidate,
-            expected_status: ApplicationStatus::Pending,
-            expected_updated_at: reconciliation_failure.updated_at,
-            transaction: Some(rejected_transaction),
-            approval_snapshot: Some(reconciliation_approval_snapshot(&failure_runtime)),
-            events: vec![evidence_event_fixture(
-                "event-reconciliation-failure",
-                &reconciliation_failure,
-                "approval_issuance_succeeded",
-                reconciliation_time,
-            )],
-            reconciled_at: reconciliation_time,
-        },
-    )
-    .await
-    .is_err());
-    assert_eq!(
-        repository
-            .get_application(&reconciliation_failure.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        ApplicationStatus::Pending
-    );
-    assert_eq!(
-        transaction_count(&pool, &reconciliation_failure.id).await,
-        0
-    );
-    assert!(repository
-        .list_events_for_application(&reconciliation_failure.id)
-        .await
-        .expect("rolled back reconciliation events")
-        .is_empty());
-
-    let mut reconciliation_conflict =
-        application_fixture(&application, "application-reconciliation-conflict");
-    reconciliation_conflict.integration_context =
-        reconciliation_application.integration_context.clone();
-    repository
-        .insert_application(&reconciliation_conflict)
-        .await
-        .expect("reconciliation conflict application fixture must insert");
-    sqlx::query("UPDATE issuance_service.applications SET status = 'rejected' WHERE id = $1")
-        .bind(&reconciliation_conflict.id)
-        .execute(&pool)
-        .await
-        .expect("reconciliation rejection must win");
-    let mut conflict_candidate = reconciliation_conflict.clone();
-    conflict_candidate.updated_at = reconciliation_time;
-    assert!(matches!(
-        InternalApplicationReconciliationRepository::commit(
-            &repository,
-            &EvidenceReconciliationWrite {
-                application: conflict_candidate,
-                expected_status: ApplicationStatus::Pending,
-                expected_updated_at: reconciliation_conflict.updated_at,
-                transaction: None,
-                approval_snapshot: None,
-                events: Vec::new(),
-                reconciled_at: reconciliation_time,
-            },
-        )
-        .await
-        .expect("reconciliation lifecycle conflict"),
-        EvidenceReconciliationCommitOutcome::ConcurrentChange { current: Some(current) }
-            if current.status == ApplicationStatus::Rejected
-    ));
-
-    sqlx::query(
-        "UPDATE issuance_service.applications
-         SET status = 'not-a-status' WHERE id = 'application-1'",
-    )
-    .execute(&pool)
-    .await
-    .expect("invalid status fixture");
-    assert_eq!(
-        repository.get_application("application-1").await,
-        Err(InternalApplicationRepositoryError::Unavailable)
-    );
-
     sqlx::query("DROP TABLE issuance_service.issuance_events CASCADE")
         .execute(&pool)
         .await
@@ -1363,6 +1077,7 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
 fn application_fixture(source: &ApplicationRecord, id: &str) -> ApplicationRecord {
     let mut application = source.clone();
     application.id = id.to_owned();
+    application.integration_context.clear();
     application
 }
 
@@ -1412,76 +1127,6 @@ fn evidence_event_fixture(
             Value::String(application.organization_id.clone()),
         )]),
         created_at: now,
-    }
-}
-
-fn reconciliation_approval_snapshot(
-    snapshot: &EvidenceReconciliationSnapshot,
-) -> CanvasApplicationApprovalSnapshot {
-    let application = &snapshot.application;
-    let template = snapshot.template.as_ref().expect("reconciliation template");
-    let binding = snapshot.binding.as_ref().expect("reconciliation binding");
-    CanvasApplicationApprovalSnapshot {
-        policy_set: snapshot.policy_set.clone().map(Value::Object),
-        evidence_facts: snapshot.facts.iter().map(|fact| serde_json::to_value(
-            marty_issuance_service::internal_application_domain::EvidenceFactResponse::from(fact)).unwrap()).collect(),
-        application: json!({
-            "id": application.id,
-            "organization_id": application.organization_id,
-            "application_template_id": application.application_template_id,
-            "applicant_identifier": application.applicant_identifier,
-            "form_data": application.form_data,
-            "integration_context": application.integration_context,
-            "status": application.status.as_str(),
-            "issuance_transaction_id": application.issuance_transaction_id,
-            "credential_id": application.credential_id,
-        })
-        .as_object()
-        .expect("approval application")
-        .clone(),
-        application_template: json!({
-            "claim_collection_rules":template.claim_collection_rules,
-            "form_fields":template.form_fields,"name":template.name,"description":template.description,
-            "application_validity_days":template.application_validity_days,
-            "id": template.id,
-            "organization_id": template.organization_id,
-            "credential_template_id": template.credential_template_id,
-            "approval_policy_set_id": template.approval_policy_set_id,
-            "status": template.status.as_str(),
-        })
-        .as_object()
-        .expect("approval template")
-        .clone(),
-        platform: snapshot.platform.clone().expect("reconciliation platform"),
-        binding: Map::from_iter(
-            [
-                "id",
-                "organization_id",
-                "platform_id",
-                "application_template_id",
-                "credential_template_id",
-                "approval_policy_set_id",
-                "auto_approve_on_evidence",
-                "evidence_requirements",
-                "feature_flags",
-                "enabled",
-                "config_version",
-                "validated_config_version",
-                "readiness_checks",
-                "readiness_validated_at",
-                "credential_template_snapshot",
-                "activated_at",
-                "archived_at",
-            ]
-            .into_iter()
-            .filter_map(|name| {
-                binding
-                    .get(name)
-                    .cloned()
-                    .map(|value| (name.to_owned(), value))
-            }),
-        ),
-        existing_transaction: snapshot.existing_transaction.clone(),
     }
 }
 

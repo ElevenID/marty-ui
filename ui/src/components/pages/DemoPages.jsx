@@ -287,7 +287,7 @@ function ReleaseExperience({ index, manifest }) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               label="Filter scenarios"
-              placeholder="Badge, verifier, Canvas..."
+              placeholder="Badge, verifier, wallet..."
               sx={{ flex: 1, minWidth: 0 }}
               slotProps={{
                 input: { startAdornment: <SearchRoundedIcon color="action" sx={{ mr: 1 }} /> }

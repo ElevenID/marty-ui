@@ -19,11 +19,19 @@ from datetime import datetime
 UI_REVISION = "0aae5d6c03df0ccb2aa757d61fb022a24a962d14"
 CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-native": "marty-issuance-service"}
-MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
-RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
-# The current D12 functional cohort has event-stream in the 22 owned runtime
-# slots. Keep the historical Canvas cohort exact for every older profile.
-D12_CURRENT_RUNTIME_ROLES = (RUNTIME_ROLES - {"canvas-sandbox"}) | {"event-stream"}
+MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native passport-beta-bureau".split())
+RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "ui-prod"))
+# Closed platform cohorts: the current D12/D05 cohort also owns event-stream.
+# Retired connector roles are not eligible for mutation by these operators.
+D12_CURRENT_RUNTIME_ROLES = RUNTIME_ROLES | {"event-stream"}
+
+def reject_retired_runtime_roles(names):
+    """A retained model must not hide connector roles outside the selected cohort."""
+    for name in names:
+        require(isinstance(name, str), "NAMED_RUNTIME_ROLE_REQUIRED")
+        normalized = name.lower().replace("_", "-")
+        require(not (normalized == "canvas" or normalized.startswith("canvas-")
+                     or "-canvas-" in normalized), "RETIRED_CONNECTOR_RUNTIME_ROLE")
 
 def runtime_roles(profile=None):
     if profile in ("d12-passport-current-functional", "d05-membership-current-functional"):

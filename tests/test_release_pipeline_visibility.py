@@ -82,7 +82,7 @@ class HttpFixture:
         if method == "POST":
             self.case.assertEqual(path, BASE + "/actions/workflows/ci.yml/dispatches")
             self.case.assertEqual(json.loads(input_bytes),
-                                  {"ref": "main", "inputs": {"canvas_migrated_base_pilot": False}})
+                                  {"ref": "main", "inputs": {}})
             self.case.assertEqual(json.loads(self.journal.read_bytes())["steps"][0]["outcome"], "unknown")
             if self.post_error:
                 raise self.post_error
@@ -412,7 +412,7 @@ class InitialVisibilityTests(unittest.TestCase):
                     # Any next GET would expose a valid successful run. The
                     # first visible response must itself receive every check.
                     with redirect_stdout(self.output), self.assertRaises(pipeline.PipelineError) as caught:
-                        self.driver.dispatch("full-ci", {"canvas_migrated_base_pilot": False}, title=title)
+                        self.driver.dispatch("full-ci", {}, title=title)
                     self.assertEqual(caught.exception.code, code)
                     self.assertEqual(len(self.http.child_reads), len(prefix) + 1)
                     self.assertEqual(self.clock.sleeps, [5.0] * len(prefix))

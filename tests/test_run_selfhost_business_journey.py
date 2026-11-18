@@ -475,11 +475,6 @@ def disabled_optional_model() -> dict:
         "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
     }
     model["services"]["notification"]["environment"] = {"SMTP_USERNAME": ""}
-    model["services"]["issuance"]["environment"] = {
-        **{name: "false" for name in runner.CANVAS_DISABLED_FLAGS},
-        **{name: "" for name in runner.CANVAS_UNUSED_SETTINGS},
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
-    }
     for owner, flags in runner.PASSPORT_DISABLED_FLAGS.items():
         model["services"][owner]["environment"] = {
             **{name: "false" for name in flags},
@@ -487,7 +482,6 @@ def disabled_optional_model() -> dict:
         }
     model["services"]["issuance-native"]["environment"].update({
         **{name: "" for name in runner.BUREAU_UNUSED_SETTINGS},
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
     })
     return model
 
@@ -524,20 +518,20 @@ def test_fresh_install_initializes_kms_only_after_rootless_migration(
         runner.initialize_kms(["docker", "compose"], tmp_path, secret_root, {})
 
 
-def test_explicitly_disabled_worker_healthcheck_does_not_block_closure() -> None:
+def test_explicitly_disabled_service_healthcheck_does_not_block_closure() -> None:
     raw, model = status_fixture()
-    model["services"]["canvas-sync-worker"]["healthcheck"] = {"disable": True}
+    model["services"]["notification"]["healthcheck"] = {"disable": True}
     rows = json.loads(raw)
     for row in rows:
-        if row["Service"] == "canvas-sync-worker":
+        if row["Service"] == "notification":
             row["Health"] = ""
     assert len(live_services(json.dumps(rows), model)) == len(LOCAL_SERVICES)
-    model["services"]["canvas-sync-worker"]["healthcheck"] = {
+    model["services"]["notification"]["healthcheck"] = {
         "test": ["CMD", "true"],
     }
-    with pytest.raises(ValueError, match="not healthy: canvas-sync-worker"):
+    with pytest.raises(ValueError, match="not healthy: notification"):
         live_services(json.dumps(rows), model)
-    model["services"]["canvas-sync-worker"]["healthcheck"] = "disabled"
+    model["services"]["notification"]["healthcheck"] = "disabled"
     with pytest.raises(ValueError, match="healthcheck model is invalid"):
         live_services(json.dumps(rows), model)
 
@@ -570,9 +564,9 @@ def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
 ) -> None:
     model = disabled_optional_model()
     assert OPTIONAL_LOCAL_SECRET_NAMES == {
-        "canvas_credentials_shared_secret", "google_analytics_measurement_id",
+        "google_analytics_measurement_id",
         "google_client_id", "google_client_secret", "google_site_verification",
-        "smtp_password", "canvas_credentials_api_token", "passport_tenant_api_keys",
+        "smtp_password", "passport_tenant_api_keys",
         "personalization_bureau_api_key",
     }
     for name in LOCAL_SECRET_NAMES:
@@ -596,9 +590,6 @@ def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
     ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "unexpected", "google_client_id"),
     ("keycloak-configurator", "KEYCLOAK_SMTP_USERNAME", "sender", "smtp_password"),
     ("notification", "SMTP_USERNAME", "sender", "smtp_password"),
-    ("issuance", "CANVAS_PORTABLE_INTEGRATION_ENABLED", "true", "canvas_credentials_api_token"),
-    ("issuance", "CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.test", "canvas_credentials_api_token"),
-    ("issuance", "CANVAS_CREDENTIALS_API_TOKEN_FILE", "/run/secrets/canvas_credentials_api_token", "canvas_credentials_api_token"),
     ("gateway", "PASSPORT_TENANT_API_KEYS_FILE", "/run/secrets/passport_tenant_api_keys", "passport_tenant_api_keys"),
     ("flow", "PASSPORT_TENANT_API_KEYS", "synthetic-test-keyring", "passport_tenant_api_keys"),
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://bureau.test", "personalization_bureau_api_key"),
@@ -624,11 +615,11 @@ def test_empty_secret_fails_closed_without_rendered_controls(tmp_path: Path) -> 
             "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
             encoding="utf-8",
         )
-    with pytest.raises(ValueError, match="canvas_credentials_api_token"):
+    with pytest.raises(ValueError, match="google_analytics_measurement_id"):
         required_secrets(tmp_path)
     model = disabled_optional_model()
-    del model["services"]["issuance"]["environment"]["CANVAS_CREDENTIALS_PUBLISH_URL"]
-    with pytest.raises(ValueError, match="canvas_credentials_api_token"):
+    del model["services"]["keycloak-configurator"]["environment"]["KEYCLOAK_SOCIAL_LOGIN_ENABLED"]
+    with pytest.raises(ValueError, match="google_client_id"):
         required_secrets(tmp_path, model)
 
 
@@ -643,16 +634,35 @@ def test_optional_passport_files_require_all_consumers_to_be_explicitly_disabled
     assert not {"passport_tenant_api_keys", "personalization_bureau_api_key"} & allowed
 
 
-def test_optional_passport_files_require_every_consumer_and_canvas_token_selection():
+def test_optional_passport_files_require_every_consumer():
     model = disabled_optional_model()
     del model["services"]["flow"]
     assert "passport_tenant_api_keys" not in runner.disabled_optional_secrets(model)
-    model = disabled_optional_model()
-    del model["services"]["issuance-native"]["environment"]["CANVAS_CREDENTIALS_API_TOKEN_FILE"]
-    allowed = runner.disabled_optional_secrets(model)
-    assert "canvas_credentials_api_token" not in allowed
-    assert "canvas_credentials_shared_secret" in allowed
 
+
+@pytest.mark.parametrize("setting", ["CANVAS_PORTABLE_INTEGRATION_ENABLED",
+    "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_API_TOKEN_FILE",
+    "CANVAS_FUTURE_SETTING", "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+    "SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN", "KEYCLOAK_SEED_CANVAS_ADMIN_USER"])
+@pytest.mark.parametrize("value", ["false", "", "true"])
+def test_retired_connector_configuration_cannot_receive_staged_credentials(setting, value):
+    model = disabled_optional_model()
+    model["services"]["issuance-native"]["environment"][setting] = value
+    with pytest.raises(ValueError, match="retired connector configuration"):
+        runner.disabled_optional_secrets(model)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda model: model["services"].update({"canvas-sync-worker": {}}),
+    lambda model: model["services"].update({"canvas_sync_worker": {}}),
+    lambda model: model.update(secrets={"canvas_credentials_api_token": {}}),
+    lambda model: model["services"]["gateway"].update(environment=["CANVAS_NEW_FLAG=false"]),
+])
+def test_retired_connector_model_inputs_fail_closed(mutate):
+    model = disabled_optional_model()
+    mutate(model)
+    with pytest.raises(ValueError, match="retired connector"):
+        runner.disabled_optional_secrets(model)
 
 def test_missing_service_and_unhealthy_gateway_fail_closed() -> None:
     raw, model = status_fixture()

@@ -53,12 +53,6 @@ services:
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
       issuance-migrations: *completed-job
-  canvas-sync-worker:
-    depends_on:
-      kms-initialize: *completed-job
-      openbao-unseal: *usable-kms
-      db-migrate: *completed-job
-      issuance-migrations: *completed-job
   applicant:
     depends_on:
       kms-initialize: *completed-job

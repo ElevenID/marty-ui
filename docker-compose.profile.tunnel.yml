@@ -57,8 +57,6 @@ services:
       # Self-host stacks can still override this via GATEWAY_TUNNEL_UPSTREAM.
       GATEWAY_UPSTREAM: ${GATEWAY_TUNNEL_UPSTREAM:-gateway:8000}
       DOCS_DOMAIN: ${DOCS_DOMAIN:-docs.elevenidllc.com}
-      CANVAS_REAL_PUBLIC_HOST: ${CANVAS_REAL_PUBLIC_HOST:-}
-      CANVAS_SANDBOX_PUBLIC_HOST: ${CANVAS_SANDBOX_PUBLIC_HOST:-}
       NORTHSTAR_ADMISSIONS_PUBLIC_HOST: ${NORTHSTAR_ADMISSIONS_PUBLIC_HOST:-admissions-test.elevenidllc.com}
     networks:
       - marty-network

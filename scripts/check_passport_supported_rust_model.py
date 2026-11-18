@@ -87,17 +87,6 @@ def remote_grpc_client_environment(service: str, project: str) -> dict[str, str]
     }
 DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing", "ingress"})
 INGRESS_NETWORK = "ingress"
-ALLOWED_SERVICES = frozenset({
-    "applicant", "auth", "canvas-sync-worker", "compliance-profile",
-    "credential-template", "db-migrate", "deployment-profile",
-    "device-registration", "edge", "event-stream", "flow", "gateway",
-    "issuance-migrations", "issuance-native", "keycloak",
-    "keycloak-configurator", "mailpit", "notification", "openbao",
-    "openbao-init", "organization", "passport-callback-signer",
-    "passport-beta-bureau", "postgres", "presentation-policy", "redis",
-    "revocation-profile", "revocation-profile-migrate", "signing-keys",
-    "trust-profile", "ui", "verification", "verification-migrations",
-})
 ROOT = Path(__file__).resolve().parents[1]
 
 

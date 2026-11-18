@@ -2,7 +2,7 @@
 //! No extraction/relinking of Envoy, Docker socket, host ports or operator files.
 use super::{
     base_runtime_container::{digest, regular_file},
-    canvas_published_database::{docker, inspect, inspect_with_timeout, PublishedDatabase},
+    platform_test_database::{docker, inspect, inspect_with_timeout, PublishedDatabase},
 };
 use marty_release_evidence::envoy_config::{encode, parse, render, NATIVE_CLUSTER};
 use serde_json::{json, Value};
@@ -266,7 +266,7 @@ impl OwnedEnvoy {
                 && images[0]["Os"] == "linux",
             "Exact Linux Envoy image is unavailable",
         )?;
-        let root = super::canvas_published_database::repository_root();
+        let root = super::platform_test_database::repository_root();
         let source = regular_file(&root.join("config/envoy/envoy.yaml"))?;
         let proto = regular_file(&root.join("config/envoy/proto_descriptor.pb"))?;
         let source_before = digest(&source)?;

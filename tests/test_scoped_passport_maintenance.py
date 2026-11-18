@@ -1,4 +1,4 @@
-"""All22-role source-only controls; no Docker process, SQL, job or secret."""
+"""Closed-cohort source-only controls; no Docker process, SQL, job or secret."""
 import copy
 import importlib
 import json
@@ -13,11 +13,11 @@ shared = importlib.import_module("scoped_native_runtime")
 overlay = importlib.import_module("scoped_beta_binary_overlay")
 
 
-def fixture(directory):
+def fixture(directory, profile=None):
     before = {"roles": []}
     contracts = {}
     compose = {project: {"name": project, "services": {}} for project in maintenance.PROJECTS}
-    for index, role in enumerate(sorted(shared.RUNTIME_ROLES)):
+    for index, role in enumerate(sorted(shared.runtime_roles(profile))):
         row = {"role": role, "project": maintenance.ROLE_PROJECTS[role], "containerId": f"{index+1:064x}", "imageId": "sha256:"+"a"*64, "source": "1"*40,
                "binary": "marty-"+role, "sha256": "b"*64, "binaryMounts": [], "hostPid": index+100, "startedAt": "2026-10-27T15:00:00Z",
                "running": True, "paused": False, "state": "running", "containerExitCode": 0, "oomKilled": False}
@@ -56,7 +56,7 @@ def fixture(directory):
     stopped = copy.deepcopy(before)
     for row in stopped["roles"]:
         row.update(running=False, hostPid=0, state="exited")
-    outcomes = {role: {"terminal": True, "exitCode": 0, "stopAcknowledged": True} for role in shared.RUNTIME_ROLES}
+    outcomes = {role: {"terminal": True, "exitCode": 0, "stopAcknowledged": True} for role in shared.runtime_roles(profile)}
     return plan, before, stopped, outcomes, compose
 
 
@@ -102,13 +102,13 @@ class MaintenanceControls(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ELF_STOP_CONTRACT_REQUIRES_BINARY"):
                 maintenance._stop_contract("gateway", native, plan["stopContracts"]["gateway"])
 
-    def test_preview_requires_all22_and_gateway_first_without_automatic_kill(self):
+    def test_preview_requires_all_owned_roles_and_gateway_first_without_automatic_kill(self):
         with tempfile.TemporaryDirectory() as temp:
             plan, before, _, _, compose = fixture(Path(temp))
             value = maintenance.preview(plan, before, compose)
             self.assertEqual(set(value["allStopRoles"]), shared.RUNTIME_ROLES)
             self.assertEqual(value["allStopRoles"][0], "gateway")
-            self.assertEqual(len(value["additionalUnselectedRestartRoles"]), 19)
+            self.assertEqual(len(value["additionalUnselectedRestartRoles"]), 17)
             self.assertTrue(value["noApplyAuthority"])
             self.assertTrue(value["durableOneShotIntentRequiredBeforeFirstStop"])
             for step in value["stopSteps"]:
@@ -116,7 +116,7 @@ class MaintenanceControls(unittest.TestCase):
                 self.assertEqual(step["requireExitCode"], 0)
             # A missing or crash-stop-only handler cannot silently get permission.
             del plan["stopContracts"]["passport-beta-bureau"]
-            with self.assertRaisesRegex(ValueError, "ALL_22_STOP_CONTRACTS"):
+            with self.assertRaisesRegex(ValueError, "ALL_RUNTIME_STOP_CONTRACTS"):
                 maintenance.preview(plan, before, compose)
 
     def test_foreign_source_or_signal_contract_refuses_before_rendering_stops(self):
@@ -138,8 +138,8 @@ class MaintenanceControls(unittest.TestCase):
     def test_three_stopped_roles_never_satisfy_database_quiescence(self):
         with tempfile.TemporaryDirectory() as temp:
             _, before, stopped, outcomes, _ = fixture(Path(temp))
-            self.assertTrue(maintenance.validate_quiescent(before, stopped, outcomes)["all22Quiescent"])
-            for role in ("auth", "ui-prod", "canvas-sync-worker"):
+            self.assertTrue(maintenance.validate_quiescent(before, stopped, outcomes)["allRolesQuiescent"])
+            for role in ("auth", "ui-prod", "notification"):
                 changed = copy.deepcopy(stopped)
                 row = next(row for row in changed["roles"] if row["role"] == role)
                 row.update(running=True, hostPid=500, state="running")
@@ -166,7 +166,7 @@ class MaintenanceControls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             _, before, stopped, outcomes, _ = fixture(Path(temp))
             value = maintenance.restore_commands(before, stopped, outcomes, sorted(shared.RUNTIME_ROLES))
-            self.assertEqual(len(value["startPass"]), 22)
+            self.assertEqual(len(value["startPass"]), 20)
             self.assertTrue(value["healthWaitAfterEntirePass"])
             self.assertTrue(value["noDesktopCommand"])
             self.assertTrue(value["noRecreateResetPruneOrMigration"])

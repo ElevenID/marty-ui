@@ -130,14 +130,6 @@ pub struct CredentialLifecycleEvent {
 pub struct CredentialManagementPortError(pub String);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum CanvasLifecycleSyncError {
-    #[error(transparent)]
-    Port(#[from] CredentialManagementPortError),
-    #[error("Canvas delivery response cannot be encoded for persistence")]
-    TextEncoding,
-}
-
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CredentialManagementError {
     #[error("Credential not found")]
     NotFound,
@@ -159,10 +151,6 @@ pub enum CredentialManagementError {
     RepositoryUnavailable(String),
     #[error("Revocation service unavailable: {0}")]
     PublicationUnavailable(String),
-    #[error("Canvas lifecycle retry could not be recorded: {0}")]
-    CanvasRetryUnavailable(String),
-    #[error("Canvas delivery response cannot be encoded for persistence")]
-    CanvasTextEncoding,
 }
 
 #[async_trait]
@@ -202,16 +190,6 @@ pub trait CredentialManagementRepository: Send + Sync {
         expected_status: ManagedCredentialStatus,
         audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError>;
-
-    /// Synchronize Canvas mirrors after local persistence. External failures
-    /// are successful outcomes only after this port durably records retry
-    /// metadata; an error means that durable retry recording itself failed.
-    async fn synchronize_canvas(
-        &self,
-        credential: &ManagedCredential,
-        action: CredentialLifecycleAction,
-        reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError>;
 }
 
 #[async_trait]
@@ -404,18 +382,6 @@ impl CredentialManagementService {
             .await
             .map_err(|error| CredentialManagementError::RepositoryUnavailable(error.0))?;
 
-        self.repository
-            .synchronize_canvas(&updated, action, reason)
-            .await
-            .map_err(|error| match error {
-                CanvasLifecycleSyncError::Port(error) => {
-                    CredentialManagementError::CanvasRetryUnavailable(error.0)
-                }
-                CanvasLifecycleSyncError::TextEncoding => {
-                    CredentialManagementError::CanvasTextEncoding
-                }
-            })?;
-
         self.events
             .emit(CredentialLifecycleEvent {
                 event_type: action.event_type().to_owned(),
@@ -437,7 +403,7 @@ impl CredentialManagementService {
     ///
     /// A transaction revocation can fail after the credential row is written
     /// but before the transaction row is committed. Retrying must therefore
-    /// republish the idempotent canonical status bit and retry Canvas sync even
+    /// republish the idempotent canonical status bit even
     /// when the local credential is already revoked.
     pub async fn reconcile_revocation(
         &self,
@@ -515,21 +481,6 @@ impl CredentialManagementService {
             )
             .await
             .map_err(|error| CredentialManagementError::PublicationUnavailable(error.0))?;
-        self.repository
-            .synchronize_canvas(
-                credential,
-                CredentialLifecycleAction::Revoke,
-                persisted_reason,
-            )
-            .await
-            .map_err(|error| match error {
-                CanvasLifecycleSyncError::Port(error) => {
-                    CredentialManagementError::CanvasRetryUnavailable(error.0)
-                }
-                CanvasLifecycleSyncError::TextEncoding => {
-                    CredentialManagementError::CanvasTextEncoding
-                }
-            })?;
         Ok(status_view(
             credential,
             credential.revocation_reason.clone(),
@@ -632,7 +583,6 @@ mod tests {
         credential: Arc<Mutex<Option<ManagedCredential>>>,
         calls: Arc<Mutex<Vec<String>>>,
         publication_failure: Arc<Mutex<Option<String>>>,
-        canvas_failure: Arc<Mutex<Option<String>>>,
         persist_failure: Arc<Mutex<Option<String>>>,
         persist_race_reason: Arc<Mutex<Option<String>>>,
         events: Arc<Mutex<Vec<CredentialLifecycleEvent>>>,
@@ -666,7 +616,6 @@ mod tests {
                 }))),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 publication_failure: Arc::new(Mutex::new(None)),
-                canvas_failure: Arc::new(Mutex::new(None)),
                 persist_failure: Arc::new(Mutex::new(None)),
                 persist_race_reason: Arc::new(Mutex::new(None)),
                 events: Arc::new(Mutex::new(Vec::new())),
@@ -755,23 +704,6 @@ mod tests {
             *stored = Some(credential.clone());
             Ok(credential.clone())
         }
-
-        async fn synchronize_canvas(
-            &self,
-            _credential: &ManagedCredential,
-            action: CredentialLifecycleAction,
-            _reason: Option<&str>,
-        ) -> Result<(), CanvasLifecycleSyncError> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .push(format!("canvas:{}", action.as_str()));
-            if let Some(error) = self.canvas_failure.lock().expect("canvas failure").clone() {
-                Err(CredentialManagementPortError(error).into())
-            } else {
-                Ok(())
-            }
-        }
     }
 
     #[tokio::test]
@@ -798,7 +730,6 @@ mod tests {
                 "persist",
                 "load",
                 "publish:revoke",
-                "canvas:revoke",
             ]
         );
         assert!(harness.events.lock().expect("events").is_empty());
@@ -870,111 +801,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canvas_review_reconciles_previously_revoked_credentials_without_duplicate_events() {
-        use crate::canvas_review_resolution::CanvasReviewLifecycle;
-
-        let harness = Harness::new(ManagedCredentialStatus::Revoked);
-        let result = CanvasReviewLifecycle::reconcile_revocation(
-            &harness.service(),
-            "org-a",
-            "credential-a",
-            "Run-owned Canvas capture cleanup",
-        )
-        .await;
-        assert!(
-            result.is_ok(),
-            "an open review can finish after prior credential revocation"
-        );
-        assert_eq!(
-            *harness.calls.lock().expect("calls"),
-            ["load", "publish:revoke", "canvas:revoke"]
-        );
-        assert!(harness.events.lock().expect("events").is_empty());
-        assert!(harness.audits.lock().expect("audits").is_empty());
-    }
-
-    #[tokio::test]
-    async fn canvas_review_revocation_recovery_keeps_tenant_reason_and_publication_fences() {
-        use crate::canvas_review_resolution::CanvasReviewLifecycle;
-
-        for (organization, reason, publication_failure) in [
-            ("foreign-org", "cleanup".to_owned(), false),
-            ("org-a", "x".repeat(MAX_REASON_CHARACTERS + 1), false),
-            ("org-a", "cleanup".to_owned(), true),
-        ] {
-            let harness = Harness::new(ManagedCredentialStatus::Revoked);
-            if publication_failure {
-                *harness
-                    .publication_failure
-                    .lock()
-                    .expect("publication failure") = Some("offline".to_owned());
-            }
-            assert!(CanvasReviewLifecycle::reconcile_revocation(
-                &harness.service(),
-                organization,
-                "credential-a",
-                &reason,
-            )
-            .await
-            .is_err());
-            let expected = if publication_failure {
-                vec!["load", "publish:revoke"]
-            } else {
-                vec!["load"]
-            };
-            assert_eq!(*harness.calls.lock().expect("calls"), expected);
-            assert!(harness.events.lock().expect("events").is_empty());
-        }
-        // The public lifecycle endpoint continues to reject repeated revocation.
-        let harness = Harness::new(ManagedCredentialStatus::Revoked);
-        assert_eq!(
-            harness
-                .service()
-                .transition(
-                    "credential-a",
-                    Some("org-a"),
-                    CredentialLifecycleAction::Revoke,
-                    Some("cleanup")
-                )
-                .await
-                .expect_err("public repeated revoke"),
-            CredentialManagementError::AlreadyRevoked
-        );
-        // The review resolve adapter also preserves the published error;
-        // callers must opt into the separately scoped recovery operation.
-        assert!(matches!(
-            CanvasReviewLifecycle::transition(
-                &harness.service(),
-                "org-a",
-                "credential-a",
-                CredentialLifecycleAction::Revoke,
-                "cleanup"
-            )
-            .await,
-            Err(crate::canvas_operations::OperationsError::Lifecycle(
-                CredentialManagementError::AlreadyRevoked
-            ))
-        ));
-        for status in [
-            ManagedCredentialStatus::Active,
-            ManagedCredentialStatus::Suspended,
-        ] {
-            let harness = Harness::new(status);
-            assert!(CanvasReviewLifecycle::reconcile_revocation(
-                &harness.service(),
-                "org-a",
-                "credential-a",
-                "cleanup"
-            )
-            .await
-            .is_err());
-            assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
-            assert!(harness.events.lock().expect("events").is_empty());
-            assert!(harness.audits.lock().expect("audits").is_empty());
-        }
-    }
-
-    #[tokio::test]
     async fn mutations_follow_the_frozen_publication_and_event_order() {
         let cases = [
             (
@@ -1014,7 +840,6 @@ mod tests {
                     "load",
                     &format!("publish:{}", action.as_str()),
                     "persist",
-                    &format!("canvas:{}", action.as_str()),
                     "event",
                 ]
             );
@@ -1121,33 +946,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canvas_retry_recording_failure_never_emits_a_success_event() {
+    async fn canonical_status_transition_does_not_invoke_retired_provider_sync() {
         let harness = Harness::new(ManagedCredentialStatus::Active);
-        *harness.canvas_failure.lock().expect("canvas failure") =
-            Some("retry storage unavailable".to_owned());
-
-        let error = harness
+        let status = harness
             .service()
             .transition(
                 "credential-a",
-                None,
+                Some("org-a"),
                 CredentialLifecycleAction::Suspend,
                 None,
             )
             .await
-            .expect_err("retry recording failure");
-
-        assert_eq!(
-            error,
-            CredentialManagementError::CanvasRetryUnavailable(
-                "retry storage unavailable".to_owned()
-            )
-        );
+            .expect("canonical status transition");
+        assert_eq!(status.status, "suspended");
         assert_eq!(
             *harness.calls.lock().expect("calls"),
-            ["load", "publish:suspend", "persist", "canvas:suspend"]
+            ["load", "publish:suspend", "persist", "event"]
         );
-        assert!(harness.events.lock().expect("events").is_empty());
+        assert_eq!(harness.events.lock().expect("events").len(), 1);
     }
 
     #[tokio::test]

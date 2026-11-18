@@ -225,8 +225,6 @@ fn inputs(root: &Path) -> (PathBuf, Configuration) {
         "gateway_issuer_did",
         "flow_wallet_request",
         "issuance_credential",
-        "issuance_canvas",
-        "issuance_readiness",
         "issuance_passport",
     ]
     .into_iter()

@@ -228,24 +228,6 @@ server {
         add_header X-Cache-Status $upstream_cache_status;
     }
 
-    # Canvas LTI launches are intentionally embedded inside Canvas. Keep this
-    # exception narrow so the rest of the app remains protected by SAMEORIGIN.
-    location ^~ /v1/integrations/canvas/lti/ {
-        set $backend_api ${GATEWAY_UPSTREAM};
-        proxy_pass http://$backend_api;
-        proxy_http_version 1.1;
-        proxy_redirect off;
-        proxy_hide_header X-Frame-Options;
-        proxy_hide_header Content-Security-Policy;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST}" always;
-    }
 
     location /v1/ {
         set $backend_api ${GATEWAY_UPSTREAM};
@@ -314,24 +296,6 @@ server {
         proxy_set_header X-Forwarded-Host $host;
     }
 
-    # Canvas LTI embedded experience. This route is the React landing page after
-    # the verified launch callback and must render inside the Canvas iframe.
-    location = /canvas/lti/experience {
-        if ($console_disabled) { return 404; }
-        set $ui_upstream ${UI_UPSTREAM};
-        proxy_pass http://$ui_upstream;
-        proxy_http_version 1.1;
-        proxy_hide_header X-Frame-Options;
-        proxy_hide_header Content-Security-Policy;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST}" always;
-    }
 
     location / {
         if ($console_disabled) { return 404; }

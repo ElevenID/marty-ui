@@ -33,7 +33,7 @@ WEB = ".github/workflows/production-web-release.yml"
 PHASE_MINUTES = {"qualify": 330, "nightly": 330, "stable": 330, "stable-publish": 45,
                  "web-application": 100, "web-website": 100, "web-compose": 40}
 DISPATCH = {
-    "full-ci": (".github/workflows/ci.yml", {"canvas_migrated_base_pilot"}, {"CI Gate"}),
+    "full-ci": (".github/workflows/ci.yml", set(), {"CI Gate"}),
     "nightly-claim": (".github/workflows/prepare-nightly-claim.yml", {"source_sha"}, {"claim"}),
     "nightly-release": (".github/workflows/nightly-release.yml", {"claim_run_id", "publish_cloudflare_addon"},
                         {"admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"}),
@@ -525,7 +525,7 @@ class Pipeline:
                 # The exact original IDs are returned by each one-shot POST.
                 # Claim waits for this CI, and CD waits for this claim before
                 # any build/sign/publish work. No failed dependency is replaced.
-                ci = self.dispatch("full-ci", {"canvas_migrated_base_pilot": False}, wait=False)
+                ci = self.dispatch("full-ci", {}, wait=False)
                 claim = self.dispatch("stable-claim", {"source_sha": self.source, "tag": self.tag,
                                       "qualification_run_id": str(ci)}, wait=False)
                 release = self.dispatch("stable-release", {"claim_run_id": str(claim), "publication_contract": "v2",
@@ -534,7 +534,7 @@ class Pipeline:
                 self.wait(ci, DISPATCH["full-ci"][0], DISPATCH["full-ci"][2])
                 return {"ci_run_id": ci, "stable_claim_run_id": claim,
                         "stable_run_id": release, "stable_tag": self.tag}
-            return {"ci_run_id": self.dispatch("full-ci", {"canvas_migrated_base_pilot": False}), "stable_tag": self.tag}
+            return {"ci_run_id": self.dispatch("full-ci", {}), "stable_tag": self.tag}
         self.wait(ci_run_id, DISPATCH["full-ci"][0], DISPATCH["full-ci"][2])
         self.operation = "execute_stage"
         if self.phase == "nightly":

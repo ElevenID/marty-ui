@@ -132,13 +132,6 @@ pub struct FeatureFlags {
     pub enable_qr_code_generation: bool,
     pub enable_push_notifications: bool,
     pub enable_biometric_binding: bool,
-    pub enable_canvas_evidence: bool,
-    pub enable_canvas_lti: bool,
-    pub enable_canvas_mirror_publish: bool,
-    pub enable_canvas_mirror_ops: bool,
-    pub enable_canvas_deep_linking: bool,
-    pub enable_canvas_ags: bool,
-    pub enable_canvas_nrps: bool,
     pub custom_flags: BTreeMap<String, bool>,
 }
 
@@ -153,39 +146,8 @@ impl Default for FeatureFlags {
             enable_qr_code_generation: true,
             enable_push_notifications: false,
             enable_biometric_binding: false,
-            enable_canvas_evidence: false,
-            enable_canvas_lti: false,
-            enable_canvas_mirror_publish: false,
-            enable_canvas_mirror_ops: false,
-            enable_canvas_deep_linking: false,
-            enable_canvas_ags: false,
-            enable_canvas_nrps: false,
             custom_flags: BTreeMap::new(),
         }
-    }
-}
-
-impl FeatureFlags {
-    #[must_use]
-    pub fn canvas_flags(&self) -> BTreeMap<String, bool> {
-        BTreeMap::from([
-            ("enable_canvas_evidence".into(), self.enable_canvas_evidence),
-            ("enable_canvas_lti".into(), self.enable_canvas_lti),
-            (
-                "enable_canvas_mirror_publish".into(),
-                self.enable_canvas_mirror_publish,
-            ),
-            (
-                "enable_canvas_mirror_ops".into(),
-                self.enable_canvas_mirror_ops,
-            ),
-            (
-                "enable_canvas_deep_linking".into(),
-                self.enable_canvas_deep_linking,
-            ),
-            ("enable_canvas_ags".into(), self.enable_canvas_ags),
-            ("enable_canvas_nrps".into(), self.enable_canvas_nrps),
-        ])
     }
 }
 
@@ -429,7 +391,6 @@ pub struct DeploymentProfileResponse {
     pub offline_cache_ttl_hours: i32,
     pub operator_biometric_authentication_required: bool,
     pub audit_all_events: bool,
-    pub canvas_feature_flags: BTreeMap<String, bool>,
     pub lanes: Vec<LaneResponse>,
     pub created_at: String,
     pub updated_at: String,
@@ -669,7 +630,6 @@ impl DeploymentProfile {
             operator_biometric_authentication_required: self
                 .operator_biometric_authentication_required,
             audit_all_events: self.audit_all_events,
-            canvas_feature_flags: self.feature_flags.canvas_flags(),
             lanes: lanes.into_iter().map(|lane| lane.response()).collect(),
             created_at: self.created_at.to_rfc3339(),
             updated_at: self.updated_at.to_rfc3339(),

@@ -153,14 +153,8 @@ impl AuthConnections {
             ))
             .map_err(|error| AuthConnectionError::Http(error.to_string()))?,
         );
-        let (applicant_health, canvas_health) = tokio::join!(
-            probe_http_health(outbound_http.as_ref(), &config.applicant_service_url),
-            probe_http_health(outbound_http.as_ref(), &config.issuance_native_service_url),
-        );
-        applicant_health?;
+        probe_http_health(outbound_http.as_ref(), &config.applicant_service_url).await?;
         runtime_health(runtime, AuthDependency::Applicant)?;
-        canvas_health?;
-        runtime_health(runtime, AuthDependency::CanvasLti)?;
 
         let outbox = Arc::new(
             PostgresOutboxStore::new(pool.clone(), "auth", OUTBOX_PARTITIONS)

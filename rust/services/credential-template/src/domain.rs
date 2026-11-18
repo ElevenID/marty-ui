@@ -310,8 +310,6 @@ impl DeliveryDestinationPolicy {
                 "elevenid_wallet",
                 "oid4vci_wallet",
                 "didcomm_v2",
-                "canvas_credentials",
-                "canvas_credentials_backpack",
                 "open_badges_backpack",
                 "custom",
                 "physical_document_bureau",
@@ -339,7 +337,6 @@ impl DeliveryDestinationPolicy {
             &[
                 "wallet",
                 "didcomm_v2",
-                "canvas_credentials",
                 "external_api",
                 "webhook",
                 "physical_document",

@@ -10,13 +10,13 @@ use axum::{
 };
 use chrono::Utc;
 use marty_auth::{
-    auth_core_router, AuthHttpApplication, AuthHttpState, AuthenticatedUser, CanvasFinalizeContext,
-    CanvasHttpApplication, CredentialCallbackContext, CredentialCallbackHeaders,
-    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
-    CredentialLoginHttpService, CredentialLoginPoll, CredentialLoginStartResult,
-    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, InitiateLoginResult,
-    PasskeyEnrollmentStart, PortError, Session, SessionCookieConfig, SessionRepository,
-    SessionSpec, UiOriginPolicy, UserType, AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
+    auth_core_router, AuthHttpApplication, AuthHttpState, AuthenticatedUser,
+    CredentialCallbackContext, CredentialCallbackHeaders, CredentialCallbackResult,
+    CredentialHttpError, CredentialLoginCompletion, CredentialLoginHttpService,
+    CredentialLoginPoll, CredentialLoginStartResult, CredentialVerifiedPayload,
+    HandleCallbackCommand, HandleCallbackResult, InitiateLoginResult, PasskeyEnrollmentStart,
+    PortError, Session, SessionCookieConfig, SessionRepository, SessionSpec, UiOriginPolicy,
+    UserType, AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
 };
 use serde_json::Value;
 use tower::ServiceExt as _;
@@ -117,16 +117,6 @@ impl AuthHttpApplication for AppStub {
             .as_ref()
             .filter(|session| session.session_id == session_id)
             .cloned())
-    }
-}
-
-struct CanvasStub(Session);
-
-#[async_trait]
-impl CanvasHttpApplication for CanvasStub {
-    async fn finalize(&self, context: &CanvasFinalizeContext) -> Result<Session, PortError> {
-        assert_eq!(context.bearer_token, "canvas-token");
-        Ok(self.0.clone())
     }
 }
 
@@ -272,7 +262,6 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
     *sessions.0.lock().unwrap() = Some(session());
     let router = auth_core_router(AuthHttpState {
         application: app.clone(),
-        canvas: Arc::new(CanvasStub(session())),
         credential_login: Arc::new(CredentialStub),
         sessions: sessions.clone(),
         origins: UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"])
@@ -284,7 +273,6 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
             maximum_age_seconds: 86_400,
             path: "/".into(),
         },
-        canvas_session_ttl_seconds: 3_600,
         impersonation_handoff_cookie_name: "marty_impersonation_handoff".into(),
     })
     .unwrap();
@@ -404,7 +392,7 @@ async fn unsupported_registration_has_a_specific_public_error() {
 fn core_surface_is_the_exact_non_credential_route_subset() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
-    let expected = contract["http_routes"].as_array().unwrap()[..10]
+    let expected = contract["http_routes"].as_array().unwrap()[..8]
         .iter()
         .map(|route| {
             (
@@ -671,7 +659,7 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
 }
 
 #[tokio::test]
-async fn login_registration_and_canvas_preserve_redirect_auth_and_cookie_behavior() {
+async fn login_registration_preserve_redirect_auth_and_cookie_behavior() {
     let (router, app, _) = harness();
     let login = request(
         &router,
@@ -702,38 +690,19 @@ async fn login_registration_and_canvas_preserve_redirect_auth_and_cookie_behavio
     assert_eq!(register.status(), StatusCode::FOUND);
     assert!(app.initiated.lock().unwrap()[1].0);
 
-    let legacy = request(
-        &router,
-        Method::GET,
-        "/v1/auth/canvas-lti/finalize",
-        &[],
-        "",
-    )
-    .await;
-    assert_eq!(legacy.status(), StatusCode::GONE);
-    let unauthorized = request(
-        &router,
-        Method::POST,
-        "/v1/auth/canvas-lti/finalize",
-        &[],
-        "",
-    )
-    .await;
-    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-    let canvas = request(
-        &router,
-        Method::POST,
-        "/v1/auth/canvas-lti/finalize",
-        &[("authorization", "Bearer canvas-token")],
-        "",
-    )
-    .await;
-    assert_eq!(canvas.status(), StatusCode::OK);
-    assert!(canvas
-        .headers()
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .any(|value| value.to_str().unwrap().contains("sessionId=session-1")));
+    // Provider bearer tokens must never create canonical platform sessions.
+    for method in [Method::GET, Method::POST] {
+        let retired = request(
+            &router,
+            method,
+            "/v1/auth/canvas-lti/finalize",
+            &[("authorization", "Bearer retired-provider-token")],
+            "",
+        )
+        .await;
+        assert_eq!(retired.status(), StatusCode::NOT_FOUND);
+        assert!(retired.headers().get(header::SET_COOKIE).is_none());
+    }
 }
 
 #[tokio::test]

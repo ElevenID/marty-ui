@@ -21,13 +21,9 @@ const INTERNAL_KEYS: &[&str] = &[
     "delivery_preferences",
     "auto_approve",
 ];
-const INTEGRATION_KEYS: &[&str] = &[
-    "canvas_lti",
-    "canvas_context",
-    "learner_identity",
-    "delivery_mode",
-    "delivery",
-];
+// Only the reviewed generic delivery contract may be upgraded automatically.
+// Other historical metadata needs an explicit, separately reviewed data upgrade.
+const INTEGRATION_KEYS: &[&str] = &["delivery_mode", "delivery"];
 
 pub fn migrate_payload(
     payload: &mut Value,
@@ -67,7 +63,21 @@ pub fn migrate_payload(
             continue;
         }
 
-        let mut form_data = object(row.get("form_data"));
+        let form_data = object(row.get("form_data"));
+        // Do not infer form fields or provider authority from legacy metadata.
+        // This loop builds local replacements; the source payload is untouched
+        // until every row has been accepted.
+        if row.get("metadata").is_some_and(|value| !value.is_object())
+            || row.get("integration_context").is_some_and(|value| {
+                value.as_object().is_none_or(|context| {
+                    context
+                        .keys()
+                        .any(|key| !INTEGRATION_KEYS.contains(&key.as_str()))
+                })
+            })
+        {
+            return Err(MigrationError::LegacyContextReviewRequired);
+        }
         let mut integration_context = object(row.get("integration_context"));
         let mut system_data = object(row.get("system_data"));
         for (key, value) in object(row.get("metadata")) {
@@ -76,7 +86,7 @@ pub fn migrate_payload(
             } else if INTEGRATION_KEYS.contains(&key.as_str()) {
                 integration_context.insert(key, value);
             } else {
-                form_data.insert(key, value);
+                return Err(MigrationError::LegacyContextReviewRequired);
             }
         }
         let auto_approve = system_data
@@ -190,6 +200,10 @@ pub enum MigrationError {
     MalformedStore,
     #[error("Applicant migration cannot resolve Application Templates for: {0:?}")]
     UnresolvedTemplates(Vec<String>),
+    #[error(
+        "Legacy Applicant metadata or context requires a reviewed data upgrade before startup"
+    )]
+    LegacyContextReviewRequired,
     #[error("applicant store I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("applicant store JSON is malformed: {0}")]

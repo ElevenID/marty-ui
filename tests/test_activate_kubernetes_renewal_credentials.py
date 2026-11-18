@@ -95,8 +95,7 @@ def resources(namespace, values):
             "envFrom": [{"configMapRef": {"name": "marty-config"}}],
             "env": [{"name": key, "value": value} for key, value in {
                 "KC_URL": "http://keycloak:8080", "KEYCLOAK_SETUP_STRICT": "true",
-                "KEYCLOAK_REMOVE_DEMO_USERS": "true", "KEYCLOAK_REPLACE_UI_ORIGINS": "true",
-                "CANVAS_DEMO_ADMIN_ENABLED": "false"}.items()],
+                "KEYCLOAK_REMOVE_DEMO_USERS": "true", "KEYCLOAK_REPLACE_UI_ORIGINS": "true"}.items()],
             "volumeMounts": [{"name": "scripts", "mountPath": "/scripts", "readOnly": True}]}],
             "volumes": [{"name": "scripts", "configMap": {"name": "keycloak-setup-scripts", "defaultMode": 0o555}}]}}},
         "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}})
@@ -701,7 +700,6 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
             scopes=["openid", "$(SERVICE_NAME)"])
     values["release"] = {"runtimeSourceSha": "1" * 40, "chartSourceSha": "2" * 40,
         "tag": "v1.2.3-nightly.20261108.123", "buildRunId": 123, "buildRunAttempt": 1}
-    values["canvasWorker"] = {"enabled": True}
     documents = chart.render(tmp_path, values)
     publication = {"catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
     contract = activation.activation_contract(publication)
@@ -739,7 +737,7 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
     # token graph for either login provider without a second inventory.
     application_graph = application.preflight_resources({"kind": "List", "items": [
         item for item in actual if item["kind"] != "ConfigMap"]}, "isolated-install", values["images"], values["release"])
-    assert set(application_graph["deployments"]) == application.REQUIRED | {"canvas-sync-worker"}
+    assert set(application_graph["deployments"]) == application.REQUIRED
 
 
 @pytest.mark.parametrize("value", [
@@ -925,3 +923,17 @@ def test_partial_external_reconciliation_refuses_rebound_provider_before_more_pu
     with pytest.raises(bootstrap.BootstrapError, match="authentication selection"):
         activation.activate(flow.args)
     assert (flow.secret_patches, flow.deployment_patches) == before
+
+
+def test_current_configurator_refuses_retired_provider_flag_even_when_false(flow):
+    job = next(item for item in flow.resources if item["kind"] == "Job"
+               and item["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "keycloak-configurator")
+    namespace = flow.staged.binding["namespace"]
+    images = flow.staged.values["images"]
+    assert activation.configurator_complete(job, namespace, "marty", images)
+    for value in ("false", "true", ""):
+        changed = deepcopy(job)
+        changed["spec"]["template"]["spec"]["containers"][0]["env"].append(
+            {"name": "CANVAS_DEMO_ADMIN_ENABLED", "value": value})
+        with pytest.raises(bootstrap.BootstrapError, match="Retired provider administrator"):
+            activation.configurator_complete(changed, namespace, "marty", images)

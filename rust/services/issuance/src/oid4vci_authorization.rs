@@ -29,7 +29,7 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 use crate::{
-    canvas_award_candidate::python_canonical_json,
+    canonical_json::python_canonical_json,
     dpop::verify_bound_dpop,
     token_exchange::DpopProofVerifier,
     token_rate_limit::{token_rate_limit_middleware, TokenRateLimiter},

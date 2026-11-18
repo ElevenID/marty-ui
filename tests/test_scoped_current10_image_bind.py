@@ -11,12 +11,11 @@ from test_scoped_passport_maintenance import fixture
 SIX={"compliance-profile","credential-template","flow","organization","presentation-policy","trust-profile"}
 
 def source_fixture(tmp_path):
-    _,before,_,_,_=fixture(tmp_path)
+    _,before,_,_,_=fixture(tmp_path,CURRENT10)
     roles=dict(D05_MEMBERSHIP_LATEST.roles)
     model={"name":"elevenid-beta","services":{},"networks":{"kept":{}}}
     inspections=[];binaries={}
     for row in before["roles"]:
-        if row["role"]=="canvas-sandbox":row["role"]="event-stream"
         binary=roles.get(row["role"],row["binary"])
         row.update(binary=binary,kind="SIGNED_NIGHTLY_IMAGE",effectiveUid=10001,configuredRuntimeUid=10001,
             health="healthy",processExecutableSha256=row["sha256"],executablePath="/usr/local/bin/"+binary if binary else None)

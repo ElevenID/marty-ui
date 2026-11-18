@@ -406,7 +406,6 @@ pub struct ApplicationEvidenceSummaryResponse {
     pub policy_source: Option<String>,
     pub policy_set_id: Option<String>,
     pub issuance_transaction_id: Option<String>,
-    pub canvas: Option<Map<String, Value>>,
     pub available_api_checks: Vec<Map<String, Value>>,
 }
 
@@ -421,51 +420,6 @@ pub struct ExternalEvidenceApiCheckResponse {
     pub policy_decision: Map<String, Value>,
     pub issuance_transaction_id: Option<String>,
     pub response_metadata: Map<String, Value>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-pub struct EvidenceReconciliationMetrics {
-    pub scanned_applications: u64,
-    pub evaluated_policies: u64,
-    pub policy_permits: u64,
-    pub policy_denies: u64,
-    pub approval_issuance_successes: u64,
-    pub approval_issuance_failures: u64,
-    pub skipped: u64,
-    pub stale_receipts: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct EvidenceReconciliationRecord {
-    pub application_id: String,
-    pub status_before: String,
-    pub status_after: String,
-    pub action: String,
-    pub fact_count: usize,
-    pub policy_decision: Option<Map<String, Value>>,
-    pub issuance_transaction_id: Option<String>,
-    pub errors: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StaleCanvasEvidenceReceipt {
-    pub receipt_id: String,
-    pub provider_event_id: String,
-    pub canvas_account_id: Option<String>,
-    pub application_id: Option<String>,
-    pub status: String,
-    pub reasons: Vec<String>,
-    pub last_seen_at: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct EvidenceReconciliationResult {
-    pub organization_id: String,
-    pub dry_run: bool,
-    pub metrics: EvidenceReconciliationMetrics,
-    pub records: Vec<EvidenceReconciliationRecord>,
-    pub stale_receipts: Vec<StaleCanvasEvidenceReceipt>,
-    pub generated_at: String,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]

@@ -1,7 +1,7 @@
 {{- $root := . -}}
 {{- $workloads := .Files.Get "files/workloads.yaml" | fromYaml -}}
 {{- range $name, $workload := $workloads -}}
-{{- if or (ne $name "canvas-sync-worker") $root.Values.canvasWorker.enabled -}}
+
 {{- $override := index $root.Values.apps.overrides $name | default dict -}}
 {{- $replicas := ternary 1 $root.Values.apps.replicas (eq $name "applicant") -}}
 {{- $resources := mergeOverwrite (deepCopy $root.Values.apps.resources) ($override.resources | default dict) }}
@@ -159,7 +159,7 @@ spec:
       targetPort: {{ $port.containerPort }}
     {{- end }}
 {{- end }}
-{{- end }}
+
 {{- end }}
 ---
 apiVersion: v1

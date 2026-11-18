@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Export the frozen product/Core Git objects for a local KMS-only build.
+"""Historical source audit helpers and a retired build-export entry point.
 
-This produces immutable source inputs and a reviewed recipe. It neither creates
+Retired profile selection refuses before export. This module neither creates
 a compiler/target volume nor runs Cargo, Docker, beta, or an official suite.
 """
 from __future__ import annotations
@@ -194,6 +194,7 @@ def stage_operator(repo: Path, revision: str, name: str, destination: Path) -> d
 
 
 def selected_sources(profile: str) -> tuple[str, str, str]:
+    build.build_scope(profile)
     if profile == build.OFFICIAL_PROFILE:
         return PRODUCT, CORE, FREEZE_SHA256
     require(profile == LATEST_PROFILE, "UNKNOWN_REVIEWED_BUILD_PROFILE")

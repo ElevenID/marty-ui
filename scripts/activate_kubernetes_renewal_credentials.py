@@ -515,9 +515,10 @@ def configurator_complete(job: dict, namespace: str, release_name: str, images: 
     bootstrap.require(isinstance(env, list) and len({item.get("name") for item in env}) == len(env),
                       "Keycloak configurator environment is ambiguous")
     entries = {item["name"]: item for item in env}
+    bootstrap.require("CANVAS_DEMO_ADMIN_ENABLED" not in entries,
+                      "Retired provider administrator setting is unavailable")
     for key, value in {"KC_URL": "http://keycloak:8080", "KEYCLOAK_SETUP_STRICT": "true",
-                       "KEYCLOAK_REMOVE_DEMO_USERS": "true", "KEYCLOAK_REPLACE_UI_ORIGINS": "true",
-                       "CANVAS_DEMO_ADMIN_ENABLED": "false"}.items():
+                       "KEYCLOAK_REMOVE_DEMO_USERS": "true", "KEYCLOAK_REPLACE_UI_ORIGINS": "true"}.items():
         bootstrap.require(entries.get(key) == {"name": key, "value": value},
                           "Keycloak configurator safety settings differ")
     bootstrap.require(containers[0].get("envFrom") == [{"configMapRef": {"name": "marty-config"}}]

@@ -96,7 +96,7 @@ def retained(state: Path, current: Path, binding: dict, runtime: dict, *, operat
     write(observations / "observation-000.json", {"synthetic": "readback"})
     write(verification / "delivery.json", {"schema": adoption.DELIVERY_SCHEMA, "binding": binding,
         "adoptionId": intent["adoptionId"], "candidateInputs": intent["candidateInputs"], "secretCount": 34,
-        "workloadCount": 16, "credentialDeliveryVerified": True, "credentialConsumptionVerified": False,
+        "workloadCount": 15, "credentialDeliveryVerified": True, "credentialConsumptionVerified": False,
         "observationHashes": {"observation-000.json": adoption.digest((observations / "observation-000.json").read_bytes())}})
     write(verification / "adoption-complete.json", {"schema": adoption.COMPLETE_SCHEMA,
         "adoptionId": intent["adoptionId"], "binding": binding,

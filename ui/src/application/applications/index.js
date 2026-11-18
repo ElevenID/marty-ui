@@ -30,7 +30,6 @@ export {
   loadCredentialCatalogItems,
   loadExistingCredentialApplications,
   mapCredentialTemplateToCatalogItem,
-  scopeCredentialCatalogItemsForCanvasLaunch,
 } from './credentialCatalog';
 
 export {

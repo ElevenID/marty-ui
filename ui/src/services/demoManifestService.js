@@ -1,5 +1,6 @@
 import { DEMO_INDEX, DEMO_MANIFESTS } from '../generated/demoManifests.generated';
 import WALLET_SCHEMA from '../generated/demoWalletSchema.generated.json';
+import { platformDemoScenarios } from './platformDemoScenarios';
 
 import { staticAssetHref } from '../utils/staticAssetHref';
 const MANIFEST_ROOT = staticAssetHref('/demos/manifests');
@@ -286,6 +287,15 @@ export async function loadDemoIndex({ signal } = {}) {
   return validateDemoIndex(await fetchJson(`${MANIFEST_ROOT}/index.json`, signal));
 }
 
+function platformDemoManifest(manifest) {
+  // Raw release manifests remain immutable evidence. Provider demonstrations
+  // belong to the independent connector and are not current platform UI routes.
+  return {
+    ...manifest,
+    scenarios: platformDemoScenarios(manifest.scenarios),
+  };
+}
+
 export async function loadDemoManifest(stackVersion, { signal } = {}) {
   assert(STACK_VERSION_PATTERN.test(stackVersion || ''), 'Invalid ElevenID LLC version.');
   const source = isBuildPrerender()
@@ -294,9 +304,9 @@ export async function loadDemoManifest(stackVersion, { signal } = {}) {
   assert(source, `ElevenID LLC v${stackVersion} does not have a published manifest.`);
   const manifest = validateDemoManifest(source);
   assert(manifest.stack_version === stackVersion, 'The requested ElevenID LLC release does not match the manifest.');
-  return manifest;
+  return platformDemoManifest(manifest);
 }
 
 export function findDemoScenario(manifest, slug) {
-  return manifest.scenarios.find((scenario) => scenario.slug === slug) || null;
+  return platformDemoScenarios(manifest.scenarios).find((scenario) => scenario.slug === slug) || null;
 }

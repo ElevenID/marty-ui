@@ -30,7 +30,7 @@ def key_fixture(tmp_path):
                                      "scripts/ci/install-bookworm-sccache.sh"])
 def test_key_binds_compiler_dependencies_profiles_and_recipe(tmp_path, changed):
     key_fixture(tmp_path)
-    initial = KEY.cache_key(tmp_path, "canvas", "x86_64")
+    initial = KEY.cache_key(tmp_path, "flow", "x86_64")
     path = tmp_path / changed
     if changed == "services/Dockerfile":
         source = path.read_text()
@@ -39,15 +39,16 @@ def test_key_binds_compiler_dependencies_profiles_and_recipe(tmp_path, changed):
         path.write_text(source[:start] + "f" * 64 + source[start + 64:])
     else:
         path.write_text(path.read_text() + "\n# changed compiler input\n")
-    assert KEY.cache_key(tmp_path, "canvas", "x86_64") != initial
+    assert KEY.cache_key(tmp_path, "flow", "x86_64") != initial
 
 
 def test_all_scopes_share_trusted_objects_but_architectures_do_not(tmp_path):
     key_fixture(tmp_path)
-    keys = {KEY.cache_key(tmp_path, lane, "x86_64") for lane in ("canvas", "worker", "flow", "selfhost")}
+    keys = {KEY.cache_key(tmp_path, lane, "x86_64") for lane in ("flow", "selfhost")}
     assert len(keys) == 1  # sccache itself keys compiler arguments/features per object.
-    assert KEY.cache_key(tmp_path, "canvas", "aarch64") not in keys
-    with pytest.raises(ValueError): KEY.cache_key(tmp_path, "contracts", "x86_64")
+    assert KEY.cache_key(tmp_path, "flow", "aarch64") not in keys
+    for retired in ("canvas", "worker", "contracts"):
+        with pytest.raises(ValueError): KEY.cache_key(tmp_path, retired, "x86_64")
 
 
 @pytest.mark.parametrize("cache_exit", [0, 1])
@@ -77,9 +78,9 @@ def test_workflow_mounts_actual_cache_and_only_trusted_full_runs_publish():
     job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["test-rust-services"]
     steps = {step.get("name"): step for step in job["steps"]}
     compile = steps["Compile reusable Rust test executables"]["run"]
-    assert compile.count('"${bookworm_cache_args[@]}"') == 2
-    assert compile.count(". ../scripts/ci/bookworm-cache-env.sh") == 2
-    assert compile.count("--network none --read-only") == 2
+    assert compile.count('"${bookworm_cache_args[@]}"') == 1
+    assert compile.count(". ../scripts/ci/bookworm-cache-env.sh") == 1
+    assert compile.count("--network none --read-only") == 1
     assert '--volume "$BOOKWORM_SCCACHE_BIN:/opt/marty-cache/sccache:ro"' in compile
     assert '--volume "$BOOKWORM_CACHE_DIR:/opt/marty-cache/data:rw"' in compile
     assert "SCCACHE_GHA_RUNTIME_TOKEN" not in compile and "ACTIONS_RUNTIME_TOKEN" not in compile
@@ -90,7 +91,7 @@ def test_workflow_mounts_actual_cache_and_only_trusted_full_runs_publish():
     assert restore["continue-on-error"] and save["continue-on-error"]
     for restriction in ("success()", "github.repository == 'ElevenID/marty-ui'",
                         "github.ref == 'refs/heads/main'", "github.event_name == 'schedule'",
-                        "github.event_name == 'workflow_dispatch'", "matrix.lane == 'canvas'"):
+                        "github.event_name == 'workflow_dispatch'", "matrix.lane == 'flow'"):
         assert restriction in save["if"]
     assert "pull_request" not in save["if"] and "merge_group" not in save["if"]
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"

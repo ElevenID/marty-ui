@@ -162,7 +162,7 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
         if mode == "official":
             service["image"] = SERVICES_IMAGE if bound else "${MARTY_SERVICES_IMAGE}"
             owner = runpy.run_path(
-                str(ROOT / "scripts/test_canvas_worker_compose_render.py")
+                str(ROOT / "scripts/compose_config_model.py")
             )
             environment = owner["environment_mapping"](service.get("environment", {}))
             environment["SERVICE_NAME"] = (
@@ -189,11 +189,10 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
             }
         elif mode == "official":
             alias.pop("build", None)
-        owner = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+        owner = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
         alias_env = owner["environment_mapping"](alias.get("environment", {}))
         alias_env["SERVICE_NAME"] = "issuance_native"
         alias_env["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
-        alias_env["CANVAS_MIRROR_WORKER_ENABLED"] = "false"
         alias["environment"] = alias_env
         migrator = expected["services"].setdefault("issuance-migrations", {})
         migrator["image"] = expected["services"]["issuance"]["image"]
@@ -220,7 +219,7 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
 
 
 def assert_model(actual, expected):
-    owner = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+    owner = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
     normalized = []
     for model in (actual, expected):
         model = deepcopy(model)
@@ -253,7 +252,7 @@ def assert_report(report, mode):
     if report.get("caught"):
         raise AssertionError("Pure beta image-plan generation failed")
     names = report["services"]
-    if len(names) != 19 or len(set(names)) != 19 or not EXTERNAL.issubset(names):
+    if len(names) != 18 or len(set(names)) != 18 or not EXTERNAL.issubset(names):
         raise AssertionError("Review changed application image inventory")
     expected = []
     for name in names:
@@ -376,7 +375,7 @@ def render_binding(
 
 def run(compose_command=None, powershell=None):
     compose_command = compose_command or ["docker", "compose"]
-    owner = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+    owner = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
     files = owner["beta_release_source_files"]()
     base = owner["render"](*files, compose_command=compose_command)
     checked = 0
@@ -389,9 +388,9 @@ def run(compose_command=None, powershell=None):
             assert_report(report, mode)
             names = report["services"]
             if (
-                len(names) != 19
-                or len(set(names)) != 19
-                or len(set(names) - EXTERNAL) != 19
+                len(names) != 18
+                or len(set(names)) != 18
+                or len(set(names) - EXTERNAL) != 18
             ):
                 raise AssertionError("Review changed application image inventory")
             overlay = directory / f"{mode}-images.yml"
@@ -446,7 +445,7 @@ def run(compose_command=None, powershell=None):
     if checked != 5:
         raise AssertionError("Incomplete generated beta image merge matrix")
     print(
-        "Generated beta image gate: 3 tracked-source full-model merges and 2 synthetic image-binding merges; 19 application services per model; config only"
+        "Generated beta image gate: 3 tracked-source full-model merges and 2 synthetic image-binding merges; 18 application services per model; config only"
     )
     return checked
 

@@ -278,7 +278,7 @@ def test_native_application_patch_and_observation_keep_payloads_private(
     request, secret, before, after, replacements = application_publication
     result = native_application_publication(native_tools, tmp_path, request)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"ready": True, "secret": "marty-secrets", "count": 11}
+    assert json.loads(result.stdout) == {"ready": True, "secret": "marty-secrets", "count": 9}
     assert "PRIVATE_" not in result.stdout + result.stderr
     patch_path = Path(request["output"])
     assert patch_path.stat().st_mode & 0o7777 == 0o600
@@ -287,7 +287,7 @@ def test_native_application_patch_and_observation_keep_payloads_private(
         {"op": "test", "path": "/metadata/uid", "value": secret["metadata"]["uid"]},
         {"op": "test", "path": "/metadata/resourceVersion", "value": "41"},
     ]
-    assert len(patch) == 14
+    assert len(patch) == 12
     applied = json.loads(json.dumps(secret))
     for name, key in replacements.items():
         applied["data"][key] = base64.b64encode(after[name]).decode()
@@ -668,12 +668,10 @@ def applications(calls):
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN"),
         ("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
-        ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN"),
-        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN"),
-        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN"),
         ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
-        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
-        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_BOOTSTRAP_TOKEN"),
+        ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN", "OPENBAO_BOOTSTRAP_TOKEN"),
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_OPENBAO_TOKEN"),
@@ -978,7 +976,7 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
         arg for arg in records[0] if arg.startswith("--from-literal=TOKEN_HMAC_KEY=")
     ]
     assert fields == ["--from-literal=TOKEN_HMAC_KEY=" + TOKEN]
-    # Both real manifests select the one captured entry, not independent values.
+    # The retained issuance manifest selects the validated captured entry.
     documents = yaml.safe_load_all(
         (ROOT / "k8s/oracle/07-microservices.yaml").read_text(encoding="utf-8")
     )
@@ -987,7 +985,7 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
         if not document or document.get("kind") != "Deployment":
             continue
         name = document["metadata"]["name"]
-        if name in ("issuance", "canvas-sync-worker"):
+        if name == "issuance":
             container = document["spec"]["template"]["spec"]["containers"][0]
             entries = [
                 item for item in container["env"] if item["name"] == "TOKEN_HMAC_KEY"
@@ -998,7 +996,7 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
                 "key": "TOKEN_HMAC_KEY",
             }
             selected[name] = fields[0].split("=", 2)[2]
-    assert selected == {"issuance": TOKEN, "canvas-sync-worker": TOKEN}
+    assert selected == {"issuance": TOKEN}
     assert TOKEN not in result.stdout + result.stderr
     assert later not in result.stdout + result.stderr
 

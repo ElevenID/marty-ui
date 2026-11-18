@@ -138,9 +138,13 @@ Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile o
 Provision public workload certificates, the trusted OpenBao CA, scoped token
 files, and versioned non-exportable Transit key references before starting the
 stack. Signing Keys serves its integration-secret HTTPS endpoint with a remote
-TLS signer; Issuance and the Canvas worker consume its public CA. Workload TLS
+TLS signer; Issuance consumes its public CA. Workload TLS
 private-key files are unsupported. The beta deployment validates these inputs
 with `scripts/ensure-beta-workload-identity.ps1`.
+
+The [external connector boundary](docs/architecture/external-connector-boundary.md)
+defines the public Common Gateway as the sole integration point and keeps
+canonical identity, ownership, approval and signing in Core.
 
 ## Runtime inputs
 

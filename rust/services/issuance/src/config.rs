@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
@@ -9,12 +9,6 @@ use mmf_config::{numeric_config::PythonConfigInteger, ConfigLayer, LayeredConfig
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-
-use crate::canvas_credentials_status::CanvasCredentialsStatusConfig;
-use crate::canvas_credentials_validation::CanvasCredentialsValidationConfig;
-use crate::canvas_mirror_automation::CanvasMirrorAutomationConfig;
-use crate::canvas_mirror_domain::CanvasMirrorAlertThresholds;
-use crate::canvas_network_timeout::CanvasNetworkTimeout;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassportNativeConfig {
@@ -238,6 +232,9 @@ pub struct IssuanceServiceConfig {
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub external_observations_enabled: bool,
+    pub application_ownership_enabled: bool,
+    pub external_associations_enabled: bool,
+    pub external_association_database_url: Option<String>,
     pub external_observation_database_url: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
@@ -259,39 +256,6 @@ pub struct IssuanceServiceConfig {
     pub didcomm_encryption_policy_file: Option<String>,
     pub didcomm_tls_ca_file: Option<String>,
     pub didcomm_allow_private_ips: bool,
-    pub canvas_portable_enabled: bool,
-    pub canvas_legacy_event_ingest_enabled: bool,
-    pub canvas_credentials_shared_secret: Option<String>,
-    pub canvas_credentials_shared_secret_file: Option<String>,
-    pub canvas_credentials_signature_tolerance_seconds: i64,
-    pub canvas_pilot_organizations: BTreeSet<String>,
-    pub canvas_evidence_max_age: Duration,
-    pub canvas_readiness_max_age: Duration,
-    pub canvas_lti_state_ttl: Duration,
-    pub canvas_lti_jwks_ttl: Duration,
-    pub canvas_lti_experience_base_url: String,
-    pub canvas_lti_experience_code_ttl: Duration,
-    pub canvas_lti_experience_session_ttl: Duration,
-    pub canvas_lti_tool_signing_organization_id: String,
-    pub canvas_lti_tool_issuer_did: String,
-    pub canvas_lti_deep_linking_issuer: Option<String>,
-    pub canvas_oauth_completion_redirect_url: String,
-    pub canvas_self_managed_origins: Vec<String>,
-    pub canvas_private_origin_allowlist: Vec<String>,
-    pub canvas_credentials_api_origins: Vec<String>,
-    pub canvas_credentials_validation: CanvasCredentialsValidationConfig,
-    pub canvas_credentials_status: CanvasCredentialsStatusConfig,
-    pub canvas_credentials_validation_timeout: CanvasNetworkTimeout,
-    pub canvas_credentials_publish_timeout: CanvasNetworkTimeout,
-    pub canvas_credentials_publication:
-        crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig,
-    pub canvas_mirror_automation: CanvasMirrorAutomationConfig,
-    pub canvas_mirror_alert_thresholds: CanvasMirrorAlertThresholds,
-    pub canvas_mirror_alert_webhook_url: Option<String>,
-    pub canvas_mirror_alert_webhook_timeout: Duration,
-    pub canvas_allow_private_base_urls: bool,
-    pub canvas_allow_http_localhost_base_urls: bool,
-    pub canvas_local_admin_token: Option<String>,
     pub dependency_timeout: Duration,
     pub token_rate_limit: PythonConfigInteger,
     pub token_rate_window: PythonConfigInteger,
@@ -338,6 +302,18 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "external_observations_enabled",
                 &self.external_observations_enabled,
+            )
+            .field(
+                "application_ownership_enabled",
+                &self.application_ownership_enabled,
+            )
+            .field(
+                "external_associations_enabled",
+                &self.external_associations_enabled,
+            )
+            .field(
+                "external_association_database_configured",
+                &self.external_association_database_url.is_some(),
             )
             .field(
                 "external_observation_database_configured",
@@ -403,90 +379,6 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 &self.didcomm_tls_ca_file.is_some(),
             )
             .field("didcomm_allow_private_ips", &self.didcomm_allow_private_ips)
-            .field("canvas_portable_enabled", &self.canvas_portable_enabled)
-            .field(
-                "canvas_legacy_event_ingest_enabled",
-                &self.canvas_legacy_event_ingest_enabled,
-            )
-            .field(
-                "canvas_credentials_shared_secret_configured",
-                &self.canvas_credentials_shared_secret.is_some(),
-            )
-            .field(
-                "canvas_credentials_shared_secret_file_configured",
-                &self.canvas_credentials_shared_secret_file.is_some(),
-            )
-            .field(
-                "canvas_credentials_signature_tolerance_seconds",
-                &self.canvas_credentials_signature_tolerance_seconds,
-            )
-            .field(
-                "canvas_pilot_organizations",
-                &self.canvas_pilot_organizations,
-            )
-            .field("canvas_lti_state_ttl", &self.canvas_lti_state_ttl)
-            .field("canvas_lti_jwks_ttl", &self.canvas_lti_jwks_ttl)
-            .field(
-                "canvas_lti_experience_base_url",
-                &self.canvas_lti_experience_base_url,
-            )
-            .field(
-                "canvas_lti_experience_code_ttl",
-                &self.canvas_lti_experience_code_ttl,
-            )
-            .field(
-                "canvas_lti_experience_session_ttl",
-                &self.canvas_lti_experience_session_ttl,
-            )
-            .field(
-                "canvas_lti_tool_signing_organization_id",
-                &self.canvas_lti_tool_signing_organization_id,
-            )
-            .field(
-                "canvas_lti_tool_issuer_did",
-                &self.canvas_lti_tool_issuer_did,
-            )
-            .field(
-                "canvas_lti_deep_linking_issuer",
-                &self.canvas_lti_deep_linking_issuer,
-            )
-            .field(
-                "canvas_oauth_completion_redirect_url",
-                &self.canvas_oauth_completion_redirect_url,
-            )
-            .field(
-                "canvas_self_managed_origin_count",
-                &self.canvas_self_managed_origins.len(),
-            )
-            .field(
-                "canvas_private_origin_allowlist_count",
-                &self.canvas_private_origin_allowlist.len(),
-            )
-            .field(
-                "canvas_credentials_api_origin_count",
-                &self.canvas_credentials_api_origins.len(),
-            )
-            .field(
-                "canvas_credentials_validation",
-                &self.canvas_credentials_validation,
-            )
-            .field(
-                "canvas_credentials_validation_timeout",
-                &self.canvas_credentials_validation_timeout,
-            )
-            .field("canvas_credentials_status", &self.canvas_credentials_status)
-            .field(
-                "canvas_allow_private_base_urls",
-                &self.canvas_allow_private_base_urls,
-            )
-            .field(
-                "canvas_allow_http_localhost_base_urls",
-                &self.canvas_allow_http_localhost_base_urls,
-            )
-            .field(
-                "canvas_local_admin_token_configured",
-                &self.canvas_local_admin_token.is_some(),
-            )
             .field("dependency_timeout", &self.dependency_timeout)
             .field("token_rate_limit", &self.token_rate_limit)
             .field("token_rate_window", &self.token_rate_window)
@@ -856,176 +748,6 @@ impl IssuanceServiceConfig {
                 "GRPC_SERVICE_TOKEN is required for internal passport authentication",
             ));
         }
-        let canvas_portable_enabled =
-            environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
-        let canvas_legacy_event_ingest_enabled =
-            environment_flag(&values, "CANVAS_LEGACY_EVENT_INGEST_ENABLED");
-        let canvas_credentials_shared_secret = values
-            .get("CANVAS_CREDENTIALS_SHARED_SECRET")
-            .filter(|value| !value.is_empty())
-            .cloned();
-        let canvas_credentials_shared_secret_file = values
-            .get("CANVAS_CREDENTIALS_SHARED_SECRET_FILE")
-            .filter(|value| !value.is_empty())
-            .cloned();
-        let canvas_credentials_signature_tolerance_seconds = values
-            .get("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS")
-            .map_or(Ok(300_i64), |value| {
-                value.trim().parse::<i64>().map_err(|error| {
-                    MmfError::new(
-                        ErrorCode::Configuration,
-                        "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS must be an integer",
-                    )
-                    .with_detail("cause", error.to_string())
-                })
-            })?;
-        let canvas_pilot_organizations: BTreeSet<String> =
-            comma_separated_values(&values, "CANVAS_PILOT_ORGANIZATION_IDS")
-                .into_iter()
-                .collect();
-        let canvas_evidence_max_age =
-            positive_seconds(&values, "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS", 900)?;
-        let canvas_readiness_max_age =
-            positive_seconds(&values, "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS", 900)?;
-        let canvas_lti_state_ttl = positive_minutes(&values, "CANVAS_LTI_STATE_TTL_MINUTES", 10)?;
-        let canvas_lti_jwks_ttl = positive_minutes(&values, "CANVAS_LTI_JWKS_TTL_MINUTES", 1440)?;
-        let canvas_lti_experience_base_url = ["CANVAS_LTI_EXPERIENCE_BASE_URL", "UI_BASE_URL"]
-            .into_iter()
-            .find_map(|name| values.get(name).filter(|value| !value.trim().is_empty()))
-            .map_or_else(
-                || Ok(issuer_base_url.clone()),
-                |value| validate_http_base_url(value, "Canvas LTI experience base URL"),
-            )?;
-        let canvas_lti_experience_code_ttl =
-            positive_seconds(&values, "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", 60)?;
-        let canvas_lti_experience_session_ttl =
-            positive_minutes(&values, "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", 30)?;
-        let canvas_lti_tool_signing_organization_id = values
-            .get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID")
-            .map_or("", String::as_str)
-            .trim()
-            .to_owned();
-        let canvas_lti_tool_issuer_did = values
-            .get("CANVAS_LTI_TOOL_ISSUER_DID")
-            .map_or("", String::as_str)
-            .trim()
-            .to_owned();
-        let canvas_lti_deep_linking_issuer = values
-            .get("CANVAS_LTI_DEEP_LINKING_ISSUER")
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
-        let canvas_oauth_completion_redirect_url = values
-            .get("CANVAS_OAUTH_COMPLETION_REDIRECT_URL")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map_or_else(
-                || {
-                    validate_canvas_oauth_completion_url(&format!(
-                        "{canvas_lti_experience_base_url}/console/integrations/canvas"
-                    ))
-                },
-                validate_canvas_oauth_completion_url,
-            )?;
-        let canvas_self_managed_origins =
-            comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
-        let canvas_private_origin_allowlist =
-            comma_separated_values(&values, "CANVAS_PRIVATE_ORIGIN_ALLOWLIST");
-        let mut canvas_credentials_api_origins =
-            comma_separated_values(&values, "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST");
-        if let Some(base_url) = values
-            .get("CANVAS_CREDENTIALS_API_BASE_URL")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            canvas_credentials_api_origins.push(base_url.to_owned());
-        }
-        let canvas_credentials_validation = CanvasCredentialsValidationConfig {
-            operator_api_token: values
-                .get("CANVAS_CREDENTIALS_API_TOKEN")
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            operator_api_token_file: values
-                .get("CANVAS_CREDENTIALS_API_TOKEN_FILE")
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            provider: optional_environment_value(&values, "CANVAS_CREDENTIALS_PROVIDER"),
-            publish_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_PUBLISH_URL"),
-            api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_API_BASE_URL"),
-            assertion_scope: optional_environment_value(
-                &values,
-                "CANVAS_CREDENTIALS_ASSERTION_SCOPE",
-            ),
-            issuer_id: optional_environment_value(&values, "CANVAS_CREDENTIALS_ISSUER_ID"),
-            badgeclass_id: optional_environment_value(&values, "CANVAS_CREDENTIALS_BADGECLASS_ID"),
-            validation_url_template: optional_environment_value(
-                &values,
-                "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
-            ),
-            allowed_api_origins: canvas_credentials_api_origins.clone(),
-        };
-        let canvas_credentials_status = CanvasCredentialsStatusConfig {
-            provider: canvas_credentials_validation.clone(),
-            legacy_api_base_url: optional_environment_value(&values, "CANVAS_CREDENTIALS_BASE_URL"),
-            status_sync_url: optional_environment_value(
-                &values,
-                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-            ),
-            revoke_url_template: optional_environment_value(
-                &values,
-                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
-            ),
-            portable_enabled: canvas_portable_enabled,
-            pilot_organizations: canvas_pilot_organizations.clone(),
-        };
-        let (publish_timeout, status_timeout) = crate::canvas_credentials_protocol::timeout_values(
-            values
-                .get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS")
-                .map(String::as_str),
-            values
-                .get("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS")
-                .map(String::as_str),
-        )
-        .map_err(|name| {
-            MmfError::new(
-                ErrorCode::Configuration,
-                format!("{name} must be a number of seconds"),
-            )
-        })?;
-        let canvas_credentials_validation_timeout =
-            CanvasNetworkTimeout::from_seconds(status_timeout);
-        let canvas_credentials_publish_timeout =
-            CanvasNetworkTimeout::from_seconds(publish_timeout);
-        let canvas_credentials_publication = crate::canvas_credentials_publication::CanvasCredentialsPublicationConfig::from_environment(canvas_credentials_status.clone(), &values);
-        let canvas_mirror_automation = CanvasMirrorAutomationConfig::from_values(&values);
-        let canvas_mirror_alert_thresholds = CanvasMirrorAlertThresholds {
-            warning_attempts: positive_i64_or_default(
-                &values,
-                "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-                3,
-            ),
-            critical_attempts: positive_i64_or_default(
-                &values,
-                "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-                5,
-            ),
-        }
-        .normalized();
-        let canvas_mirror_alert_webhook_url =
-            optional_environment_value(&values, "CANVAS_MIRROR_ALERT_WEBHOOK_URL");
-        let canvas_mirror_alert_webhook_timeout = Duration::from_secs_f64(
-            values
-                .get("CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS")
-                .and_then(|value| value.parse::<f64>().ok())
-                .filter(|value| value.is_finite())
-                .unwrap_or(5.0)
-                .clamp(1.0, 20.0),
-        );
-        let canvas_allow_private_base_urls =
-            environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
-        let canvas_allow_http_localhost_base_urls =
-            environment_flag(&values, "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
         let environment = values
             .get("ENVIRONMENT")
             .or_else(|| values.get("APP_ENV"))
@@ -1055,18 +777,34 @@ impl IssuanceServiceConfig {
                 ));
             }
         }
-        let canvas_local_admin_token =
-            if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
-                && !matches!(environment.as_str(), "production" | "prod")
-            {
-                secret_value(&values, "CANVAS_ADMIN_API_TOKEN")?
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty())
-            } else {
-                None
-            };
         let external_observations_enabled =
             environment_flag(&values, "MARTY_EXTERNAL_OBSERVATIONS_ENABLED");
+        let application_ownership_enabled =
+            environment_flag(&values, "MARTY_APPLICATION_OWNERSHIP_ENABLED");
+        let external_associations_enabled =
+            environment_flag(&values, "MARTY_EXTERNAL_ASSOCIATIONS_ENABLED");
+        let external_association_database_url = values
+            .get("ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL")
+            .map(|value| {
+                validate_observation_database_url(value).map_err(|_| {
+                    MmfError::new(
+                        ErrorCode::Configuration,
+                        "Invalid separate Core association database configuration",
+                    )
+                })
+            })
+            .transpose()?;
+        if external_associations_enabled
+            && (issuance_api_key.is_none() || external_association_database_url.is_none())
+        {
+            return Err(MmfError::new(ErrorCode::Configuration,"Association activation requires Gateway service authentication and separate Core database credentials"));
+        }
+        if application_ownership_enabled && issuance_api_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "Ownership Gateway service credential is required",
+            ));
+        }
         let external_observation_database_url = values
             .get("ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL")
             .map(|value| validate_observation_database_url(value))
@@ -1095,6 +833,9 @@ impl IssuanceServiceConfig {
             token_hmac_key,
             issuance_api_key,
             external_observations_enabled,
+            application_ownership_enabled,
+            external_associations_enabled,
+            external_association_database_url,
             external_observation_database_url,
             passport_tenant_keys,
             passport_native,
@@ -1118,38 +859,6 @@ impl IssuanceServiceConfig {
             ),
             didcomm_tls_ca_file: optional_trimmed(settings.didcomm.tls_ca_file),
             didcomm_allow_private_ips: settings.didcomm.allow_private_ips,
-            canvas_portable_enabled,
-            canvas_legacy_event_ingest_enabled,
-            canvas_credentials_shared_secret,
-            canvas_credentials_shared_secret_file,
-            canvas_credentials_signature_tolerance_seconds,
-            canvas_pilot_organizations,
-            canvas_evidence_max_age,
-            canvas_readiness_max_age,
-            canvas_lti_state_ttl,
-            canvas_lti_jwks_ttl,
-            canvas_lti_experience_base_url,
-            canvas_lti_experience_code_ttl,
-            canvas_lti_experience_session_ttl,
-            canvas_lti_tool_signing_organization_id,
-            canvas_lti_tool_issuer_did,
-            canvas_lti_deep_linking_issuer,
-            canvas_oauth_completion_redirect_url,
-            canvas_self_managed_origins,
-            canvas_private_origin_allowlist,
-            canvas_credentials_api_origins,
-            canvas_credentials_validation,
-            canvas_credentials_status,
-            canvas_credentials_validation_timeout,
-            canvas_credentials_publish_timeout,
-            canvas_credentials_publication,
-            canvas_mirror_automation,
-            canvas_mirror_alert_thresholds,
-            canvas_mirror_alert_webhook_url,
-            canvas_mirror_alert_webhook_timeout,
-            canvas_allow_private_base_urls,
-            canvas_allow_http_localhost_base_urls,
-            canvas_local_admin_token,
             dependency_timeout: Duration::from_secs(10),
             token_rate_limit: parse_python_integer_setting(
                 "TOKEN_RATE_LIMIT",
@@ -1349,55 +1058,6 @@ fn environment_flag(values: &BTreeMap<String, String>, name: &str) -> bool {
     })
 }
 
-fn positive_seconds(
-    values: &BTreeMap<String, String>,
-    name: &str,
-    default: u64,
-) -> Result<Duration, MmfError> {
-    let seconds = values.get(name).map_or(Ok(default), |value| {
-        value.parse::<u64>().map_err(|error| {
-            MmfError::new(
-                ErrorCode::Configuration,
-                format!("{name} must be a positive integer"),
-            )
-            .with_detail("cause", error.to_string())
-        })
-    })?;
-    if seconds == 0 || seconds > i64::MAX as u64 {
-        return Err(MmfError::new(
-            ErrorCode::Configuration,
-            format!("{name} must be a positive integer within range"),
-        ));
-    }
-    Ok(Duration::from_secs(seconds))
-}
-
-fn positive_minutes(
-    values: &BTreeMap<String, String>,
-    name: &str,
-    default: u64,
-) -> Result<Duration, MmfError> {
-    let minutes = values.get(name).map_or(Ok(default), |value| {
-        value.parse::<u64>().map_err(|error| {
-            MmfError::new(
-                ErrorCode::Configuration,
-                format!("{name} must be a positive integer"),
-            )
-            .with_detail("cause", error.to_string())
-        })
-    })?;
-    let seconds = minutes
-        .checked_mul(60)
-        .filter(|value| *value > 0 && *value <= i64::MAX as u64)
-        .ok_or_else(|| {
-            MmfError::new(
-                ErrorCode::Configuration,
-                format!("{name} must be a positive integer within range"),
-            )
-        })?;
-    Ok(Duration::from_secs(seconds))
-}
-
 fn comma_separated_values(values: &BTreeMap<String, String>, name: &str) -> Vec<String> {
     values
         .get(name)
@@ -1552,54 +1212,6 @@ fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> 
     optional_trimmed(values.get(name).cloned())
 }
 
-fn positive_i64_or_default(values: &BTreeMap<String, String>, name: &str, default: i64) -> i64 {
-    let Some(raw) = values.get(name) else {
-        return default;
-    };
-    let Ok(parsed) = raw.parse::<PythonConfigInteger>() else {
-        tracing::warn!("Ignoring invalid integer {name}='{raw}'; using {default}");
-        return default;
-    };
-    if parsed < PythonConfigInteger::from(1_u64) {
-        tracing::warn!("Ignoring {name}='{raw}' below minimum 1; using {default}");
-        return default;
-    }
-    parsed.to_i64().unwrap_or(i64::MAX)
-}
-
-fn validate_canvas_oauth_completion_url(value: &str) -> Result<String, MmfError> {
-    let parsed = url::Url::parse(value).map_err(|error| {
-        MmfError::new(
-            ErrorCode::Configuration,
-            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL must be a trusted HTTPS URL",
-        )
-        .with_detail("cause", error.to_string())
-    })?;
-    let local_http = is_loopback_http_url(&parsed);
-    if (parsed.scheme() != "https" && !local_http)
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(MmfError::new(
-            ErrorCode::Configuration,
-            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL must be a trusted HTTPS URL",
-        ));
-    }
-    Ok(value.to_owned())
-}
-
-pub(crate) fn is_loopback_http_url(value: &url::Url) -> bool {
-    value.scheme() == "http"
-        && match value.host() {
-            Some(url::Host::Domain(host)) => host == "localhost",
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
-            None => false,
-        }
-}
-
 fn validate_database_url(value: &str) -> Result<String, MmfError> {
     let normalized = value.replacen("postgresql+asyncpg://", "postgresql://", 1);
     let parsed = url::Url::parse(&normalized).map_err(|error| {
@@ -1729,7 +1341,6 @@ fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
     use super::{validate_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig};
@@ -1858,80 +1469,6 @@ mod tests {
         assert!(config.token_hmac_key.is_none());
         assert_eq!(config.token_rate_limit.as_decimal(), "30");
         assert_eq!(config.token_rate_window.as_decimal(), "60");
-        assert_eq!(
-            config.canvas_credentials_validation_timeout,
-            CanvasNetworkTimeout::from_seconds(20.0)
-        );
-        assert_eq!(
-            config.canvas_credentials_validation,
-            crate::canvas_credentials_validation::CanvasCredentialsValidationConfig::default()
-        );
-        assert_eq!(
-            config.canvas_lti_state_ttl,
-            std::time::Duration::from_secs(600)
-        );
-        assert_eq!(
-            config.canvas_lti_jwks_ttl,
-            std::time::Duration::from_secs(86_400)
-        );
-        assert_eq!(
-            config.canvas_lti_experience_base_url,
-            "https://beta.elevenidllc.com"
-        );
-        assert_eq!(
-            config.canvas_oauth_completion_redirect_url,
-            "https://beta.elevenidllc.com/console/integrations/canvas"
-        );
-        assert_eq!(
-            config.canvas_lti_experience_code_ttl,
-            std::time::Duration::from_secs(60)
-        );
-        assert_eq!(
-            config.canvas_lti_experience_session_ttl,
-            std::time::Duration::from_secs(1_800)
-        );
-        assert!(config.canvas_lti_tool_signing_organization_id.is_empty());
-        assert!(config.canvas_lti_tool_issuer_did.is_empty());
-        assert!(config.canvas_lti_deep_linking_issuer.is_none());
-        assert!(config.canvas_self_managed_origins.is_empty());
-        assert!(config.canvas_private_origin_allowlist.is_empty());
-        assert!(config.canvas_credentials_api_origins.is_empty());
-        assert!(!config.canvas_allow_private_base_urls);
-        assert!(!config.canvas_allow_http_localhost_base_urls);
-        assert!(config.canvas_local_admin_token.is_none());
-        assert!(!config.canvas_legacy_event_ingest_enabled);
-        assert!(config.canvas_credentials_shared_secret.is_none());
-        assert!(config.canvas_credentials_shared_secret_file.is_none());
-        assert_eq!(config.canvas_credentials_signature_tolerance_seconds, 300);
-        assert_eq!(
-            config.canvas_mirror_automation,
-            crate::canvas_mirror_automation::CanvasMirrorAutomationConfig::default()
-        );
-        assert_eq!(config.canvas_mirror_alert_thresholds.warning_attempts, 3);
-        assert_eq!(config.canvas_mirror_alert_thresholds.critical_attempts, 5);
-        assert!(config.canvas_mirror_alert_webhook_url.is_none());
-        assert_eq!(
-            config.canvas_mirror_alert_webhook_timeout,
-            std::time::Duration::from_secs(5)
-        );
-    }
-
-    #[test]
-    fn no_canvas_issuance_accepts_absent_canvas_secret_without_disabling_issuance() {
-        let config = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
-            ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
-            ("CANVAS_MIRROR_WORKER_ENABLED", "false"),
-            ("CANVAS_CREDENTIALS_SHARED_SECRET_FILE", ""),
-            ("ISSUER_BASE_URL", "https://issuer.example.invalid"),
-        ]))
-        .expect("no-Canvas issuance configuration");
-        assert!(!config.canvas_portable_enabled);
-        assert!(!config.canvas_legacy_event_ingest_enabled);
-        assert!(!config.canvas_mirror_automation.enabled);
-        assert!(config.canvas_credentials_shared_secret.is_none());
-        assert!(config.canvas_credentials_shared_secret_file.is_none());
-        assert_eq!(config.issuer_base_url, "https://issuer.example.invalid");
     }
 
     #[test]
@@ -2274,406 +1811,6 @@ mod tests {
     }
 
     #[test]
-    fn canvas_mirror_runtime_configuration_is_typed_normalized_and_redacted() {
-        let config = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_MIRROR_WORKER_ENABLED", "true"),
-            ("CANVAS_MIRROR_WORKER_ORGANIZATION_ID", " org-1 "),
-            ("CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS", "7"),
-            ("CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS", "4"),
-            (
-                "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-                " https://alerts.example/hook ",
-            ),
-            ("CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS", "40"),
-        ]))
-        .expect("Canvas mirror settings");
-        assert!(config.canvas_mirror_automation.enabled);
-        assert_eq!(
-            config.canvas_mirror_automation.organization_id.as_deref(),
-            Some("org-1")
-        );
-        assert_eq!(config.canvas_mirror_alert_thresholds.warning_attempts, 7);
-        assert_eq!(config.canvas_mirror_alert_thresholds.critical_attempts, 7);
-        assert_eq!(
-            config.canvas_mirror_alert_webhook_url.as_deref(),
-            Some("https://alerts.example/hook")
-        );
-        assert_eq!(
-            config.canvas_mirror_alert_webhook_timeout,
-            std::time::Duration::from_secs(20)
-        );
-        assert!(!format!("{config:?}").contains("alerts.example"));
-    }
-
-    #[test]
-    fn canvas_legacy_ingest_configuration_is_exact_and_redacted() {
-        for enabled in ["1", "true", "yes", "on", " TRUE "] {
-            let config = IssuanceServiceConfig::from_values(values(&[
-                ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", enabled),
-                ("CANVAS_CREDENTIALS_SHARED_SECRET", "direct-secret"),
-                (
-                    "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
-                    "/run/secrets/canvas",
-                ),
-                ("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS", " 45 "),
-            ]))
-            .expect("legacy Canvas settings");
-            assert!(config.canvas_legacy_event_ingest_enabled, "{enabled}");
-            assert_eq!(
-                config.canvas_credentials_shared_secret.as_deref(),
-                Some("direct-secret")
-            );
-            assert_eq!(
-                config.canvas_credentials_shared_secret_file.as_deref(),
-                Some("/run/secrets/canvas")
-            );
-            assert_eq!(config.canvas_credentials_signature_tolerance_seconds, 45);
-            let debug = format!("{config:?}");
-            assert!(!debug.contains("direct-secret"));
-            assert!(!debug.contains("/run/secrets/canvas"));
-        }
-        for disabled in ["0", "false", "no", "off", "enabled", ""] {
-            let config = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
-                disabled,
-            )]))
-            .expect("disabled setting");
-            assert!(!config.canvas_legacy_event_ingest_enabled, "{disabled}");
-        }
-        assert!(IssuanceServiceConfig::from_values(values(&[(
-            "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
-            "three-hundred",
-        )]))
-        .is_err());
-    }
-
-    #[test]
-    fn canvas_credentials_validation_configuration_is_complete_and_redacted() {
-        let config = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_PROVIDER", "badgr_api"),
-            ("CANVAS_CREDENTIALS_API_TOKEN", "sensitive-operator-token"),
-            (
-                "CANVAS_CREDENTIALS_PUBLISH_URL",
-                "https://sensitive-bridge.example/publish",
-            ),
-            (
-                "CANVAS_CREDENTIALS_API_BASE_URL",
-                "https://sensitive-api.example/v2",
-            ),
-            ("CANVAS_CREDENTIALS_ASSERTION_SCOPE", "issuers"),
-            ("CANVAS_CREDENTIALS_ISSUER_ID", "sensitive-issuer"),
-            ("CANVAS_CREDENTIALS_BADGECLASS_ID", "sensitive-badgeclass"),
-            (
-                "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
-                "https://sensitive-api.example/check/{issuer_id}",
-            ),
-            (
-                "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
-                "https://second-api.example",
-            ),
-            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "2.5"),
-        ]))
-        .expect("Canvas Credentials validation configuration");
-        let provider = &config.canvas_credentials_validation;
-        assert_eq!(provider.provider.as_deref(), Some("badgr_api"));
-        assert_eq!(provider.assertion_scope.as_deref(), Some("issuers"));
-        assert_eq!(provider.allowed_api_origins.len(), 2);
-        assert_eq!(
-            config.canvas_credentials_validation_timeout,
-            CanvasNetworkTimeout::from_seconds(2.5)
-        );
-        let debug = format!("{config:?}");
-        for secret_value in [
-            "sensitive-bridge",
-            "sensitive-operator-token",
-            "sensitive-api",
-            "sensitive-issuer",
-            "sensitive-badgeclass",
-            "second-api",
-        ] {
-            assert!(!debug.contains(secret_value));
-        }
-
-        for value in ["", "not-a-number", "1__0"] {
-            let error = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-                value,
-            )]))
-            .expect_err("invalid Canvas Credentials timeout");
-            assert_eq!(error.code, ErrorCode::Configuration);
-        }
-    }
-
-    #[tokio::test]
-    async fn canvas_status_reuses_operator_secret_loading_timeout_and_rollout_configuration() {
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../contracts/canvas-status-operator-token.txt"
-        );
-        let config = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_API_TOKEN_FILE", fixture),
-            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "2.75"),
-            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true"),
-            ("CANVAS_PILOT_ORGANIZATION_IDS", " org-review, ,org-review "),
-            (
-                "CANVAS_CREDENTIALS_BASE_URL",
-                " https://synthetic-legacy.example.invalid ",
-            ),
-            (
-                "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-                " https://synthetic-bridge.example.invalid/status ",
-            ),
-            (
-                "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
-                " {api_base_url}/custom/{external_credential_id} ",
-            ),
-        ]))
-        .unwrap();
-        let status = &config.canvas_credentials_status;
-        assert_eq!(status.provider, config.canvas_credentials_validation);
-        assert_eq!(
-            crate::canvas_operator_secret::resolve_canvas_operator_token(
-                status.provider.operator_api_token.as_deref(),
-                status.provider.operator_api_token_file.as_deref(),
-                &crate::canvas_operator_secret::FileCanvasOperatorSecretReader
-            )
-            .await
-            .unwrap()
-            .as_deref(),
-            Some("synthetic-operator-file-token")
-        );
-        assert_eq!(
-            status.legacy_api_base_url.as_deref(),
-            Some("https://synthetic-legacy.example.invalid")
-        );
-        assert!(
-            status.provider.allowed_api_origins.is_empty(),
-            "legacy fallback cannot grant trust"
-        );
-        assert_eq!(
-            status.status_sync_url.as_deref(),
-            Some("https://synthetic-bridge.example.invalid/status")
-        );
-        assert_eq!(
-            status.revoke_url_template.as_deref(),
-            Some("{api_base_url}/custom/{external_credential_id}")
-        );
-        assert!(status.portable_enabled);
-        assert_eq!(
-            status
-                .pilot_organizations
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["org-review"]
-        );
-        assert_eq!(
-            config.canvas_credentials_validation_timeout,
-            CanvasNetworkTimeout::from_seconds(2.75)
-        );
-        let debug = format!("{config:?}");
-        for private in [
-            "synthetic-operator-file-token",
-            "synthetic-legacy",
-            "synthetic-bridge",
-            "custom/",
-        ] {
-            assert!(!debug.contains(private));
-        }
-
-        let direct = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_API_TOKEN", " synthetic-direct-token "),
-            (
-                "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-                "synthetic-unused-missing-file",
-            ),
-            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "1.5"),
-            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "3.25"),
-        ]))
-        .unwrap();
-        assert_eq!(
-            direct
-                .canvas_credentials_status
-                .provider
-                .operator_api_token
-                .as_deref(),
-            Some(" synthetic-direct-token ")
-        );
-        assert_eq!(
-            direct.canvas_credentials_validation_timeout,
-            CanvasNetworkTimeout::from_seconds(3.25)
-        );
-        assert_eq!(
-            direct.canvas_credentials_publish_timeout,
-            CanvasNetworkTimeout::from_seconds(1.5)
-        );
-        assert_eq!(
-            direct.canvas_credentials_publication.delivery,
-            direct.canvas_credentials_status
-        );
-    }
-
-    #[test]
-    fn publication_settings_preserve_empty_flags_and_provenance_precedence() {
-        let defaults = IssuanceServiceConfig::from_values(values(&[])).unwrap();
-        assert!(defaults.canvas_credentials_publication.recipient_hashed);
-        assert!(
-            !defaults
-                .canvas_credentials_publication
-                .allow_duplicate_awards
-        );
-        let empty = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", ""),
-            ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", ""),
-            ("CANVAS_CREDENTIALS_PROVENANCE_BASE_URL", " "),
-            (
-                "MARTY_ISSUER_BASE_URL",
-                " https://synthetic-provenance.invalid/// ",
-            ),
-        ]))
-        .unwrap();
-        assert!(!empty.canvas_credentials_publication.recipient_hashed);
-        assert!(!empty.canvas_credentials_publication.allow_duplicate_awards);
-        assert_eq!(
-            empty
-                .canvas_credentials_publication
-                .provenance_base_url
-                .as_deref(),
-            Some("https://synthetic-provenance.invalid")
-        );
-        let custom = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", " YeS "),
-            ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "on"),
-            (
-                "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-                "https://synthetic-priority.invalid/",
-            ),
-            ("MARTY_ISSUER_BASE_URL", "https://synthetic-other.invalid"),
-            (
-                "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-                "  synthetic narrative  ",
-            ),
-        ]))
-        .unwrap();
-        assert!(custom.canvas_credentials_publication.recipient_hashed);
-        assert!(custom.canvas_credentials_publication.allow_duplicate_awards);
-        assert_eq!(
-            custom
-                .canvas_credentials_publication
-                .provenance_base_url
-                .as_deref(),
-            Some("https://synthetic-priority.invalid")
-        );
-        assert_eq!(
-            custom
-                .canvas_credentials_publication
-                .assertion_narrative
-                .as_deref(),
-            Some("  synthetic narrative  ")
-        );
-        let debug = format!("{:?}", custom.canvas_credentials_publication);
-        assert!(!debug.contains("synthetic-"));
-        assert!(!debug.contains("synthetic narrative"));
-    }
-
-    #[test]
-    fn canvas_operator_files_are_deferred_without_weakening_required_secrets() {
-        let missing = "synthetic-operator-file-that-does-not-exist";
-        let config = IssuanceServiceConfig::from_values(values(&[(
-            "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-            missing,
-        )]))
-        .unwrap();
-        assert_eq!(
-            config.canvas_credentials_validation.operator_api_token,
-            None
-        );
-        assert_eq!(
-            config
-                .canvas_credentials_status
-                .provider
-                .operator_api_token_file
-                .as_deref(),
-            Some(missing)
-        );
-        let required =
-            IssuanceServiceConfig::from_values(values(&[("GRPC_SERVICE_TOKEN_FILE", missing)]))
-                .unwrap_err();
-        assert_eq!(required.code, ErrorCode::Configuration);
-    }
-
-    #[test]
-    fn canvas_timeout_grammar_preserves_order_and_unrestricted_range() {
-        for raw in ["  2.5  ", "２.５", "2_5e-1"] {
-            let config = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-                raw,
-            )]))
-            .unwrap();
-            assert_eq!(
-                config.canvas_credentials_validation_timeout,
-                CanvasNetworkTimeout::from_seconds(2.5)
-            );
-        }
-        let error = IssuanceServiceConfig::from_values(values(&[
-            ("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "invalid"),
-            ("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "2.5"),
-        ]))
-        .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"));
-        // Preserve configuration accepted by the independently verified import.
-        let huge = std::panic::catch_unwind(|| {
-            IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-                "1e30",
-            )]))
-        })
-        .expect("range conversion must not panic");
-        assert_eq!(
-            huge.unwrap()
-                .canvas_credentials_validation_timeout
-                .seconds(),
-            1e30
-        );
-    }
-
-    #[test]
-    fn canvas_startup_acceptance_matches_all_published_import_observations() {
-        let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-provider-configuration-scenarios.json"
-        ))
-        .unwrap();
-        let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-provider-configuration-oracle.json"
-        ))
-        .unwrap();
-        let cases = cases["timeouts"].as_array().unwrap();
-        let expected = oracle["timeouts"].as_array().unwrap();
-        assert_eq!(cases.len(), 19);
-        assert_eq!(cases.len(), expected.len());
-        for (case, expected) in cases.iter().zip(expected) {
-            assert_eq!(case["name"], expected["name"]);
-            let mut environment = Vec::new();
-            for (key, name) in [
-                ("publish", "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS"),
-                ("status", "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS"),
-            ] {
-                if let Some(raw) = case[key].as_str() {
-                    environment.push((name.to_owned(), raw.to_owned()));
-                }
-            }
-            let result = IssuanceServiceConfig::from_values(environment);
-            if expected.get("error_class").is_some() {
-                assert!(result.is_err(), "{}", case["name"]);
-            } else {
-                result.unwrap();
-            }
-        }
-    }
-
-    #[test]
     fn hierarchical_configuration_overrides_the_legacy_adapter() {
         let config = IssuanceServiceConfig::from_values(values(&[
             ("ISSUANCE_SERVICE_PORT", "8006"),
@@ -2716,30 +1853,6 @@ mod tests {
             ("SIGNING_KEYS_INTERNAL_API_KEY", "preferred-key"),
             ("TOKEN_RATE_LIMIT", "12"),
             ("TOKEN_RATE_WINDOW", "45"),
-            ("CANVAS_LTI_STATE_TTL_MINUTES", "12"),
-            ("CANVAS_LTI_JWKS_TTL_MINUTES", "30"),
-            ("CANVAS_LTI_EXPERIENCE_BASE_URL", "https://ui.example/"),
-            ("CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", "90"),
-            ("CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", "45"),
-            ("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", " system-tools "),
-            (
-                "CANVAS_LTI_TOOL_ISSUER_DID",
-                " did:web:issuer.example:canvas ",
-            ),
-            (
-                "CANVAS_LTI_DEEP_LINKING_ISSUER",
-                " elevenid-deep-link-client ",
-            ),
-            ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
-            ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
-            (
-                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-                " https://10.0.0.4,https://canvas.internal.example ,,",
-            ),
-            (
-                "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
-                " https://canvas.one.example,https://canvas.two.example ,,",
-            ),
         ]))
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
@@ -2779,45 +1892,7 @@ mod tests {
         );
         assert_eq!(config.token_rate_limit.as_decimal(), "12");
         assert_eq!(config.token_rate_window.as_decimal(), "45");
-        assert_eq!(
-            config.canvas_lti_state_ttl,
-            std::time::Duration::from_secs(720)
-        );
-        assert_eq!(
-            config.canvas_lti_jwks_ttl,
-            std::time::Duration::from_secs(1_800)
-        );
-        assert_eq!(config.canvas_lti_experience_base_url, "https://ui.example");
-        assert_eq!(
-            config.canvas_lti_experience_code_ttl,
-            std::time::Duration::from_secs(90)
-        );
-        assert_eq!(
-            config.canvas_lti_experience_session_ttl,
-            std::time::Duration::from_secs(2_700)
-        );
-        assert_eq!(
-            config.canvas_lti_tool_signing_organization_id,
-            "system-tools"
-        );
-        assert_eq!(
-            config.canvas_lti_tool_issuer_did,
-            "did:web:issuer.example:canvas"
-        );
-        assert_eq!(
-            config.canvas_lti_deep_linking_issuer.as_deref(),
-            Some("elevenid-deep-link-client")
-        );
-        assert_eq!(
-            config.canvas_self_managed_origins,
-            ["https://canvas.one.example", "https://canvas.two.example"]
-        );
-        assert_eq!(
-            config.canvas_private_origin_allowlist,
-            ["https://10.0.0.4", "https://canvas.internal.example"]
-        );
-        assert!(config.canvas_allow_private_base_urls);
-        assert!(config.canvas_allow_http_localhost_base_urls);
+
         let diagnostic = format!("{config:?}");
         assert!(!diagnostic.contains("preferred-key"));
         assert!(!diagnostic.contains("fallback-key"));
@@ -3131,147 +2206,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_canvas_lti_ttls_fail_closed() {
-        for name in [
-            "CANVAS_LTI_STATE_TTL_MINUTES",
-            "CANVAS_LTI_JWKS_TTL_MINUTES",
-            "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
-            "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
-        ] {
-            let invalid_values = if name.ends_with("_MINUTES") {
-                &[
-                    "0",
-                    "-1",
-                    "later",
-                    "153722867280912931",
-                    "18446744073709551615",
-                ][..]
-            } else {
-                &["0", "-1", "later", "18446744073709551615"][..]
-            };
-            for value in invalid_values {
-                let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
-                    .expect_err("invalid Canvas LTI TTL");
-                assert_eq!(error.code, ErrorCode::Configuration);
-            }
-        }
-    }
-
-    #[test]
-    fn canvas_lti_experience_base_url_preserves_the_python_fallback_order() {
-        let ui_fallback = IssuanceServiceConfig::from_values(values(&[
-            ("ISSUER_BASE_URL", "https://issuer.example"),
-            ("UI_BASE_URL", "https://ui.example/"),
-        ]))
-        .expect("UI fallback");
-        assert_eq!(
-            ui_fallback.canvas_lti_experience_base_url,
-            "https://ui.example"
-        );
-
-        let explicit = IssuanceServiceConfig::from_values(values(&[
-            ("ISSUER_BASE_URL", "https://issuer.example"),
-            ("UI_BASE_URL", "https://ui.example"),
-            (
-                "CANVAS_LTI_EXPERIENCE_BASE_URL",
-                "https://experience.example/",
-            ),
-        ]))
-        .expect("explicit experience URL");
-        assert_eq!(
-            explicit.canvas_lti_experience_base_url,
-            "https://experience.example"
-        );
-    }
-
-    #[test]
-    fn canvas_oauth_configuration_rejects_legacy_master_key() {
-        let config = IssuanceServiceConfig::from_values(values(&[(
-            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-            "https://ui.example/console/integrations/canvas?source=oauth",
-        )]))
-        .expect("Canvas OAuth configuration");
-        assert_eq!(
-            config.canvas_oauth_completion_redirect_url,
-            "https://ui.example/console/integrations/canvas?source=oauth"
-        );
-        for forbidden in [
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "INTEGRATION_SECRET_MASTER_KEY_FILE",
-            "INTEGRATION_SECRET_MASTER_KEY_ENV",
-        ] {
-            assert!(
-                IssuanceServiceConfig::from_values(values(&[(forbidden, "synthetic")])).is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn local_canvas_admin_token_fallback_is_explicit_redacted_and_never_production() {
-        let local = IssuanceServiceConfig::from_values(values(&[
-            ("ENVIRONMENT", "development"),
-            ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
-            ("CANVAS_ADMIN_API_TOKEN", " local-simulator-token "),
-        ]))
-        .expect("local Canvas fallback");
-        assert_eq!(
-            local.canvas_local_admin_token.as_deref(),
-            Some("local-simulator-token")
-        );
-        let diagnostic = format!("{local:?}");
-        assert!(diagnostic.contains("canvas_local_admin_token_configured: true"));
-        assert!(!diagnostic.contains("local-simulator-token"));
-
-        let mut production_values = values(&[
-            ("ENVIRONMENT", "production"),
-            ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
-            ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
-        ]);
-        production_values.extend(remote_server_tls_values());
-        let production = IssuanceServiceConfig::from_values(production_values)
-            .expect("production ignores local fallback");
-        assert!(production.canvas_local_admin_token.is_none());
-
-        let disabled = IssuanceServiceConfig::from_values(values(&[
-            ("ENVIRONMENT", "development"),
-            ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
-        ]))
-        .expect("disabled local fallback");
-        assert!(disabled.canvas_local_admin_token.is_none());
-    }
-
-    #[test]
-    fn invalid_canvas_oauth_completion_urls_fail_closed() {
-        for value in [
-            "http://ui.example/console/integrations/canvas",
-            "ftp://ui.example/console/integrations/canvas",
-            "https://user:secret@ui.example/console/integrations/canvas",
-            "https://ui.example/console/integrations/canvas#token",
-            "not-a-url",
-        ] {
-            let error = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-                value,
-            )]))
-            .expect_err("invalid Canvas OAuth completion URL");
-            assert_eq!(error.code, ErrorCode::Configuration);
-        }
-
-        for value in [
-            "http://localhost:3000/console/integrations/canvas",
-            "http://127.0.0.1:3000/console/integrations/canvas",
-            "http://[::1]:3000/console/integrations/canvas",
-        ] {
-            let config = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-                value,
-            )]))
-            .expect("local development completion URL");
-            assert_eq!(config.canvas_oauth_completion_redirect_url, value);
-        }
-    }
-
-    #[test]
     fn invalid_hierarchical_bind_address_fails_closed() {
         let error = IssuanceServiceConfig::from_values(values(&[
             ("MARTY_ISSUANCE__SERVER__HOST", "issuance.example.test"),
@@ -3292,23 +2226,6 @@ mod tests {
             let error =
                 IssuanceServiceConfig::from_values(values(&[("ISSUER_BASE_URL", issuer_base_url)]))
                     .expect_err("invalid issuer URL");
-            assert_eq!(error.code, ErrorCode::Configuration);
-        }
-    }
-
-    #[test]
-    fn invalid_canvas_lti_experience_urls_fail_closed() {
-        for value in [
-            "ftp://experience.example",
-            "https://user:password@experience.example",
-            "https://experience.example?tenant=a",
-            "not-a-url",
-        ] {
-            let error = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_LTI_EXPERIENCE_BASE_URL",
-                value,
-            )]))
-            .expect_err("invalid experience URL");
             assert_eq!(error.code, ErrorCode::Configuration);
         }
     }
@@ -3388,4 +2305,65 @@ fn observation_ingress_requires_explicit_activation_configuration() {
         let error = validate_observation_database_url(invalid).unwrap_err();
         assert!(!format!("{error:?}").contains("synthetic-secret"));
     }
+}
+#[test]
+fn application_ownership_requires_explicit_activation_and_service_authentication() {
+    assert!(
+        !IssuanceServiceConfig::from_values(Vec::<(String, String)>::new())
+            .unwrap()
+            .application_ownership_enabled
+    );
+    assert!(IssuanceServiceConfig::from_values(vec![(
+        "MARTY_APPLICATION_OWNERSHIP_ENABLED".into(),
+        "true".into()
+    )])
+    .is_err());
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("MARTY_APPLICATION_OWNERSHIP_ENABLED".into(), "true".into()),
+        (
+            "ISSUANCE_API_KEY".into(),
+            "synthetic-ownership-service-key-000000000001".into(),
+        ),
+    ])
+    .unwrap();
+    assert!(config.application_ownership_enabled);
+    assert!(!config.external_observations_enabled);
+}
+
+#[test]
+fn external_association_activation_requires_isolated_credentials_and_redacts_them() {
+    let default = IssuanceServiceConfig::from_values(Vec::<(String, String)>::new()).unwrap();
+    assert!(!default.external_associations_enabled);
+    for values in [
+        vec![("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into())],
+        vec![
+            ("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into()),
+            (
+                "ISSUANCE_API_KEY".into(),
+                "synthetic-service-key-000000000001".into(),
+            ),
+        ],
+    ] {
+        assert!(IssuanceServiceConfig::from_values(values).is_err());
+    }
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into()),
+        (
+            "ISSUANCE_API_KEY".into(),
+            "synthetic-service-key-000000000001".into(),
+        ),
+        (
+            "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL".into(),
+            "postgresql://association:synthetic-private-password@127.0.0.1/issuer".into(),
+        ),
+    ])
+    .unwrap();
+    assert!(config.external_associations_enabled);
+    assert!(!format!("{config:?}").contains("synthetic-private-password"));
+    let error = IssuanceServiceConfig::from_values(vec![(
+        "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL".into(),
+        "invalid:synthetic-private-password".into(),
+    )])
+    .unwrap_err();
+    assert!(!format!("{error:?}").contains("synthetic-private-password"));
 }

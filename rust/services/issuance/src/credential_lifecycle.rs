@@ -1,14 +1,12 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::canvas_issuance_guard::{CanvasGuardConfig, PostgresCanvasIssuanceGuard};
 use crate::credential::{
     AllocatedCredentialStatus, CredentialIssuanceError, CredentialLifecycle, CredentialTransaction,
     IssuedCredential, IssuerContext,
@@ -284,7 +282,6 @@ struct ProcessRevocationResponse {
 #[derive(Clone, Debug)]
 pub struct PostgresCredentialLifecycle {
     pool: PgPool,
-    canvas_guard: PostgresCanvasIssuanceGuard,
     status: HttpCredentialStatusAllocator,
 }
 
@@ -294,12 +291,9 @@ impl PostgresCredentialLifecycle {
         revocation_base_url: Url,
         service_token: Option<&str>,
         timeout: Duration,
-        canvas_config: CanvasGuardConfig,
     ) -> Result<Self, CredentialIssuanceError> {
-        let canvas_guard = PostgresCanvasIssuanceGuard::new(pool.clone(), canvas_config);
         Ok(Self {
             pool,
-            canvas_guard,
             status: HttpCredentialStatusAllocator::new(
                 revocation_base_url,
                 service_token,
@@ -311,84 +305,6 @@ impl PostgresCredentialLifecycle {
     #[must_use]
     pub fn status_publisher(&self) -> HttpCredentialStatusAllocator {
         self.status.clone()
-    }
-
-    async fn record_canvas_drift(
-        &self,
-        transaction: &CredentialTransaction,
-        credential_id: &str,
-    ) -> Result<(), CredentialIssuanceError> {
-        let Some(application_id) = transaction.application_id.as_deref() else {
-            return Ok(());
-        };
-        let row = sqlx::query(
-            "SELECT app.organization_id, app.integration_context,
-                    binding.id AS binding_id, binding.platform_id,
-                    binding.config_version
-             FROM issuance_service.applications AS app
-             JOIN issuance_service.canvas_program_bindings AS binding
-               ON binding.organization_id = app.organization_id
-              AND binding.id = app.integration_context->'canvas'->>'canvas_program_binding_id'
-             JOIN issuance_service.canvas_platforms AS platform
-               ON platform.organization_id = app.organization_id
-              AND platform.id = app.integration_context->'canvas'->>'canvas_platform_id'
-              AND binding.platform_id = platform.id
-             WHERE app.id = $1 AND app.organization_id = $2",
-        )
-        .bind(application_id)
-        .bind(&transaction.organization_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(database_error)?;
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let organization_id: String = row.try_get("organization_id").map_err(database_error)?;
-        let binding_id: String = row.try_get("binding_id").map_err(database_error)?;
-        let platform_id: String = row.try_get("platform_id").map_err(database_error)?;
-        let config_version: i32 = row.try_get("config_version").map_err(database_error)?;
-        let now = Utc::now();
-        let metadata = json!({
-            "drift_until": (now + ChronoDuration::days(90)).to_rfc3339(),
-            "claimed_credential_id": credential_id,
-        });
-        let logical_key = format!("application:{application_id}");
-        sqlx::query(
-            "INSERT INTO issuance_service.canvas_evidence_sync_targets
-                 (id, organization_id, platform_id, binding_id, target_type,
-                  logical_key, application_id, enabled, schedule_seconds,
-                  next_run_at, config_version, metadata, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 'issued_drift', $5, $6, true, 21600,
-                     $7, $8, $9, $10, $10)
-             ON CONFLICT (organization_id, logical_key) DO UPDATE SET
-                 platform_id = EXCLUDED.platform_id,
-                 binding_id = EXCLUDED.binding_id,
-                 target_type = 'issued_drift',
-                 application_id = EXCLUDED.application_id,
-                 enabled = true,
-                 schedule_seconds = 21600,
-                 next_run_at = EXCLUDED.next_run_at,
-                 config_version = EXCLUDED.config_version,
-                 metadata = (
-                     COALESCE(canvas_evidence_sync_targets.metadata, '{}'::json)::jsonb
-                     || EXCLUDED.metadata::jsonb
-                 )::json,
-                 updated_at = EXCLUDED.updated_at",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(organization_id)
-        .bind(platform_id)
-        .bind(binding_id)
-        .bind(logical_key)
-        .bind(application_id)
-        .bind(now + ChronoDuration::hours(6))
-        .bind(config_version)
-        .bind(metadata)
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(database_error)?;
-        Ok(())
     }
 
     async fn finalize_renewal(
@@ -569,13 +485,9 @@ impl PostgresCredentialLifecycle {
             "wallet",
             "delivered",
             None,
-            None,
             json!({"protocol":"oid4vci","requested_format":response_format}),
         )
         .await?;
-        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
-            self.record_canvas_delivery(transaction, credential).await?;
-        }
         Ok(())
     }
 
@@ -640,16 +552,12 @@ impl PostgresCredentialLifecycle {
         .await
         .map_err(database_error)?;
 
-        if transaction.delivery_mode == "wallet_plus_canvas_mirror" {
-            self.record_canvas_delivery(transaction, credential).await?;
-        }
         self.upsert_delivery(
             &delivery_id,
             transaction,
             credential,
             "didcomm_v2",
             "delivered",
-            None,
             None,
             json!({
                 "protocol": "didcomm_v2",
@@ -669,16 +577,15 @@ impl PostgresCredentialLifecycle {
         credential: &IssuedCredential,
         target: &str,
         status: &str,
-        canvas_account_id: Option<&str>,
         last_error: Option<&str>,
         metadata: Value,
     ) -> Result<(), CredentialIssuanceError> {
         let updated = sqlx::query(
             "INSERT INTO issuance_service.credential_delivery_records
                  (id, credential_id, transaction_id, organization_id, delivery_target,
-                  delivery_mode, status, canvas_account_id, last_error, metadata,
+                  delivery_mode, status, last_error, metadata,
                   created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
                      clock_timestamp(), clock_timestamp())
              ON CONFLICT (id) DO UPDATE SET
                  credential_id = EXCLUDED.credential_id,
@@ -687,7 +594,6 @@ impl PostgresCredentialLifecycle {
                  delivery_target = EXCLUDED.delivery_target,
                  delivery_mode = EXCLUDED.delivery_mode,
                  status = EXCLUDED.status,
-                 canvas_account_id = EXCLUDED.canvas_account_id,
                  last_error = EXCLUDED.last_error,
                  metadata = CASE
                       WHEN EXCLUDED.delivery_target = 'didcomm_v2'
@@ -708,7 +614,6 @@ impl PostgresCredentialLifecycle {
         .bind(target)
         .bind(&transaction.delivery_mode)
         .bind(status)
-        .bind(canvas_account_id)
         .bind(last_error)
         .bind(metadata)
         .execute(&self.pool)
@@ -719,158 +624,6 @@ impl PostgresCredentialLifecycle {
         }
         Ok(())
     }
-
-    async fn record_canvas_delivery(
-        &self,
-        transaction: &CredentialTransaction,
-        credential: &IssuedCredential,
-    ) -> Result<(), CredentialIssuanceError> {
-        let application = if let Some(application_id) = transaction.application_id.as_deref() {
-            sqlx::query_scalar::<_, Value>(
-                "SELECT integration_context FROM issuance_service.applications
-                 WHERE id = $1 AND organization_id = $2",
-            )
-            .bind(application_id)
-            .bind(&transaction.organization_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(database_error)?
-        } else {
-            None
-        };
-        let canvas = application
-            .as_ref()
-            .and_then(|value| value.get("canvas"))
-            .and_then(Value::as_object);
-        let binding_id = canvas
-            .and_then(|value| value.get("canvas_program_binding_id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let mut metadata = canvas_delivery_metadata(canvas);
-        let flags = metadata
-            .get("canvas_feature_flags")
-            .and_then(Value::as_object);
-        let publish_enabled = flags.is_none_or(Map::is_empty)
-            || flags.and_then(|flags| flags.get("enable_canvas_mirror_publish"))
-                == Some(&Value::Bool(true));
-        let (enabled, canvas_account_id, error) = if !publish_enabled {
-            (
-                false,
-                None,
-                Some("Canvas mirror publish is disabled by deployment profile".to_owned()),
-            )
-        } else if let Some(binding_id) = binding_id {
-            let row = sqlx::query(
-                "SELECT binding.id, binding.enabled AS binding_enabled,
-                        binding.canvas_credentials,
-                        binding.platform_id AS binding_platform_id,
-                        platform.id AS platform_id,
-                        platform.enabled AS platform_enabled, platform.canvas_account_id
-                 FROM issuance_service.canvas_program_bindings AS binding
-                 LEFT JOIN issuance_service.canvas_platforms AS platform
-                   ON platform.id = binding.platform_id
-                  AND platform.organization_id = binding.organization_id
-                 WHERE binding.id = $1 AND binding.organization_id = $2",
-            )
-            .bind(binding_id)
-            .bind(&transaction.organization_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(database_error)?;
-            match row {
-                None => (
-                    false,
-                    None,
-                    Some(format!("Canvas program binding {binding_id} was not found")),
-                ),
-                Some(row) if !row.try_get::<bool, _>("binding_enabled").unwrap_or(false) => (
-                    false,
-                    None,
-                    Some(format!("Canvas program binding {binding_id} is disabled")),
-                ),
-                Some(row) => {
-                    let binding_platform_id: String =
-                        row.try_get("binding_platform_id").map_err(database_error)?;
-                    let platform_id = row
-                        .try_get::<Option<String>, _>("platform_id")
-                        .map_err(database_error)?;
-                    let account = row
-                        .try_get::<Option<String>, _>("canvas_account_id")
-                        .map_err(database_error)?;
-                    if platform_id.is_none() {
-                        (
-                            false,
-                            None,
-                            Some(format!(
-                                "Canvas platform {binding_platform_id} was not found"
-                            )),
-                        )
-                    } else if !row.try_get::<bool, _>("platform_enabled").unwrap_or(false) {
-                        (
-                            false,
-                            account,
-                            Some(format!(
-                                "Canvas platform {} is disabled",
-                                platform_id.as_deref().unwrap_or_default()
-                            )),
-                        )
-                    } else {
-                        metadata["canvas_platform_id"] =
-                            Value::String(platform_id.unwrap_or_default());
-                        metadata["canvas_program_binding_id"] =
-                            Value::String(binding_id.to_owned());
-                        let credentials: Value =
-                            row.try_get("canvas_credentials").map_err(database_error)?;
-                        if credentials
-                            .as_object()
-                            .is_some_and(|value| !value.is_empty())
-                        {
-                            metadata["canvas_credentials"] = credentials;
-                        }
-                        (true, account, None)
-                    }
-                }
-            }
-        } else {
-            (
-                false,
-                None,
-                Some(
-                    "Canvas mirroring requested but no canvas_program_binding_id was provided"
-                        .to_owned(),
-                ),
-            )
-        };
-        metadata["application_id"] = transaction
-            .application_id
-            .as_ref()
-            .map_or(Value::Null, |value| Value::String(value.clone()));
-        metadata["source_delivery_target"] = Value::String("wallet".to_owned());
-        metadata["queue"] = Value::String("canvas_credentials_mirror".to_owned());
-        metadata["delivery_destination_id"] =
-            Value::String("dd-canvas-credentials-institutional".to_owned());
-        metadata["delivery_destination_mode"] = Value::String("organization_mirror".to_owned());
-        metadata["delivery_destination_provider"] = Value::String("canvas_credentials".to_owned());
-        if !publish_enabled {
-            metadata["canvas_feature_gate_blocked"] = Value::Bool(true);
-            metadata["canvas_feature_gate"] =
-                Value::String("enable_canvas_mirror_publish".to_owned());
-            metadata["retryable"] = Value::Bool(false);
-        }
-        let id = delivery_record_id(&credential.id, "canvas_credentials", binding_id);
-        self.upsert_delivery(
-            &id,
-            transaction,
-            credential,
-            "canvas_credentials",
-            if enabled { "pending" } else { "failed" },
-            canvas_account_id.as_deref(),
-            error.as_deref(),
-            metadata,
-        )
-        .await
-    }
 }
 
 #[async_trait]
@@ -878,12 +631,28 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
     async fn ensure_ready(
         &self,
         transaction: &CredentialTransaction,
-        issuer: &IssuerContext,
+        _issuer: &IssuerContext,
     ) -> Result<(), CredentialIssuanceError> {
-        self.canvas_guard
-            .ensure_ready(transaction, issuer)
-            .await
-            .map(|_| ())
+        let Some(application_id) = transaction.application_id.as_deref() else {
+            return Ok(());
+        };
+        let application = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT jsonb_build_object('organization_id', organization_id,
+             'status', status, 'issuance_transaction_id', issuance_transaction_id,
+             'integration_context', integration_context)
+             FROM issuance_service.applications WHERE id = $1",
+        )
+        .bind(application_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
+        if application.as_ref().is_some_and(|application| {
+            application_issuance_context_matches(application, transaction)
+        }) {
+            Ok(())
+        } else {
+            Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+        }
     }
 
     async fn allocate_status(
@@ -903,8 +672,6 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
         credential: &IssuedCredential,
         response_format: &str,
     ) -> Result<(), CredentialIssuanceError> {
-        self.record_canvas_drift(transaction, &credential.id)
-            .await?;
         self.finalize_renewal(transaction, credential).await?;
         self.record_event_and_deliveries(transaction, credential, response_format)
             .await
@@ -917,8 +684,6 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
         service_endpoint: &str,
         message_id: &str,
     ) -> Result<(), CredentialIssuanceError> {
-        self.record_canvas_drift(transaction, &credential.id)
-            .await?;
         self.finalize_renewal(transaction, credential).await?;
         self.record_didcomm_event_and_deliveries(
             transaction,
@@ -928,49 +693,6 @@ impl CredentialLifecycle for PostgresCredentialLifecycle {
         )
         .await
     }
-}
-
-fn canvas_delivery_metadata(canvas: Option<&Map<String, Value>>) -> Value {
-    let mut metadata = Map::new();
-    let Some(canvas) = canvas else {
-        return Value::Object(metadata);
-    };
-    for (source, target) in [
-        ("canvas_platform_id", "canvas_platform_id"),
-        ("canvas_program_binding_id", "canvas_program_binding_id"),
-        ("deployment_profile_id", "deployment_profile_id"),
-        ("delivery_mode", "canvas_binding_delivery_mode"),
-    ] {
-        if let Some(value) = canvas
-            .get(source)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            metadata.insert(target.to_owned(), Value::String(value.to_owned()));
-        }
-    }
-    if let Some(flags) = canvas.get("feature_flags").and_then(Value::as_object) {
-        let allowed = [
-            "enable_canvas_evidence",
-            "enable_canvas_lti",
-            "enable_canvas_mirror_publish",
-            "enable_canvas_mirror_ops",
-            "enable_canvas_deep_linking",
-            "enable_canvas_ags",
-            "enable_canvas_nrps",
-            "enable_background_awards",
-        ];
-        let normalized = flags
-            .iter()
-            .filter(|(key, _)| allowed.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), Value::Bool(value.as_bool().unwrap_or(false))))
-            .collect::<Map<_, _>>();
-        if !normalized.is_empty() {
-            metadata.insert("canvas_feature_flags".to_owned(), Value::Object(normalized));
-        }
-    }
-    Value::Object(metadata)
 }
 
 pub(crate) fn delivery_record_id(
@@ -1003,6 +725,22 @@ fn lifecycle_error(message: impl Into<String>) -> CredentialIssuanceError {
     CredentialIssuanceError::LifecycleUnavailable(message.into())
 }
 
+fn application_issuance_context_matches(
+    application: &serde_json::Value,
+    transaction: &CredentialTransaction,
+) -> bool {
+    application["organization_id"].as_str() == Some(transaction.organization_id.as_str())
+        && application["status"].as_str() == Some("approved")
+        && application["issuance_transaction_id"].as_str() == Some(transaction.id.as_str())
+        && application["integration_context"]
+            .as_object()
+            .is_some_and(|context| {
+                context
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
@@ -1013,6 +751,7 @@ mod tests {
         routing::post,
         Json, Router,
     };
+    use chrono::Utc;
     use serde_json::{json, Map, Value};
     use tokio::sync::Mutex;
 
@@ -1286,5 +1025,34 @@ mod tests {
             );
         }
         server.abort();
+    }
+    #[test]
+    fn application_signing_requires_current_platform_authority() {
+        let transaction = transaction();
+        let valid = json!({
+            "organization_id": transaction.organization_id,
+            "status": "approved",
+            "issuance_transaction_id": transaction.id,
+            "integration_context": {"delivery_mode": "wallet_only"}
+        });
+        assert!(super::application_issuance_context_matches(
+            &valid,
+            &transaction
+        ));
+        for (key, value) in [
+            ("organization_id", json!("other-tenant")),
+            ("status", json!("pending")),
+            ("issuance_transaction_id", json!("other-transaction")),
+            ("integration_context", json!({"canvas": {"eligible": true}})),
+            ("integration_context", json!({"unknown_provider": {}})),
+            ("integration_context", json!(null)),
+        ] {
+            let mut rejected = valid.clone();
+            rejected[key] = value;
+            assert!(
+                !super::application_issuance_context_matches(&rejected, &transaction),
+                "{key}"
+            );
+        }
     }
 }
