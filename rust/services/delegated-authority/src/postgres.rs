@@ -26,6 +26,12 @@ const MIGRATIONS: &[(i32, &str)] = &[
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;
 
+// These tests share a schema and exercise table-wide TRUNCATE guards. Keep
+// those DDL locks separate from other tests' FK checks; each test still runs
+// its own concurrent compare-and-swap operations without serialization.
+#[cfg(test)]
+pub(crate) static POSTGRES_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Clone)]
 pub struct PgDelegationGrantRepository {
     pool: PgPool,
@@ -401,6 +407,7 @@ mod tests {
         let Ok(database_url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
             return;
         };
+        let _test_guard = POSTGRES_TEST_LOCK.lock().await;
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .connect(&database_url)
@@ -615,8 +622,11 @@ mod tests {
             let mut transaction = pool.begin().await.unwrap();
             let result = sqlx::query(sql).execute(&mut *transaction).await;
             transaction.rollback().await.unwrap();
-            assert!(matches!(result, Err(sqlx::Error::Database(error))
-                if error.code().as_deref() == Some("P0001")));
+            assert!(
+                matches!(&result, Err(sqlx::Error::Database(error))
+                    if error.code().as_deref() == Some("P0001")),
+                "unexpected TRUNCATE guard result for {sql}: {result:?}"
+            );
         }
 
         // Provision a temporary least-privilege runtime role and its fixtures
@@ -730,6 +740,7 @@ mod tests {
         let Ok(url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
             return;
         };
+        let _test_guard = POSTGRES_TEST_LOCK.lock().await;
         let pool = PgPool::connect(&url).await.unwrap();
         let repository = PgDelegationGrantRepository::new(pool.clone());
         repository.migrate().await.unwrap();
@@ -812,6 +823,7 @@ mod tests {
         let Ok(url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
             return;
         };
+        let _test_guard = POSTGRES_TEST_LOCK.lock().await;
         let pool = PgPool::connect(&url).await.unwrap();
         let repository = PgDelegationGrantRepository::new(pool.clone());
         repository.migrate().await.unwrap();

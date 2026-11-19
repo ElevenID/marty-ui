@@ -6,6 +6,7 @@
 //! runtime composition, final-use replay/revision enforcement, signed receipts
 //! and public Gateway hosting remain separate qualification milestones.
 pub mod authorization;
+pub mod challenge;
 pub mod consent;
 pub mod consent_postgres;
 pub mod domain;
@@ -17,6 +18,7 @@ pub mod service;
 pub mod test_support;
 pub mod wire;
 pub use authorization::*;
+pub use challenge::*;
 pub use consent::*;
 pub use consent_postgres::*;
 pub use domain::*;

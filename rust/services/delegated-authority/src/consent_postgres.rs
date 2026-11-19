@@ -543,6 +543,7 @@ mod tests {
         let Ok(url) = std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL") else {
             return;
         };
+        let _test_guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(8)
             .connect(&url)
@@ -832,7 +833,11 @@ mod tests {
             let mut tx = pool.begin().await.unwrap();
             let result = sqlx::query(sql).execute(&mut *tx).await;
             tx.rollback().await.unwrap();
-            assert!(matches!(result, Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("P0001")));
+            assert!(
+                matches!(&result, Err(sqlx::Error::Database(error))
+                    if error.code().as_deref() == Some("P0001")),
+                "unexpected append-only guard result for {sql}: {result:?}"
+            );
         }
         pool.close().await;
     }

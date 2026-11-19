@@ -218,15 +218,24 @@ From the repository's `rust` workspace:
 ```bash
 cargo fmt --all -- --check
 cargo test --locked -p marty-delegated-authority
-cargo clippy --locked -p marty-delegated-authority --all-targets -- -D warnings
+cargo test --locked -p marty-flow --lib delegation_
+cargo test --locked -p marty-flow --test delegation_context_boundary
+cargo clippy --locked -p marty-delegated-authority -p marty-flow --all-targets -- -D warnings
 ```
 
-The PostgreSQL contract test runs when
+The delegated-authority PostgreSQL contract tests run when
 `DELEGATED_AUTHORITY_TEST_DATABASE_URL` names a dedicated disposable test database.
 A configured but unavailable database fails the test; an unset variable skips
-that database-specific test. The existing workspace contracts CI lane supplies a
-fresh database and sets this variable, so CI executes the live PostgreSQL path.
+the database-specific cases. The existing workspace contracts CI lane supplies a
+fresh database and sets this variable, so CI executes the live PostgreSQL paths.
 The test database owner must be able to create schemas and test roles.
+
+The Flow start contract uses `FLOW_POSTGRES_TEST_URL`, pointing to the dedicated
+local `marty_atomic_test` database. It takes the existing shared schema-test
+advisory lock and resets its Flow and deployment-profile fixture schemas. CI
+provides this database as well. The delegated-authority tests serialize their
+table-wide guard fixtures within the test process; competing lifecycle updates
+inside each case remain concurrent.
 
 Tests cover the pinned protocol digest, strict parsing, typed-identity rejection,
 withdrawn consent/authority, expiration during verification, evidence freshness,
@@ -237,6 +246,78 @@ complete evidence/pin substitutions, confirmation versus authority freshness,
 provider timeout, trusted-record activation and withdrawal, explicit authority
 renewal, independent producer permissions, activation lock delays, post-write
 expiry rollback and rejection when an application clock is frozen.
+
+## Trusted Flow challenge admission
+
+`DelegationChallengeIssuer` admits an exact operation into the existing Flow
+challenge lifecycle. Its caller must already authenticate the organization and
+complete typed delegate and authorize challenge creation. The request supplies
+the grant/revision and operation action, audience, resource, profile and digest;
+the issuer generates the opaque challenge ID and verifies the current active
+grant, consent, typed delegate and exact scope. Exact-operation grants must also
+match their frozen operation profile and digest. Admission creates an identity
+challenge; it does not evaluate external constraints or Cedar and cannot permit
+an operation.
+
+Key-bound grants use the immutable grant key and require no session provider.
+Session-bound grants require a configured `DelegationSessionBindingSource` that
+independently authenticates current establishment evidence. Its result must bind
+the exact organization, grant, terms digest, typed delegate, session reference,
+establishment reference and verified signing-key thumbprint. The provider must
+resolve the grant's references through its own trusted source, never fetch a
+caller-selected URI. Its deadline must bound both status-observation freshness
+and session/key lifetime. Establishment evidence must remain bound to the key it
+authenticated; the source cannot retarget an existing evidence reference to a
+replacement key. A bound-key change requires a new grant identifier and fresh
+approval in v1. No production default source is provided.
+
+Admission rechecks the grant and consent after session resolution. Each awaited
+stage checks clock ordering and deadlines; the complete admission has a
+five-second budget. The configured challenge lifetime is between 30 and 600
+seconds, shortened by grant, consent and session-evidence validity. The returned
+`DelegationChallengeAdmission` is move-only, nonserializable and has no public
+constructor or mutable binding accessor. Its debug representation omits the
+actor, operation and evidence references. Revalidation reads current evidence,
+rejects changed grant revisions or session keys, and can only shorten the
+original deadline.
+
+Flow's `FlowDelegatedVerificationStarter` accepts this sealed admission and
+trusted definition/verifier settings. It loads the existing persisted,
+version-pinned active OID4VP definition, validates its references, and reuses
+defined verification start, frozen requests, nonce generation and request-URI
+construction. It preserves the real definition ID and authenticated delegate
+attribution. No wallet request is returned until persistence succeeds. Provider
+preparation is bounded separately from the database commit, and errors retain
+the original challenge ID for reconciliation. An uncertain commit outcome must
+be reconciled against that ID rather than retried with a replacement challenge.
+
+Before persistence, Flow revalidates grant/consent/session evidence and caps the
+request expiry again. Its existing start transaction locks and compares the
+configured definition snapshot and checks fresh database time after lock
+acquisition and after writes. Expiry or changed definition rolls back the start.
+These guards protect challenge creation; they do not lock external consent or
+session owners until commit or claim instantaneous distributed revocation.
+
+The exact operation is stored in `_marty_delegation_oid4vp_v1`. The independently
+configured OID4VP verifier client ID is frozen in
+`_marty_delegation_verifier_client_id_v1`. The operation audience identifies the
+relying domain; the proof's JWT audience identifies the OID4VP verifier. They
+need not be equal. The signed nonce and private Flow binding connect the proof
+to the exact operation.
+
+Generic Flow start/upsert paths cannot install or remove these private bindings.
+The existing compare-and-swap path preserves their definition, delegate, nonce,
+verifier and frozen request while allowing request retrieval, cancellation and
+expiry. It cannot attach a successful result or complete a delegated challenge.
+The ordinary verification finalizer also rejects delegated challenges until the
+delegated final-use transaction is composed. Public context input and output
+boundaries continue to protect both reserved keys.
+
+The admission and Flow APIs are internal composition boundaries, not new public
+routes. Their tests cover cross-tenant and typed-actor substitution, evidence
+binding and freshness, concurrent revocation/withdrawal, session-key rotation,
+bounded provider work and deadlines that cannot be extended. Database tests
+also exercise trusted start, immutable bindings and rollback at expiry.
 
 ## Delegated operation evaluation boundary
 
@@ -276,9 +357,11 @@ only a Cedar observation made for the current evaluation, with at most a
 30-second validity horizon. The returned `DelegationUseEvaluation` is deliberately
 not serializable and is not a bearer permit. It retains the exact typed actor,
 action, audience, resource, operation profile/digest, constraint-evidence digest,
-grant and policy revision/digest, and the shortest verified deadline. The
-consuming operation must still atomically enforce final-use revision and replay
-reservation at its own commit boundary. Do not cache or reuse this result to
+grant and policy revision/digest, and the shortest verified deadline. Final use
+must still revalidate current grant/evidence and reserve the challenge through
+its owning service. The consuming domain must enforce replay and operation
+idempotency with its own commit and coordinate those boundaries; a remote grant
+read is not atomic with a domain write. Do not cache or reuse this result to
 authorize another operation.
 
 The MMF Cedar execution adapter is implemented; its active-policy/entity-source
@@ -313,27 +396,30 @@ exact session and establishment evidence references plus the key thumbprint
 established by that session.
 
 The challenge lookup is read-only. Evaluation is not a permit and must not
-consume the challenge prematurely. The external operation's final-use
-transaction must atomically recheck the grant revision, reserve the challenge
-once, enforce its idempotency/replay key, and commit its signed authorization
-receipt with the domain operation. The challenge ID is carried in the
-non-serializable evaluation object for that boundary. The Flow owner remains
-responsible for standard OID4VP request construction, request signing,
-nonce/session persistence, direct_post handling and its existing finalizer.
+consume the challenge prematurely. Final use still needs current grant/evidence
+checks, one-time challenge consumption, replay reservation and signed receipts.
+The challenge ID is carried in the nonserializable evaluation object for that
+integration. Atomicity can cover records participating in the same database
+transaction; it cannot be claimed for an external domain's side effects. The
+consuming domain must enforce its operation idempotency and coordinated commit
+contract. Two independently issued challenges for the same operation are not
+the same as a nonce replay. Flow retains standard OID4VP request construction,
+request signing and nonce/session persistence; its ordinary finalizer is guarded
+against completing a delegated challenge without the required integration.
 
 The challenge store is an explicit integration port, not a new parallel
 challenge database. The Flow service now provides
 `FlowDelegationOid4vpChallengeStore`, which resolves the opaque challenge ID to
 the existing tenant-scoped Flow instance, requires an active OID4VP definition
 and unfinished, unexpired session, validates its frozen request, and reads the
-typed binding from `_marty_delegation_oid4vp_v1` private Flow context. Public start
-and advance requests reject that key at every nesting level; public results
-remove it recursively. It reuses the Flow nonce/session lifecycle; no second
-nonce table or request URI scheme is introduced. Flow start still needs to
-populate the snapshot from trusted active-grant/session configuration, and the
-final-use receipt/operation transaction remains a separate integration gate. A
-mock or in-memory challenge store is test-only and cannot qualify production
-replay protection.
+typed binding and verifier pin from private Flow context. Public start and
+advance requests reject reserved keys at every nesting level; public results
+remove them recursively. It reuses the Flow nonce/session lifecycle; no second
+nonce table or request URI scheme is introduced. The trusted starter described
+above populates the snapshot from an authenticated admission. Production session
+evidence composition and the final-use receipt/operation contract remain
+separate integration gates. A mock or in-memory challenge store is test-only and
+cannot qualify production replay protection.
 
 Regression tests use public-only signed Ed25519 JWT VP vectors with the actual
 pinned Marty verifier. They cover valid key/session proofs, wrong keys, changed
@@ -350,13 +436,16 @@ changes.
   authenticated trusted approval surface and current grantor-authority source.
   This requires own-session confirmation, fresh challenges and organization
   action authorization; database records alone do not establish those guarantees.
-- Connect Flow start to trusted delegation/session configuration and verify the
-  session-establishment evidence that supplies session-bound signing keys.
+- Compose the implemented Flow starter with authenticated organization/action
+  authorization and a qualified session-establishment source for session-bound
+  signing keys. Qualify request retrieval and proof submission through that
+  composed runtime.
 - Implement configured external-authority/status and external-constraint sources,
   plus the consuming domain's active Cedar policy and typed entity source.
-- Enforce final-use revision, challenge consumption and replay/idempotency
-  reservation with signed receipts at the consuming operation's commit boundary.
-  A read-only evaluation or challenge lookup cannot provide those guarantees.
+- Integrate current grant/evidence checks, challenge consumption, replay
+  reservation and signed receipts into the delegated final-use path. Coordinate
+  this with the consuming domain's own operation idempotency and commit contract;
+  a read-only evaluation cannot make an external side effect atomic.
 - Add HTTP/gRPC hosting, public Gateway contracts, organization action
   authorization, attributed security audit delivery and capability discovery.
 - Qualify deployment and end-to-end behavior across the relevant services.

@@ -24,6 +24,7 @@ use crate::{
 const MAX_CHALLENGE_BYTES: usize = 256;
 const MIN_NONCE_CHARS: usize = 22;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
+const MAX_VERIFIER_CLIENT_ID_BYTES: usize = 2_048;
 
 /// Reserved Flow context key. Public Flow start/update inputs reject the
 /// `_marty_` prefix, and public projections remove it recursively.
@@ -105,6 +106,8 @@ impl DelegationFlowContextV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DelegationOid4vpChallenge {
     pub binding: DelegationFlowContextV1,
+    /// Flow's configured OID4VP verifier, separate from the operation audience.
+    pub verifier_client_id: String,
     /// OID4VP nonce from the signed authorization request.
     pub nonce: String,
     pub expires_at: DateTime<Utc>,
@@ -181,7 +184,7 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
         validate_challenge(grant, request, &challenge, now)?;
 
         let evaluated_at = now.timestamp();
-        let verified = VerificationEngine::new(request.audience.clone(), "")
+        let verified = VerificationEngine::new(challenge.verifier_client_id.clone(), "")
             .verify_authenticated_vp_proof_at(compact_vp, &challenge.nonce, evaluated_at)
             .map_err(|_| DelegateProofError)?;
 
@@ -276,6 +279,13 @@ fn validate_challenge(
         || binding.resource != request.resource
         || binding.operation_profile != request.operation_profile
         || binding.operation_digest != request.operation_digest
+        // OID4VP identifiers such as decentralized_identifier:did:... are not
+        // RFC 3986 URI schemes. Flow's canonical identity constructor owns
+        // their format and authority. This trusted value remains opaque here;
+        // Core compares it exactly to the authenticated JWT audience.
+        || challenge.verifier_client_id.is_empty()
+        || challenge.verifier_client_id.len() > MAX_VERIFIER_CLIENT_ID_BYTES
+        || !challenge.verifier_client_id.bytes().all(|byte| byte.is_ascii_graphic())
         || challenge.expires_at <= now
         || challenge.nonce.len() > MAX_CHALLENGE_BYTES
         || challenge.nonce.chars().count() < MIN_NONCE_CHARS
@@ -384,6 +394,7 @@ mod tests {
                 establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
                 session_key_thumbprint: Some(vectors["signer_thumbprint"].as_str().unwrap().into()),
             },
+            verifier_client_id: request.audience.clone(),
             nonce: vectors["nonce"].as_str().unwrap().into(),
             expires_at: now + Duration::minutes(2),
         };
@@ -576,11 +587,34 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn protocol_verifier_audience_is_independent_from_the_operation_domain() {
+        let (mut grant, mut request, mut challenge, now) = fixture();
+        let operation_audience = "https://consuming-domain.example";
+        grant.terms.audiences = vec![operation_audience.into()];
+        grant.terms_digest = grant.calculate_terms_digest().unwrap();
+        request.audience = operation_audience.into();
+        challenge.binding.audience = operation_audience.into();
+        assert_ne!(challenge.binding.audience, challenge.verifier_client_id);
+        assert!(verifier(challenge.clone())
+            .verify(&grant, &request, now)
+            .await
+            .is_ok());
+        challenge.verifier_client_id = "https://another-verifier.example".into();
+        assert!(verifier(challenge)
+            .verify(&grant, &request, now)
+            .await
+            .is_err());
+    }
+
     #[test]
     fn challenge_requires_live_nonce_and_exact_session_evidence() {
         let (grant, request, challenge, now) = fixture();
         assert!(validate_challenge(&grant, &request, &challenge, now).is_ok());
         let mutations: &[fn(&mut DelegationOid4vpChallenge)] = &[
+            |challenge| challenge.verifier_client_id = String::new(),
+            |challenge| challenge.verifier_client_id = "verifier with whitespace".into(),
+            |challenge| challenge.verifier_client_id = "x".repeat(MAX_VERIFIER_CLIENT_ID_BYTES + 1),
             |challenge| challenge.nonce = "too-short".into(),
             |challenge| challenge.nonce = "x".repeat(MAX_CHALLENGE_BYTES + 1),
             |challenge| challenge.nonce = "non-ascii-nonce-établissement".into(),

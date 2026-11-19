@@ -445,6 +445,7 @@ impl PostgresFlowRepository {
         &self,
         instance: &FlowInstanceRecord,
     ) -> Result<bool, RepositoryError> {
+        reject_delegation_context(instance)?;
         validate_instance_record(instance)?;
         let result = sqlx::query(
             "INSERT INTO flow_service.flow_instances (id, flow_definition_id, organization_id, \
@@ -460,7 +461,9 @@ impl PostgresFlowRepository {
              external_reference=EXCLUDED.external_reference, started_at=EXCLUDED.started_at, \
              completed_at=EXCLUDED.completed_at, expires_at=EXCLUDED.expires_at, \
              result=EXCLUDED.result, error=EXCLUDED.error, updated_at=EXCLUDED.updated_at \
-             WHERE flow_instances.status NOT IN ('completed','failed','cancelled','expired')",
+             WHERE flow_instances.status NOT IN ('completed','failed','cancelled','expired') \
+             AND NOT (flow_instances.context::jsonb ? '_marty_delegation_oid4vp_v1') \
+             AND NOT (flow_instances.context::jsonb ? '_marty_delegation_verifier_client_id_v1')",
         )
         .bind(&instance.id)
         .bind(&instance.flow_definition_id)
@@ -494,8 +497,30 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         artifact: Option<&FlowArtifactRecord>,
     ) -> Result<bool, RepositoryError> {
-        self.save_started_instance_with_intent(instance, artifact, None, None)
+        self.save_started_instance_with_intent(instance, artifact, None, None, None)
             .await
+    }
+
+    /// Only the sealed delegated preparation may install a private challenge
+    /// binding. Re-resolve evidence before entering this transaction, then keep
+    /// the configured definition stable and enforce its deadline at the database
+    /// clock after lock acquisition and after all writes.
+    pub(crate) async fn save_delegated_verification_start(
+        &self,
+        prepared: &mut crate::delegation_start::PreparedDelegatedVerificationStart,
+    ) -> Result<bool, RepositoryError> {
+        prepared
+            .revalidate()
+            .await
+            .map_err(|_| record("delegation admission"))?;
+        self.save_started_instance_with_intent(
+            prepared.instance(),
+            None,
+            None,
+            None,
+            Some(prepared),
+        )
+        .await
     }
 
     pub async fn save_started_physical_instance(
@@ -507,8 +532,14 @@ impl PostgresFlowRepository {
         if !valid_sha256(key_hash) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
-        self.save_started_instance_with_intent(instance, None, Some((key_hash, claim_token)), None)
-            .await
+        self.save_started_instance_with_intent(
+            instance,
+            None,
+            Some((key_hash, claim_token)),
+            None,
+            None,
+        )
+        .await
     }
 
     pub async fn save_public_verification_start(
@@ -523,7 +554,7 @@ impl PostgresFlowRepository {
         {
             return Err(record("public_verification_session"));
         }
-        self.save_started_instance_with_intent(instance, None, None, Some(limits))
+        self.save_started_instance_with_intent(instance, None, None, Some(limits), None)
             .await
     }
 
@@ -533,7 +564,13 @@ impl PostgresFlowRepository {
         artifact: Option<&FlowArtifactRecord>,
         physical_intent: Option<(&str, Uuid)>,
         public_limits: Option<crate::PublicVerificationLimits>,
+        delegated: Option<&crate::delegation_start::PreparedDelegatedVerificationStart>,
     ) -> Result<bool, RepositoryError> {
+        if delegated.is_none() {
+            reject_delegation_context(instance)?;
+        } else if artifact.is_some() || physical_intent.is_some() || public_limits.is_some() {
+            return Err(record("delegation start composition"));
+        }
         validate_instance_record(instance)?;
         if let Some(artifact) = artifact {
             validate_artifact_record(artifact)?;
@@ -542,6 +579,31 @@ impl PostgresFlowRepository {
             }
         }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
+        if let Some(prepared) = delegated {
+            let definition = sqlx::query(
+                "SELECT * FROM flow_service.flow_definitions \
+                 WHERE id=$1 AND organization_id=$2 FOR SHARE",
+            )
+            .bind(&prepared.definition().id)
+            .bind(&prepared.definition().organization_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?
+            .map(|row| definition_from_row(&row))
+            .transpose()?;
+            if definition.as_ref() != Some(prepared.definition()) {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(record("delegation definition changed"));
+            }
+            let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(storage)?;
+            if prepared.check_live_at(now).is_err() {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(record("delegation admission expired"));
+            }
+        }
         if let Some(limits) = public_limits {
             // Serialize quota check and insertion across every service replica.
             // The lock is tenant-wide, never derived from visitor input.
@@ -691,6 +753,16 @@ impl PostgresFlowRepository {
                 return Ok(false);
             }
         }
+        if let Some(prepared) = delegated {
+            let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(storage)?;
+            if prepared.check_live_at(now).is_err() {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(record("delegation admission expired"));
+            }
+        }
         transaction.commit().await.map_err(storage)?;
         Ok(true)
     }
@@ -708,6 +780,7 @@ impl PostgresFlowRepository {
             return Err(RepositoryError::InvalidReplayDigest);
         }
         for candidate in planned {
+            reject_delegation_context(&candidate.instance)?;
             validate_instance_record(&candidate.instance)?;
             if candidate
                 .instance
@@ -860,6 +933,14 @@ impl PostgresFlowRepository {
         expected_updated_at: DateTime<Utc>,
     ) -> Result<bool, RepositoryError> {
         validate_instance_record(instance)?;
+        if instance
+            .context
+            .get(marty_delegated_authority::DELEGATION_FLOW_CONTEXT_KEY)
+            .is_some()
+        {
+            crate::delegation_start::validate_delegation_snapshot(instance)
+                .map_err(|_| record("delegation binding"))?;
+        }
         if !matches!(
             expected_status,
             FlowInstanceStatus::InProgress | FlowInstanceStatus::AwaitingWallet
@@ -874,7 +955,25 @@ impl PostgresFlowRepository {
              external_reference=$10, application_flow_key_hash=$11, started_at=$12, \
              completed_at=$13, expires_at=$14, result=$15, error=$16, updated_at=$17 \
              WHERE id=$18 AND status=$19 AND updated_at=$20 \
-             AND status NOT IN ('completed','failed','cancelled','expired')",
+             AND status NOT IN ('completed','failed','cancelled','expired') \
+             AND (context::jsonb->'_marty_delegation_oid4vp_v1') IS NOT DISTINCT FROM \
+                 ($5::jsonb->'_marty_delegation_oid4vp_v1') \
+             AND (context::jsonb->'_marty_delegation_verifier_client_id_v1') IS NOT DISTINCT FROM \
+                 ($5::jsonb->'_marty_delegation_verifier_client_id_v1') \
+             AND (NOT (context::jsonb ? '_marty_delegation_oid4vp_v1') OR ( \
+                 flow_definition_id=$1 AND organization_id=$2 AND expires_at >= $14 \
+                 AND subject_id IS NOT DISTINCT FROM $8 AND subject_type=$9 \
+                 AND started_at IS NOT DISTINCT FROM $12 \
+                 AND application_flow_key_hash IS NOT DISTINCT FROM $11 \
+                 AND $3 IN ('awaiting_wallet','in_progress','cancelled','expired') AND $15 IS NULL \
+                 AND (context::jsonb->'nonce') IS NOT DISTINCT FROM ($5::jsonb->'nonce') \
+                 AND (context::jsonb->'oid4vp_client_id') IS NOT DISTINCT FROM ($5::jsonb->'oid4vp_client_id') \
+                 AND (context::jsonb->'_marty_presentation_request_v1') IS NOT DISTINCT FROM \
+                     ($5::jsonb->'_marty_presentation_request_v1') \
+                 AND (context::jsonb->'_marty_verification_definition') IS NOT DISTINCT FROM \
+                     ($5::jsonb->'_marty_verification_definition') \
+                 AND (context::jsonb->'_marty_verification_principal_id') IS NOT DISTINCT FROM \
+                     ($5::jsonb->'_marty_verification_principal_id'))) ",
         )
         .bind(&instance.flow_definition_id)
         .bind(&instance.organization_id)
@@ -911,6 +1010,7 @@ impl PostgresFlowRepository {
         expected_updated_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<bool, RepositoryError> {
+        reject_delegation_context(instance)?;
         validate_instance_record(instance)?;
         validate_artifact_record(artifact)?;
         if artifact.flow_instance_id != instance.id || instance.updated_at <= expected_updated_at {
@@ -920,6 +1020,8 @@ impl PostgresFlowRepository {
         let updated = sqlx::query(
             "UPDATE flow_service.flow_instances SET context=$1, updated_at=$2 \
              WHERE id=$3 AND updated_at=$4 AND organization_id=$5 \
+             AND NOT (context::jsonb ? '_marty_delegation_oid4vp_v1') \
+             AND NOT (context::jsonb ? '_marty_delegation_verifier_client_id_v1') \
              AND NOT (context::jsonb ? '_marty_managed_oid4vp_evidence_v2') \
              AND NOT (COALESCE(result, '{}'::json)::jsonb ?| \
                       ARRAY['verification_receipt', 'managed_policy_evidence_digest'])",
@@ -1241,6 +1343,10 @@ impl PostgresFlowRepository {
         )>,
         RepositoryError,
     > {
+        // A normal verification receipt cannot stand in for delegated Cedar,
+        // grant-revision and consuming-operation final-use authorization.
+        reject_delegation_context(instance)?;
+        reject_delegation_context(expected)?;
         if let Some(prepared) = receipt_preparation {
             validate_instance_shape(instance)?;
             prepared
@@ -1286,6 +1392,12 @@ impl PostgresFlowRepository {
         .await
         .map_err(storage)?;
         let stored = row.as_ref().map(instance_from_row).transpose()?;
+        if let Some(stored) = stored.as_ref() {
+            if reject_delegation_context(stored).is_err() {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(record("delegation final-use integration required"));
+            }
+        }
         if stored.is_none() || (receipt_preparation.is_some() && stored.as_ref() != Some(expected))
         {
             transaction.rollback().await.map_err(storage)?;
@@ -1851,6 +1963,22 @@ fn validate_instance_record(instance: &FlowInstanceRecord) -> Result<(), Reposit
         instance.result.as_ref(),
     )?;
     validate_instance_shape(instance)
+}
+
+fn reject_delegation_context(instance: &FlowInstanceRecord) -> Result<(), RepositoryError> {
+    if instance
+        .context
+        .get(marty_delegated_authority::DELEGATION_FLOW_CONTEXT_KEY)
+        .is_some()
+        || instance
+            .context
+            .get(crate::delegation_start::DELEGATION_VERIFIER_CLIENT_ID_KEY)
+            .is_some()
+    {
+        Err(record("sealed delegation admission required"))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_instance_shape(instance: &FlowInstanceRecord) -> Result<(), RepositoryError> {

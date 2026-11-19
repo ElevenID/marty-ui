@@ -2,23 +2,23 @@
 //!
 //! Reads the existing persisted Flow instance, frozen OID4VP request and
 //! private operation binding. It adds no nonce store or protocol endpoint.
-//! The authenticated Flow start path still needs to produce the private binding
-//! snapshot. The consuming final-use integration must coordinate Flow nonce
+//! The trusted delegated starter produces the private binding snapshot.
+//! Authenticated runtime composition and the consuming final-use integration
+//! must still coordinate Flow nonce
 //! consumption with grant revision and operation replay protection; reading a
 //! challenge here does not implement that transaction or authorize execution.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_delegated_authority::{
-    DelegationFlowContextV1, DelegationOid4vpChallenge, DelegationOid4vpChallengeStore,
-    DelegationOid4vpChallengeStoreError, DELEGATION_FLOW_CONTEXT_KEY,
+    DelegationOid4vpChallenge, DelegationOid4vpChallengeStore, DelegationOid4vpChallengeStoreError,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use uuid::Uuid;
 
 use crate::{
-    presentation_request::load_frozen_flow_presentation_request, DefinitionStatus,
-    FlowDefinitionRecord, FlowInstanceRecord, FlowType, PostgresFlowRepository,
+    delegation_start::validate_delegation_snapshot, DefinitionStatus, FlowDefinitionRecord,
+    FlowInstanceRecord, FlowType, PostgresFlowRepository,
 };
 
 #[derive(Clone)]
@@ -95,51 +95,35 @@ fn challenge_from_records(
     {
         return Err(unavailable());
     }
-    let expires_at = instance
+    instance
         .expires_at
         .filter(|expiry| *expiry > now)
         .ok_or_else(unavailable)?;
 
-    // Use the same frozen-request validator as normal Flow submission. This
-    // binds the nonce and query to the original saved OID4VP request.
-    let frozen = load_frozen_flow_presentation_request(instance).map_err(|_| unavailable())?;
-    let binding: DelegationFlowContextV1 = serde_json::from_value(
-        instance
-            .context
-            .get(DELEGATION_FLOW_CONTEXT_KEY)
-            .cloned()
-            .ok_or_else(unavailable)?,
-    )
-    .map_err(|_| unavailable())?;
-    binding.validate()?;
+    let challenge = validate_delegation_snapshot(instance).map_err(|_| unavailable())?;
+    let binding = &challenge.binding;
     if binding.challenge_id != challenge_id
         || binding.organization_id != organization_id
         || binding.grant_id != grant_id
-        || instance
-            .context
-            .get("oid4vp_client_id")
-            .and_then(serde_json::Value::as_str)
-            != Some(binding.audience.as_str())
     {
         return Err(unavailable());
     }
 
-    Ok(DelegationOid4vpChallenge {
-        binding,
-        nonce: frozen.nonce,
-        expires_at,
-    })
+    Ok(challenge)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;
-    use marty_delegated_authority::{Principal, PrincipalType};
+    use marty_delegated_authority::{
+        DelegationFlowContextV1, Principal, PrincipalType, DELEGATION_FLOW_CONTEXT_KEY,
+    };
     use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
     use marty_oid4vp_contract::FrozenPolicyIdentity;
     use serde_json::json;
 
+    use crate::delegation_start::DELEGATION_VERIFIER_CLIENT_ID_KEY;
     use crate::presentation_request::{
         freeze_flow_presentation_request, FROZEN_PRESENTATION_REQUEST_KEY,
     };
@@ -183,7 +167,7 @@ mod tests {
                 id: "urn:example:delegate".into(),
             },
             action: "urn:example:action:read".into(),
-            audience: "https://verifier.example".into(),
+            audience: "https://consuming-domain.example".into(),
             resource: "urn:example:resource:123".into(),
             operation_profile: "urn:example:operation:v1".into(),
             operation_digest: format!("sha256:{}", "b".repeat(64)),
@@ -213,6 +197,7 @@ mod tests {
         }))
         .unwrap();
         instance.context[DELEGATION_FLOW_CONTEXT_KEY] = serde_json::to_value(binding).unwrap();
+        instance.context[DELEGATION_VERIFIER_CLIENT_ID_KEY] = json!("https://verifier.example");
         freeze_flow_presentation_request(
             &mut instance,
             FrozenPolicyIdentity {
@@ -253,6 +238,8 @@ mod tests {
             assert_eq!(challenge.binding.challenge_id, fixture.challenge_id);
             assert_eq!(challenge.binding.grant_id, fixture.grant_id);
             assert_eq!(challenge.binding.organization_id, fixture.organization_id);
+            assert_eq!(challenge.verifier_client_id, "https://verifier.example");
+            assert_ne!(challenge.verifier_client_id, challenge.binding.audience);
             assert_eq!(
                 serde_json::to_value(&challenge.binding).unwrap(),
                 fixture.instance.context[DELEGATION_FLOW_CONTEXT_KEY]
