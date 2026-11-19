@@ -1,6 +1,31 @@
 # Repository restructuring foundation
 
-Status: destination repository bootstrap and extraction preparation; no production cutover authorized.
+Status: standalone website publication qualified; signed composition and
+application extraction preparation are in progress. Production cutover remains
+a separate gate.
+
+## Current continuation checkpoint
+
+Latest recorded evidence, November 19, 2026 (America/Denver):
+
+| Workstream | Completed evidence | Next gate |
+| --- | --- | --- |
+| Standalone website producer | Successful signed `ElevenID/website` run [`44449706828`, attempt 2](https://github.com/ElevenID/website/actions/runs/44449706828/attempts/2), source `7ec0707aa348939a0e48e6a26b24fb1af8671b9b` | Preserve this exact original release selection for composition; newer source requires a newly qualified release |
+| Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) repairs protected-main manifest admission; implementation `b2db066e` passed full CI, and queue admission correctly rejected a stale parent before merge | Complete normal CI/queue admission against the refreshed parent, then inspect the real signed composition attempt and original proof payloads |
+| Application source preparation | Separate [draft PR #2001](https://github.com/ElevenID/marty-ui/pull/2001): clean local and hosted application builds passed with the 34 audited website modules and three raw demo inputs absent | Finish composition, then admit the source-preparation batch and classify the remaining retained source/assets before independent application publication |
+
+Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
+and the exact run/artifact records in those PRs. The application rehearsal is a
+partial source boundary: generated demo projections, shared application inputs,
+assets and dependencies remain retained. The rehearsal does not qualify source
+deletion, a separate dependency installation, signed application publication or
+an actual host/OIDC journey.
+
+The bootstrap status and initial sequence below preserve the November 15
+foundation. Use the checkpoint above for the current execution stage. Actual
+host promotion, rollback/recovery and OIDC qualification remain distinct from
+publication and packaging; production changes and repository renaming require
+their later acceptance gates.
 
 ## Adopted repository names
 
@@ -29,7 +54,7 @@ Existing independently maintained backend services remain independently owned. D
 - Private subscription/commerce code remains in `subscriptions`.
 - The Canvas source split is merged into the existing [`canvas-integration`](https://github.com/ElevenID/canvas-integration) repository. Provider protocols, credentials, administration, workers and storage remain connector-owned; the public Common Gateway is its sole platform interface. Core retains canonical identity, ownership, evidence, approval, signing and audit. Existing licenses/provenance remain with their owners; production adapters and deployment/cutover qualification are separate owned TODOs, with unsupported flows disabled.
 
-## Execution status
+## Bootstrap execution status (November 15, 2026)
 
 | Workstream | Status | Next gate |
 | --- | --- | --- |
@@ -78,7 +103,7 @@ Introduce a signed product release manifest consumed by `platform`. It must iden
 
 Website and application producers should publish independently. Product composition selects already-published compatible artifacts and preserves original producer evidence. The installer verifies the complete release before deployment.
 
-## Next execution sequence
+## Original execution sequence
 
 1. Continue from the merged website route-contract foundation and its enforced `Website contracts` check. Refresh the destination branch before starting each subsequent batch.
 2. Finish website import, asset, route, build and workflow closure audit. The 79-file static observation is not a qualified export manifest.
