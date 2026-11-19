@@ -491,7 +491,8 @@ mod tests {
             verifier(challenge.clone())
                 .verify(&grant, &request, now)
                 .await
-                .unwrap(),
+                .unwrap()
+                .valid_until,
             now + Duration::seconds(90),
         );
         challenge.expires_at = now + Duration::seconds(20);
@@ -499,7 +500,8 @@ mod tests {
             verifier(challenge.clone())
                 .verify(&grant, &request, now)
                 .await
-                .unwrap(),
+                .unwrap()
+                .valid_until,
             challenge.expires_at,
         );
         challenge.binding.session_key_thumbprint = Some(format!("sha256:{}", "b".repeat(64)));
