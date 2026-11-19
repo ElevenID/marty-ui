@@ -15,8 +15,7 @@ use uuid::Uuid;
 
 use crate::{domain::valid_uri, DelegationUseEvaluation, Principal};
 
-pub const DELEGATED_DECISION_RECEIPT_PROFILE: &str =
-    "urn:marty:delegated-decision-receipt:v1";
+pub const DELEGATED_DECISION_RECEIPT_PROFILE: &str = "urn:marty:delegated-decision-receipt:v1";
 pub const DELEGATED_EVALUATION_PROFILE: &str = "urn:marty:delegated-evaluation:v1";
 pub const DELEGATED_DECISION_JWS_PURPOSE: &str = "urn:marty:delegated-decision:jws-v1";
 pub const DELEGATED_DECISION_JWS_TYP: &str = "mip-delegated-decision+jws";
@@ -293,11 +292,15 @@ impl DelegatedDecisionReceiptIssuer {
         };
         let payload_bytes = serde_json::to_vec(&payload)
             .map_err(|_| DelegatedDecisionReceiptError::InvalidEvaluation)?;
-        let key = self.signer.resolve_key(
-            evaluation.organization_id(),
-            &self.issuer,
-            DELEGATED_DECISION_JWS_PURPOSE,
-        ).await.map_err(|_| DelegatedDecisionReceiptError::SigningFailed)?;
+        let key = self
+            .signer
+            .resolve_key(
+                evaluation.organization_id(),
+                &self.issuer,
+                DELEGATED_DECISION_JWS_PURPOSE,
+            )
+            .await
+            .map_err(|_| DelegatedDecisionReceiptError::SigningFailed)?;
         if key.issuer != self.issuer
             || key.purpose != DELEGATED_DECISION_JWS_PURPOSE
             || !valid_key_id(&key.key_id)
@@ -317,18 +320,19 @@ impl DelegatedDecisionReceiptIssuer {
             URL_SAFE_NO_PAD.encode(header_bytes),
             URL_SAFE_NO_PAD.encode(&payload_bytes)
         );
-        let signature = self.signer.sign(DelegatedReceiptSigningRequest {
-            organization_id: evaluation.organization_id(),
-            key,
-            signing_input: signing_input.as_bytes().to_vec(),
-        }).await.map_err(|_| DelegatedDecisionReceiptError::SigningFailed)?;
+        let signature = self
+            .signer
+            .sign(DelegatedReceiptSigningRequest {
+                organization_id: evaluation.organization_id(),
+                key,
+                signing_input: signing_input.as_bytes().to_vec(),
+            })
+            .await
+            .map_err(|_| DelegatedDecisionReceiptError::SigningFailed)?;
         if signature.len() != 64 {
             return Err(DelegatedDecisionReceiptError::SigningFailed);
         }
-        let compact_jws = format!(
-            "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature)
-        );
+        let compact_jws = format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature));
         if compact_jws.len() > MAX_COMPACT_RECEIPT_BYTES {
             return Err(DelegatedDecisionReceiptError::TooLarge);
         }
@@ -359,8 +363,8 @@ mod tests {
     use crate::{
         authorization::{
             CedarDecision, CedarEvaluation, CedarEvaluationError, CedarEvaluationRequest,
-            DelegationCedarEvaluator, DelegationUseAuthorizer, DelegateProofError,
-            DelegateProofVerifier, ExternalConstraintVerifier, ConstraintVerificationError,
+            ConstraintVerificationError, DelegateProofError, DelegateProofVerifier,
+            DelegationCedarEvaluator, DelegationUseAuthorizer, ExternalConstraintVerifier,
             VerifiedConstraintEvidence, VerifiedDelegateProof,
         },
         test_support::pending_grant,
@@ -378,7 +382,9 @@ mod tests {
             &self,
             request: ConsentVerificationRequest<'_>,
         ) -> Result<VerifiedConsent, ConsentVerificationError> {
-            Ok(VerifiedConsent { valid_until: request.grant.terms.valid_until })
+            Ok(VerifiedConsent {
+                valid_until: request.grant.terms.valid_until,
+            })
         }
     }
 
@@ -477,18 +483,28 @@ mod tests {
                 Arc::new(FixedConsent),
                 template.authority.clone(),
                 clock.clone(),
-            ).unwrap()
+            )
+            .unwrap(),
         );
-        let pending = lifecycle.propose(template.organization_id, template.terms).await.unwrap();
+        let pending = lifecycle
+            .propose(template.organization_id, template.terms)
+            .await
+            .unwrap();
         clock.set(now + Duration::seconds(1));
-        let active = lifecycle.approve(
-            pending.organization_id, pending.id, pending.revision, &pending.terms.grantor,
-            ApprovalEvidence {
-                profile: "urn:example:approval:v1".into(),
-                evidence_ref: "urn:example:consent:1".into(),
-                authority_evidence_ref: "urn:example:authority:1".into(),
-            }
-        ).await.unwrap();
+        let active = lifecycle
+            .approve(
+                pending.organization_id,
+                pending.id,
+                pending.revision,
+                &pending.terms.grantor,
+                ApprovalEvidence {
+                    profile: "urn:example:approval:v1".into(),
+                    evidence_ref: "urn:example:consent:1".into(),
+                    authority_evidence_ref: "urn:example:authority:1".into(),
+                },
+            )
+            .await
+            .unwrap();
         let proof = Arc::new(Proof);
         let evaluator = DelegationUseAuthorizer::with_clock(
             lifecycle,
@@ -508,52 +524,88 @@ mod tests {
             resource: active.terms.resources[0].clone(),
             operation_profile: active.terms.constraints.profile.clone().unwrap(),
             operation_digest: format!("sha256:{}", "c".repeat(64)),
-            proof: vec![1,2,3],
+            proof: vec![1, 2, 3],
         };
         let evaluation = evaluator.evaluate(&request).await.unwrap();
-        let issuer = Principal { principal_type: crate::PrincipalType::Organization, id: "https://issuer.example".into() };
+        let issuer = Principal {
+            principal_type: crate::PrincipalType::Organization,
+            id: "https://issuer.example".into(),
+        };
         let signer = Arc::new(Signer {
             calls: Mutex::new(Vec::new()),
             key_id: "https://issuer.example/keys/delegated-receipt-1".into(),
         });
-        let receipt_issuer = DelegatedDecisionReceiptIssuer::new(signer.clone(), issuer.clone(), 30).unwrap();
+        let receipt_issuer =
+            DelegatedDecisionReceiptIssuer::new(signer.clone(), issuer.clone(), 30).unwrap();
         let issued_at = evaluation.evaluated_at();
         let receipt = receipt_issuer.issue(&evaluation, issued_at).await.unwrap();
         assert_eq!(receipt.payload.profile, DELEGATED_DECISION_RECEIPT_PROFILE);
         assert_eq!(receipt.payload.decision, "PERMIT");
         assert_eq!(receipt.payload.issuer.id, issuer.id);
         assert_eq!(receipt.payload.evaluation.grant.id, active.id);
-        assert_eq!(receipt.payload.evaluation.operation.request_digest, request.operation_digest);
+        assert_eq!(
+            receipt.payload.evaluation.operation.request_digest,
+            request.operation_digest
+        );
         assert_eq!(receipt.payload.evaluation.status.state, "ACTIVE");
         let domain_evidence = receipt.payload.evaluation.domain_evidence.as_ref().unwrap();
-        assert_eq!(domain_evidence.profile, active.terms.constraints.profile.clone().unwrap());
-        assert_eq!(domain_evidence.document_digest, active.terms.constraints.document_digest.clone().unwrap());
-        assert_eq!(domain_evidence.evaluator, active.terms.constraints.evaluator.clone().unwrap());
-        assert_eq!(domain_evidence.operation.request_digest, request.operation_digest);
+        assert_eq!(
+            domain_evidence.profile,
+            active.terms.constraints.profile.clone().unwrap()
+        );
+        assert_eq!(
+            domain_evidence.document_digest,
+            active.terms.constraints.document_digest.clone().unwrap()
+        );
+        assert_eq!(
+            domain_evidence.evaluator,
+            active.terms.constraints.evaluator.clone().unwrap()
+        );
+        assert_eq!(
+            domain_evidence.operation.request_digest,
+            request.operation_digest
+        );
         assert_eq!(domain_evidence.decision, "PERMIT");
         assert!(receipt.payload.expires_at <= domain_evidence.valid_until);
         assert!(receipt.payload.expires_at <= evaluation.valid_until());
         let parts: Vec<_> = receipt.compact_jws.split('.').collect();
         assert_eq!(parts.len(), 3);
-        assert_eq!(URL_SAFE_NO_PAD.decode(parts[2]).unwrap(), vec![7;64]);
+        assert_eq!(URL_SAFE_NO_PAD.decode(parts[2]).unwrap(), vec![7; 64]);
         let calls = signer.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].key.key_id, "https://issuer.example/keys/delegated-receipt-1");
+        assert_eq!(
+            calls[0].key.key_id,
+            "https://issuer.example/keys/delegated-receipt-1"
+        );
         assert_eq!(calls[0].key.purpose, DELEGATED_DECISION_JWS_PURPOSE);
-        assert!(String::from_utf8(calls[0].signing_input.clone()).unwrap().contains('.'));
-        let header: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert!(String::from_utf8(calls[0].signing_input.clone())
+            .unwrap()
+            .contains('.'));
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
         assert_eq!(header["typ"], DELEGATED_DECISION_JWS_TYP);
         assert_eq!(header["alg"], "EdDSA");
-        let payload: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
-        assert_eq!(payload["evaluation"]["challenge"], request.challenge_id.simple().to_string());
-        assert_eq!(payload["evaluation"]["subject"]["id"], active.terms.subject.id);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(
+            payload["evaluation"]["challenge"],
+            request.challenge_id.simple().to_string()
+        );
+        assert_eq!(
+            payload["evaluation"]["subject"]["id"],
+            active.terms.subject.id
+        );
     }
 
     struct TestClock(Mutex<DateTime<Utc>>);
     impl TestClock {
-        fn set(&self, now: DateTime<Utc>) { *self.0.lock().unwrap() = now; }
+        fn set(&self, now: DateTime<Utc>) {
+            *self.0.lock().unwrap() = now;
+        }
     }
     impl DelegationClock for TestClock {
-        fn now(&self) -> DateTime<Utc> { *self.0.lock().unwrap() }
+        fn now(&self) -> DateTime<Utc> {
+            *self.0.lock().unwrap()
+        }
     }
 }

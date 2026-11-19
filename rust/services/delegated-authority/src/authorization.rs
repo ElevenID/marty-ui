@@ -412,18 +412,42 @@ impl DelegationUseEvaluation {
     pub fn valid_until(&self) -> DateTime<Utc> {
         self.valid_until
     }
-    pub(crate) fn receipt_subject(&self) -> &Principal { &self.subject }
-    pub(crate) fn receipt_binding(&self) -> &crate::Binding { &self.binding }
-    pub(crate) fn receipt_approval_evidence_ref(&self) -> &str { &self.approval_evidence_ref }
-    pub(crate) fn receipt_authority_evidence_ref(&self) -> &str { &self.authority_evidence_ref }
-    pub(crate) fn receipt_authority_issuer(&self) -> &Principal { &self.authority_issuer }
-    pub(crate) fn receipt_status_evidence_ref(&self) -> &str { &self.status_evidence_ref }
-    pub(crate) fn receipt_status_checked_at(&self) -> DateTime<Utc> { self.status_checked_at }
-    pub(crate) fn receipt_status_valid_until(&self) -> DateTime<Utc> { self.status_valid_until }
-    pub(crate) fn receipt_proof_evidence_ref(&self) -> &str { &self.proof_evidence_ref }
-    pub(crate) fn receipt_proof_challenge(&self) -> &str { &self.proof_challenge }
-    pub(crate) fn receipt_proof_verified_at(&self) -> DateTime<Utc> { self.proof_verified_at }
-    pub(crate) fn receipt_proof_valid_until(&self) -> DateTime<Utc> { self.proof_valid_until }
+    pub(crate) fn receipt_subject(&self) -> &Principal {
+        &self.subject
+    }
+    pub(crate) fn receipt_binding(&self) -> &crate::Binding {
+        &self.binding
+    }
+    pub(crate) fn receipt_approval_evidence_ref(&self) -> &str {
+        &self.approval_evidence_ref
+    }
+    pub(crate) fn receipt_authority_evidence_ref(&self) -> &str {
+        &self.authority_evidence_ref
+    }
+    pub(crate) fn receipt_authority_issuer(&self) -> &Principal {
+        &self.authority_issuer
+    }
+    pub(crate) fn receipt_status_evidence_ref(&self) -> &str {
+        &self.status_evidence_ref
+    }
+    pub(crate) fn receipt_status_checked_at(&self) -> DateTime<Utc> {
+        self.status_checked_at
+    }
+    pub(crate) fn receipt_status_valid_until(&self) -> DateTime<Utc> {
+        self.status_valid_until
+    }
+    pub(crate) fn receipt_proof_evidence_ref(&self) -> &str {
+        &self.proof_evidence_ref
+    }
+    pub(crate) fn receipt_proof_challenge(&self) -> &str {
+        &self.proof_challenge
+    }
+    pub(crate) fn receipt_proof_verified_at(&self) -> DateTime<Utc> {
+        self.proof_verified_at
+    }
+    pub(crate) fn receipt_proof_valid_until(&self) -> DateTime<Utc> {
+        self.proof_valid_until
+    }
     pub(crate) fn receipt_domain_evidence(&self) -> Option<&VerifiedDomainConstraintReceipt> {
         self.domain_evidence.as_ref()
     }
@@ -544,9 +568,10 @@ impl DelegationUseAuthorizer {
         if !valid_uri(Some(&verified_proof.evidence_ref))
             || verified_proof.challenge.len() < 22
             || verified_proof.challenge.len() > 128
-            || !verified_proof.challenge.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-            })
+            || !verified_proof
+                .challenge
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             || verified_proof.verified_at < after_resolution
             || verified_proof.verified_at > after_proof
             || verified_proof.valid_until <= after_proof
@@ -596,11 +621,23 @@ impl DelegationUseAuthorizer {
                         return Err(DelegationUseError::ConstraintNotVerified);
                     }
                     domain_evidence = Some(VerifiedDomainConstraintReceipt {
-                        evaluator: grant.terms.constraints.evaluator.clone()
+                        evaluator: grant
+                            .terms
+                            .constraints
+                            .evaluator
+                            .clone()
                             .ok_or(DelegationUseError::ConstraintNotVerified)?,
-                        profile: grant.terms.constraints.profile.clone()
+                        profile: grant
+                            .terms
+                            .constraints
+                            .profile
+                            .clone()
                             .ok_or(DelegationUseError::ConstraintNotVerified)?,
-                        document_digest: grant.terms.constraints.document_digest.clone()
+                        document_digest: grant
+                            .terms
+                            .constraints
+                            .document_digest
+                            .clone()
                             .ok_or(DelegationUseError::ConstraintNotVerified)?,
                         checked_at: verified.checked_at,
                         valid_until: verified.valid_until,
@@ -669,7 +706,10 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
-        let approval = grant.approval.as_ref().ok_or(DelegationUseError::Unavailable)?;
+        let approval = grant
+            .approval
+            .as_ref()
+            .ok_or(DelegationUseError::Unavailable)?;
         if approval.grant_id != grant.id || approval.terms_digest != grant.terms_digest {
             return Err(DelegationUseError::Unavailable);
         }
