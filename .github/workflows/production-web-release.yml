@@ -42,11 +42,16 @@ on:
         required: false
         type: string
 
+  push:
+    branches: [main]
+    paths:
+      - .github/release-inputs/website-composition.json
+
 permissions:
   contents: read
 
 concurrency:
-  group: production-web-release-${{ inputs.mode || 'combined' }}
+  group: production-web-release-${{ inputs.mode || (github.event_name == 'push' && 'compose' || 'combined') }}
   cancel-in-progress: false
 
 env:
