@@ -101,7 +101,14 @@ EXTERNAL_OBSERVATION_CONTRACT_TEST=synthetic-local-only \
 - Explicit policy admission for producer-attested observations; receipts never
   grant VERIFIED status, approval, signing or issuance on their own.
 - Real Gateway key/tenant/revocation/audit/idempotency qualification, then the
-  isolated OB3 flow and network-denial checks before switching Canvas workers.
+  isolated OB3 flow and network-denial checks before enabling a connector deployment.
 
-The existing Canvas worker, React UI, core policy transitions, startup migration
-list, rootless Docker, OpenBao and live deployments are unchanged.
+Canvas workers and provider-specific React UI have been removed from the platform
+source. Their protocol, administration and persistence ownership belongs to
+[`canvas-integration`](https://github.com/ElevenID/canvas-integration), with the
+public Gateway as the sole platform integration point. This journal remains a
+platform-owned candidate subject to the activation gates above.
+
+Installed pre-split deployments still need separately qualified worker retirement
+and cutover. Source removal does not establish that deployment migration, change
+core policy decisions, or activate this journal's startup migrations.

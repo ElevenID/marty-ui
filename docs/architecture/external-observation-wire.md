@@ -99,4 +99,11 @@ scope, revocation, idempotency and audit behavior through that actual route.
 
 A receipt remains an unsigned producer attestation. Explicit evidence-policy
 admission and isolated OB3/network-denial acceptance are still required before
-switching the Canvas worker or deleting its old implementation.
+enabling provider observations through the public Gateway.
+
+The old Canvas worker and provider UI implementation have already been retired
+from platform source. Provider behavior belongs to
+[`canvas-integration`](https://github.com/ElevenID/canvas-integration); this
+platform-owned wire adapter is not a private integration surface for that repo.
+Installed legacy worker retirement and production connector cutover remain
+separate, owned deployment TODOs.
