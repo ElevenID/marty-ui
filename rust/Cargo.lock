@@ -4321,6 +4321,7 @@ dependencies = [
  "http 1.5.0",
  "marty-api-key-policy",
  "marty-crypto",
+ "marty-delegated-authority",
  "marty-didcomm",
  "marty-iso18013",
  "marty-jwt-vc-issuance",

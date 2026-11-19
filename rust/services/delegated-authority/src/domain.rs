@@ -341,9 +341,9 @@ fn valid_key_thumbprint(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         value.len() == 50
             && value.starts_with("sha256:")
-            && value[7..].bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-            })
+            && value[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     })
 }
 

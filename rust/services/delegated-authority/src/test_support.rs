@@ -272,8 +272,7 @@ fn key_binding_thumbprints_use_rfc7638_base64url_encoding() {
     grant.terms_digest = grant.calculate_terms_digest().unwrap();
     assert!(grant.validate().is_ok());
 
-    grant.terms.binding.key_thumbprint =
-        Some(format!("sha256:{}", "a".repeat(64)));
+    grant.terms.binding.key_thumbprint = Some(format!("sha256:{}", "a".repeat(64)));
     grant.terms_digest = grant.calculate_terms_digest().unwrap();
     assert_eq!(
         grant.terms.validate(),

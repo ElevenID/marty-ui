@@ -327,8 +327,13 @@ responsible for standard OID4VP request construction, request signing,
 nonce/session persistence, direct_post handling and its existing finalizer.
 
 The challenge store is an explicit integration port, not a new parallel
-challenge database. Its production implementation must read the exact saved
-Flow session and use the existing Flow nonce lifecycle. The final-use
-reservation/receipt transaction and the Flow adapter remain follow-up
-integration gates. A mock or in-memory challenge store is test-only and cannot
-qualify production replay protection.
+challenge database. The Flow service now provides
+`FlowDelegationOid4vpChallengeStore`, which resolves the opaque challenge ID to
+the existing tenant-scoped Flow instance, validates its frozen OID4VP request,
+and reads the typed delegation binding snapshot from private Flow context. It
+reuses the Flow nonce/session lifecycle; no second nonce table or request URI
+scheme is introduced. Flow start still needs to populate that typed binding
+snapshot from the active grant/session configuration, and the final-use
+receipt/operation transaction remains a separate integration gate. A mock or
+in-memory challenge store is test-only and cannot qualify production replay
+protection.

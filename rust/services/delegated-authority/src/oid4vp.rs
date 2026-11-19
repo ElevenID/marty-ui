@@ -57,7 +57,6 @@ pub trait DelegationOid4vpChallengeStore: Send + Sync {
         grant_id: Uuid,
         challenge_id: Uuid,
     ) -> Result<DelegationOid4vpChallenge, DelegationOid4vpChallengeStoreError>;
-
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -106,7 +105,11 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
 
         let challenge = self
             .challenges
-            .load_active(request.organization_id, request.grant_id, request.challenge_id)
+            .load_active(
+                request.organization_id,
+                request.grant_id,
+                request.challenge_id,
+            )
             .await
             .map_err(|_| DelegateProofError)?;
         validate_challenge(grant, request, &challenge, now)?;
@@ -125,14 +128,18 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
             .get("type")
             .and_then(serde_json::Value::as_array)
             .ok_or(DelegateProofError)?;
-        if !presentation_types.iter().any(|value| {
-            value.as_str() == Some("VerifiablePresentation")
-        })
-            || presentation.get("holder").and_then(serde_json::Value::as_str)
+        if !presentation_types
+            .iter()
+            .any(|value| value.as_str() == Some("VerifiablePresentation"))
+            || presentation
+                .get("holder")
+                .and_then(serde_json::Value::as_str)
                 != Some(request.actor.id.as_str())
             || claims.get("iss").and_then(serde_json::Value::as_str)
                 != Some(request.actor.id.as_str())
-            || claims.get("sub").and_then(serde_json::Value::as_str)
+            || claims
+                .get("sub")
+                .and_then(serde_json::Value::as_str)
                 .is_some_and(|subject| subject != request.actor.id)
         {
             return Err(DelegateProofError);
@@ -155,8 +162,8 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
 
         // Marty Core's RFC 7638 implementation calculates the canonical JWK
         // thumbprint; no parallel JOSE/JWK implementation is maintained here.
-        let jwk_json = serde_json::to_string(verified.signer_public_jwk())
-            .map_err(|_| DelegateProofError)?;
+        let jwk_json =
+            serde_json::to_string(verified.signer_public_jwk()).map_err(|_| DelegateProofError)?;
         let signer = Jwk::from_json(&jwk_json).map_err(|_| DelegateProofError)?;
         let signer_thumbprint = format!(
             "sha256:{}",
@@ -185,9 +192,10 @@ fn validate_challenge(
         || challenge.nonce.len() > MAX_CHALLENGE_BYTES
         || challenge.nonce.chars().count() < MIN_NONCE_CHARS
         || !challenge.nonce.is_ascii()
-        || !challenge.nonce.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
-        })
+        || !challenge
+            .nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
     {
         return Err(DelegateProofError);
     }
@@ -201,8 +209,7 @@ fn validate_challenge(
             }
         }
         BindingMethod::Session => {
-            if challenge.session_ref.as_deref()
-                != grant.terms.binding.session_ref.as_deref()
+            if challenge.session_ref.as_deref() != grant.terms.binding.session_ref.as_deref()
                 || challenge.establishment_evidence_ref.as_deref()
                     != grant.terms.binding.establishment_evidence_ref.as_deref()
                 || challenge.session_key_thumbprint.is_none()
@@ -279,7 +286,8 @@ mod tests {
         assert!(validate_challenge(&grant, &request, &wrong_audience, now).is_err());
 
         let mut wrong_session = challenge;
-        wrong_session.establishment_evidence_ref = Some("https://identity.example/evidence/other".into());
+        wrong_session.establishment_evidence_ref =
+            Some("https://identity.example/evidence/other".into());
         assert!(validate_challenge(&grant, &request, &wrong_session, now).is_err());
     }
 
