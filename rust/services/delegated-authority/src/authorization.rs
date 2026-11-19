@@ -610,11 +610,15 @@ impl DelegationUseAuthorizer {
                         .verify(grant, request, after_proof)
                         .await
                         .map_err(|_| DelegationUseError::ConstraintNotVerified)?;
+                    // Observe the trusted clock before classifying provider evidence.
+                    // Otherwise a regressed clock can be misreported as malformed
+                    // constraint evidence because the timestamp comparison short-circuits.
+                    let after_constraint_provider = self.now_after(after_proof)?;
                     if !valid_digest(&verified.evidence_digest)
                         || !valid_uri(Some(&verified.evidence_ref))
                         || !verified.context.is_object()
                         || verified.checked_at < after_proof
-                        || verified.checked_at > self.now_after(after_proof)?
+                        || verified.checked_at > after_constraint_provider
                         || verified.valid_until <= verified.checked_at
                         || verified.valid_until > grant.terms.valid_until
                     {
