@@ -24,7 +24,7 @@ use crate::{
     Principal, ResolvedDelegationGrant, SystemDelegationClock,
 };
 
-const MAX_PROOF_BYTES: usize = 256 * 1024;
+pub const MAX_DELEGATE_PROOF_BYTES: usize = 256 * 1024;
 const MAX_CONSTRAINT_CONTEXT_BYTES: usize = 16_384;
 const MAX_POLICY_OBSERVATION_AGE_SECONDS: i64 = 30;
 
@@ -557,7 +557,7 @@ fn validate_request(request: &DelegationUseRequest) -> Result<(), DelegationUseE
         || !valid_uri(Some(&request.operation_profile))
         || !valid_digest(&request.operation_digest)
         || request.proof.is_empty()
-        || request.proof.len() > MAX_PROOF_BYTES
+        || request.proof.len() > MAX_DELEGATE_PROOF_BYTES
     {
         return Err(DelegationUseError::InvalidRequest);
     }

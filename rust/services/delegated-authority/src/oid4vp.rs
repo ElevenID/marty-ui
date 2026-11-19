@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     BindingMethod, DelegateProofError, DelegateProofVerifier, DelegationGrant,
-    DelegationUseRequest,
+    DelegationUseRequest, MAX_DELEGATE_PROOF_BYTES,
 };
 
 const MAX_CHALLENGE_BYTES: usize = 256;
@@ -96,7 +96,7 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
         request: &DelegationUseRequest,
         now: DateTime<Utc>,
     ) -> Result<DateTime<Utc>, DelegateProofError> {
-        if request.proof.len() > 256 * 1024 {
+        if request.proof.len() > MAX_DELEGATE_PROOF_BYTES {
             return Err(DelegateProofError);
         }
         let compact_vp = std::str::from_utf8(&request.proof).map_err(|_| DelegateProofError)?;
@@ -117,8 +117,21 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
             .map_err(|_| DelegateProofError)?;
 
         let claims = verified.claims();
-        if claims.get("iss").and_then(serde_json::Value::as_str)
-            != Some(request.actor.id.as_str())
+        let presentation = claims
+            .get("vp")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(DelegateProofError)?;
+        let presentation_types = presentation
+            .get("type")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(DelegateProofError)?;
+        if !presentation_types.iter().any(|value| {
+            value.as_str() == Some("VerifiablePresentation")
+        })
+            || presentation.get("holder").and_then(serde_json::Value::as_str)
+                != Some(request.actor.id.as_str())
+            || claims.get("iss").and_then(serde_json::Value::as_str)
+                != Some(request.actor.id.as_str())
             || claims.get("sub").and_then(serde_json::Value::as_str)
                 .is_some_and(|subject| subject != request.actor.id)
         {
