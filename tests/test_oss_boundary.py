@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_oss_boundary import scan_repository
+from scripts.check_oss_boundary import METADATA_IDENTITY_LINES, scan_repository
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -11,11 +11,19 @@ METADATA_FILES = [
     "scripts/ui_release.py",
     "scripts/website_release.py",
     "scripts/website_provenance.py",
+    "scripts/website_producer_policy.py",
 ]
 
 
 def test_current_repository_has_no_private_commerce_implementation() -> None:
     assert scan_repository(REPO_ROOT) == []
+
+
+@pytest.mark.parametrize("relative", METADATA_FILES)
+def test_reviewed_identity_exceptions_match_current_source_once(relative: str) -> None:
+    statements = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
+    for allowed in METADATA_IDENTITY_LINES[relative]:
+        assert statements.count(allowed) == 1, "stale or repeated reviewed metadata exception: " + allowed
 
 
 def test_boundary_scan_reports_private_package_reference(tmp_path: Path) -> None:

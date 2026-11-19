@@ -203,3 +203,136 @@ def test_json_duplicate_keys_are_rejected(tmp_path):
     path.write_text('{"source_sha":"a","source_sha":"b"}')
     with pytest.raises(ValueError, match="duplicate"):
         web.read(path)
+
+
+@pytest.fixture
+def standalone_release():
+    plan = web.standalone_plan(
+        SOURCE,
+        input_sha256={name: "sha256:" + "1" * 64 for name in web.STANDALONE_INPUTS},
+        output={"directory": "ui/dist-website", "inventory_sha256": "sha256:" + "2" * 64,
+                "file_count": 123, "total_bytes": 456789},
+        route_contract=web.route_identity(web.read(ROOT / web.ROUTE_PATH)),
+    )
+    return web.standalone_record(plan, metadata=web.image_metadata(plan), digest=DIGEST,
+                                 run_id="345", run_attempt="2")
+
+
+def test_standalone_contract_describes_prebuilt_static_output_without_application_dependencies(standalone_release, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Standalone contract must not use application source dependencies")
+    monkeypatch.setattr(web, "console_dependencies", forbidden)
+    value = standalone_release
+    assert web.validate_release(value, source_sha=SOURCE) == value
+    assert value["schema"] == "marty.website-release/v2"
+    assert value["producer"] == {
+        "repository": "ElevenID/website", "workflow": ".github/workflows/production-website-release.yml",
+        "source_sha": SOURCE, "ref": "refs/heads/main", "run_id": "345", "run_attempt": "2",
+    }
+    assert value["image"]["uri"] == "ghcr.io/elevenid/website"
+    assert value["image_metadata"]["schema"] == "marty.website-image/v2"
+    plan = value["build_plan"]
+    assert plan["dockerfile"] == "Dockerfile.website"
+    assert plan["dependency_lock"] == "package-lock.json"
+    assert plan["build_kind"] == "prebuilt-static"
+    assert plan["build_args"] == {"WEBSITE_SOURCE_SHA": SOURCE, "WEBSITE_REVISION": SOURCE,
+                                  "WEBSITE_ROUTE_CONTRACT_SHA256": plan["route_contract"]["sha256"]}
+    assert set(plan["input_sha256"]) == set(web.STANDALONE_INPUTS)
+    assert value["build_plan_sha256"] == ui.digest(ui.canonical(plan))
+    assert value["production_pages"] == "public" and value["commerce_extension"] is None
+    assert not {"local_image_id", "registry_published", "qualification"}.intersection(value)
+
+
+@pytest.mark.parametrize("path,value", [
+    (("repository",), ui.REPOSITORY), (("schema",), web.PLAN_SCHEMA),
+    (("source_sha",), "development"), (("revision",), "latest"),
+    (("production_pages",), "full"), (("commerce_extension",), {"repository": ui.COMMERCE_REPOSITORY, "source_sha": PRIVATE}),
+    (("workflow",), ui.WORKFLOW), (("image",), web.PUBLIC_IMAGE),
+    (("platform",), "linux/arm64"), (("dockerfile",), "docker/ui.Dockerfile"),
+    (("build_kind",), "source-checkout"), (("dependency_lock",), "ui/package-lock.json"),
+    (("base_image",), "nginx:latest"), (("base_image",), "nginx:1.29.1-alpine@sha256:" + "0" * 64),
+    (("input_sha256", "package-lock.json"), "sha256:bad"), (("input_sha256", "application/secret"), DIGEST),
+    (("output", "directory"), "../application/ui/dist"), (("output", "inventory_sha256"), "latest"),
+    (("output", "file_count"), 0), (("output", "file_count"), True), (("output", "file_count"), 10001),
+    (("output", "total_bytes"), 0), (("output", "total_bytes"), True),
+    (("output", "total_bytes"), 512 * 1024 * 1024 + 1), (("output", "extra"), "ignored"),
+    (("route_contract", "version"), True), (("route_contract", "sha256"), "sha256:bad"),
+    (("build_args", "MARTY_UI_SHA"), SOURCE), (("build_args", "WEBSITE_SOURCE_SHA"), PRIVATE),
+    (("build_args", "WEBSITE_REVISION"), PRIVATE), (("build_args", "WEBSITE_ROUTE_CONTRACT_SHA256"), DIGEST),
+    (("extra",), "ignored"),
+])
+def test_standalone_plan_rejects_cross_owner_legacy_private_or_unbounded_inputs(standalone_release, path, value):
+    changed = copy.deepcopy(standalone_release["build_plan"])
+    target = changed
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(ValueError):
+        web.validate_standalone_plan(changed)
+
+
+@pytest.mark.parametrize("path,value", [
+    (("schema",), web.RELEASE_SCHEMA), (("source_sha",), PRIVATE), (("revision",), PRIVATE),
+    (("production_pages",), "full"), (("commerce_extension",), {"repository": ui.COMMERCE_REPOSITORY, "source_sha": PRIVATE}),
+    (("producer", "repository"), ui.REPOSITORY), (("producer", "workflow"), ui.WORKFLOW),
+    (("producer", "source_sha"), PRIVATE), (("producer", "ref"), "refs/heads/topic"),
+    (("producer", "run_attempt"), "0"), (("producer", "run_id"), 345),
+    (("image", "uri"), web.PUBLIC_IMAGE), (("image", "digest"), "latest"),
+    (("image", "platform"), "linux/arm64"), (("image", "local_image_id"), DIGEST),
+    (("image_metadata", "schema"), web.IMAGE_SCHEMA), (("image_metadata", "repository"), ui.REPOSITORY),
+    (("image_metadata", "source_sha"), PRIVATE), (("image_metadata", "surface"), "application"),
+    (("image_metadata", "route_contract", "version"), True),
+    (("image_metadata", "route_contract", "sha256"), DIGEST),
+    (("build_plan_sha256",), DIGEST), (("extra",), "ignored"),
+])
+def test_standalone_release_cannot_substitute_other_identity_or_local_qualification_fields(standalone_release, path, value):
+    target = standalone_release
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(ValueError):
+        web.validate_release(standalone_release)
+
+
+def test_standalone_release_requires_explicit_matching_source_and_rejects_commerce_expectation(standalone_release):
+    with pytest.raises(ValueError, match="expected source"):
+        web.validate_release(standalone_release, source_sha=PRIVATE)
+    with pytest.raises(ValueError, match="commerce source"):
+        web.validate_release(standalone_release, commerce_source_sha=PRIVATE)
+
+
+def test_legacy_envelope_cannot_relabel_a_standalone_plan_as_legacy_authority(standalone_release):
+    # Even a self-consistent Frankenstein receipt must not bridge schema/owner
+    # boundaries through the legacy validator's generic image_metadata helper.
+    standalone_release["schema"] = web.RELEASE_SCHEMA
+    standalone_release["producer"] = web.producer(SOURCE, None, "345", "2")
+    with pytest.raises(ValueError, match="original plan schema"):
+        web.validate_release(standalone_release)
+
+
+def test_standalone_envelope_rejects_legacy_plan_even_with_recomputed_plan_hash(source):
+    release = candidate(source)
+    release["schema"] = web.STANDALONE_RELEASE_SCHEMA
+    release["producer"] = web.standalone_producer(SOURCE, "123", "2")
+    with pytest.raises(ValueError, match="standalone website plan"):
+        web.validate_release(release)
+
+
+def test_qualification_is_not_a_release_receipt():
+    qualification = {"schema": "marty.website-qualification/v1", "source_sha": SOURCE,
+                     "local_image_id": DIGEST, "cryptographic_provenance_verified": False}
+    with pytest.raises(ValueError):
+        web.validate_release(qualification)
+
+
+def test_standalone_fixture_matches_javascript_producer_and_canonical_plan_hash():
+    fixture = web.read(ROOT / "tests/fixtures/standalone-website-release-v2.json")
+    assert fixture["purpose"] == "synthetic-contract-fixture-not-release-evidence"
+    release = fixture["release"]
+    assert web.validate_release(release, source_sha=SOURCE) == release
+    plan = release["build_plan"]
+    assert plan == web.standalone_plan(SOURCE, input_sha256=plan["input_sha256"],
+                                       output=plan["output"], route_contract=plan["route_contract"])
+    assert release == web.standalone_record(plan, metadata=web.image_metadata(plan),
+                                            digest=release["image"]["digest"], run_id="1234567890", run_attempt="2")
+    assert ui.digest(ui.canonical(plan)) == "sha256:651dc6a6bf9ed66ba7b2a58edfe72a6efd266924fa71f4a82aa514ddd7b8f609"

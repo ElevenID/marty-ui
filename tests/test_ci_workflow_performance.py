@@ -1267,6 +1267,94 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
+    "primary,retry,expected_success",
+    [
+        ("success", "skipped", True),
+        ("failure", "success", True),
+        ("failure", "failure", False),
+        ("failure", "skipped", False),
+        ("failure", "cancelled", False),
+        ("cancelled", "skipped", False),
+        ("skipped", "skipped", False),
+        ("skipped", "success", False),
+        ("success", "failure", False),
+        ("success", "success", False),
+        ("", "", False),
+        ("unknown", "success", False),
+    ],
+)
+def test_keycloak_image_retry_keeps_build_and_integration_required(
+    primary: str, retry: str, expected_success: bool
+) -> None:
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-openbao-didcomm-plugin"]
+    steps = job["steps"]
+    first = next(step for step in steps if step.get("id") == "keycloak_image_build")
+    second = next(step for step in steps if step.get("id") == "keycloak_image_retry")
+    pause = next(
+        step for step in steps
+        if step.get("name") == "Wait before retrying the pinned Keycloak image"
+    )
+    gate = next(
+        step for step in steps
+        if step.get("name") == "Require the pinned Keycloak image build"
+    )
+    image_builds = [
+        step for step in steps
+        if step.get("with", {}).get("file") == "keycloak/openbao-provider/Dockerfile"
+    ]
+    assert image_builds == [first, second]
+    assert steps.index(first) < steps.index(pause) < steps.index(second) < steps.index(gate)
+    assert not job.get("continue-on-error")
+    assert "test-openbao-didcomm-plugin" in document["jobs"]["ci-gate"]["needs"]
+    assert not first.get("if")
+    assert first["continue-on-error"] is second["continue-on-error"] is True
+    assert pause["if"] == second["if"] == "steps.keycloak_image_build.outcome == 'failure'"
+    assert pause["run"] == "sleep 10"
+    assert not pause.get("continue-on-error")
+    assert first["uses"] == second["uses"] == (
+        "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
+    )
+    assert first["with"] == second["with"] == {
+        "context": ".",
+        "file": "keycloak/openbao-provider/Dockerfile",
+        "load": True,
+        "push": False,
+        "tags": "marty-keycloak-openbao:ci",
+        "provenance": False,
+    }
+    assert gate["if"] == "always()"
+    assert gate["shell"] == "bash"
+    assert not gate.get("continue-on-error")
+    assert gate["env"] == {
+        "PRIMARY_OUTCOME": "${{ steps.keycloak_image_build.outcome }}",
+        "RETRY_OUTCOME": "${{ steps.keycloak_image_retry.outcome }}",
+    }
+    for name in (
+        "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody",
+        "Qualify packaged plugin storage and self-host Raft behavior",
+        "Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore",
+    ):
+        integration = next(step for step in steps if step.get("name") == name)
+        assert steps.index(gate) < steps.index(integration)
+        assert not integration.get("if") and not integration.get("continue-on-error")
+
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    assert bash, "Bash is required to exercise the Keycloak image gate"
+    environment = {**os.environ, "PRIMARY_OUTCOME": primary, "RETRY_OUTCOME": retry}
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    result = subprocess.run(
+        [bash, "-c", gate["run"]], env=environment, capture_output=True,
+        text=True, check=False,
+    )
+    assert (result.returncode == 0) is expected_success
+    if not expected_success:
+        assert "Pinned Keycloak image build did not succeed" in result.stderr
+
+
+@pytest.mark.parametrize(
     "mutation",
     [
         "drop-tests",

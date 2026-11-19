@@ -24,6 +24,7 @@ import stable_installer_assets as stable
 import ui_release as ui
 import website_provenance as proof
 import website_release as web
+import website_producer_policy as policy
 
 SCHEMA = "marty.web-composition/v1"
 WEBSITE_FILES = ("website-release.json", "website-release.json.sigstore.json",
@@ -85,7 +86,7 @@ def authenticate_payloads(directory: Path, *, gh: Path, cosign: Path,
 
 def describe(directory: Path, producer: dict, website: dict, application: dict, compatibility: dict,
              inventory: dict, bundle_root: str) -> dict:
-    proof.validate_producer(producer)
+    proof.validate_producer(producer, role="composition")
     lock = web.read(directory / "backend/prepared-selfhost-images.json")
     app_image = application["image"]["uri"] + "@" + application["image"]["digest"]
     files = {name: {"sha256": proof.file_digest(directory / name), "bytes": (directory / name).stat().st_size}
@@ -114,12 +115,28 @@ def validate_record(record: dict) -> dict:
     fields = {"schema", "producer", "platform", "route_contract", "website", "application", "backend", "images",
               "openbao_didcomm_image", "production_pages", "kms_provider", "qualification", "files", "composition_id"}
     web.object_keys(record, fields, "web composition")
-    proof.validate_producer(record["producer"])
+    proof.validate_producer(record["producer"], role="composition")
     ui.require(record["schema"] == SCHEMA and record["platform"] == "linux/amd64" and record["kms_provider"] == "openbao"
                and record["production_pages"] in {"public", "full"}
                and record["qualification"] == {"runtime_tested": False, "billing_journey_tested": False},
                "unsupported web composition")
     web.validate_route_identity(record["route_contract"])
+    for role, fields in (("website", {"revision", "source_sha", "image", "release_sha256", "producer"}),
+                         ("application", {"source_sha", "image", "release_sha256", "compatibility_sha256", "producer"})):
+        selected = record[role]
+        web.object_keys(selected, fields, role + " composition input")
+        proof.validate_producer(selected["producer"], role=role)
+        web.object_keys(selected["image"], {"uri", "digest", "platform"}, role + " composition image")
+        owner = policy.image_policy(selected["image"]["uri"], role=role)
+        ui.require(owner["repository"] == selected["producer"]["repository"]
+                   and selected["image"]["platform"] == "linux/amd64", "composition image and producer role differ")
+        web.image_digest(selected["image"]["digest"])
+        web.full_sha(selected["source_sha"])
+    web.object_keys(record["backend"], {"source_sha", "release_tag", "repository", "workflow", "run_id", "run_attempt",
+                                        "inventory_sha256", "bundle_root"}, "composition backend")
+    ui.require(record["backend"].get("repository") == ui.REPOSITORY
+               and record["backend"].get("workflow") == stable.WORKFLOW,
+               "composition backend producer differs")
     web.object_keys(record["files"], PAYLOAD_NAMES, "composition payload inventory")
     total = 0
     for metadata in record["files"].values():
@@ -137,7 +154,7 @@ def package(*, website_assets: Path, application_assets: Path, backend_assets: P
             output: Path, gh: Path, cosign: Path, runner: proof.verifier.Run = proof.verifier.command,
             registry_config: Path | None = None) -> dict:
     ui.require(not output.exists(), "web composition output already exists")
-    proof.validate_producer(producer)
+    proof.validate_producer(producer, role="composition")
     with tempfile.TemporaryDirectory(prefix="marty-web-composition-") as temporary:
         held = Path(temporary).resolve()
         for source, names, prefix in ((website_assets, WEBSITE_FILES, "website"),
@@ -212,7 +229,7 @@ def verified_package(assets: Path, *, gh: Path, cosign: Path,
             (held / name).chmod(0o600)
         manifest = validate_record(proof.read_metadata(held / "web-composition.json"))
         for name in ("web-composition.json", "web-composition.zip"):
-            proof.verify_subject(held / name, producer=manifest["producer"], gh=gh, cosign=cosign, runner=runner)
+            proof.verify_subject(held / name, producer=manifest["producer"], gh=gh, cosign=cosign, runner=runner, role="composition")
         payload = held / "payload"
         extract(held / "web-composition.zip", manifest, payload)
         expected = describe(payload, manifest["producer"], *authenticate_payloads(
@@ -225,13 +242,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("website-assets", "application-assets", "backend-assets", "output-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--producer-repository", choices=tuple(web.REPOSITORIES), required=True)
+    parser.add_argument("--producer-repository", choices=tuple(policy.repositories_for("composition")), required=True)
     parser.add_argument("--registry-config", type=Path, help="explicit private Docker config.json for private OCI reads")
     for name in ("producer-source-sha", "run-id", "run-attempt"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()
     producer = {"repository": args.producer_repository,
-                "workflow": ui.WORKFLOW if args.producer_repository == ui.REPOSITORY else ui.COMMERCE_WORKFLOW,
+                "workflow": policy.producer_policy(args.producer_repository, role="composition")["workflow"],
                 "source_sha": args.producer_source_sha, "ref": web.REF, "run_id": args.run_id, "run_attempt": args.run_attempt}
     package(website_assets=args.website_assets.absolute(), application_assets=args.application_assets.absolute(),
             backend_assets=args.backend_assets.absolute(), producer=producer, output=args.output_dir.absolute(),

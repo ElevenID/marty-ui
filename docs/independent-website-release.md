@@ -51,6 +51,44 @@ does not authorize it.
 
 ## Produce a website
 
+### Standalone website owner contract
+
+The extracted `ElevenID/website` repository now has an additive public producer
+contract. Its exact identity is:
+
+| Field | Standalone public website |
+| --- | --- |
+| Repository / numeric ID | `ElevenID/website` / `1459542519` |
+| Reserved workflow | `.github/workflows/production-website-release.yml` |
+| Ref | `refs/heads/main` |
+| Image | `ghcr.io/elevenid/website` |
+| Plan / receipt / image marker | `marty.website-build-plan/v2` / `marty.website-release/v2` / `marty.website-image/v2` |
+| Audience / pages / platform | production / public / `linux/amd64` |
+
+The v2 plan describes `Dockerfile.website`, the root `package-lock.json`, eleven
+fixed source-input fingerprints and the final static output inventory. It does
+not reuse the legacy Docker build target or dependency graph. Its revision is
+the exact website source SHA, and commerce identity must be null. The shared
+synthetic fixture in `tests/fixtures/standalone-website-release-v2.json` verifies
+the same closed schema and canonical build-plan hash as the JavaScript producer.
+The [website contract specification](https://github.com/ElevenID/website/blob/main/docs/standalone-release-contract.md)
+defines the input paths, output hashing and publisher requirements.
+
+`website_producer_policy.py` admits this repository only for website receipts and
+its own image. Application, stable backend and outer composition authorities
+remain with their existing producers. Original public/private v1 evidence and
+retained rollback slots remain supported. A receipt cannot select or widen its
+own role, workflow, image coordinate, credential access or executable tooling.
+
+This compatibility milestone reserves the future publisher identity; it does
+not install or dispatch that publisher, publish an image, or activate a host.
+The website's unsigned `web-qualification-RUN-ATTEMPT` artifact is not a release
+receipt. Its local Docker image/config ID is not an OCI registry manifest digest.
+Real hosted signing, published image verification, cross-owner intake and live
+application/host qualification follow reviewed compatibility code.
+
+### Existing public and private producers
+
 For public marketing, dispatch the existing public workflow on `main`:
 
 ```sh
@@ -99,10 +137,13 @@ image provenance. Existing `production-web-VERSION-RUN-ATTEMPT` and private
 
 ## Compose with an existing product
 
-Select successful original **website** and **combined** runs in the same producer
-repository. The two sources can differ; their route contracts and production
-audiences must match. The selected application determines the original stable
-backend source and tag.
+Select successful original **website** and **combined** runs. Public composition
+defaults to website evidence from `ElevenID/marty-ui`. After the standalone
+publisher is live-qualified, select `website_repository=ElevenID/website` to use
+its original v2 evidence. The application remains from `ElevenID/marty-ui` and
+determines the original stable backend source and tag. The sources can differ;
+their route contracts and production page sets must match. The private full
+producer continues to select its original private website/application evidence.
 
 ```sh
 gh workflow run production-web-release.yml --repo ElevenID/marty-ui --ref main \
@@ -110,6 +151,29 @@ gh workflow run production-web-release.yml --repo ElevenID/marty-ui --ref main \
   -f website_run_id="$website_run" -f website_run_attempt="$website_attempt" \
   -f application_run_id="$application_run" -f application_run_attempt="$application_attempt"
 ```
+
+The optional `website_repository` choice affects only the website intake. It does
+not transfer application, backend or composition signing authority, and it does
+not accept unsigned qualification artifacts. Omitting it retains the existing
+public producer selection.
+
+Cross-repository artifact download requires a separate credential authorized for
+`ElevenID/website` with **Actions: read**. Before live standalone composition,
+configure the `WEBSITE_RELEASE_READ_TOKEN` Actions secret using an authorized
+token restricted to that repository and permission (for example, a GitHub App
+installation token or fine-grained personal access token). GitHub's
+[`GITHUB_TOKEN` is scoped to its workflow repository](https://docs.github.com/en/actions/concepts/security/github_token);
+public artifact metadata access does not establish permission to
+[download its archive](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
+
+The workflow supplies that credential only to the standalone website-intake
+step. It rejects a missing credential before any intake request and does not
+fall back to the application job token. The next application/backend/composition
+step receives the original job token, and legacy website selection continues to
+use it. The CLI already accepts an explicitly selected `GH_TOKEN` for its fixed
+Actions GET endpoints. Configuring the secret and proving a real original
+artifact download remain live-qualification prerequisites; this source change
+does neither.
 
 For full production, use `production-ui-release.yml` in
 `ElevenID/marty-subscriptions` and also supply `ui_source_sha` for the reviewed

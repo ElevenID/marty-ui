@@ -5,27 +5,35 @@ import copy
 import io
 import json
 from pathlib import Path
+import shlex
 import stat
+import subprocess
+import sys
 import zipfile
 
 import pytest
+import yaml
 
-from tests.test_package_web_composition import candidate
+from tests.test_package_web_composition import candidate, standalone_website, write_json
 import package_web_composition as composition
 import ui_release as ui
 import web_release_intake as intake
 import website_release as web
+import website_producer_policy as policy
 
 
-@pytest.fixture
-def producer_artifact(candidate, tmp_path):
+@pytest.fixture(params=["legacy", "standalone"])
+def producer_artifact(candidate, tmp_path, request):
     kwargs, calls, _, _ = candidate
     release = web.read(kwargs["website_assets"] / "website-release.json")
+    if request.param == "standalone":
+        release = standalone_website(release["source_sha"], web.read(kwargs["website_assets"] / "web-surface-routes.json"))
+        write_json(kwargs["website_assets"] / "website-release.json", release)
     producer = release["producer"]
     run = {"id": int(producer["run_id"]), "run_attempt": int(producer["run_attempt"]), "status": "completed",
            "conclusion": "success", "event": "workflow_dispatch", "head_branch": "main", "head_sha": producer["source_sha"],
            "path": producer["workflow"] + "@main", "repository": {"full_name": producer["repository"],
-           "id": int(web.REPOSITORIES[producer["repository"]])}}
+           "id": int(policy.repositories_for("website")[producer["repository"]])}}
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         for name in composition.WEBSITE_FILES:
@@ -161,3 +169,179 @@ def test_backend_cli_never_selects_actions_credentials_by_default(tmp_path, monk
     monkeypatch.setattr(intake.auth, "GitHubReader", lambda **kwargs: pytest.fail("backend selected API credentials"))
     intake.main()
     assert calls == ["download", "verify"]
+
+
+def test_standalone_application_intake_fails_before_any_network_or_credentials(tmp_path, monkeypatch):
+    class Reader:
+        def attempt(self):
+            pytest.fail("unauthorized application read reached network")
+    monkeypatch.setattr(intake.auth, "GitHubReader", lambda **_kwargs: pytest.fail("unauthorized role selected credentials"))
+    for reader in (None, Reader()):
+        with pytest.raises(ValueError, match="producer role"):
+            intake.fetch("application", repository=policy.STANDALONE_REPOSITORY, run_id="124", attempt="2",
+                         destination=tmp_path / "must-not-create", gh=tmp_path / "gh", cosign=tmp_path / "cosign",
+                         reader=reader)
+    assert not (tmp_path / "must-not-create").exists()
+
+
+def test_api_repository_numeric_id_cannot_be_substituted_by_another_authorized_owner(producer_artifact, tmp_path):
+    _, producer, run, _, _, calls = producer_artifact
+    run["repository"]["id"] = int(web.REPOSITORIES[ui.REPOSITORY]
+                                    if producer["repository"] == policy.STANDALONE_REPOSITORY
+                                    else policy.STANDALONE_REPOSITORY_ID)
+    with pytest.raises(ValueError, match="repository differs"):
+        fetch(producer_artifact, tmp_path)
+    assert calls == [] and not (tmp_path / "intake").exists()
+
+
+@pytest.fixture
+def composer_workflow():
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/production-web-release.yml").read_text())
+    compose = workflow["jobs"]["compose"]
+    website = next(item for item in compose["steps"] if item.get("name") == "Authenticate the selected original website producer")
+    application = next(item for item in compose["steps"] if item.get("name") == "Authenticate application and backend and compose unchanged artifacts")
+    return workflow, compose, website, application
+
+
+def test_composer_workflow_keeps_legacy_default_and_scopes_external_credentials_to_website(composer_workflow):
+    workflow, compose, website, application = composer_workflow
+    dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]
+    selection = dispatch["inputs"]["website_repository"]
+    assert selection["type"] == "choice"
+    assert selection["default"] == ui.REPOSITORY
+    assert selection["options"] == [ui.REPOSITORY, policy.STANDALONE_REPOSITORY]
+    assert "github.repository == 'ElevenID/marty-ui'" in compose["if"]
+    assert compose["steps"].index(website) < compose["steps"].index(application)
+    assert website["env"] == {
+        "GH_TOKEN": "${{ github.token }}",
+        "WEBSITE_ARTIFACT_READ_TOKEN": "${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}",
+        "WEBSITE_RUN": "${{ inputs.website_run_id }}",
+        "WEBSITE_ATTEMPT": "${{ inputs.website_run_attempt }}",
+        "WEBSITE_REPOSITORY": "${{ inputs.website_repository || 'ElevenID/marty-ui' }}",
+    }
+    assert application["env"] == {
+        "GH_TOKEN": "${{ github.token }}",
+        "APPLICATION_RUN": "${{ inputs.application_run_id }}",
+        "APPLICATION_ATTEMPT": "${{ inputs.application_run_attempt }}",
+    }
+    for step in compose["steps"]:
+        if step is not website:
+            assert "WEBSITE_ARTIFACT_READ_TOKEN" not in str(step)
+            assert "secrets.WEBSITE_RELEASE_READ_TOKEN" not in str(step)
+    website_commands = [shlex.split(line) for line in website["run"].replace("\\\n", " ").splitlines()
+                        if line.strip().startswith("python ")]
+    assert len(website_commands) == 1
+    assert website_commands[0][:3] == ["python", "scripts/web_release_intake.py", "website"]
+    commands = website_commands + [shlex.split(line) for line in application["run"].replace("\\\n", " ").splitlines()
+                if line.strip().startswith("python scripts/web_release_intake.py ")]
+    selected = {command[2]: command for command in commands}
+    assert selected["website"][selected["website"].index("--repository") + 1] == "$WEBSITE_REPOSITORY"
+    assert selected["application"][selected["application"].index("--repository") + 1] == ui.REPOSITORY
+    assert "--repository" not in selected["backend"]
+    assert sum("$WEBSITE_REPOSITORY" in command for command in commands) == 1
+
+
+@pytest.fixture
+def workflow_shell(tmp_path):
+    """Run the actual workflow shell with inert tools and synthetic credentials."""
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    runner = tmp_path / "runner"
+    verifiers = runner / "web-verifiers"
+    verifiers.mkdir(parents=True)
+    capture = tmp_path / "workflow-calls.jsonl"
+    recorder = "#!" + sys.executable + "\n" + '''import json, os, sys
+from pathlib import Path
+program = Path(sys.argv[0]).name
+credentials = {key: os.environ[key] for key in
+               ("GH_TOKEN", "GITHUB_TOKEN", "WEBSITE_ARTIFACT_READ_TOKEN") if key in os.environ}
+with open(os.environ["WORKFLOW_CALLS"], "a") as stream:
+    stream.write(json.dumps({"program": program, "argv": sys.argv[1:], "env": credentials}) + "\\n")
+if program == "jq":
+    print({".source_sha": "b" * 40, ".version": "1.2.3"}[sys.argv[2]])
+'''
+    for executable in (tools / "python", tools / "jq", verifiers / "cosign"):
+        executable.write_text(recorder)
+        executable.chmod(0o700)
+
+    def run(step, *, repository=None, artifact_token=""):
+        values = {
+            "${{ github.token }}": "synthetic-job-token",
+            "${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}": artifact_token,
+            "${{ inputs.website_repository || 'ElevenID/marty-ui' }}": repository or ui.REPOSITORY,
+            "${{ inputs.website_run_id }}": "124",
+            "${{ inputs.website_run_attempt }}": "2",
+            "${{ inputs.application_run_id }}": "125",
+            "${{ inputs.application_run_attempt }}": "1",
+        }
+        # Each Actions step starts with its own declared environment. Never copy
+        # the test process environment, which may contain actual CI credentials.
+        env = {
+            "PATH": str(tools) + ":/usr/bin:/bin",
+            "RUNNER_TEMP": str(runner), "WORKFLOW_CALLS": str(capture),
+            "GITHUB_REPOSITORY": ui.REPOSITORY, "GITHUB_SHA": "c" * 40,
+            "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
+            **{name: values[value] for name, value in step["env"].items()},
+        }
+        capture.unlink(missing_ok=True)
+        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", step["run"]],
+                                cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
+        calls = [json.loads(line) for line in capture.read_text().splitlines()] if capture.exists() else []
+        for token in ("synthetic-job-token", artifact_token):
+            if token:
+                assert token not in result.stdout + result.stderr
+        return result, calls
+    return run
+
+
+@pytest.mark.parametrize("repository,artifact_token,expected_token", [
+    (None, "", "synthetic-job-token"),
+    (ui.REPOSITORY, "synthetic-website-token", "synthetic-job-token"),
+    (policy.STANDALONE_REPOSITORY, "synthetic-website-token", "synthetic-website-token"),
+])
+def test_website_intake_shell_selects_only_the_required_token(composer_workflow, workflow_shell, tmp_path,
+                                                            repository, artifact_token, expected_token):
+    result, calls = workflow_shell(composer_workflow[2], repository=repository, artifact_token=artifact_token)
+    assert result.returncode == 0, result.stderr
+    assert calls == [{
+        "program": "python",
+        "argv": ["scripts/web_release_intake.py", "website", "--repository", repository or ui.REPOSITORY,
+                 "--run-id", "124", "--run-attempt", "2", "--assets", str(tmp_path / "runner/selected-website"),
+                 "--gh", str(tmp_path / "runner/web-verifiers/gh"),
+                 "--cosign", str(tmp_path / "runner/web-verifiers/cosign")],
+        "env": {"GH_TOKEN": expected_token},
+    }]
+
+
+def test_standalone_intake_shell_requires_external_token_before_any_tool(composer_workflow, workflow_shell):
+    result, calls = workflow_shell(composer_workflow[2], repository=policy.STANDALONE_REPOSITORY)
+    assert result.returncode != 0
+    assert "requires WEBSITE_RELEASE_READ_TOKEN" in result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("repository", [ui.COMMERCE_REPOSITORY, "Elsewhere/website", "ElevenID/website/extra"])
+def test_website_intake_shell_rejects_unlisted_owner_before_any_tool(composer_workflow, workflow_shell, repository):
+    result, calls = workflow_shell(composer_workflow[2], repository=repository, artifact_token="synthetic-website-token")
+    assert result.returncode != 0
+    assert "Unsupported website producer repository" in result.stderr
+    assert calls == []
+
+
+def test_external_website_token_does_not_reach_application_backend_composer_or_signer(composer_workflow, workflow_shell):
+    result, website_calls = workflow_shell(composer_workflow[2], repository=policy.STANDALONE_REPOSITORY,
+                                         artifact_token="synthetic-website-token")
+    assert result.returncode == 0, result.stderr
+    assert website_calls[0]["env"] == {"GH_TOKEN": "synthetic-website-token"}
+    result, calls = workflow_shell(composer_workflow[3], repository=policy.STANDALONE_REPOSITORY,
+                                  artifact_token="synthetic-website-token")
+    assert result.returncode == 0, result.stderr
+    assert [call["program"] for call in calls] == ["python", "jq", "jq", "python", "python", "cosign", "cosign"]
+    assert all(call["env"] == {"GH_TOKEN": "synthetic-job-token"} for call in calls)
+    python_calls = [call["argv"] for call in calls if call["program"] == "python"]
+    assert python_calls[0][:4] == ["scripts/web_release_intake.py", "application", "--repository", ui.REPOSITORY]
+    assert python_calls[1][:6] == ["scripts/web_release_intake.py", "backend", "--source-sha", "b" * 40, "--tag", "v1.2.3"]
+    assert python_calls[2][0] == "scripts/package_web_composition.py"
+    assert python_calls[2][python_calls[2].index("--producer-repository") + 1] == ui.REPOSITORY
+    assert [call["argv"][-1] for call in calls if call["program"] == "cosign"] == [
+        "web-composition/web-composition.json", "web-composition/web-composition.zip"]

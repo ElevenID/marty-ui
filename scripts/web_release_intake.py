@@ -23,29 +23,34 @@ import ui_release as ui
 import web_auth as auth
 import website_provenance as proof
 import website_release as web
+import website_producer_policy as policy
 
 MAX_ARCHIVE = auth.ARCHIVE_LIMIT
 
 
-def attempt_identity(value: dict, *, repository: str, run_id: str, attempt: str) -> dict:
-    ui.require(repository in web.REPOSITORIES and all(isinstance(x, str) and ui.RUN.fullmatch(x) for x in (run_id, attempt)),
+def attempt_identity(value: dict, *, repository: str, run_id: str, attempt: str, kind: str = "website") -> dict:
+    ui.require(kind in {"website", "application"}, "unsupported web evidence kind")
+    selected = policy.producer_policy(repository, role=kind)
+    ui.require(all(isinstance(x, str) and ui.RUN.fullmatch(x) for x in (run_id, attempt)),
                "invalid original producer selection")
-    workflow = ui.WORKFLOW if repository == ui.REPOSITORY else ui.COMMERCE_WORKFLOW
+    workflow = selected["workflow"]
     ui.require(isinstance(value, dict) and value.get("id") == int(run_id) and value.get("run_attempt") == int(attempt)
                and value.get("status") == "completed" and value.get("conclusion") == "success"
                and value.get("event") == "workflow_dispatch" and value.get("head_branch") == "main"
                and value.get("path") in {workflow, workflow + "@main", workflow + "@refs/heads/main"},
                "selected producer attempt was not a successful protected-main release")
     repo = value.get("repository", {})
-    ui.require(repo.get("full_name") == repository and str(repo.get("id")) == web.REPOSITORIES[repository],
+    ui.require(repo.get("full_name") == repository and str(repo.get("id")) == selected["repository_id"],
                "selected producer repository differs")
     source = web.full_sha(value.get("head_sha"))
     return proof.validate_producer({"repository": repository, "workflow": workflow, "ref": web.REF,
-                                    "source_sha": source, "run_id": run_id, "run_attempt": attempt})
+                                    "source_sha": source, "run_id": run_id, "run_attempt": attempt}, role=kind)
 
 
 def archive_selection(value: dict, *, kind: str, producer: dict) -> dict:
     ui.require(kind in {"website", "application"}, "unsupported web evidence kind")
+    proof.validate_producer(producer, role=kind)
+    selected = policy.producer_policy(producer["repository"], role=kind)
     name = f"web-{kind}-{producer['run_id']}-{producer['run_attempt']}"
     ui.require(isinstance(value, dict) and value.get("total_count") == 1 and isinstance(value.get("artifacts"), list)
                and len(value["artifacts"]) == 1, "one exact producer evidence artifact is required")
@@ -56,7 +61,7 @@ def archive_selection(value: dict, *, kind: str, producer: dict) -> dict:
                and type(artifact.get("size_in_bytes")) is int and 0 < artifact["size_in_bytes"] <= MAX_ARCHIVE
                and run.get("id") == int(producer["run_id"]) and run.get("head_sha") == producer["source_sha"]
                and run.get("head_branch") == "main"
-               and str(run.get("repository_id")) == web.REPOSITORIES[producer["repository"]],
+               and str(run.get("repository_id")) == selected["repository_id"],
                "producer evidence artifact owner or bounds differ")
     web.image_digest(artifact.get("digest"))
     return artifact
@@ -88,15 +93,16 @@ def extract_receipt(raw: bytes, *, kind: str, destination: Path) -> None:
 def fetch(kind: str, *, repository: str, run_id: str, attempt: str, destination: Path,
           gh: Path, cosign: Path, registry_config: Path | None = None,
           github_token_env: str | None = "GH_TOKEN", reader: auth.GitHubReader | None = None) -> dict:
-    ui.require(kind in {"website", "application"} and repository in web.REPOSITORIES
+    ui.require(kind in {"website", "application"}
                and all(isinstance(x, str) and ui.RUN.fullmatch(x) for x in (run_id, attempt)),
                "invalid original producer selection")
+    policy.producer_policy(repository, role=kind)
     proof.verifier.local_file(gh)
     if reader is None:
         reader = auth.GitHubReader(gh=gh, repository=repository, run_id=run_id,
                                   attempt=attempt, kind=kind, token_env=github_token_env)
     attempt_record = proof.parse_verified_json(reader.attempt())
-    producer = attempt_identity(attempt_record, repository=repository, run_id=run_id, attempt=attempt)
+    producer = attempt_identity(attempt_record, repository=repository, run_id=run_id, attempt=attempt, kind=kind)
     listed = proof.parse_verified_json(reader.artifacts())
     artifact = archive_selection(listed, kind=kind, producer=producer)
     raw = reader.archive(artifact["id"], maximum=artifact["size_in_bytes"])
@@ -150,7 +156,7 @@ def backend(tag: str, *, destination: Path, opener=None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=("website", "application", "backend"))
-    parser.add_argument("--repository", choices=tuple(web.REPOSITORIES))
+    parser.add_argument("--repository", choices=tuple(policy.repositories_for("website")))
     parser.add_argument("--run-id")
     parser.add_argument("--run-attempt")
     parser.add_argument("--assets", type=Path, required=True)
