@@ -549,7 +549,10 @@ mod tests {
             DelegatedDecisionReceiptIssuer::new(signer.clone(), issuer.clone(), 30).unwrap();
         let issued_at = evaluation.evaluated_at();
         let receipt = receipt_issuer.issue(&evaluation, issued_at).await.unwrap();
-        assert_eq!(receipt.payload().profile, DELEGATED_DECISION_RECEIPT_PROFILE);
+        assert_eq!(
+            receipt.payload().profile,
+            DELEGATED_DECISION_RECEIPT_PROFILE
+        );
         assert_eq!(receipt.payload().decision, "PERMIT");
         assert_eq!(receipt.payload().issuer.id, issuer.id);
         assert_eq!(receipt.payload().evaluation.grant.id, active.id);
@@ -558,7 +561,12 @@ mod tests {
             request.operation_digest
         );
         assert_eq!(receipt.payload().evaluation.status.state, "ACTIVE");
-        let domain_evidence = receipt.payload().evaluation.domain_evidence.as_ref().unwrap();
+        let domain_evidence = receipt
+            .payload()
+            .evaluation
+            .domain_evidence
+            .as_ref()
+            .unwrap();
         assert_eq!(
             domain_evidence.profile,
             active.terms.constraints.profile.clone().unwrap()
