@@ -131,7 +131,7 @@ impl GrantTerms {
         }
         match self.binding.method {
             BindingMethod::Key
-                if valid_digest(self.binding.key_thumbprint.as_deref())
+                if valid_key_thumbprint(self.binding.key_thumbprint.as_deref())
                     && self.binding.session_ref.is_none()
                     && self.binding.establishment_evidence_ref.is_none() => {}
             BindingMethod::Session
@@ -337,6 +337,16 @@ pub(crate) fn valid_uri(value: Option<&str>) -> bool {
     }
     true
 }
+fn valid_key_thumbprint(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        value.len() == 50
+            && value.starts_with("sha256:")
+            && value[7..].bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+            })
+    })
+}
+
 fn valid_digest(value: Option<&str>) -> bool {
     value.is_some_and(|v| {
         v.len() == 71

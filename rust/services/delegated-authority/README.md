@@ -299,3 +299,36 @@ Cedar policy source, signed receipt writer or final-use reservation are deployed
 to implement those adapters against the established Marty identity, policy and
 transaction services, then qualify them end to end. Commerce execution remains
 in the separate consuming project.
+
+
+## OID4VP delegate proof verification
+
+The crate includes `MartyOid4vpDelegateProofVerifier`, which reuses the pinned
+Marty Core `VerificationEngine::verify_authenticated_vp_proof_at` and Marty
+Verification's RFC 7638 JWK thumbprint implementation. It does not implement a
+second JOSE parser, JWT signature verifier, or thumbprint algorithm.
+
+The verifier accepts the compact JWT VP produced through the existing OID4VP
+Flow. Its challenge ID resolves to authoritative Flow-owned challenge state;
+the nonce and verifier audience are loaded from that state and never accepted
+from caller-supplied proof metadata. The verifier requires the exact grant ID,
+organization, revision, audience, nonce, holder principal, short proof lifetime,
+and signer key binding. Key-bound grants compare the RFC 7638 thumbprint.
+Session-bound grants compare the exact session and establishment evidence
+references plus the key thumbprint established by that session.
+
+The challenge lookup is read-only. Evaluation is not a permit and must not
+consume the challenge prematurely. The external operation's final-use
+transaction must atomically recheck the grant revision, reserve the challenge
+once, enforce its idempotency/replay key, and commit its signed authorization
+receipt with the domain operation. The challenge ID is carried in the
+non-serializable evaluation object for that boundary. The Flow owner remains
+responsible for standard OID4VP request construction, request signing,
+nonce/session persistence, direct_post handling and its existing finalizer.
+
+The challenge store is an explicit integration port, not a new parallel
+challenge database. Its production implementation must read the exact saved
+Flow session and use the existing Flow nonce lifecycle. The final-use
+reservation/receipt transaction and the Flow adapter remain follow-up
+integration gates. A mock or in-memory challenge store is test-only and cannot
+qualify production replay protection.

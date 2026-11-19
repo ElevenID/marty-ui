@@ -24,7 +24,7 @@ use crate::{
     Principal, ResolvedDelegationGrant, SystemDelegationClock,
 };
 
-const MAX_PROOF_BYTES: usize = 16_384;
+const MAX_PROOF_BYTES: usize = 256 * 1024;
 const MAX_CONSTRAINT_CONTEXT_BYTES: usize = 16_384;
 const MAX_POLICY_OBSERVATION_AGE_SECONDS: i64 = 30;
 
@@ -33,6 +33,9 @@ pub struct DelegationUseRequest {
     pub organization_id: Uuid,
     pub grant_id: Uuid,
     pub expected_revision: u64,
+    /// Server-issued OID4VP transaction challenge identifier. The nonce itself
+    /// is resolved from the authoritative challenge store, never from input.
+    pub challenge_id: Uuid,
     pub actor: Principal,
     pub action: String,
     pub audience: String,
@@ -49,6 +52,7 @@ impl std::fmt::Debug for DelegationUseRequest {
             .field("organization_id", &self.organization_id)
             .field("grant_id", &self.grant_id)
             .field("expected_revision", &self.expected_revision)
+            .field("challenge_id", &self.challenge_id)
             .field("actor", &self.actor)
             .field("action", &self.action)
             .field("audience", &self.audience)
@@ -282,6 +286,7 @@ pub struct CedarEvaluationError;
 pub struct DelegationUseEvaluation {
     organization_id: Uuid,
     grant_id: Uuid,
+    challenge_id: Uuid,
     grant_revision: u64,
     terms_digest: String,
     policy_id: String,
@@ -297,6 +302,9 @@ impl DelegationUseEvaluation {
     }
     pub fn grant_id(&self) -> Uuid {
         self.grant_id
+    }
+    pub fn challenge_id(&self) -> Uuid {
+        self.challenge_id
     }
     pub fn grant_revision(&self) -> u64 {
         self.grant_revision
@@ -510,6 +518,7 @@ impl DelegationUseAuthorizer {
         Ok(DelegationUseEvaluation {
             organization_id: grant.organization_id,
             grant_id: grant.id,
+            challenge_id: request.challenge_id,
             grant_revision: grant.revision,
             terms_digest: grant.terms_digest.clone(),
             policy_id: cedar_result.policy_id,
@@ -789,6 +798,7 @@ mod tests {
                 organization_id: pending.organization_id,
                 grant_id: pending.id,
                 expected_revision: 2,
+                challenge_id: Uuid::new_v4(),
                 actor: pending.terms.delegate.clone(),
                 action: pending.terms.actions[0].clone(),
                 audience: pending.terms.audiences[0].clone(),

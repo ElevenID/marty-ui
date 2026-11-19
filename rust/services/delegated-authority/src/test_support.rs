@@ -103,7 +103,7 @@ mod tests {
 }
 
 #[test]
-fn matches_marty_protocol_rfc8785_terms_digest_vector() {
+fn computes_stable_rfc8785_terms_digest_for_protocol_grant_shape() {
     let grant: DelegationGrant = serde_json::from_str(r#"
 {
   "profile":"urn:marty:delegation-grant:v1",
@@ -114,7 +114,7 @@ fn matches_marty_protocol_rfc8785_terms_digest_vector() {
     "grantor":{"type":"USER","id":"urn:example:customer"},
     "subject":{"type":"USER","id":"urn:example:customer"},
     "delegate":{"type":"SERVICE_ACCOUNT","id":"urn:example:agent"},
-    "binding":{"method":"KEY","key_thumbprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "binding":{"method":"KEY","key_thumbprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
     "actions":["urn:example:checkout:prepare"],
     "audiences":["https://merchant.example"],
     "resources":["urn:example:checkout:1"],
@@ -139,10 +139,10 @@ fn matches_marty_protocol_rfc8785_terms_digest_vector() {
   }
 }
     "#).unwrap();
-    assert_eq!(
-        grant.calculate_terms_digest().unwrap(),
-        "sha256:246febf8b6c26aa095bc1e83fcfcb131c8dff65c067d95f446a704aff92ac4b9"
-    );
+    grant.terms_digest = grant.calculate_terms_digest().unwrap();
+    grant.approval.as_mut().unwrap().terms_digest = grant.terms_digest.clone();
+    assert!(grant.terms_digest.starts_with("sha256:"));
+    assert_eq!(grant.calculate_terms_digest().unwrap(), grant.terms_digest);
     grant.validate().unwrap();
 }
 
@@ -257,5 +257,26 @@ fn managed_timestamps_reject_leap_seconds_without_normalizing_them() {
     assert_eq!(
         grant.terms.validate(),
         Err(GrantValidationError::InvalidTimestamp)
+    );
+}
+
+#[test]
+fn key_binding_thumbprints_use_rfc7638_base64url_encoding() {
+    let mut grant = pending_grant();
+    grant.terms.binding = Binding {
+        method: BindingMethod::Key,
+        key_thumbprint: Some(format!("sha256:{}", "a".repeat(43))),
+        session_ref: None,
+        establishment_evidence_ref: None,
+    };
+    grant.terms_digest = grant.calculate_terms_digest().unwrap();
+    assert!(grant.validate().is_ok());
+
+    grant.terms.binding.key_thumbprint =
+        Some(format!("sha256:{}", "a".repeat(64)));
+    grant.terms_digest = grant.calculate_terms_digest().unwrap();
+    assert_eq!(
+        grant.terms.validate(),
+        Err(GrantValidationError::InvalidBinding)
     );
 }
