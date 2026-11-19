@@ -14,8 +14,7 @@ use marty_verification::flow::FlowInstanceStatus;
 use uuid::Uuid;
 
 use crate::{
-    presentation_request::load_frozen_flow_presentation_request, FlowType,
-    PostgresFlowRepository,
+    presentation_request::load_frozen_flow_presentation_request, FlowType, PostgresFlowRepository,
 };
 
 #[derive(Clone)]
@@ -69,8 +68,7 @@ impl DelegationOid4vpChallengeStore for FlowDelegationOid4vpChallengeStore {
 
         // Use the same frozen-request validator as normal Flow submission.
         // This binds the nonce and query to the original saved OID4VP request.
-        let frozen = load_frozen_flow_presentation_request(&instance)
-            .map_err(|_| unavailable())?;
+        let frozen = load_frozen_flow_presentation_request(&instance).map_err(|_| unavailable())?;
         let audience = instance
             .context
             .get("oid4vp_client_id")
