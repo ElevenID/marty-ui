@@ -54,6 +54,20 @@ the actual integration parent before merge, including changes inherited from
 earlier entries in a merge-group batch. The normal required checks and merge
 queue still apply.
 
+The repaired source at `b2db066e49bc6895be4268c3a39bd984e21d0a17` passed
+[full hosted CI](https://github.com/ElevenID/marty-ui/actions/runs/44568782673):
+27 successful jobs and one intended skip. The release-contract suite passed
+12,370 tests before its separate staging and archive checks. Its first
+[queue attempt](https://github.com/ElevenID/marty-ui/actions/runs/44576916109)
+then rejected the stale parent at required preflight: the prospective queue
+parent was `49bb88b07a26fa454819cf3ae5c6a6d7179d27b2`, while the manifest pinned
+`08ee96933373805911de4fd10acb384205c880dd`. Subsequent CI lanes were skipped.
+This demonstrates admission before merge; it is not a completed composition.
+PR #2000 subsequently merged at `49bb88b07a26fa454819cf3ae5c6a6d7179d27b2`.
+The refreshed manifest pins that actual main parent and retains the same two
+original invocations. Repeat normal CI and queue admission on the updated head,
+and retain its exact source and run evidence in PR #1999.
+
 ## Acceptance and continuation
 
 After the manifest change merges, inspect the exact production-web workflow
