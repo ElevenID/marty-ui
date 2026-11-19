@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { WEBSITE_SOURCE_OWNERSHIP, validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { selfhostBuildContractPlugin } from './selfhost-build-contract.mjs';
 import { forbiddenWebSurfaceModule, websiteBuildRevision, webSurfaceBuildContractPlugin } from './web-surface-build-contract.mjs';
@@ -27,6 +31,41 @@ test('website ownership has a closed schema, unique exact paths, and existing re
     { schema_version: 1, modules: ['ui/src/../package.json'] },
     { schema_version: 1, modules: ['ui/src/does-not-exist.jsx'] },
   ]) assert.throws(() => validateWebsiteSourceOwnership(value));
+});
+
+test('application classifies absent website sources while other builds still require them', async (t) => {
+  const repositoryRoot = path.resolve(import.meta.dirname, '../..');
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-absent-website-source-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const relativePath of [
+    'contracts/website-source-ownership.json',
+    'contracts/web-surface-routes.json',
+    'ui/scripts/website-source-ownership.mjs',
+    'ui/scripts/selfhost-build-contract.mjs',
+    'ui/scripts/web-surface-build-contract.mjs',
+    'ui/scripts/web-surface-contract.mjs',
+    'ui/src/application/routing/webSurfaceContract.mjs',
+    'ui/src/utils/hasAsciiControlCharacters.js',
+  ]) {
+    const destination = path.join(directory, relativePath);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(repositoryRoot, relativePath), destination);
+  }
+  const { webSurfaceBuildContractPlugin: exportedWebPlugin } = await import(pathToFileURL(
+    path.join(directory, 'ui/scripts/web-surface-build-contract.mjs'),
+  ).href);
+  const { selfhostBuildContractPlugin: exportedSelfhostPlugin } = await import(pathToFileURL(
+    path.join(directory, 'ui/scripts/selfhost-build-contract.mjs'),
+  ).href);
+
+  const applicationPlugin = exportedWebPlugin({ surface: 'application' });
+  for (const entry of WEBSITE_SOURCE_OWNERSHIP.modules) {
+    assert.throws(() => applicationPlugin.generateBundle({}, chunk(path.join(directory, entry))), /forbidden/, entry);
+  }
+  for (const surface of ['combined', 'website']) {
+    assert.throws(() => exportedWebPlugin({ surface }), { code: 'ENOENT' }, surface);
+  }
+  assert.throws(() => exportedSelfhostPlugin(), { code: 'ENOENT' });
 });
 
 test('website output rejects application services, contexts, consoles and private application modules', () => {

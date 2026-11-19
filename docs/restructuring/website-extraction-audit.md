@@ -99,6 +99,11 @@ Do not simply change the image name or accept both identities indefinitely witho
 
 Keep the existing combined release path until the replacement application release path is independently qualified.
 
+The [application build boundary rehearsal](application-build-boundary.md) checks
+an application build with the 34 audited website modules and three raw demo
+inputs omitted from a temporary export. Its inventory is a partial boundary;
+generated demo projections, shared source and assets remain retained inputs.
+
 ## Acceptance gates
 
 1. Clean checkout of `website` alone installs dependencies and builds the static website.

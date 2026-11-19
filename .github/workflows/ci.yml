@@ -130,7 +130,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD=true bun install
           bun x --no-install puppeteer browsers install
       - name: Test website routing and all surface boundary guards
-        run: bun run test:website
+        run: |
+          bun run test:website
+          bun run test:application
       - name: Build and check crawlable website output
         run: |
           bun run build:website
@@ -139,6 +141,16 @@ jobs:
         run: |
           bun run build:application
           bun run build:selfhost
+      - name: Build application with audited website inputs absent
+        run: node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"
+      - name: Upload application source boundary report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   fast-feedback:
     name: Fast Feedback
