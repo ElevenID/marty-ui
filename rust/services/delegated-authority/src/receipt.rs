@@ -187,8 +187,7 @@ impl DelegatedDecisionReceiptIssuer {
         issuer: Principal,
         maximum_lifetime_seconds: i64,
     ) -> Result<Self, DelegatedDecisionReceiptError> {
-        if maximum_lifetime_seconds < 1
-            || maximum_lifetime_seconds > MAX_RECEIPT_LIFETIME_SECONDS
+        if !(1..=MAX_RECEIPT_LIFETIME_SECONDS).contains(&maximum_lifetime_seconds)
             || issuer.id.is_empty()
             || issuer.id.len() > 1024
             || !valid_uri(Some(&issuer.id))
