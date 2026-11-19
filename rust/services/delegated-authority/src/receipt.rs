@@ -441,7 +441,6 @@ mod tests {
     struct Signer {
         calls: Mutex<Vec<DelegatedReceiptSigningRequest>>,
         key_id: String,
-        issuer: Principal,
     }
     #[async_trait]
     impl DelegatedDecisionReceiptSigner for Signer {
@@ -516,7 +515,6 @@ mod tests {
         let signer = Arc::new(Signer {
             calls: Mutex::new(Vec::new()),
             key_id: "https://issuer.example/keys/delegated-receipt-1".into(),
-            issuer: issuer.clone(),
         });
         let receipt_issuer = DelegatedDecisionReceiptIssuer::new(signer.clone(), issuer.clone(), 30).unwrap();
         let issued_at = evaluation.evaluated_at();
@@ -541,6 +539,7 @@ mod tests {
         let calls = signer.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].key.key_id, "https://issuer.example/keys/delegated-receipt-1");
+        assert_eq!(calls[0].key.purpose, DELEGATED_DECISION_JWS_PURPOSE);
         assert!(String::from_utf8(calls[0].signing_input.clone()).unwrap().contains('.'));
         let header: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
         assert_eq!(header["typ"], DELEGATED_DECISION_JWS_TYP);
