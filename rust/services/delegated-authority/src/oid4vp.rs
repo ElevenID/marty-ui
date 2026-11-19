@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, Utc};
 use marty_oid4vci::verifier::VerificationEngine;
 use marty_verification::jwk::Jwk;
@@ -165,10 +166,17 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
         let jwk_json =
             serde_json::to_string(verified.signer_public_jwk()).map_err(|_| DelegateProofError)?;
         let signer = Jwk::from_json(&jwk_json).map_err(|_| DelegateProofError)?;
-        let signer_thumbprint = format!(
-            "sha256:{}",
-            signer.thumbprint().map_err(|_| DelegateProofError)?
-        );
+        // RFC 7638 returns the SHA-256 thumbprint as base64url. The MIP
+        // DelegationGrant digest vocabulary serializes that same 32-byte value
+        // as lowercase hexadecimal after the sha256: prefix.
+        let thumbprint = signer.thumbprint().map_err(|_| DelegateProofError)?;
+        let thumbprint_bytes = URL_SAFE_NO_PAD
+            .decode(thumbprint)
+            .map_err(|_| DelegateProofError)?;
+        if thumbprint_bytes.len() != 32 {
+            return Err(DelegateProofError);
+        }
+        let signer_thumbprint = format!("sha256:{}", hex::encode(thumbprint_bytes));
         validate_signer_binding(grant, &challenge, &signer_thumbprint)?;
 
         let proof_deadline = DateTime::from_timestamp(expires_at, 0).ok_or(DelegateProofError)?;
@@ -273,7 +281,7 @@ mod tests {
             expires_at: now + Duration::minutes(2),
             session_ref: grant.terms.binding.session_ref.clone(),
             establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
-            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(43))),
+            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(64))),
         };
         assert!(validate_challenge(&grant, &request, &challenge, now).is_ok());
 
@@ -304,7 +312,7 @@ mod tests {
             expires_at: grant.terms.valid_until,
             session_ref: grant.terms.binding.session_ref.clone(),
             establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
-            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(43))),
+            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(64))),
         };
         let thumbprint = challenge.session_key_thumbprint.clone().unwrap();
         assert!(validate_signer_binding(&grant, &challenge, &thumbprint).is_ok());

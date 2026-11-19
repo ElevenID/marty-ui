@@ -338,16 +338,10 @@ pub(crate) fn valid_uri(value: Option<&str>) -> bool {
     true
 }
 fn valid_key_thumbprint(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        value.len() == 50
-            && value.starts_with("sha256:")
-            && value[7..]
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    })
+    valid_digest(value)
 }
 
-fn valid_digest(value: Option<&str>) -> bool {
+pub(crate) fn valid_digest(value: Option<&str>) -> bool {
     value.is_some_and(|v| {
         v.len() == 71
             && v.starts_with("sha256:")
