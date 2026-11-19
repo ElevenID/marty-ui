@@ -308,7 +308,11 @@ jobs:
           retention-days: 90
 
   compose:
-    if: github.repository == 'ElevenID/marty-ui' && (inputs.mode == 'compose' || github.event_name == 'push')
+    if: >-
+      github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'compose') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.ref_protected && !github.event.deleted))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -324,32 +328,6 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Load and validate the protected-main composition manifest
-        id: composition_manifest
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          manifest=.github/release-inputs/website-composition.json
-          test -f "$manifest"
-          jq -e '
-            type == "object" and
-            (keys | sort) == ["application_run_attempt","application_run_id","expected_parent_sha","website_repository","website_run_attempt","website_run_id"] and
-            .website_repository == "ElevenID/website" and
-            (.website_run_id | type == "string" and test("^[0-9]{6,}$")) and
-            (.website_run_attempt | type == "string" and test("^[1-9][0-9]*$")) and
-            (.application_run_id | type == "string" and test("^[0-9]{6,}$")) and
-            (.application_run_attempt | type == "string" and test("^[1-9][0-9]*$")) and
-            (.expected_parent_sha | type == "string" and test("^[0-9a-f]{40}$"))
-          ' "$manifest" >/dev/null
-          test "$(git rev-parse 'HEAD^')" = "$(jq -r .expected_parent_sha "$manifest")"
-          {
-            echo "website_repository=$(jq -r .website_repository "$manifest")"
-            echo "website_run_id=$(jq -r .website_run_id "$manifest")"
-            echo "website_run_attempt=$(jq -r .website_run_attempt "$manifest")"
-            echo "application_run_id=$(jq -r .application_run_id "$manifest")"
-            echo "application_run_attempt=$(jq -r .application_run_attempt "$manifest")"
-          } >> "$GITHUB_OUTPUT"
       - name: Require the exact protected-main composition source
         env:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
@@ -363,6 +341,16 @@ jobs:
           fi
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Load and validate the protected-main composition manifest
+        id: composition_manifest
+        if: github.event_name == 'push'
+        env:
+          COMPOSITION_PUSH_DELETED: ${{ github.event.deleted }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/web_composition_manifest.py \
+            --manifest .github/release-inputs/website-composition.json >> "$GITHUB_OUTPUT"
       - name: Prepare pinned verification tools and dependencies
         shell: bash
         run: |

@@ -69,9 +69,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 2
           persist-credentials: false
       - name: Verify private fork access policy
         run: python3 -m unittest discover -s tests -p test_private_forks.py
+      - name: Validate changed website composition against its integration parent
+        env:
+          COMPOSITION_INTEGRATION_BASE: ${{ github.event.merge_group.base_sha || '' }}
+        run: python3 scripts/web_composition_manifest.py --check-integration
       - name: Validate source release metadata before expensive setup
         env:
           SOURCE_SHA: ${{ github.sha }}

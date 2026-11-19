@@ -215,14 +215,14 @@ def test_composer_workflow_keeps_legacy_default_and_scopes_external_credentials_
     assert website["env"] == {
         "GH_TOKEN": "${{ github.token }}",
         "WEBSITE_ARTIFACT_READ_TOKEN": "${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}",
-        "WEBSITE_RUN": "${{ inputs.website_run_id }}",
-        "WEBSITE_ATTEMPT": "${{ inputs.website_run_attempt }}",
-        "WEBSITE_REPOSITORY": "${{ inputs.website_repository || 'ElevenID/marty-ui' }}",
+        "WEBSITE_RUN": "${{ inputs.website_run_id || steps.composition_manifest.outputs.website_run_id }}",
+        "WEBSITE_ATTEMPT": "${{ inputs.website_run_attempt || steps.composition_manifest.outputs.website_run_attempt }}",
+        "WEBSITE_REPOSITORY": "${{ inputs.website_repository || steps.composition_manifest.outputs.website_repository || 'ElevenID/marty-ui' }}",
     }
     assert application["env"] == {
         "GH_TOKEN": "${{ github.token }}",
-        "APPLICATION_RUN": "${{ inputs.application_run_id }}",
-        "APPLICATION_ATTEMPT": "${{ inputs.application_run_attempt }}",
+        "APPLICATION_RUN": "${{ inputs.application_run_id || steps.composition_manifest.outputs.application_run_id }}",
+        "APPLICATION_ATTEMPT": "${{ inputs.application_run_attempt || steps.composition_manifest.outputs.application_run_attempt }}",
     }
     for step in compose["steps"]:
         if step is not website:
@@ -264,16 +264,39 @@ if program == "jq":
         executable.write_text(recorder)
         executable.chmod(0o700)
 
-    def run(step, *, repository=None, artifact_token=""):
+    def run(step, *, repository=None, artifact_token="", event="workflow_dispatch"):
+        assert event in {"workflow_dispatch", "push"}
+        inputs = {
+            "website_repository": repository or "",
+            "website_run_id": "124", "website_run_attempt": "2",
+            "application_run_id": "125", "application_run_attempt": "1",
+        } if event == "workflow_dispatch" else {}
+        outputs = {
+            "website_repository": repository or policy.STANDALONE_REPOSITORY,
+            "website_run_id": "224", "website_run_attempt": "3",
+            "application_run_id": "225", "application_run_attempt": "4",
+        } if event == "push" else {}
         values = {
-            "${{ github.token }}": "synthetic-job-token",
-            "${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}": artifact_token,
-            "${{ inputs.website_repository || 'ElevenID/marty-ui' }}": repository or ui.REPOSITORY,
-            "${{ inputs.website_run_id }}": "124",
-            "${{ inputs.website_run_attempt }}": "2",
-            "${{ inputs.application_run_id }}": "125",
-            "${{ inputs.application_run_attempt }}": "1",
+            "github.token": "synthetic-job-token",
+            "secrets.WEBSITE_RELEASE_READ_TOKEN": artifact_token,
+            **{f"inputs.{key}": value for key, value in inputs.items()},
+            **{f"steps.composition_manifest.outputs.{key}": value for key, value in outputs.items()},
         }
+
+        def resolve(expression):
+            # Resolve only the declared string selections, including Actions' OR
+            # fallback for absent dispatch inputs. Never interpolate shell text.
+            assert expression.startswith("${{ ") and expression.endswith(" }}")
+            for term in expression[4:-3].split(" || "):
+                if term.startswith("'") and term.endswith("'"):
+                    value = term[1:-1]
+                else:
+                    assert term in values or term.startswith(("inputs.", "steps.composition_manifest.outputs."))
+                    value = values.get(term, "")
+                if value:
+                    return value
+            return ""
+
         # Each Actions step starts with its own declared environment. Never copy
         # the test process environment, which may contain actual CI credentials.
         env = {
@@ -281,7 +304,7 @@ if program == "jq":
             "RUNNER_TEMP": str(runner), "WORKFLOW_CALLS": str(capture),
             "GITHUB_REPOSITORY": ui.REPOSITORY, "GITHUB_SHA": "c" * 40,
             "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
-            **{name: values[value] for name, value in step["env"].items()},
+            **{name: resolve(value) for name, value in step["env"].items()},
         }
         capture.unlink(missing_ok=True)
         result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", step["run"]],
@@ -294,52 +317,61 @@ if program == "jq":
     return run
 
 
-@pytest.mark.parametrize("repository,artifact_token,expected_token", [
-    (None, "", "synthetic-job-token"),
-    (ui.REPOSITORY, "synthetic-website-token", "synthetic-job-token"),
-    (policy.STANDALONE_REPOSITORY, "synthetic-website-token", "synthetic-website-token"),
+@pytest.mark.parametrize("event,repository,artifact_token,expected_token", [
+    ("workflow_dispatch", None, "", "synthetic-job-token"),
+    ("workflow_dispatch", ui.REPOSITORY, "synthetic-website-token", "synthetic-job-token"),
+    ("workflow_dispatch", policy.STANDALONE_REPOSITORY, "synthetic-website-token", "synthetic-website-token"),
+    ("push", policy.STANDALONE_REPOSITORY, "synthetic-website-token", "synthetic-website-token"),
 ])
 def test_website_intake_shell_selects_only_the_required_token(composer_workflow, workflow_shell, tmp_path,
-                                                            repository, artifact_token, expected_token):
-    result, calls = workflow_shell(composer_workflow[2], repository=repository, artifact_token=artifact_token)
+                                                            event, repository, artifact_token, expected_token):
+    result, calls = workflow_shell(composer_workflow[2], repository=repository,
+                                  artifact_token=artifact_token, event=event)
     assert result.returncode == 0, result.stderr
+    run_id, attempt = ("124", "2") if event == "workflow_dispatch" else ("224", "3")
     assert calls == [{
         "program": "python",
         "argv": ["scripts/web_release_intake.py", "website", "--repository", repository or ui.REPOSITORY,
-                 "--run-id", "124", "--run-attempt", "2", "--assets", str(tmp_path / "runner/selected-website"),
+                 "--run-id", run_id, "--run-attempt", attempt, "--assets", str(tmp_path / "runner/selected-website"),
                  "--gh", str(tmp_path / "runner/web-verifiers/gh"),
                  "--cosign", str(tmp_path / "runner/web-verifiers/cosign")],
         "env": {"GH_TOKEN": expected_token},
     }]
 
 
-def test_standalone_intake_shell_requires_external_token_before_any_tool(composer_workflow, workflow_shell):
-    result, calls = workflow_shell(composer_workflow[2], repository=policy.STANDALONE_REPOSITORY)
+@pytest.mark.parametrize("event", ["workflow_dispatch", "push"])
+def test_standalone_intake_shell_requires_external_token_before_any_tool(composer_workflow, workflow_shell, event):
+    result, calls = workflow_shell(composer_workflow[2], repository=policy.STANDALONE_REPOSITORY, event=event)
     assert result.returncode != 0
     assert "requires WEBSITE_RELEASE_READ_TOKEN" in result.stderr
     assert calls == []
 
 
 @pytest.mark.parametrize("repository", [ui.COMMERCE_REPOSITORY, "Elsewhere/website", "ElevenID/website/extra"])
-def test_website_intake_shell_rejects_unlisted_owner_before_any_tool(composer_workflow, workflow_shell, repository):
-    result, calls = workflow_shell(composer_workflow[2], repository=repository, artifact_token="synthetic-website-token")
+@pytest.mark.parametrize("event", ["workflow_dispatch", "push"])
+def test_website_intake_shell_rejects_unlisted_owner_before_any_tool(composer_workflow, workflow_shell, repository, event):
+    result, calls = workflow_shell(composer_workflow[2], repository=repository,
+                                  artifact_token="synthetic-website-token", event=event)
     assert result.returncode != 0
     assert "Unsupported website producer repository" in result.stderr
     assert calls == []
 
 
-def test_external_website_token_does_not_reach_application_backend_composer_or_signer(composer_workflow, workflow_shell):
+@pytest.mark.parametrize("event", ["workflow_dispatch", "push"])
+def test_external_website_token_does_not_reach_application_backend_composer_or_signer(composer_workflow, workflow_shell, event):
     result, website_calls = workflow_shell(composer_workflow[2], repository=policy.STANDALONE_REPOSITORY,
-                                         artifact_token="synthetic-website-token")
+                                         artifact_token="synthetic-website-token", event=event)
     assert result.returncode == 0, result.stderr
     assert website_calls[0]["env"] == {"GH_TOKEN": "synthetic-website-token"}
     result, calls = workflow_shell(composer_workflow[3], repository=policy.STANDALONE_REPOSITORY,
-                                  artifact_token="synthetic-website-token")
+                                  artifact_token="synthetic-website-token", event=event)
     assert result.returncode == 0, result.stderr
     assert [call["program"] for call in calls] == ["python", "jq", "jq", "python", "python", "cosign", "cosign"]
     assert all(call["env"] == {"GH_TOKEN": "synthetic-job-token"} for call in calls)
     python_calls = [call["argv"] for call in calls if call["program"] == "python"]
     assert python_calls[0][:4] == ["scripts/web_release_intake.py", "application", "--repository", ui.REPOSITORY]
+    run_id, attempt = ("125", "1") if event == "workflow_dispatch" else ("225", "4")
+    assert python_calls[0][4:8] == ["--run-id", run_id, "--run-attempt", attempt]
     assert python_calls[1][:6] == ["scripts/web_release_intake.py", "backend", "--source-sha", "b" * 40, "--tag", "v1.2.3"]
     assert python_calls[2][0] == "scripts/package_web_composition.py"
     assert python_calls[2][python_calls[2].index("--producer-repository") + 1] == ui.REPOSITORY
