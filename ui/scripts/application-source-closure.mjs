@@ -12,6 +12,10 @@ import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import {
+  APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
+  APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RESOURCE_MIME_TYPES,
+} from './application-public-assets.mjs';
 
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TEST_CONTRACTS = ['contracts/organization-domain-behavior.json'];
@@ -40,6 +44,7 @@ export const OMITTED_COMBINED_TEST_INPUTS = Object.freeze([
 ]);
 export const ADDITIONAL_OMISSIONS = Object.freeze([
   ...OMITTED_DEMO_INPUTS, ...OMITTED_COMBINED_ADAPTERS, ...OMITTED_DEMO_MODULES, ...OMITTED_COMBINED_TEST_INPUTS,
+  ...APPLICATION_ASSET_OMISSIONS,
 ]);
 export const RETAINED_SHARED_INPUTS = Object.freeze([
   'ui/src/application/routing/appHandoff.js',
@@ -63,7 +68,9 @@ const REQUIRED_INPUTS = [
   'ui/package.json', 'ui/package-lock.json', 'ui/index.html', 'ui/console/index.html',
   'ui/scripts/build-web-surface.mjs', 'ui/vite.config.ts', 'ui/vitest.config.ts',
   `ui/${APPLICATION_TEST_CONFIG}`, 'ui/scripts/application-test-profile.mjs',
+  'ui/scripts/application-public-assets.mjs', 'ui/scripts/application-resource-smoke.mjs',
   'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts',
+  ...APPLICATION_RETAINED_PUBLIC_FILES.map((entry) => `ui/public/${entry}`),
   ...APPLICATION_TEST_FILES.map((entry) => `ui/${entry}`), ...RETAINED_SHARED_INPUTS,
 ];
 const APPLICATION_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
@@ -148,7 +155,7 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT } =
   const files = paths.map((entry) => readInput(root, entry).record);
   const status = sourceStatus(root);
   return {
-    schema: 'marty.application-source-closure-plan/v2',
+    schema: 'marty.application-source-closure-plan/v3',
     repository_root: root,
     source: { commit: sourceSha, working_tree_dirty: status.length > 0, git_status: status,
       input_inventory_sha256: identity(files), files },
@@ -161,10 +168,12 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT } =
         combined_entry_adapters: [...OMITTED_COMBINED_ADAPTERS],
         demo_modules: [...OMITTED_DEMO_MODULES],
         combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
+        public_assets: [...APPLICATION_ASSET_OMISSIONS],
       },
       omitted: [...omitted].sort(),
       retained: paths.filter((entry) => !omitted.has(entry)),
       retained_shared_inputs: [...RETAINED_SHARED_INPUTS],
+      retained_public_files: [...APPLICATION_RETAINED_PUBLIC_FILES],
       ownership_audit_complete: false,
       scope: 'Application build and selected routing/authentication tests with audited inputs absent; remaining source, asset, package and workflow ownership is not complete.',
     },
@@ -242,8 +251,22 @@ export function verifyApplicationClosureOutput(exportRoot, plan) {
     const locale = JSON.parse(readInput(output, filename).bytes.toString('utf8'));
     require(locale && typeof locale === 'object' && !Array.isArray(locale), 'Invalid application fallback locale');
   }
+  const source = new Map(plan.source.files.map((entry) => [entry.path, entry]));
+  const publicResources = APPLICATION_RETAINED_PUBLIC_FILES.map((entry) => {
+    require(files.includes(entry), `Retained application public resource is missing: ${entry}`);
+    const actual = readInput(output, entry);
+    const expected = source.get(`ui/public/${entry}`);
+    require(expected && actual.record.bytes === expected.bytes && actual.record.sha256 === expected.sha256,
+      `Retained application public resource differs from original source: ${entry}`);
+    if (entry.startsWith('locales/')) {
+      const locale = JSON.parse(actual.bytes.toString('utf8'));
+      require(locale && typeof locale === 'object' && !Array.isArray(locale), `Invalid application locale: ${entry}`);
+    }
+    return { path: entry, bytes: actual.record.bytes, sha256: actual.record.sha256 };
+  });
   const inventory = files.map((entry) => readInput(output, entry).record);
-  return { files: inventory, inventory_sha256: identity(inventory), english_namespaces: [...APPLICATION_NAMESPACES] };
+  return { files: inventory, inventory_sha256: identity(inventory), english_namespaces: [...APPLICATION_NAMESPACES],
+    public_resources: publicResources, locales: [...APPLICATION_LOCALES] };
 }
 
 function buildEnvironment(sourceSha) {
@@ -280,6 +303,51 @@ function verifyApplicationTestResult(temporary, exported) {
   return { completed_files: completed, test_count: assertions, report_sha256: digest(raw) };
 }
 
+function verifyApplicationResourceResult(temporary, exported, output) {
+  const raw = readInput(temporary, 'application-resources.json').bytes;
+  const result = JSON.parse(raw.toString('utf8'));
+  require(result && result.schema === 'marty.application-resource-smoke/v1' && result.status === 'passed',
+    'Application resource smoke did not succeed');
+  require(Array.isArray(result.public_resources), 'Application resource report is missing public resources');
+  assert.deepEqual(result.public_resources, output.public_resources, 'Resource probe differs from the preserved public resources');
+  require(Array.isArray(result.served_resources) && result.served_resources.length > 0, 'Application resource report is missing served resources');
+  const inventory = new Map(output.files.map((entry) => [entry.path, entry]));
+  const required = new Set([...APPLICATION_RETAINED_PUBLIC_FILES, 'index.html', 'console/index.html',
+    ...output.files.filter((entry) => /\.(?:m?js|wasm|css)$/.test(entry.path)).map((entry) => entry.path)]);
+  const seen = new Set();
+  for (const row of result.served_resources) {
+    require(row && typeof row.path === 'string' && !seen.has(row.path), 'Duplicate or invalid served resource');
+    const expected = inventory.get(row.path);
+    require(expected && row.status === 200 && row.bytes === expected.bytes && row.sha256 === expected.sha256
+      && typeof row.content_type === 'string' && row.content_type.length > 0, 'Served resource differs from the built output');
+    require(APPLICATION_RESOURCE_MIME_TYPES[path.extname(row.path)]?.includes(row.content_type.split(';', 1)[0].trim().toLowerCase()),
+      'Served resource content type differs from its asset type');
+    seen.add(row.path);
+  }
+  require([...required].every((entry) => seen.has(entry)), 'Application resource report omitted a required response');
+  require(result.preview && result.preview.host === '127.0.0.1' && Number.isInteger(result.preview.port)
+    && result.preview.port > 0 && result.preview.port <= 65535 && result.preview.closed === true,
+  'Application resource preview was not closed on loopback');
+  assert.deepEqual(result.qualification, { resources_served: true, locale_fallback_observed: true,
+    browser_startup_observed: false, host_deployment_tested: false, oidc_journey_tested: false },
+  'Application resource smoke broadened its qualification');
+  const locale = result.locale_probe;
+  const en = JSON.parse(readInput(path.join(exported, 'ui/dist-application'), 'locales/en/common.json').bytes.toString('utf8'));
+  const de = JSON.parse(readInput(path.join(exported, 'ui/dist-application'), 'locales/de/common.json').bytes.toString('utf8'));
+  require(typeof en.common?.login === 'string' && en.common.login.length > 0 && de.common?.login === undefined
+    && typeof de.actions?.cancel === 'string' && de.actions.cancel.length > 0, 'Real locale inputs do not support the selected fallback probe');
+  require(locale && locale.language === 'de' && locale.fallback_language === 'en' && locale.key === 'common.login'
+    && locale.resolved_language === 'en' && locale.fallback_value === en.common.login
+    && locale.localized_key === 'actions.cancel' && locale.localized_language === 'de'
+    && locale.localized_value === de.actions.cancel && Array.isArray(locale.requests),
+  'Application resource report did not observe the selected locale fallback');
+  const expectedRequests = ['de', 'en'].flatMap((language) => APPLICATION_LOCALE_NAMESPACES.map(
+    (namespace) => `/locales/${language}/${namespace}.json`,
+  )).sort();
+  assert.deepEqual([...new Set(locale.requests)].sort(), expectedRequests, 'Locale backend requests differ from the application namespaces');
+  return { ...result, report_sha256: digest(raw) };
+}
+
 export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, dependencyDirectory,
   keepExport = false } = {}) {
   const plan = planApplicationSourceClosure({ repositoryRoot });
@@ -292,16 +360,21 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
   const exported = path.join(temporary, 'source');
   const testArguments = ['node_modules/vitest/vitest.mjs', 'run', '--config', APPLICATION_TEST_CONFIG,
     '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')];
+  const resourceArguments = ['scripts/application-resource-smoke.mjs', '--dist', 'dist-application',
+    '--report', path.join(temporary, 'application-resources.json')];
   const report = {
-    schema: 'marty.application-source-closure-rehearsal/v2',
+    schema: 'marty.application-source-closure-rehearsal/v3',
     status: 'failed', plan,
     build: { command: ['node', 'scripts/build-web-surface.mjs', 'application'], node_version: process.version,
       dependency_mode: 'reused-installed-node_modules', dependency_directory: dependencies,
       package_lock_sha256: plan.source.files.find((entry) => entry.path === 'ui/package-lock.json').sha256,
       effective_source_sha: effectiveSourceSha(plan) },
     tests: { command: ['node', ...testArguments], selected_files: [...APPLICATION_TEST_FILES] },
+    resources: { command: ['node', ...resourceArguments] },
     qualification: { application_build_completed: false, application_tests_completed: false, omitted_sources_absent: false,
       application_output_checked: false, source_checkout_unchanged: false, source_extraction_complete: false,
+      public_assets_preserved: false, application_resource_smoke_completed: false,
+      locale_fallback_observed: false, browser_startup_observed: false,
       independent_dependency_installation: false, oidc_journey_tested: false, host_deployment_tested: false,
       signed_release_produced: false },
     export_directory: exported, export_retained: keepExport,
@@ -326,8 +399,21 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     report.tests.result = verifyApplicationTestResult(temporary, exported);
     report.qualification.application_tests_completed = true;
     requireOmittedInputsAbsent(plan, exported);
-    report.qualification.omitted_sources_absent = true;
     report.output = verifyApplicationClosureOutput(exported, plan);
+    const resources = spawnSync(process.execPath, resourceArguments, {
+      cwd: path.join(exported, 'ui'), env: buildEnvironment(report.build.effective_source_sha), stdio: ['ignore', 2, 2],
+      timeout: 60 * 1000, shell: false,
+    });
+    if (resources.error) throw resources.error;
+    require(resources.status === 0, `Application resource smoke failed with exit code ${resources.status}`);
+    requireOmittedInputsAbsent(plan, exported);
+    const finalOutput = verifyApplicationClosureOutput(exported, plan);
+    assert.deepEqual(finalOutput, report.output, 'Resource probe changed the built output inventory');
+    report.resources.result = verifyApplicationResourceResult(temporary, exported, finalOutput);
+    report.qualification.application_resource_smoke_completed = true;
+    report.qualification.public_assets_preserved = true;
+    report.qualification.locale_fallback_observed = true;
+    report.qualification.omitted_sources_absent = true;
     report.qualification.application_output_checked = true;
     report.status = 'passed';
   } catch (error) {

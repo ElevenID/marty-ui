@@ -28,7 +28,7 @@
     "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs && node scripts/patch-checker-worker-cleanup.mjs",
     "build:website": "node scripts/build-web-surface.mjs website",
     "build:application": "node scripts/build-web-surface.mjs application",
-    "test:application": "node --test scripts/application-config.test.mjs scripts/application-source-closure.test.mjs && vitest run --config vitest.application.config.ts",
+    "test:application": "node --test scripts/application-config.test.mjs scripts/application-source-closure.test.mjs scripts/application-resource-smoke.test.mjs && vitest run --config vitest.application.config.ts",
     "check:application-source-closure": "node scripts/application-source-closure.mjs",
     "test:website": "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs scripts/crawler-config.test.mjs && vitest run src/application/routing/appHandoff.test.ts src/application/routing/loginEntry.test.ts src/application/routing/publicEntry.test.ts src/components/__tests__/LandingPage.test.tsx src/apps/shared/WebSurfaceBoundary.test.tsx"
   },

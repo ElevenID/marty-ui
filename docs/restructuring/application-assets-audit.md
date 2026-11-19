@@ -1,9 +1,9 @@
 # Application public asset audit
 
-This audit identifies the next bounded source-absence batch after the
-[45-input application build and test rehearsal](application-build-boundary.md).
-It does not establish that the additional assets can already be absent before
-the build, and it is not a source deletion manifest.
+This audit defines the public asset inputs added to the
+[application build, test and resource rehearsal](application-build-boundary.md).
+The fixed 26-path addition expands its disposable source-absence boundary from
+45 to 71 inputs. Original source remains intact; this is not a deletion manifest.
 
 ## Observed boundary
 
@@ -15,17 +15,17 @@ those files byte for byte: 42 translation files and 12 other resources. It
 excludes exactly 30 public inputs.
 
 The original 37-input rehearsal already omits three raw demo manifests before
-building. The next 45-input rehearsal also omits English `marketing.json`.
-The remaining 26 public files below are candidates for absence before the build.
-They total 17,105,464 bytes and would expand the bounded omission set to 71.
+building. The 45-input rehearsal also omits English `marketing.json`.
+The remaining 26 public files below are omitted from the disposable export
+before its build and tests. They total 17,105,464 bytes and expand the bounded omission set to 71.
 For comparison, the delta from the initial 37-input rehearsal is 27 files,
 including English marketing translations, for 17,116,003 bytes.
 
 `ui/scripts/prune-selfhost-dist.mjs` and the exact exclusions in
 `ui/scripts/selfhost-build-contract.mjs` explain their absence from the current
 application output. Vite currently copies the public directory before this
-pruning. Absence from final output alone does not establish independence from
-these files during configuration, compilation or tests.
+pruning. The rehearsal checks their physical absence during configuration,
+compilation, selected tests and the local resource probe.
 
 ## Exact additional application omissions
 
@@ -81,27 +81,40 @@ resources necessary. A null default branding logo does not qualify arbitrary
 deployment-defined logo URLs. All observations concern the selected public
 application profile; they do not qualify private commerce assets.
 
-## Next acceptance gate
+## Implemented acceptance gate
 
 1. Omit the exact 26 additional paths in a disposable export, then run the
    unchanged application build and selected application tests. Require every
-   omission to remain absent after both children and preserve the original
+   omission to remain absent after all children and preserve the original
    source inventory, byte hashes, file modes and Git status.
 2. Verify all 42 locale files and 12 other retained public resources, including
    exact source-byte preservation. Parse both built HTML entrypoints and the
    manifest so every local referenced resource resolves to an actual output
    file. A successful SPA fallback is not a valid asset response.
-3. Serve the same exported output for a bounded resource smoke check. Check
-   bytes and content types for configuration, startup scripts, locale JSON,
-   manifest/icons and emitted JavaScript/WASM; fail on HTML masquerading as
-   another resource. Observe real locale requests, English fallback, default
-   branding/mobile logo loading and application startup. Include a missing
-   required locale, icon or script to show that the probe detects breakage.
+3. Serve the same exported output through the installed Vite preview API on an
+   ephemeral loopback port with project configuration disabled. Check bytes and
+   content types for preserved resources, both HTML entries and emitted
+   JavaScript/CSS/WASM; reject redirects and HTML masquerading as another
+   resource. Exercise actual i18next HTTP requests for German and English,
+   including the missing German `common.login` key resolving to its actual
+   English value. Require complete output-inventory equality before and after
+   the probe. Missing/tampered locale, icon and script fixtures and a real Vite
+   HTML fallback verify rejection behavior.
 4. Keep this evidence separate from independent dependencies, signed
    application publication and actual host/OIDC qualification. Preserve the
    existing combined and website defaults. Puppeteer remains used by
    `ui/scripts/public-verification-browser.mjs` for application QA and cannot
    be classified as website-only solely from this audit.
 
-The source and output comparison is complete. The additional prebuild absence
-and served-resource/browser gates remain unexecuted at this audit checkpoint.
+The diagnostic report records source identity, all 71 omissions, all 54 preserved
+public resource hashes, served response hashes/types and the actual locale
+request/fallback evidence. Final committed-candidate execution is recorded in
+the candidate PR. This gate uses the existing dependency installation and does
+not qualify an independent application package.
+
+The default branding configuration and mobile icon are verified as served bytes.
+Browser rendering, application startup and deployment-injected runtime settings
+are not observed by this Node-only probe. Those browser gates, private commerce
+assets, production host behavior and OIDC qualification remain separate work.
+External font URLs are recorded without fetching them. The probe performs no
+external-host or AWS operations, and its preview server must close before success.

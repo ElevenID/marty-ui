@@ -11,6 +11,10 @@ import {
   rehearseApplicationSourceClosure,
 } from './application-source-closure.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import {
+  APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
+  APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RESOURCE_MIME_TYPES,
+} from './application-public-assets.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const harness = fileURLToPath(new URL('./application-source-closure.mjs', import.meta.url));
@@ -32,7 +36,8 @@ function git(root, ...args) {
   return result.stdout.trim();
 }
 
-function builder({ failure = false, marketing = false, mutateSource, outputSymlink = false, recreateOmitted } = {}) {
+function builder({ failure = false, marketing = false, mutateSource, outputSymlink = false, recreateOmitted,
+  removePublic, tamperPublic } = {}) {
   return `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -71,6 +76,13 @@ const routeContract = { version: routes.schema_version, sha256: 'sha256:' + crea
 fs.writeFileSync(path.join(output, 'marty-web-routes.json'), JSON.stringify({ schema: 'marty.application-web-compatibility/v1', surface: 'application', source_sha: process.env.MARTY_UI_SHA, route_contract: routeContract }));
 fs.mkdirSync(path.join(output, 'locales/en'), { recursive: true });
 for (const namespace of ${JSON.stringify(namespaces)}) fs.writeFileSync(path.join(output, 'locales/en', namespace + '.json'), '{}');
+for (const entry of ${JSON.stringify(APPLICATION_RETAINED_PUBLIC_FILES)}) {
+  const destination = path.join(output, entry);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(path.join('public', entry), destination);
+}
+${removePublic ? `fs.rmSync(path.join(output, ${JSON.stringify(removePublic)}));` : ''}
+${tamperPublic ? `fs.writeFileSync(path.join(output, ${JSON.stringify(tamperPublic)}), '{"tampered":true}');` : ''}
 ${marketing ? "fs.mkdirSync(path.join(output, 'blog')); fs.writeFileSync(path.join(output, 'blog/index.html'), 'retained marketing');" : ''}
 `;
 }
@@ -108,6 +120,48 @@ ${recreateAfterTests ? `fs.writeFileSync(path.join(root, ${JSON.stringify(OMITTE
 `;
 }
 
+function resourceProbe({ resourceFailure = false, resourceFault, recreateAfterResources = false } = {}) {
+  return `
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+assert.deepEqual(process.argv.slice(2, -1), ['--dist', 'dist-application', '--report']);
+${resourceFailure ? 'process.exit(19);' : ''}
+${resourceFault === 'missing-report' ? 'process.exit(0);' : ''}
+const output = path.resolve('dist-application');
+const publicFiles = ${JSON.stringify(APPLICATION_RETAINED_PUBLIC_FILES)};
+function record(entry) {
+  const bytes = fs.readFileSync(path.join(output, entry));
+  return { path: entry, bytes: bytes.length, sha256: 'sha256:' + createHash('sha256').update(bytes).digest('hex') };
+}
+const result = { schema: 'marty.application-resource-smoke/v1', status: 'passed',
+  public_resources: publicFiles.map(record),
+  served_resources: [...publicFiles, 'index.html', 'console/index.html'].map((entry) => ({
+    ...record(entry), status: 200, content_type: ${JSON.stringify(APPLICATION_RESOURCE_MIME_TYPES)}[path.extname(entry)][0],
+  })),
+  entry_references: [], manifest_icons: [],
+  locale_probe: { language: 'de', fallback_language: 'en', key: 'common.login', resolved_language: 'en',
+    fallback_value: 'Login', localized_key: 'actions.cancel', localized_language: 'de', localized_value: 'Abbrechen',
+    requests: ['de', 'en'].flatMap((locale) => ${JSON.stringify(APPLICATION_LOCALE_NAMESPACES)}.map((namespace) => '/locales/' + locale + '/' + namespace + '.json')).sort() },
+  preview: { host: '127.0.0.1', port: 42641, closed: true },
+  qualification: { resources_served: true, locale_fallback_observed: true, browser_startup_observed: false,
+    host_deployment_tested: false, oidc_journey_tested: false } };
+${resourceFault === 'missing-resource' ? 'result.served_resources.pop();' : ''}
+${resourceFault === 'tampered-resource' ? "result.served_resources[0].sha256 = 'sha256:' + '0'.repeat(64);" : ''}
+${resourceFault === 'html-as-script' ? "result.served_resources.find((entry) => entry.path === 'startup.js').content_type = 'text/html';" : ''}
+${resourceFault === 'no-fallback' ? "result.locale_probe.resolved_language = 'de';" : ''}
+${resourceFault === 'missing-locale-request' ? 'result.locale_probe.requests.pop();' : ''}
+${resourceFault === 'open-preview' ? 'result.preview.closed = false;' : ''}
+${resourceFault === 'broadened-qualification' ? 'result.qualification.browser_startup_observed = true;' : ''}
+fs.writeFileSync(process.argv.at(-1), JSON.stringify(result));
+${resourceFault === 'changed-output' ? "fs.writeFileSync(path.join(output, 'runtime-config.js'), '// changed after report');" : ''}
+${resourceFault === 'changed-emitted-output' ? "fs.writeFileSync(path.join(output, 'index.html'), '<html>Changed after valid HTTP responses</html>');" : ''}
+${recreateAfterResources ? `const restored = path.resolve('..', ${JSON.stringify(APPLICATION_ASSET_OMISSIONS[0])});
+fs.mkdirSync(path.dirname(restored), { recursive: true }); fs.writeFileSync(restored, '// restored asset');` : ''}
+`;
+}
+
 function fixture(t, buildOptions = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'marty-application-source-fixture-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -117,17 +171,25 @@ function fixture(t, buildOptions = {}) {
   put(root, 'contracts/organization-domain-behavior.json', organizationContract);
   for (const entry of [...ownership.modules, ...RETAINED_SHARED_INPUTS]) put(root, entry, '// retained fixture source\n');
   for (const entry of ADDITIONAL_OMISSIONS) put(root, entry, '{}\n');
+  for (const entry of APPLICATION_RETAINED_PUBLIC_FILES) {
+    let content = entry.endsWith('.json') ? '{}\n' : `Synthetic resource fixture: ${entry}\n`;
+    if (entry === 'locales/en/common.json') content = JSON.stringify({ common: { login: 'Login' }, actions: { cancel: 'Cancel' } });
+    if (entry === 'locales/de/common.json') content = JSON.stringify({ actions: { cancel: 'Abbrechen' } });
+    put(root, `ui/public/${entry}`, content);
+  }
   for (const entry of APPLICATION_TEST_FILES) put(root, `ui/${entry}`, '// selected test fixture\n');
   put(root, 'ui/package.json', JSON.stringify({ type: 'module' }));
   put(root, 'ui/package-lock.json', '{}\n');
   put(root, 'ui/vite.config.ts', '// fixture config; the real Vite build is a separate rehearsal\n');
   for (const entry of ['ui/vitest.config.ts', `ui/${APPLICATION_TEST_CONFIG}`,
-    'ui/scripts/application-test-profile.mjs', 'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts']) {
+    'ui/scripts/application-test-profile.mjs', 'ui/scripts/application-public-assets.mjs',
+    'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts']) {
     put(root, entry, '// required application test input\n');
   }
   put(root, 'ui/index.html', '<html>Fixture entry</html>');
   put(root, 'ui/console/index.html', '<html>Fixture console entry</html>');
   put(root, 'ui/scripts/build-web-surface.mjs', builder(buildOptions));
+  put(root, 'ui/scripts/application-resource-smoke.mjs', resourceProbe(buildOptions));
   put(root, 'ui/node_modules/.bin/tsc', 'fixture');
   put(root, 'ui/node_modules/.bin/vite', 'fixture');
   put(root, 'ui/node_modules/vitest/vitest.mjs', tester(buildOptions));
@@ -137,7 +199,7 @@ function fixture(t, buildOptions = {}) {
   return root;
 }
 
-test('the plan separates the original website roster from the 45-input application build/test boundary', (t) => {
+test('the plan separates the original website roster from the 71-input application build/test/resource boundary', (t) => {
   const root = fixture(t);
   const plan = planApplicationSourceClosure({ repositoryRoot: root });
   assert.equal(ownership.modules.length, 34);
@@ -147,8 +209,14 @@ test('the plan separates the original website roster from the 45-input applicati
     combined_entry_adapters: [...OMITTED_COMBINED_ADAPTERS],
     demo_modules: [...OMITTED_DEMO_MODULES],
     combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
+    public_assets: [...APPLICATION_ASSET_OMISSIONS],
   });
-  assert.equal(plan.boundary.omitted.length, 45);
+  assert.equal(plan.boundary.omitted.length, 71);
+  assert.equal(APPLICATION_ASSET_OMISSIONS.length, 26);
+  assert.equal(new Set(APPLICATION_ASSET_OMISSIONS).size, 26);
+  assert.deepEqual(plan.boundary.retained_public_files, [...APPLICATION_RETAINED_PUBLIC_FILES]);
+  assert.equal(APPLICATION_RETAINED_PUBLIC_FILES.length, 54);
+  assert.equal(APPLICATION_RETAINED_PUBLIC_FILES.filter((entry) => entry.startsWith('locales/')).length, 42);
   assert.equal(plan.boundary.ownership_audit_complete, false);
   assert.equal(plan.source.working_tree_dirty, false);
   assert.match(plan.source.input_inventory_sha256, /^sha256:[0-9a-f]{64}$/);
@@ -180,6 +248,12 @@ test('real child processes build and test only the disposable export while prese
   assert.equal(report.status, 'passed', report.error);
   assert.equal(report.qualification.application_build_completed, true);
   assert.equal(report.qualification.application_tests_completed, true);
+  assert.equal(report.qualification.application_resource_smoke_completed, true);
+  assert.equal(report.qualification.public_assets_preserved, true);
+  assert.equal(report.qualification.locale_fallback_observed, true);
+  assert.equal(report.qualification.browser_startup_observed, false);
+  assert.equal(report.resources.result.public_resources.length, 54);
+  assert.deepEqual(report.output.locales, [...APPLICATION_LOCALES]);
   assert.deepEqual(report.tests.result.completed_files, [...APPLICATION_TEST_FILES].sort());
   assert.equal(report.tests.result.test_count, APPLICATION_TEST_FILES.length);
   assert.match(report.tests.result.report_sha256, /^sha256:[0-9a-f]{64}$/);
@@ -268,6 +342,54 @@ for (const testReportFault of ['missing-report', 'missing-file', 'wrong-file', '
   });
 }
 
+for (const entry of ['locales/fr/common.json', 'favicon.ico', 'startup.js']) {
+  for (const failure of ['removePublic', 'tamperPublic']) {
+    test(`${failure} refuses a changed retained locale, icon or script: ${entry}`, (t) => {
+      const root = fixture(t, { [failure]: entry });
+      const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+      assert.equal(report.status, 'failed');
+      assert.match(report.error, /Retained application public resource/);
+      assert.equal(report.qualification.public_assets_preserved, false);
+      assert.equal(report.qualification.application_resource_smoke_completed, false);
+      assert.equal(report.qualification.source_checkout_unchanged, true);
+    });
+  }
+}
+
+test('resource process failure leaves a successful build/test stage unqualified and cleans the export', (t) => {
+  const root = fixture(t, { resourceFailure: true });
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+  assert.equal(report.status, 'failed');
+  assert.match(report.error, /Application resource smoke failed with exit code 19/);
+  assert.equal(report.qualification.application_build_completed, true);
+  assert.equal(report.qualification.application_tests_completed, true);
+  assert.equal(report.qualification.application_resource_smoke_completed, false);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+for (const resourceFault of ['missing-report', 'missing-resource', 'tampered-resource', 'html-as-script', 'no-fallback',
+  'missing-locale-request', 'open-preview', 'broadened-qualification', 'changed-output', 'changed-emitted-output']) {
+  test(`successful resource exit cannot conceal ${resourceFault}`, (t) => {
+    const root = fixture(t, { resourceFault });
+    const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+    assert.equal(report.status, 'failed');
+    if (resourceFault === 'changed-emitted-output') assert.match(report.error, /Resource probe changed the built output inventory/);
+    assert.equal(report.qualification.application_resource_smoke_completed, false);
+    assert.equal(report.qualification.source_checkout_unchanged, true);
+    assert.equal(existsSync(path.dirname(report.export_directory)), false);
+  });
+}
+
+test('the resource probe cannot restore an omitted asset after build and tests', (t) => {
+  const root = fixture(t, { recreateAfterResources: true });
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.omitted_sources_absent, false);
+  assert.match(report.error, /contains an omitted input/);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
+});
+
 test('passing tests cannot restore an omitted combined input after the build', (t) => {
   const root = fixture(t, { recreateAfterTests: true });
   const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
@@ -344,7 +466,8 @@ test('a missing fixed demo input fails instead of silently shrinking the audited
   assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /ENOENT/);
 });
 
-for (const entry of [`ui/${APPLICATION_TEST_FILES[0]}`, 'contracts/organization-domain-behavior.json']) {
+for (const entry of [`ui/${APPLICATION_TEST_FILES[0]}`, 'contracts/organization-domain-behavior.json',
+  'ui/public/locales/nl/vendor.json', APPLICATION_ASSET_OMISSIONS[0]]) {
   test(`a missing required test input refuses a narrower test claim: ${entry}`, (t) => {
     const root = fixture(t);
     rmSync(path.join(root, entry));
