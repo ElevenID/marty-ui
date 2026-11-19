@@ -544,7 +544,9 @@ impl DelegationUseAuthorizer {
         if !valid_uri(Some(&verified_proof.evidence_ref))
             || verified_proof.challenge.len() < 22
             || verified_proof.challenge.len() > 128
-            || !verified_proof.challenge.is_ascii()
+            || !verified_proof.challenge.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+            })
             || verified_proof.verified_at < after_resolution
             || verified_proof.verified_at > after_proof
             || verified_proof.valid_until <= after_proof
@@ -688,9 +690,7 @@ impl DelegationUseAuthorizer {
             policy_revision: cedar_result.policy_revision,
             policy_digest: cedar_result.policy_digest,
             // Receipt evaluation time is the final post-policy grant/consent
-            // observation. Policy identity and freshness were checked separately.
-            // This is the final post-policy grant/consent observation. Cedar's
-            // policy snapshot was independently validated immediately before it.
+            // observation. Cedar's policy snapshot was validated immediately before it.
             evaluated_at: final_now,
             valid_until,
             subject: grant.terms.subject.clone(),

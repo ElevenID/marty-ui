@@ -327,7 +327,7 @@ impl DelegatedDecisionReceiptIssuer {
         }
         let compact_jws = format!(
             "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature.signature)
+            URL_SAFE_NO_PAD.encode(signature)
         );
         if compact_jws.len() > MAX_COMPACT_RECEIPT_BYTES {
             return Err(DelegatedDecisionReceiptError::TooLarge);
