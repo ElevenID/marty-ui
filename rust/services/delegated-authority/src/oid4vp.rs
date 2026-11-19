@@ -16,33 +16,98 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    domain::{valid_digest, valid_uri},
     BindingMethod, DelegateProofError, DelegateProofVerifier, DelegationGrant,
-    DelegationUseRequest, MAX_DELEGATE_PROOF_BYTES,
+    DelegationUseRequest, Principal, MAX_DELEGATE_PROOF_BYTES, MAX_GRANT_REVISION,
 };
 
 const MAX_CHALLENGE_BYTES: usize = 256;
 const MIN_NONCE_CHARS: usize = 22;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 
-/// Authoritative OID4VP challenge state resolved by its opaque ID. Implementations
-/// must scope reads to the authenticated organization and grant, and only return
-/// challenges created from the active Flow's configured verifier authority.
+/// Reserved Flow context key. Public Flow start/update inputs reject the
+/// `_marty_` prefix, and public projections remove it recursively.
+pub const DELEGATION_FLOW_CONTEXT_KEY: &str = "_marty_delegation_oid4vp_v1";
+
+/// Immutable, Flow-owned binding between one OID4VP nonce and one delegated
+/// operation. The authenticated Flow producer must populate this snapshot from
+/// the resolved grant, exact operation and independently established session;
+/// deserialization alone does not establish its authority. It must never be
+/// copied from caller-supplied initial context or proof claims.
+///
+/// The snapshot is deliberately scoped to one Flow instance as well as its
+/// tenant, grant revision and entire operation tuple. A broad grant cannot make
+/// a proof for one operation usable for another in-scope operation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DelegationOid4vpChallenge {
-    pub id: Uuid,
+#[serde(deny_unknown_fields)]
+pub struct DelegationFlowContextV1 {
+    pub challenge_id: Uuid,
     pub organization_id: Uuid,
     pub grant_id: Uuid,
     pub grant_revision: u64,
-    /// OID4VP nonce from the signed authorization request.
-    pub nonce: String,
-    /// OID4VP verifier client identifier / expected VP audience.
+    pub actor: Principal,
+    pub action: String,
     pub audience: String,
-    pub expires_at: DateTime<Utc>,
+    pub resource: String,
+    pub operation_profile: String,
+    pub operation_digest: String,
     /// Required for SESSION grants and matched to the grant's exact binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub establishment_evidence_ref: Option<String>,
     /// Thumbprint of the key established by the session evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_key_thumbprint: Option<String>,
+}
+
+impl DelegationFlowContextV1 {
+    pub fn validate(&self) -> Result<(), DelegationOid4vpChallengeStoreError> {
+        if self.challenge_id.is_nil()
+            || self.organization_id.is_nil()
+            || self.grant_id.is_nil()
+            || !(1..=MAX_GRANT_REVISION).contains(&self.grant_revision)
+            || [
+                &self.actor.id,
+                &self.action,
+                &self.audience,
+                &self.resource,
+                &self.operation_profile,
+            ]
+            .into_iter()
+            .any(|value| !valid_uri(Some(value)))
+            || !valid_digest(Some(&self.operation_digest))
+        {
+            return Err(DelegationOid4vpChallengeStoreError);
+        }
+        match (
+            self.session_ref.as_deref(),
+            self.establishment_evidence_ref.as_deref(),
+            self.session_key_thumbprint.as_deref(),
+        ) {
+            (None, None, None) => Ok(()),
+            (Some(session), Some(evidence), Some(thumbprint))
+                if valid_uri(Some(session))
+                    && valid_uri(Some(evidence))
+                    && valid_digest(Some(thumbprint)) =>
+            {
+                Ok(())
+            }
+            _ => Err(DelegationOid4vpChallengeStoreError),
+        }
+    }
+}
+
+/// Authoritative OID4VP challenge state resolved by its opaque ID. Implementations
+/// must scope reads to the authenticated organization and grant, and only return
+/// challenges created from the active Flow's configured verifier authority.
+/// This in-process result is not a caller-deserializable authorization object.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegationOid4vpChallenge {
+    pub binding: DelegationFlowContextV1,
+    /// OID4VP nonce from the signed authorization request.
+    pub nonce: String,
+    pub expires_at: DateTime<Utc>,
 }
 
 /// Challenge lookup port backed by Flow's authoritative OID4VP session state.
@@ -138,10 +203,10 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
                 != Some(request.actor.id.as_str())
             || claims.get("iss").and_then(serde_json::Value::as_str)
                 != Some(request.actor.id.as_str())
+            || presentation_types.iter().any(|value| !value.is_string())
             || claims
                 .get("sub")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|subject| subject != request.actor.id)
+                .is_some_and(|subject| subject.as_str() != Some(request.actor.id.as_str()))
         {
             return Err(DelegateProofError);
         }
@@ -157,6 +222,11 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
             .ok_or(DelegateProofError)?;
         if evaluated_at.saturating_sub(issued_at) > self.max_proof_age.num_seconds()
             || expires_at.saturating_sub(issued_at) > self.max_proof_age.num_seconds()
+            || claims.get("nbf").is_some_and(|not_before| {
+                not_before
+                    .as_i64()
+                    .is_none_or(|not_before| not_before > evaluated_at || not_before >= expires_at)
+            })
         {
             return Err(DelegateProofError);
         }
@@ -190,12 +260,22 @@ fn validate_challenge(
     challenge: &DelegationOid4vpChallenge,
     now: DateTime<Utc>,
 ) -> Result<(), DelegateProofError> {
-    if challenge.id != request.challenge_id
-        || challenge.organization_id != request.organization_id
-        || challenge.grant_id != request.grant_id
-        || challenge.grant_revision != request.expected_revision
-        || challenge.grant_revision != grant.revision
-        || challenge.audience != request.audience
+    let binding = &challenge.binding;
+    binding.validate().map_err(|_| DelegateProofError)?;
+    if binding.challenge_id != request.challenge_id
+        || binding.organization_id != request.organization_id
+        || binding.organization_id != grant.organization_id
+        || binding.grant_id != request.grant_id
+        || binding.grant_id != grant.id
+        || binding.grant_revision != request.expected_revision
+        || binding.grant_revision != grant.revision
+        || binding.actor != request.actor
+        || binding.actor != grant.terms.delegate
+        || binding.action != request.action
+        || binding.audience != request.audience
+        || binding.resource != request.resource
+        || binding.operation_profile != request.operation_profile
+        || binding.operation_digest != request.operation_digest
         || challenge.expires_at <= now
         || challenge.nonce.len() > MAX_CHALLENGE_BYTES
         || challenge.nonce.chars().count() < MIN_NONCE_CHARS
@@ -209,18 +289,18 @@ fn validate_challenge(
     }
     match grant.terms.binding.method {
         BindingMethod::Key => {
-            if challenge.session_ref.is_some()
-                || challenge.establishment_evidence_ref.is_some()
-                || challenge.session_key_thumbprint.is_some()
+            if binding.session_ref.is_some()
+                || binding.establishment_evidence_ref.is_some()
+                || binding.session_key_thumbprint.is_some()
             {
                 return Err(DelegateProofError);
             }
         }
         BindingMethod::Session => {
-            if challenge.session_ref.as_deref() != grant.terms.binding.session_ref.as_deref()
-                || challenge.establishment_evidence_ref.as_deref()
+            if binding.session_ref.as_deref() != grant.terms.binding.session_ref.as_deref()
+                || binding.establishment_evidence_ref.as_deref()
                     != grant.terms.binding.establishment_evidence_ref.as_deref()
-                || challenge.session_key_thumbprint.is_none()
+                || binding.session_key_thumbprint.is_none()
             {
                 return Err(DelegateProofError);
             }
@@ -241,7 +321,7 @@ fn validate_signer_binding(
             }
         }
         BindingMethod::Session => {
-            if challenge.session_key_thumbprint.as_deref() != Some(signer_thumbprint) {
+            if challenge.binding.session_key_thumbprint.as_deref() != Some(signer_thumbprint) {
                 return Err(DelegateProofError);
             }
         }
@@ -252,11 +332,25 @@ fn validate_signer_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test_support::pending_grant, Binding};
+    use crate::{test_support::pending_grant, Binding, PrincipalType};
+    use serde_json::{json, Value};
 
-    #[test]
-    fn challenge_requires_exact_grant_revision_audience_and_session_evidence() {
+    fn vectors() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/oid4vp-delegate-proofs.json"
+        ))
+        .unwrap()
+    }
+
+    fn fixture() -> (
+        DelegationGrant,
+        DelegationUseRequest,
+        DelegationOid4vpChallenge,
+        DateTime<Utc>,
+    ) {
+        let vectors = vectors();
         let grant = pending_grant();
+        let now = DateTime::from_timestamp(vectors["evaluated_at"].as_i64().unwrap(), 0).unwrap();
         let request = DelegationUseRequest {
             organization_id: grant.organization_id,
             grant_id: grant.id,
@@ -268,62 +362,246 @@ mod tests {
             resource: grant.terms.resources[0].clone(),
             operation_profile: "https://commerce.example/profiles/desk-lamp-purchase/v1".into(),
             operation_digest: format!("sha256:{}", "c".repeat(64)),
-            proof: b"not-a-real-vp".to_vec(),
+            proof: vectors["vectors"]["valid"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
         };
-        let now = grant.created_at + Duration::seconds(1);
         let challenge = DelegationOid4vpChallenge {
-            id: request.challenge_id,
-            organization_id: grant.organization_id,
-            grant_id: grant.id,
-            grant_revision: grant.revision,
-            nonce: "A-single-use-OID4VP-nonce-123456".into(),
-            audience: request.audience.clone(),
+            binding: DelegationFlowContextV1 {
+                challenge_id: request.challenge_id,
+                organization_id: grant.organization_id,
+                grant_id: grant.id,
+                grant_revision: grant.revision,
+                actor: request.actor.clone(),
+                action: request.action.clone(),
+                audience: request.audience.clone(),
+                resource: request.resource.clone(),
+                operation_profile: request.operation_profile.clone(),
+                operation_digest: request.operation_digest.clone(),
+                session_ref: grant.terms.binding.session_ref.clone(),
+                establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
+                session_key_thumbprint: Some(vectors["signer_thumbprint"].as_str().unwrap().into()),
+            },
+            nonce: vectors["nonce"].as_str().unwrap().into(),
             expires_at: now + Duration::minutes(2),
-            session_ref: grant.terms.binding.session_ref.clone(),
-            establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
-            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(64))),
         };
-        assert!(validate_challenge(&grant, &request, &challenge, now).is_ok());
+        (grant, request, challenge, now)
+    }
 
-        let mut wrong_revision = challenge.clone();
-        wrong_revision.grant_revision += 1;
-        assert!(validate_challenge(&grant, &request, &wrong_revision, now).is_err());
+    struct FixedChallenge(DelegationOid4vpChallenge);
 
-        let mut wrong_audience = challenge.clone();
-        wrong_audience.audience = "https://attacker.example".into();
-        assert!(validate_challenge(&grant, &request, &wrong_audience, now).is_err());
+    #[async_trait]
+    impl DelegationOid4vpChallengeStore for FixedChallenge {
+        async fn load_active(
+            &self,
+            _organization_id: Uuid,
+            _grant_id: Uuid,
+            _challenge_id: Uuid,
+        ) -> Result<DelegationOid4vpChallenge, DelegationOid4vpChallengeStoreError> {
+            // Deliberately do not filter here: the adapter itself must reject a
+            // foreign or mismatched snapshot, even from a faulty provider.
+            Ok(self.0.clone())
+        }
+    }
 
-        let mut wrong_session = challenge;
-        wrong_session.establishment_evidence_ref =
-            Some("https://identity.example/evidence/other".into());
-        assert!(validate_challenge(&grant, &request, &wrong_session, now).is_err());
+    fn verifier(challenge: DelegationOid4vpChallenge) -> MartyOid4vpDelegateProofVerifier {
+        MartyOid4vpDelegateProofVerifier::new(Arc::new(FixedChallenge(challenge)), 120).unwrap()
     }
 
     #[test]
-    fn signer_binding_uses_rfc7638_thumbprint_and_exact_session_key() {
-        let mut grant = pending_grant();
-        let challenge = DelegationOid4vpChallenge {
-            id: Uuid::new_v4(),
-            organization_id: grant.organization_id,
-            grant_id: grant.id,
-            grant_revision: grant.revision,
-            nonce: "A-single-use-OID4VP-nonce-123456".into(),
-            audience: grant.terms.audiences[0].clone(),
-            expires_at: grant.terms.valid_until,
-            session_ref: grant.terms.binding.session_ref.clone(),
-            establishment_evidence_ref: grant.terms.binding.establishment_evidence_ref.clone(),
-            session_key_thumbprint: Some(format!("sha256:{}", "a".repeat(64))),
-        };
-        let thumbprint = challenge.session_key_thumbprint.clone().unwrap();
-        assert!(validate_signer_binding(&grant, &challenge, &thumbprint).is_ok());
-        assert!(validate_signer_binding(&grant, &challenge, "sha256:wrong").is_err());
+    fn flow_context_rejects_incomplete_session_bindings_and_unknown_fields() {
+        let (_, _, challenge, _) = fixture();
+        let binding = challenge.binding;
+        binding.validate().unwrap();
+        for mask in 0..8 {
+            let mut changed = binding.clone();
+            if mask & 1 == 0 {
+                changed.session_ref = None;
+            }
+            if mask & 2 == 0 {
+                changed.establishment_evidence_ref = None;
+            }
+            if mask & 4 == 0 {
+                changed.session_key_thumbprint = None;
+            }
+            assert_eq!(
+                changed.validate().is_ok(),
+                mask == 0 || mask == 7,
+                "mask {mask}"
+            );
+        }
+        let mut encoded = serde_json::to_value(&binding).unwrap();
+        encoded["unchecked_authority"] = json!(true);
+        assert!(serde_json::from_value::<DelegationFlowContextV1>(encoded).is_err());
+        let mut encoded = serde_json::to_value(&binding).unwrap();
+        encoded.as_object_mut().unwrap().remove("operation_digest");
+        assert!(serde_json::from_value::<DelegationFlowContextV1>(encoded).is_err());
+    }
 
+    #[test]
+    fn flow_context_rejects_nil_ids_invalid_revisions_uris_and_thumbprints() {
+        let (_, _, challenge, _) = fixture();
+        let mutations: &[fn(&mut DelegationFlowContextV1)] = &[
+            |binding| binding.challenge_id = Uuid::nil(),
+            |binding| binding.organization_id = Uuid::nil(),
+            |binding| binding.grant_id = Uuid::nil(),
+            |binding| binding.grant_revision = 0,
+            |binding| binding.grant_revision = MAX_GRANT_REVISION + 1,
+            |binding| binding.actor.id = "not-an-absolute-uri".into(),
+            |binding| binding.action = "urn:action:*".into(),
+            |binding| binding.audience = "https:// bad.example".into(),
+            |binding| binding.resource = "relative/resource".into(),
+            |binding| binding.operation_profile = "".into(),
+            |binding| binding.operation_digest = format!("sha256:{}", "A".repeat(64)),
+            |binding| binding.session_ref = Some("relative/session".into()),
+            |binding| binding.establishment_evidence_ref = Some("relative/evidence".into()),
+            |binding| binding.session_key_thumbprint = Some("sha256:wrong".into()),
+        ];
+        for mutate in mutations {
+            let mut changed = challenge.binding.clone();
+            mutate(&mut changed);
+            assert!(changed.validate().is_err(), "invalid binding: {changed:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_vp_verifies_exact_session_key_and_caps_deadline() {
+        let (grant, request, mut challenge, now) = fixture();
+        assert_eq!(
+            verifier(challenge.clone())
+                .verify(&grant, &request, now)
+                .await
+                .unwrap(),
+            now + Duration::seconds(90),
+        );
+        challenge.expires_at = now + Duration::seconds(20);
+        assert_eq!(
+            verifier(challenge.clone())
+                .verify(&grant, &request, now)
+                .await
+                .unwrap(),
+            challenge.expires_at,
+        );
+        challenge.binding.session_key_thumbprint = Some(format!("sha256:{}", "b".repeat(64)));
+        assert!(verifier(challenge)
+            .verify(&grant, &request, now)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn signed_vp_verifies_key_binding_and_optional_subject() {
+        let (mut grant, mut request, mut challenge, now) = fixture();
         grant.terms.binding = Binding {
             method: BindingMethod::Key,
-            key_thumbprint: Some(thumbprint.clone()),
+            key_thumbprint: challenge.binding.session_key_thumbprint.take(),
             session_ref: None,
             establishment_evidence_ref: None,
         };
-        assert!(validate_signer_binding(&grant, &challenge, &thumbprint).is_ok());
+        grant.terms_digest = grant.calculate_terms_digest().unwrap();
+        challenge.binding.session_ref = None;
+        challenge.binding.establishment_evidence_ref = None;
+        request.proof = vectors()["vectors"]["valid_without_subject"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        assert!(verifier(challenge.clone())
+            .verify(&grant, &request, now)
+            .await
+            .is_ok());
+        grant.terms.binding.key_thumbprint = Some(format!("sha256:{}", "b".repeat(64)));
+        assert!(verifier(challenge)
+            .verify(&grant, &request, now)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn real_verifier_rejects_signed_bad_claims_wrong_key_and_altered_signature() {
+        let (grant, mut request, challenge, now) = fixture();
+        let verifier = verifier(challenge);
+        let vectors = vectors();
+        for (name, token) in vectors["vectors"].as_object().unwrap() {
+            if name.starts_with("valid") {
+                continue;
+            }
+            request.proof = token.as_str().unwrap().as_bytes().to_vec();
+            assert!(
+                verifier.verify(&grant, &request, now).await.is_err(),
+                "accepted {name}"
+            );
+        }
+        let valid = vectors["vectors"]["valid"].as_str().unwrap();
+        let (prefix, signature) = valid.rsplit_once('.').unwrap();
+        let changed = if signature.starts_with('A') { 'B' } else { 'A' };
+        request.proof = format!("{prefix}.{changed}{}", &signature[1..]).into_bytes();
+        assert!(verifier.verify(&grant, &request, now).await.is_err());
+        for malformed in [
+            vec![0xff],
+            b" a.b.c".to_vec(),
+            vec![b'a'; MAX_DELEGATE_PROOF_BYTES + 1],
+        ] {
+            request.proof = malformed;
+            assert!(verifier.verify(&grant, &request, now).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn signed_proof_cannot_be_reused_for_another_operation_or_typed_actor() {
+        let (grant, request, challenge, now) = fixture();
+        let verifier = verifier(challenge);
+        let mutations: &[fn(&mut DelegationUseRequest)] = &[
+            |request| request.organization_id = Uuid::new_v4(),
+            |request| request.grant_id = Uuid::new_v4(),
+            |request| request.expected_revision += 1,
+            |request| request.challenge_id = Uuid::new_v4(),
+            |request| request.actor.id = "https://agents.example/agents/other".into(),
+            |request| request.actor.principal_type = PrincipalType::User,
+            |request| request.action = "urn:commerce:action:purchase.prepare".into(),
+            |request| request.audience = "https://other.example".into(),
+            |request| request.resource = "urn:commerce:product:other".into(),
+            |request| request.operation_profile = "https://commerce.example/profiles/other".into(),
+            |request| request.operation_digest = format!("sha256:{}", "d".repeat(64)),
+        ];
+        for mutate in mutations {
+            let mut changed = request.clone();
+            mutate(&mut changed);
+            assert!(
+                verifier.verify(&grant, &changed, now).await.is_err(),
+                "accepted {changed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn challenge_requires_live_nonce_and_exact_session_evidence() {
+        let (grant, request, challenge, now) = fixture();
+        assert!(validate_challenge(&grant, &request, &challenge, now).is_ok());
+        let mutations: &[fn(&mut DelegationOid4vpChallenge)] = &[
+            |challenge| challenge.nonce = "too-short".into(),
+            |challenge| challenge.nonce = "x".repeat(MAX_CHALLENGE_BYTES + 1),
+            |challenge| challenge.nonce = "non-ascii-nonce-établissement".into(),
+            |challenge| challenge.nonce = "nonce-with-invalid-characters-!".into(),
+            |challenge| challenge.binding.session_ref = Some("urn:session:other".into()),
+            |challenge| {
+                challenge.binding.establishment_evidence_ref = Some("urn:evidence:other".into())
+            },
+            |challenge| challenge.binding.session_key_thumbprint = None,
+        ];
+        for mutate in mutations {
+            let mut changed = challenge.clone();
+            mutate(&mut changed);
+            assert!(validate_challenge(&grant, &request, &changed, now).is_err());
+        }
+        assert!(validate_challenge(&grant, &request, &challenge, challenge.expires_at).is_err());
+        let mut wrong_grant = grant.clone();
+        wrong_grant.organization_id = Uuid::new_v4();
+        assert!(validate_challenge(&wrong_grant, &request, &challenge, now).is_err());
+        wrong_grant = grant;
+        wrong_grant.terms.delegate.principal_type = PrincipalType::User;
+        assert!(validate_challenge(&wrong_grant, &request, &challenge, now).is_err());
     }
 }

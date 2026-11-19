@@ -1,9 +1,10 @@
 # Marty Delegated Authority service
 
-This crate implements the managed DelegationGrant v1 lifecycle and persistence
-application layer. It is not yet a hosted or production-qualified authorization
-service. The optional delegated-authority capability must remain undiscoverable
-until its remaining runtime integrations are qualified.
+This crate implements the managed DelegationGrant v1 lifecycle, persistence and
+delegated operation evaluation layer, including Marty OID4VP proof and MMF Cedar
+adapters. It is not yet a hosted or production-qualified authorization service.
+The optional delegated-authority capability must remain undiscoverable until its
+remaining runtime integrations are qualified.
 
 Commerce, checkout, payments, inventory, merchant adapters and order execution
 remain outside ElevenID. A grant describes authority; it does not execute a
@@ -237,25 +238,6 @@ provider timeout, trusted-record activation and withdrawal, explicit authority
 renewal, independent producer permissions, activation lock delays, post-write
 expiry rollback and rejection when an application clock is frozen.
 
-## Remaining runtime qualification
-
-- Connect the configured verifier and typed producer APIs to an authenticated
-  trusted approval surface and the current grantor-authority source. This still
-  requires own-session confirmation, fresh challenges and organization action
-  authorization; database records alone do not establish those guarantees.
-- External authority and fresh status resolution with configured trusted sources.
-- Authenticated delegate proof and key/session establishment verification.
-- Delegation-aware Cedar evaluation, domain-constraint evidence, signed receipts
-  and final-use replay/revision enforcement.
-- HTTP/gRPC hosting, public Gateway contracts, organization action authorization,
-  attributed security audit delivery and capability discovery.
-- Deployment wiring and end-to-end qualification across the relevant services.
-
-No allow-all consent verifier is provided for production. Test doubles exist only
-under `cfg(test)`. There is no public Gateway route, discovery advertisement or
-production deployment in this milestone.
-
-
 ## Delegated operation evaluation boundary
 
 The crate now exposes `DelegationUseAuthorizer` as a fail-closed orchestration
@@ -265,8 +247,9 @@ boundary for one exact delegated operation. It composes three required adapters:
    proof and exact key/session binding. Key grants must verify the configured
    key thumbprint; session grants must verify the established session and its
    establishment evidence. The proof must bind the organization, grant,
-   challenge/nonce, audience and operation digest, and enforce proof freshness
-   and replay status. A login, caller boolean or actor ID is not proof.
+   challenge/nonce, audience and operation digest, and check proof freshness and
+   observed live challenge state. Atomic replay enforcement remains a final-use
+   obligation. A login, caller boolean or actor ID is not proof.
 2. `ExternalConstraintVerifier` verifies external-profile constraints against
    the exact grant, document reference/digest, evaluator identity and operation.
    It must use a configured trusted source, never fetch a caller-selected URI.
@@ -281,25 +264,30 @@ boundary for one exact delegated operation. It composes three required adapters:
 
 The authorizer first resolves the active grant and its trusted consent deadline,
 checks the expected revision and exact delegate/action/audience/resource scope,
-then verifies proof, constraints and Cedar. It resolves the grant again after
-those asynchronous operations and rejects a concurrent suspension, revocation,
-revision change or expired evidence. The returned `DelegationUseEvaluation`
-is deliberately not serializable and is not a bearer permit. It records the
-grant and policy revision/digest plus the shortest verified deadline. The
+then verifies proof, constraints and Cedar. Each asynchronous stage checks for
+clock regression and expired evidence before starting the next one. One
+five-second budget covers the complete evaluation, including both lifecycle
+reads. A timed-out provider or a result arriving after the budget expires cannot
+return a successful evaluation.
+
+The authorizer resolves the grant again after proof, constraint and policy work
+and rejects a concurrent suspension, revocation or revision change. It accepts
+only a Cedar observation made for the current evaluation, with at most a
+30-second validity horizon. The returned `DelegationUseEvaluation` is deliberately
+not serializable and is not a bearer permit. It retains the exact typed actor,
+action, audience, resource, operation profile/digest, constraint-evidence digest,
+grant and policy revision/digest, and the shortest verified deadline. The
 consuming operation must still atomically enforce final-use revision and replay
 reservation at its own commit boundary. Do not cache or reuse this result to
 authorize another operation.
 
 The MMF Cedar execution adapter is implemented; its active-policy/entity-source
 port must be implemented by the consuming domain integration (for example, the
-separate Commerce Gateway) or its organization-owned policy provider. ElevenID
-does not own commerce action/resource policy or domain execution. This is not a
-claim that the production proof verifier, external constraint source, active
-Cedar policy source, signed receipt writer or final-use reservation are deployed. The next work is
-to implement those adapters against the established Marty identity, policy and
-transaction services, then qualify them end to end. Commerce execution remains
-in the separate consuming project.
-
+separate Commerce Gateway) or its organization-owned policy provider. The
+provider must bind its entity graph to the complete typed actor and exact tenant
+and resource. ElevenID does not own commerce action/resource policy or domain
+execution. The adapters still require authenticated runtime composition and
+end-to-end qualification; they are not deployed authorization endpoints.
 
 ## OID4VP delegate proof verification
 
@@ -311,11 +299,18 @@ second JOSE parser, JWT signature verifier, or thumbprint algorithm.
 The verifier accepts the compact JWT VP produced through the existing OID4VP
 Flow. Its challenge ID resolves to authoritative Flow-owned challenge state;
 the nonce and verifier audience are loaded from that state and never accepted
-from caller-supplied proof metadata. The verifier requires the exact grant ID,
-organization, revision, audience, nonce, holder principal, short proof lifetime,
-and signer key binding. Key-bound grants compare the RFC 7638 thumbprint.
-Session-bound grants compare the exact session and establishment evidence
-references plus the key thumbprint established by that session.
+from caller-supplied proof metadata. `DelegationFlowContextV1` binds that challenge
+to the exact tenant, grant/revision, typed actor, action, audience, resource and
+operation profile/digest. Reusing the signed nonce for another in-scope operation
+fails. The context rejects unknown fields, nil identifiers, out-of-range revisions
+and partial session bindings.
+
+The verifier also requires a well-formed presentation, matching holder/issuer,
+matching subject when present, a short proof lifetime, no future `nbf`, and the
+signer key binding. Key-bound grants compare the RFC 7638 thumbprint, encoded as
+the MIP `sha256:` lowercase hexadecimal digest. Session-bound grants compare the
+exact session and establishment evidence references plus the key thumbprint
+established by that session.
 
 The challenge lookup is read-only. Evaluation is not a permit and must not
 consume the challenge prematurely. The external operation's final-use
@@ -329,11 +324,43 @@ nonce/session persistence, direct_post handling and its existing finalizer.
 The challenge store is an explicit integration port, not a new parallel
 challenge database. The Flow service now provides
 `FlowDelegationOid4vpChallengeStore`, which resolves the opaque challenge ID to
-the existing tenant-scoped Flow instance, validates its frozen OID4VP request,
-and reads the typed delegation binding snapshot from private Flow context. It
-reuses the Flow nonce/session lifecycle; no second nonce table or request URI
-scheme is introduced. Flow start still needs to populate that typed binding
-snapshot from the active grant/session configuration, and the final-use
-receipt/operation transaction remains a separate integration gate. A mock or
-in-memory challenge store is test-only and cannot qualify production replay
-protection.
+the existing tenant-scoped Flow instance, requires an active OID4VP definition
+and unfinished, unexpired session, validates its frozen request, and reads the
+typed binding from `_marty_delegation_oid4vp_v1` private Flow context. Public start
+and advance requests reject that key at every nesting level; public results
+remove it recursively. It reuses the Flow nonce/session lifecycle; no second
+nonce table or request URI scheme is introduced. Flow start still needs to
+populate the snapshot from trusted active-grant/session configuration, and the
+final-use receipt/operation transaction remains a separate integration gate. A
+mock or in-memory challenge store is test-only and cannot qualify production
+replay protection.
+
+Regression tests use public-only signed Ed25519 JWT VP vectors with the actual
+pinned Marty verifier. They cover valid key/session proofs, wrong keys, changed
+signatures, nonce/audience/identity mismatches, malformed presentation claims,
+expired and not-yet-valid proofs, operation substitution and incomplete session
+bindings. Flow tests exercise frozen-request/state checks and the public input
+and output boundary. Authorization tests use the actual MMF Cedar engine and
+cover policy denial, typed principals, freshness, timeout and intervening state
+changes.
+
+## Remaining runtime qualification
+
+- Connect the configured consent verifier and typed producer APIs to an
+  authenticated trusted approval surface and current grantor-authority source.
+  This requires own-session confirmation, fresh challenges and organization
+  action authorization; database records alone do not establish those guarantees.
+- Connect Flow start to trusted delegation/session configuration and verify the
+  session-establishment evidence that supplies session-bound signing keys.
+- Implement configured external-authority/status and external-constraint sources,
+  plus the consuming domain's active Cedar policy and typed entity source.
+- Enforce final-use revision, challenge consumption and replay/idempotency
+  reservation with signed receipts at the consuming operation's commit boundary.
+  A read-only evaluation or challenge lookup cannot provide those guarantees.
+- Add HTTP/gRPC hosting, public Gateway contracts, organization action
+  authorization, attributed security audit delivery and capability discovery.
+- Qualify deployment and end-to-end behavior across the relevant services.
+
+No allow-all consent verifier is provided for production. Test doubles exist only
+under `cfg(test)`. There is no public Gateway route, discovery advertisement or
+production deployment in this milestone.
