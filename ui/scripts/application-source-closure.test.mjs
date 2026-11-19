@@ -6,14 +6,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  OMITTED_DEMO_INPUTS, RETAINED_SHARED_INPUTS, planApplicationSourceClosure,
+  ADDITIONAL_OMISSIONS, OMITTED_DEMO_INPUTS, OMITTED_COMBINED_ADAPTERS,
+  OMITTED_DEMO_MODULES, OMITTED_COMBINED_TEST_INPUTS, RETAINED_SHARED_INPUTS, planApplicationSourceClosure,
   rehearseApplicationSourceClosure,
 } from './application-source-closure.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const harness = fileURLToPath(new URL('./application-source-closure.mjs', import.meta.url));
 const ownership = JSON.parse(readFileSync(path.join(repositoryRoot, 'contracts/website-source-ownership.json'), 'utf8'));
 const routeBytes = readFileSync(path.join(repositoryRoot, 'contracts/web-surface-routes.json'));
+const organizationContract = readFileSync(path.join(repositoryRoot, 'contracts/organization-domain-behavior.json'));
 const namespaces = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
 
 function put(root, relative, content) {
@@ -41,7 +44,7 @@ assert.equal(process.env.MARTY_PRODUCTION_PAGES, 'public');
 assert.equal(process.env.VITE_UI_VARIANT, 'public');
 assert.equal(process.env.MARTY_COMMERCE_SOURCE_SHA, undefined);
 assert.equal(process.env.VITE_API_URL, undefined);
-for (const entry of ${JSON.stringify([...ownership.modules, ...OMITTED_DEMO_INPUTS])}) {
+for (const entry of ${JSON.stringify([...ownership.modules, ...ADDITIONAL_OMISSIONS])}) {
   assert.equal(fs.existsSync(path.join(root, entry)), false, entry);
 }
 for (const entry of ${JSON.stringify(RETAINED_SHARED_INPUTS)}) assert.equal(fs.existsSync(path.join(root, entry)), true, entry);
@@ -72,40 +75,88 @@ ${marketing ? "fs.mkdirSync(path.join(output, 'blog')); fs.writeFileSync(path.jo
 `;
 }
 
+function tester({ testFailure = false, testReportFault, recreateAfterTests = false } = {}) {
+  return `
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+assert.deepEqual(process.argv.slice(2, -1), ['run', '--config', ${JSON.stringify(APPLICATION_TEST_CONFIG)}, '--reporter=json', '--outputFile']);
+assert.equal(process.env.MARTY_PRODUCTION_PAGES, 'public');
+assert.equal(process.env.VITE_UI_VARIANT, 'public');
+assert.equal(process.env.MARTY_COMMERCE_SOURCE_SHA, undefined);
+assert.equal(process.env.VITE_API_URL, undefined);
+const root = path.resolve('..');
+for (const entry of ${JSON.stringify([...ownership.modules, ...ADDITIONAL_OMISSIONS])}) {
+  assert.equal(fs.existsSync(path.join(root, entry)), false, entry);
+}
+assert.equal(fs.existsSync(path.join(root, 'contracts/organization-domain-behavior.json')), true);
+const selected = ${JSON.stringify(APPLICATION_TEST_FILES)};
+for (const entry of selected) assert.equal(fs.existsSync(entry), true, entry);
+${testFailure ? 'process.exit(17);' : ''}
+${testReportFault === 'missing-report' ? 'process.exit(0);' : ''}
+const result = { success: true, numTotalTests: selected.length, numPassedTests: selected.length,
+  numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
+  testResults: selected.map((entry) => ({ name: path.resolve(entry), status: 'passed',
+    assertionResults: [{ status: 'passed', title: 'Synthetic harness fixture; real Vitest is a separate rehearsal' }] })) };
+${testReportFault === 'missing-file' ? 'result.testResults.pop();' : ''}
+${testReportFault === 'wrong-file' ? "result.testResults[0].name = path.resolve('src/not-selected.test.ts');" : ''}
+${testReportFault === 'duplicate-file' ? 'result.testResults[0] = result.testResults[1];' : ''}
+${testReportFault === 'skipped-test' ? "result.testResults[0].assertionResults[0].status = 'pending';" : ''}
+${testReportFault === 'incorrect-count' ? 'result.numPassedTests = 0;' : ''}
+fs.writeFileSync(process.argv.at(-1), JSON.stringify(result));
+${recreateAfterTests ? `fs.writeFileSync(path.join(root, ${JSON.stringify(OMITTED_COMBINED_TEST_INPUTS[0])}), '// restored combined setup');` : ''}
+`;
+}
+
 function fixture(t, buildOptions = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'marty-application-source-fixture-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   put(root, '.gitignore', 'ui/node_modules/\nui/dist*/\n');
   put(root, 'contracts/website-source-ownership.json', JSON.stringify(ownership));
   put(root, 'contracts/web-surface-routes.json', routeBytes);
+  put(root, 'contracts/organization-domain-behavior.json', organizationContract);
   for (const entry of [...ownership.modules, ...RETAINED_SHARED_INPUTS]) put(root, entry, '// retained fixture source\n');
-  for (const entry of OMITTED_DEMO_INPUTS) put(root, entry, '{}\n');
+  for (const entry of ADDITIONAL_OMISSIONS) put(root, entry, '{}\n');
+  for (const entry of APPLICATION_TEST_FILES) put(root, `ui/${entry}`, '// selected test fixture\n');
   put(root, 'ui/package.json', JSON.stringify({ type: 'module' }));
   put(root, 'ui/package-lock.json', '{}\n');
   put(root, 'ui/vite.config.ts', '// fixture config; the real Vite build is a separate rehearsal\n');
+  for (const entry of ['ui/vitest.config.ts', `ui/${APPLICATION_TEST_CONFIG}`,
+    'ui/scripts/application-test-profile.mjs', 'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts']) {
+    put(root, entry, '// required application test input\n');
+  }
   put(root, 'ui/index.html', '<html>Fixture entry</html>');
   put(root, 'ui/console/index.html', '<html>Fixture console entry</html>');
   put(root, 'ui/scripts/build-web-surface.mjs', builder(buildOptions));
   put(root, 'ui/node_modules/.bin/tsc', 'fixture');
   put(root, 'ui/node_modules/.bin/vite', 'fixture');
+  put(root, 'ui/node_modules/vitest/vitest.mjs', tester(buildOptions));
   git(root, 'init', '--initial-branch=main');
   git(root, 'add', '.');
   git(root, 'commit', '-m', 'Synthetic source-closure fixture');
   return root;
 }
 
-test('the plan records the exact initial roster, three fixed raw inputs, and retained shared boundary', (t) => {
+test('the plan separates the original website roster from the 45-input application build/test boundary', (t) => {
   const root = fixture(t);
   const plan = planApplicationSourceClosure({ repositoryRoot: root });
   assert.equal(ownership.modules.length, 34);
   assert.deepEqual(plan.boundary.website_roster, [...ownership.modules].sort());
-  assert.deepEqual(plan.boundary.additional_omissions, [...OMITTED_DEMO_INPUTS]);
-  assert.equal(plan.boundary.omitted.length, 37);
+  assert.deepEqual(plan.boundary.additional_omissions, [...ADDITIONAL_OMISSIONS]);
+  assert.deepEqual(plan.boundary.application_only_omissions, {
+    combined_entry_adapters: [...OMITTED_COMBINED_ADAPTERS],
+    demo_modules: [...OMITTED_DEMO_MODULES],
+    combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
+  });
+  assert.equal(plan.boundary.omitted.length, 45);
   assert.equal(plan.boundary.ownership_audit_complete, false);
   assert.equal(plan.source.working_tree_dirty, false);
   assert.match(plan.source.input_inventory_sha256, /^sha256:[0-9a-f]{64}$/);
   for (const retained of RETAINED_SHARED_INPUTS) assert.ok(plan.boundary.retained.includes(retained), retained);
-  assert.match(plan.boundary.retained_demo_reason, /Generated demo projections/);
+  assert.deepEqual(plan.test_profile.files, [...APPLICATION_TEST_FILES]);
+  assert.deepEqual(plan.test_profile.shared_contracts, ['contracts/organization-domain-behavior.json']);
+  assert.equal(plan.test_profile.files.length, 23);
+  assert.ok(plan.boundary.retained.includes('contracts/organization-domain-behavior.json'));
   assert.ok(plan.boundary.retained.includes('ui/package-lock.json'));
 });
 
@@ -121,13 +172,17 @@ test('dirty source changes receive their own hashes and cannot be presented as a
   assert.ok(after.boundary.retained.includes('ui/src/newApplicationModule.js'));
 });
 
-test('a real child process builds only the disposable export and leaves source bytes and Git status untouched', (t) => {
+test('real child processes build and test only the disposable export while preserving original source', (t) => {
   const root = fixture(t);
   const before = planApplicationSourceClosure({ repositoryRoot: root });
   const report = rehearseApplicationSourceClosure({ repositoryRoot: root, keepExport: true });
   t.after(() => rmSync(path.dirname(report.export_directory), { recursive: true, force: true }));
   assert.equal(report.status, 'passed', report.error);
   assert.equal(report.qualification.application_build_completed, true);
+  assert.equal(report.qualification.application_tests_completed, true);
+  assert.deepEqual(report.tests.result.completed_files, [...APPLICATION_TEST_FILES].sort());
+  assert.equal(report.tests.result.test_count, APPLICATION_TEST_FILES.length);
+  assert.match(report.tests.result.report_sha256, /^sha256:[0-9a-f]{64}$/);
   assert.equal(report.qualification.source_checkout_unchanged, true);
   assert.equal(report.build.dependency_mode, 'reused-installed-node_modules');
   assert.equal(report.build.effective_source_sha, before.source.commit);
@@ -184,9 +239,43 @@ test('build failure removes the disposable tree while preserving all original so
   assert.equal(report.status, 'failed');
   assert.match(report.error, /exit code 23/);
   assert.equal(report.qualification.application_build_completed, false);
+  assert.equal(report.qualification.application_tests_completed, false);
   assert.equal(report.qualification.source_checkout_unchanged, true);
   assert.equal(existsSync(path.dirname(report.export_directory)), false);
   for (const entry of ownership.modules) assert.equal(existsSync(path.join(root, entry)), true);
+});
+
+test('test failure removes the disposable tree instead of presenting the successful build as a completed rehearsal', (t) => {
+  const root = fixture(t, { testFailure: true });
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+  assert.equal(report.status, 'failed');
+  assert.match(report.error, /Application tests failed with exit code 17/);
+  assert.equal(report.qualification.application_build_completed, true);
+  assert.equal(report.qualification.application_tests_completed, false);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+for (const testReportFault of ['missing-report', 'missing-file', 'wrong-file', 'duplicate-file', 'skipped-test', 'incorrect-count']) {
+  test(`successful test exit cannot conceal a ${testReportFault}`, (t) => {
+    const root = fixture(t, { testReportFault });
+    const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+    assert.equal(report.status, 'failed');
+    assert.equal(report.qualification.application_build_completed, true);
+    assert.equal(report.qualification.application_tests_completed, false);
+    assert.equal(report.qualification.source_checkout_unchanged, true);
+    assert.equal(existsSync(path.dirname(report.export_directory)), false);
+  });
+}
+
+test('passing tests cannot restore an omitted combined input after the build', (t) => {
+  const root = fixture(t, { recreateAfterTests: true });
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root });
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.application_tests_completed, true);
+  assert.equal(report.qualification.omitted_sources_absent, false);
+  assert.match(report.error, /contains an omitted input/);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
 });
 
 test('successful build exit cannot conceal retained marketing output', (t) => {
@@ -254,6 +343,14 @@ test('a missing fixed demo input fails instead of silently shrinking the audited
   rmSync(path.join(root, OMITTED_DEMO_INPUTS[0]));
   assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /ENOENT/);
 });
+
+for (const entry of [`ui/${APPLICATION_TEST_FILES[0]}`, 'contracts/organization-domain-behavior.json']) {
+  test(`a missing required test input refuses a narrower test claim: ${entry}`, (t) => {
+    const root = fixture(t);
+    rmSync(path.join(root, entry));
+    assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /ENOENT/);
+  });
+}
 
 test('the CLI writes a reviewable report outside the source tree without exporting inherited production settings', (t) => {
   const root = fixture(t);

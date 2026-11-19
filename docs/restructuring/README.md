@@ -1,8 +1,8 @@
 # Repository restructuring foundation
 
-Status: standalone website publication qualified; signed composition and
-application extraction preparation are in progress. Production cutover remains
-a separate gate.
+Status: standalone website publication and signed cross-owner composition are
+qualified. Application source and test separation is in progress. Production
+cutover remains a separate gate.
 
 ## Current continuation checkpoint
 
@@ -11,15 +11,21 @@ Latest recorded evidence, November 19, 2026 (America/Denver):
 | Workstream | Completed evidence | Next gate |
 | --- | --- | --- |
 | Standalone website producer | Successful signed `ElevenID/website` run [`44449706828`, attempt 2](https://github.com/ElevenID/website/actions/runs/44449706828/attempts/2), source `7ec0707aa348939a0e48e6a26b24fb1af8671b9b` | Preserve this exact original release selection for composition; newer source requires a newly qualified release |
-| Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) repairs protected-main manifest admission; implementation `b2db066e` passed full CI, and queue admission correctly rejected a stale parent before merge | Complete normal CI/queue admission against the refreshed parent, then inspect the real signed composition attempt and original proof payloads |
-| Application source preparation | Separate [draft PR #2001](https://github.com/ElevenID/marty-ui/pull/2001): clean local and hosted application builds passed with the 34 audited website modules and three raw demo inputs absent | Finish composition, then admit the source-preparation batch and classify the remaining retained source/assets before independent application publication |
+| Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) merged as `6daf2a21`; protected-main [run `44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1) signed and verified the composition; its six-file artifact and original evidence bytes were independently inspected | Qualify the actual application/OIDC flow and isolated-host promotion, rollback and recovery with this exact composition |
+| Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001): clean local and hosted builds passed with 37 audited inputs absent; required CI completed with 27 successful jobs and one intended skip; composition sequencing prerequisite is satisfied | Complete normal merge-queue admission, then qualify the application-specific test profile and expanded omission set before asset and dependency closure |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
-and the exact run/artifact records in those PRs. The application rehearsal is a
-partial source boundary: generated demo projections, shared application inputs,
-assets and dependencies remain retained. The rehearsal does not qualify source
+and the exact run/artifact records in those PRs. The initial application rehearsal
+is a partial source boundary; the next batch separately classifies combined
+adapters, demo projections and test setup as application omissions. Shared
+application inputs, assets and dependencies remain retained. Neither rehearsal qualifies source
 deletion, a separate dependency installation, signed application publication or
 an actual host/OIDC journey.
+
+The [public asset audit](application-assets-audit.md) records the exact next
+26 application omissions and the retained locale/runtime resources. Its
+prebuild absence and served-resource checks remain a separate implementation
+and acceptance batch.
 
 The bootstrap status and initial sequence below preserve the November 15
 foundation. Use the checkpoint above for the current execution stage. Actual

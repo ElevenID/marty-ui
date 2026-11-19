@@ -11,16 +11,35 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
-const CONTRACTS = ['contracts/website-source-ownership.json', 'contracts/web-surface-routes.json'];
+const TEST_CONTRACTS = ['contracts/organization-domain-behavior.json'];
+const CONTRACTS = ['contracts/website-source-ownership.json', 'contracts/web-surface-routes.json', ...TEST_CONTRACTS];
 
-// These exact raw inputs are read by the website demo generator/catalog. This
-// rehearsal deliberately retains the generated projections and their reader.
+// These fixed omissions describe application build/test inputs. They do not
+// expand the exclusive-website ownership roster used by the combined build.
 export const OMITTED_DEMO_INPUTS = Object.freeze([
   'ui/public/demos/manifests/2026.07.0.json',
   'ui/public/demos/manifests/2026.08.0.json',
   'ui/public/demos/manifests/index.json',
+]);
+export const OMITTED_COMBINED_ADAPTERS = Object.freeze([
+  'ui/src/components/LandingPage.jsx',
+  'ui/src/variants/publicSite.public.jsx',
+]);
+export const OMITTED_DEMO_MODULES = Object.freeze([
+  'ui/src/generated/demoManifests.generated.js',
+  'ui/src/generated/demoWalletSchema.generated.json',
+  'ui/src/services/demoManifestService.js',
+  'ui/src/services/platformDemoScenarios.js',
+]);
+export const OMITTED_COMBINED_TEST_INPUTS = Object.freeze([
+  'ui/src/test/i18nTestSetup.js',
+  'ui/public/locales/en/marketing.json',
+]);
+export const ADDITIONAL_OMISSIONS = Object.freeze([
+  ...OMITTED_DEMO_INPUTS, ...OMITTED_COMBINED_ADAPTERS, ...OMITTED_DEMO_MODULES, ...OMITTED_COMBINED_TEST_INPUTS,
 ]);
 export const RETAINED_SHARED_INPUTS = Object.freeze([
   'ui/src/application/routing/appHandoff.js',
@@ -28,23 +47,24 @@ export const RETAINED_SHARED_INPUTS = Object.freeze([
   'ui/src/application/routing/loginEntry.js',
   'ui/src/application/routing/publicEntry.js',
   'ui/src/application/routing/webSurfaceContract.mjs',
+  'ui/src/application/session/authSession.js',
+  'ui/src/application/session/consoleSession.js',
   'ui/src/apps/shared/WebSurfaceBoundary.jsx',
   'ui/src/components/navigation/ConsoleHeaderBar.jsx',
   'ui/src/components/navigation/SidebarNavigation.jsx',
   'ui/src/contexts/AuthContext.jsx',
   'ui/src/contexts/BrandingContext.jsx',
   'ui/src/extensions/commerce/publicStub.jsx',
-  'ui/src/generated/demoManifests.generated.js',
-  'ui/src/generated/demoWalletSchema.generated.json',
-  'ui/src/services/demoManifestService.js',
-  'ui/src/services/platformDemoScenarios.js',
   'ui/src/variants/publicConfig.application.js',
   'ui/src/variants/publicConfig.public.js',
   'ui/src/variants/publicSite.application.jsx',
 ]);
 const REQUIRED_INPUTS = [
   'ui/package.json', 'ui/package-lock.json', 'ui/index.html', 'ui/console/index.html',
-  'ui/scripts/build-web-surface.mjs', 'ui/vite.config.ts', ...RETAINED_SHARED_INPUTS,
+  'ui/scripts/build-web-surface.mjs', 'ui/vite.config.ts', 'ui/vitest.config.ts',
+  `ui/${APPLICATION_TEST_CONFIG}`, 'ui/scripts/application-test-profile.mjs',
+  'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts',
+  ...APPLICATION_TEST_FILES.map((entry) => `ui/${entry}`), ...RETAINED_SHARED_INPUTS,
 ];
 const APPLICATION_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
 const EXCLUDED_OUTPUTS = ['blog', 'authors', 'demos', 'images/authors', 'images/demos', 'images/social',
@@ -120,7 +140,7 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT } =
   const ownership = validateWebsiteSourceOwnership(JSON.parse(readInput(root, CONTRACTS[0]).bytes.toString('utf8')), root);
   const routes = validateWebSurfaceContract(JSON.parse(readInput(root, CONTRACTS[1]).bytes.toString('utf8')));
   const paths = sourcePaths(root);
-  const omitted = new Set([...ownership.modules, ...OMITTED_DEMO_INPUTS]);
+  const omitted = new Set([...ownership.modules, ...ADDITIONAL_OMISSIONS]);
   for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS]) {
     require(paths.includes(entry), `Required reviewed source input is missing: ${entry}`);
   }
@@ -128,19 +148,25 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT } =
   const files = paths.map((entry) => readInput(root, entry).record);
   const status = sourceStatus(root);
   return {
-    schema: 'marty.application-source-closure-plan/v1',
+    schema: 'marty.application-source-closure-plan/v2',
     repository_root: root,
     source: { commit: sourceSha, working_tree_dirty: status.length > 0, git_status: status,
       input_inventory_sha256: identity(files), files },
     route_contract: { version: routes.schema_version, sha256: digest(canonicalJson(routes)) },
+    test_profile: { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES], shared_contracts: [...TEST_CONTRACTS] },
     boundary: {
       website_roster: ownership.modules.slice().sort(),
-      additional_omissions: [...OMITTED_DEMO_INPUTS],
+      additional_omissions: [...ADDITIONAL_OMISSIONS],
+      application_only_omissions: {
+        combined_entry_adapters: [...OMITTED_COMBINED_ADAPTERS],
+        demo_modules: [...OMITTED_DEMO_MODULES],
+        combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
+      },
       omitted: [...omitted].sort(),
       retained: paths.filter((entry) => !omitted.has(entry)),
       retained_shared_inputs: [...RETAINED_SHARED_INPUTS],
       ownership_audit_complete: false,
-      retained_demo_reason: 'Generated demo projections and their reader remain as a conservative retained source boundary; this rehearsal removes only the audited raw generator/catalog inputs.',
+      scope: 'Application build and selected routing/authentication tests with audited inputs absent; remaining source, asset, package and workflow ownership is not complete.',
     },
   };
 }
@@ -228,23 +254,53 @@ function buildEnvironment(sourceSha) {
   return { ...environment, MARTY_UI_SHA: sourceSha, MARTY_PRODUCTION_PAGES: 'public', VITE_UI_VARIANT: 'public' };
 }
 
+function verifyApplicationTestResult(temporary, exported) {
+  const raw = readInput(temporary, 'application-tests.json').bytes;
+  const result = JSON.parse(raw.toString('utf8'));
+  require(result && typeof result === 'object' && result.success === true, 'Application test report did not succeed');
+  require(Array.isArray(result.testResults) && result.testResults.length === APPLICATION_TEST_FILES.length,
+    'Application test report did not complete the selected files');
+  const uiRoot = path.join(exported, 'ui');
+  const expected = [...APPLICATION_TEST_FILES].sort();
+  const completed = [];
+  let assertions = 0;
+  for (const file of result.testResults) {
+    require(file && typeof file.name === 'string' && file.status === 'passed'
+      && Array.isArray(file.assertionResults) && file.assertionResults.length > 0,
+    'Application test file did not complete');
+    completed.push(path.relative(uiRoot, path.resolve(file.name)).split(path.sep).join('/'));
+    require(file.assertionResults.every((entry) => entry && entry.status === 'passed'), 'Application tests were skipped or failed');
+    assertions += file.assertionResults.length;
+  }
+  assert.deepEqual(completed.sort(), expected, 'Application test report differs from the selected file set');
+  require(Number.isSafeInteger(result.numTotalTests) && result.numTotalTests === assertions
+    && result.numPassedTests === assertions && result.numFailedTests === 0
+    && result.numPendingTests === 0 && result.numTodoTests === 0,
+  'Application test counts differ from completed assertions');
+  return { completed_files: completed, test_count: assertions, report_sha256: digest(raw) };
+}
+
 export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, dependencyDirectory,
   keepExport = false } = {}) {
   const plan = planApplicationSourceClosure({ repositoryRoot });
   const dependencies = realpathSync(dependencyDirectory || path.join(plan.repository_root, 'ui/node_modules'));
   require(lstatSync(dependencies).isDirectory() && path.basename(dependencies) === 'node_modules', 'Select an installed node_modules directory');
   for (const executable of ['tsc', 'vite']) require(existsSync(path.join(dependencies, '.bin', executable)), `Installed build dependency is missing: ${executable}`);
+  require(existsSync(path.join(dependencies, 'vitest/vitest.mjs')), 'Installed test dependency is missing: vitest');
   require(outside(plan.repository_root, realpathSync(os.tmpdir())), 'Temporary exports must be outside the source checkout');
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-application-source-closure-'));
   const exported = path.join(temporary, 'source');
+  const testArguments = ['node_modules/vitest/vitest.mjs', 'run', '--config', APPLICATION_TEST_CONFIG,
+    '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')];
   const report = {
-    schema: 'marty.application-source-closure-rehearsal/v1',
+    schema: 'marty.application-source-closure-rehearsal/v2',
     status: 'failed', plan,
     build: { command: ['node', 'scripts/build-web-surface.mjs', 'application'], node_version: process.version,
       dependency_mode: 'reused-installed-node_modules', dependency_directory: dependencies,
       package_lock_sha256: plan.source.files.find((entry) => entry.path === 'ui/package-lock.json').sha256,
       effective_source_sha: effectiveSourceSha(plan) },
-    qualification: { application_build_completed: false, omitted_sources_absent: false,
+    tests: { command: ['node', ...testArguments], selected_files: [...APPLICATION_TEST_FILES] },
+    qualification: { application_build_completed: false, application_tests_completed: false, omitted_sources_absent: false,
       application_output_checked: false, source_checkout_unchanged: false, source_extraction_complete: false,
       independent_dependency_installation: false, oidc_journey_tested: false, host_deployment_tested: false,
       signed_release_produced: false },
@@ -260,6 +316,15 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     if (result.error) throw result.error;
     require(result.status === 0, `Application build failed with exit code ${result.status}`);
     report.qualification.application_build_completed = true;
+    requireOmittedInputsAbsent(plan, exported);
+    const tests = spawnSync(process.execPath, testArguments, {
+      cwd: path.join(exported, 'ui'), env: buildEnvironment(report.build.effective_source_sha), stdio: ['ignore', 2, 2],
+      timeout: 20 * 60 * 1000, shell: false,
+    });
+    if (tests.error) throw tests.error;
+    require(tests.status === 0, `Application tests failed with exit code ${tests.status}`);
+    report.tests.result = verifyApplicationTestResult(temporary, exported);
+    report.qualification.application_tests_completed = true;
     requireOmittedInputsAbsent(plan, exported);
     report.qualification.omitted_sources_absent = true;
     report.output = verifyApplicationClosureOutput(exported, plan);
