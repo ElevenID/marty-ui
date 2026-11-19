@@ -12,6 +12,7 @@ pub mod consent_postgres;
 pub mod domain;
 pub mod oid4vp;
 pub mod postgres;
+pub mod receipt;
 pub mod repository;
 pub mod service;
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub use consent_postgres::*;
 pub use domain::*;
 pub use oid4vp::*;
 pub use postgres::PgDelegationGrantRepository;
+pub use receipt::*;
 pub use repository::*;
 pub use service::*;
 pub use wire::{decode_grant_snapshot, GrantWireError};

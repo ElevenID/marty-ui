@@ -430,6 +430,34 @@ and output boundary. Authorization tests use the actual MMF Cedar engine and
 cover policy denial, typed principals, freshness, timeout and intervening state
 changes.
 
+## Signed delegated decision receipts
+
+The crate now defines the Delegated Decision Receipt v1 payload and compact JWS
+envelope from the pinned MIP schema. A receipt is built only from a successful,
+nonserializable DelegationUseEvaluation; the operation, typed actor/subject,
+grant revision/digest, approval and authority evidence references, OID4VP nonce
+and proof evidence, active status observation, policy identity and all evidence
+deadlines are copied from verified service state. External-profile evaluations
+also retain the configured evaluator, immutable profile/document digest,
+authenticated evidence reference, decision and freshness window.
+
+DelegatedDecisionReceiptIssuer resolves a tenant-scoped key for the configured
+receipt issuer and exact urn:marty:delegated-decision:jws-v1 purpose, then signs
+the exact compact-JWS signing input using that same resolved key identity. Only
+ES256 and EdDSA with raw 64-byte JOSE signatures are accepted. The signing
+adapter is an explicit port to the existing managed signing/KMS service; this
+crate does not create/export keys or implement another JOSE cryptographic stack.
+The protected header uses typ=mip-delegated-decision+jws, and the payload uses
+the protocol's urn:marty:delegated-decision-receipt:v1 profile.
+
+Receipt expiry is bounded by the evaluation, proof, current grant/consent status,
+external constraint evidence and configured receipt lifetime. The payload is
+evidence of one evaluation, not a bearer permit. It does not consume the Flow
+nonce, reserve merchant idempotency, or atomically commit a purchase. Those
+remain separate final-use and consuming-domain obligations. A production signer
+adapter and independent JWS verification against the protocol's ES256/EdDSA
+conformance vectors are still required before runtime qualification.
+
 ## Remaining runtime qualification
 
 - Connect the configured consent verifier and typed producer APIs to an

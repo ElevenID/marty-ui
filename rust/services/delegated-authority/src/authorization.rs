@@ -80,7 +80,18 @@ pub trait DelegateProofVerifier: Send + Sync {
         grant: &DelegationGrant,
         request: &DelegationUseRequest,
         now: DateTime<Utc>,
-    ) -> Result<DateTime<Utc>, DelegateProofError>;
+    ) -> Result<VerifiedDelegateProof, DelegateProofError>;
+}
+
+/// Authenticated proof facts retained for the protocol receipt. The challenge
+/// and evidence reference are derived from the authoritative Flow state and
+/// original proof bytes, never caller-provided metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedDelegateProof {
+    pub evidence_ref: String,
+    pub challenge: String,
+    pub verified_at: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -103,10 +114,27 @@ pub trait ExternalConstraintVerifier: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct VerifiedConstraintEvidence {
     pub valid_until: DateTime<Utc>,
+    /// When the configured evaluator authenticated this exact grant/operation.
+    pub checked_at: DateTime<Utc>,
+    /// Authenticated evidence identifier from the configured evaluator.
+    pub evidence_ref: String,
     /// Sanitized, authenticated context produced by the constraint adapter.
     /// It must contain no bearer credentials or raw private source documents.
     pub context: serde_json::Value,
     pub evidence_digest: String,
+}
+
+/// Minimal external-profile evidence retained for the signed protocol receipt.
+/// Profile, document digest and evaluator are copied from immutable grant terms;
+/// only the evidence reference and observation are returned by the verifier.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedDomainConstraintReceipt {
+    pub evaluator: Principal,
+    pub profile: String,
+    pub document_digest: String,
+    pub checked_at: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
+    pub evidence_ref: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -317,6 +345,19 @@ pub struct DelegationUseEvaluation {
     policy_digest: String,
     evaluated_at: DateTime<Utc>,
     valid_until: DateTime<Utc>,
+    subject: Principal,
+    binding: crate::Binding,
+    approval_evidence_ref: String,
+    authority_evidence_ref: String,
+    authority_issuer: Principal,
+    status_evidence_ref: String,
+    status_checked_at: DateTime<Utc>,
+    status_valid_until: DateTime<Utc>,
+    proof_evidence_ref: String,
+    proof_challenge: String,
+    proof_verified_at: DateTime<Utc>,
+    proof_valid_until: DateTime<Utc>,
+    domain_evidence: Option<VerifiedDomainConstraintReceipt>,
 }
 
 impl DelegationUseEvaluation {
@@ -370,6 +411,21 @@ impl DelegationUseEvaluation {
     }
     pub fn valid_until(&self) -> DateTime<Utc> {
         self.valid_until
+    }
+    pub(crate) fn receipt_subject(&self) -> &Principal { &self.subject }
+    pub(crate) fn receipt_binding(&self) -> &crate::Binding { &self.binding }
+    pub(crate) fn receipt_approval_evidence_ref(&self) -> &str { &self.approval_evidence_ref }
+    pub(crate) fn receipt_authority_evidence_ref(&self) -> &str { &self.authority_evidence_ref }
+    pub(crate) fn receipt_authority_issuer(&self) -> &Principal { &self.authority_issuer }
+    pub(crate) fn receipt_status_evidence_ref(&self) -> &str { &self.status_evidence_ref }
+    pub(crate) fn receipt_status_checked_at(&self) -> DateTime<Utc> { self.status_checked_at }
+    pub(crate) fn receipt_status_valid_until(&self) -> DateTime<Utc> { self.status_valid_until }
+    pub(crate) fn receipt_proof_evidence_ref(&self) -> &str { &self.proof_evidence_ref }
+    pub(crate) fn receipt_proof_challenge(&self) -> &str { &self.proof_challenge }
+    pub(crate) fn receipt_proof_verified_at(&self) -> DateTime<Utc> { self.proof_verified_at }
+    pub(crate) fn receipt_proof_valid_until(&self) -> DateTime<Utc> { self.proof_valid_until }
+    pub(crate) fn receipt_domain_evidence(&self) -> Option<&VerifiedDomainConstraintReceipt> {
+        self.domain_evidence.as_ref()
     }
 }
 
@@ -479,17 +535,28 @@ impl DelegationUseAuthorizer {
         if valid_until <= after_resolution {
             return Err(DelegationUseError::EvidenceExpired);
         }
-        let proof_deadline = self
+        let verified_proof = self
             .proof
             .verify(grant, request, after_resolution)
             .await
             .map_err(|_| DelegationUseError::ProofNotVerified)?;
         let after_proof = self.now_after(after_resolution)?;
-        valid_until = valid_until.min(proof_deadline);
+        if !valid_uri(Some(&verified_proof.evidence_ref))
+            || verified_proof.challenge.len() < 22
+            || verified_proof.challenge.len() > 128
+            || !verified_proof.challenge.is_ascii()
+            || verified_proof.verified_at < after_resolution
+            || verified_proof.verified_at > after_proof
+            || verified_proof.valid_until <= after_proof
+        {
+            return Err(DelegationUseError::ProofNotVerified);
+        }
+        valid_until = valid_until.min(verified_proof.valid_until);
         if valid_until <= after_proof {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
+        let mut domain_evidence = None;
         let (constraint_deadline, constraint_context, constraint_evidence_digest) =
             match grant.terms.constraints.mode {
                 crate::ConstraintMode::ExactOperation => {
@@ -516,9 +583,27 @@ impl DelegationUseAuthorizer {
                         .verify(grant, request, after_proof)
                         .await
                         .map_err(|_| DelegationUseError::ConstraintNotVerified)?;
-                    if !valid_digest(&verified.evidence_digest) || !verified.context.is_object() {
+                    if !valid_digest(&verified.evidence_digest)
+                        || !valid_uri(Some(&verified.evidence_ref))
+                        || !verified.context.is_object()
+                        || verified.checked_at < after_proof
+                        || verified.checked_at > self.now_after(after_proof)?
+                        || verified.valid_until <= verified.checked_at
+                        || verified.valid_until > grant.terms.valid_until
+                    {
                         return Err(DelegationUseError::ConstraintNotVerified);
                     }
+                    domain_evidence = Some(VerifiedDomainConstraintReceipt {
+                        evaluator: grant.terms.constraints.evaluator.clone()
+                            .ok_or(DelegationUseError::ConstraintNotVerified)?,
+                        profile: grant.terms.constraints.profile.clone()
+                            .ok_or(DelegationUseError::ConstraintNotVerified)?,
+                        document_digest: grant.terms.constraints.document_digest.clone()
+                            .ok_or(DelegationUseError::ConstraintNotVerified)?,
+                        checked_at: verified.checked_at,
+                        valid_until: verified.valid_until,
+                        evidence_ref: verified.evidence_ref,
+                    });
                     (
                         verified.valid_until,
                         verified.context,
@@ -582,6 +667,10 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::EvidenceExpired);
         }
 
+        let approval = grant.approval.as_ref().ok_or(DelegationUseError::Unavailable)?;
+        if approval.grant_id != grant.id || approval.terms_digest != grant.terms_digest {
+            return Err(DelegationUseError::Unavailable);
+        }
         Ok(DelegationUseEvaluation {
             organization_id: grant.organization_id,
             grant_id: grant.id,
@@ -598,8 +687,25 @@ impl DelegationUseAuthorizer {
             policy_id: cedar_result.policy_id,
             policy_revision: cedar_result.policy_revision,
             policy_digest: cedar_result.policy_digest,
-            evaluated_at: cedar_result.evaluated_at,
+            // Receipt evaluation time is the final post-policy grant/consent
+            // observation. Policy identity and freshness were checked separately.
+            // This is the final post-policy grant/consent observation. Cedar's
+            // policy snapshot was independently validated immediately before it.
+            evaluated_at: final_now,
             valid_until,
+            subject: grant.terms.subject.clone(),
+            binding: grant.terms.binding.clone(),
+            approval_evidence_ref: approval.evidence_ref.clone(),
+            authority_evidence_ref: approval.authority_evidence_ref.clone(),
+            authority_issuer: grant.authority.issuer.clone(),
+            status_evidence_ref: grant.authority.status_ref.clone(),
+            status_checked_at: final_now,
+            status_valid_until: latest.consent_valid_until,
+            proof_evidence_ref: verified_proof.evidence_ref,
+            proof_challenge: verified_proof.challenge,
+            proof_verified_at: verified_proof.verified_at,
+            proof_valid_until: verified_proof.valid_until,
+            domain_evidence,
         })
     }
 
@@ -748,7 +854,7 @@ mod tests {
             grant: &DelegationGrant,
             request: &DelegationUseRequest,
             _now: DateTime<Utc>,
-        ) -> Result<DateTime<Utc>, DelegateProofError> {
+        ) -> Result<VerifiedDelegateProof, DelegateProofError> {
             *self.calls.lock().unwrap() += 1;
             if *self.reject.lock().unwrap()
                 || request.actor != grant.terms.delegate
@@ -756,7 +862,12 @@ mod tests {
             {
                 return Err(DelegateProofError);
             }
-            Ok(grant.terms.valid_until)
+            Ok(VerifiedDelegateProof {
+                evidence_ref: format!("urn:marty:oid4vp-proof:{}", request.challenge_id),
+                challenge: request.challenge_id.simple().to_string(),
+                verified_at: _now,
+                valid_until: grant.terms.valid_until,
+            })
         }
     }
     struct Constraint {
@@ -775,6 +886,8 @@ mod tests {
             }
             Ok(VerifiedConstraintEvidence {
                 valid_until: grant.terms.valid_until,
+                checked_at: _now,
+                evidence_ref: "urn:example:constraint-evidence:test".into(),
                 context: serde_json::json!({"authorized": true, "source": "test-only"}),
                 evidence_digest: format!("sha256:{}", "d".repeat(64)),
             })
@@ -1062,7 +1175,7 @@ mod tests {
             _grant: &DelegationGrant,
             _request: &DelegationUseRequest,
             _now: DateTime<Utc>,
-        ) -> Result<DateTime<Utc>, DelegateProofError> {
+        ) -> Result<VerifiedDelegateProof, DelegateProofError> {
             std::future::pending().await
         }
     }
@@ -1162,9 +1275,14 @@ mod tests {
             _grant: &DelegationGrant,
             _request: &DelegationUseRequest,
             _now: DateTime<Utc>,
-        ) -> Result<DateTime<Utc>, DelegateProofError> {
+        ) -> Result<VerifiedDelegateProof, DelegateProofError> {
             self.clock.set(self.after);
-            Ok(self.valid_until)
+            Ok(VerifiedDelegateProof {
+                evidence_ref: format!("urn:marty:oid4vp-proof:{}", _request.challenge_id),
+                challenge: _request.challenge_id.simple().to_string(),
+                verified_at: self.after,
+                valid_until: self.valid_until,
+            })
         }
     }
 
@@ -1185,6 +1303,8 @@ mod tests {
             self.clock.set(self.after);
             Ok(VerifiedConstraintEvidence {
                 valid_until: grant.terms.valid_until,
+                checked_at: self.after,
+                evidence_ref: "urn:example:constraint-evidence:timed".into(),
                 context: self.context.clone(),
                 evidence_digest: format!("sha256:{}", "d".repeat(64)),
             })

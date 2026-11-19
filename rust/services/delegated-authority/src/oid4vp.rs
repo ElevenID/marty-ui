@@ -13,6 +13,7 @@ use chrono::{DateTime, Duration, Utc};
 use marty_oid4vci::verifier::VerificationEngine;
 use marty_verification::jwk::Jwk;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use uuid::Uuid;
 
 use crate::{
@@ -163,7 +164,7 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
         grant: &DelegationGrant,
         request: &DelegationUseRequest,
         now: DateTime<Utc>,
-    ) -> Result<DateTime<Utc>, DelegateProofError> {
+    ) -> Result<crate::VerifiedDelegateProof, DelegateProofError> {
         if request.proof.len() > MAX_DELEGATE_PROOF_BYTES {
             return Err(DelegateProofError);
         }
@@ -253,7 +254,13 @@ impl DelegateProofVerifier for MartyOid4vpDelegateProofVerifier {
         validate_signer_binding(grant, &challenge, &signer_thumbprint)?;
 
         let proof_deadline = DateTime::from_timestamp(expires_at, 0).ok_or(DelegateProofError)?;
-        Ok(proof_deadline.min(challenge.expires_at))
+        let digest = hex::encode(sha2::Sha256::digest(&request.proof));
+        Ok(crate::VerifiedDelegateProof {
+            evidence_ref: format!("urn:marty:oid4vp-proof:{digest}"),
+            challenge: challenge.nonce,
+            verified_at: now,
+            valid_until: proof_deadline.min(challenge.expires_at),
+        })
     }
 }
 
