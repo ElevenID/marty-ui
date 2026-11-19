@@ -752,7 +752,7 @@ mod tests {
             *self.calls.lock().unwrap() += 1;
             if *self.reject.lock().unwrap()
                 || request.actor != grant.terms.delegate
-                || request.proof.as_slice() != &[7, 8, 9]
+                || request.proof.as_slice() != [7, 8, 9]
             {
                 return Err(DelegateProofError);
             }
