@@ -1,5 +1,6 @@
 import { isProductionMarketingModule } from './selfhost-build-contract.mjs';
 import { WEB_ROUTE_CONTRACT } from './web-surface-contract.mjs';
+import { WEBSITE_SOURCE_OWNERSHIP, validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 
 export function websiteBuildRevision({ sourceSha = 'development', commerceSha, pages = 'public', revision } = {}) {
   if (!['public', 'full'].includes(pages)) throw new Error('Unknown production page set');
@@ -31,6 +32,7 @@ export function forbiddenWebSurfaceModule(surface, moduleId, commerceEntry) {
 
 export function webSurfaceBuildContractPlugin({ surface, sourceSha = 'development', revision, pages = 'public', commerceSha, commerceEntry }) {
   if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface');
+  if (surface !== 'application') validateWebsiteSourceOwnership(WEBSITE_SOURCE_OWNERSHIP);
   const websiteRevision = surface === 'website' ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision }) : null;
   return {
     name: 'web-surface-build-contract',

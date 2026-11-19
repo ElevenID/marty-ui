@@ -135,7 +135,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD=true bun install
           bun x --no-install puppeteer browsers install
       - name: Test website routing and all surface boundary guards
-        run: bun run test:website
+        run: |
+          bun run test:website
+          bun run test:application
       - name: Build and check crawlable website output
         run: |
           bun run build:website
@@ -144,6 +146,16 @@ jobs:
         run: |
           bun run build:application
           bun run build:selfhost
+      - name: Build application with audited website inputs absent
+        run: node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"
+      - name: Upload application source boundary report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   fast-feedback:
     name: Fast Feedback
@@ -3129,9 +3141,9 @@ jobs:
 
           timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          # Audit both complete scanner reports. The exact source/graph-bound
-          # dev-only picomatch disposition expires Nov 24; all other findings
-          # and scanner errors remain failures. Existing braces scope is retained.
+          # Audit both complete reports and reject every returned finding or
+          # scanner error. The withdrawn picomatch exception is retired;
+          # the existing optional-prerenderer braces scope is preserved.
           (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && python3 ../scripts/ci/audit-ui-dependencies.py') &
           ui_audit_pid=$!
           (cd tests && npm ci --ignore-scripts && timed tests-audit npm audit --package-lock-only --audit-level=low) &
