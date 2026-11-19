@@ -148,8 +148,18 @@ pub struct DelegatedReceiptSigningError;
 /// signature bound to the requested tenant, issuer and protocol purpose.
 #[derive(Clone, Debug)]
 pub struct IssuedDelegatedDecisionReceipt {
-    pub payload: DelegatedDecisionReceiptPayloadV1,
-    pub compact_jws: String,
+    payload: DelegatedDecisionReceiptPayloadV1,
+    compact_jws: String,
+}
+
+impl IssuedDelegatedDecisionReceipt {
+    pub fn payload(&self) -> &DelegatedDecisionReceiptPayloadV1 {
+        &self.payload
+    }
+
+    pub fn compact_jws(&self) -> &str {
+        &self.compact_jws
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -539,16 +549,16 @@ mod tests {
             DelegatedDecisionReceiptIssuer::new(signer.clone(), issuer.clone(), 30).unwrap();
         let issued_at = evaluation.evaluated_at();
         let receipt = receipt_issuer.issue(&evaluation, issued_at).await.unwrap();
-        assert_eq!(receipt.payload.profile, DELEGATED_DECISION_RECEIPT_PROFILE);
-        assert_eq!(receipt.payload.decision, "PERMIT");
-        assert_eq!(receipt.payload.issuer.id, issuer.id);
-        assert_eq!(receipt.payload.evaluation.grant.id, active.id);
+        assert_eq!(receipt.payload().profile, DELEGATED_DECISION_RECEIPT_PROFILE);
+        assert_eq!(receipt.payload().decision, "PERMIT");
+        assert_eq!(receipt.payload().issuer.id, issuer.id);
+        assert_eq!(receipt.payload().evaluation.grant.id, active.id);
         assert_eq!(
-            receipt.payload.evaluation.operation.request_digest,
+            receipt.payload().evaluation.operation.request_digest,
             request.operation_digest
         );
-        assert_eq!(receipt.payload.evaluation.status.state, "ACTIVE");
-        let domain_evidence = receipt.payload.evaluation.domain_evidence.as_ref().unwrap();
+        assert_eq!(receipt.payload().evaluation.status.state, "ACTIVE");
+        let domain_evidence = receipt.payload().evaluation.domain_evidence.as_ref().unwrap();
         assert_eq!(
             domain_evidence.profile,
             active.terms.constraints.profile.clone().unwrap()
@@ -566,9 +576,9 @@ mod tests {
             request.operation_digest
         );
         assert_eq!(domain_evidence.decision, "PERMIT");
-        assert!(receipt.payload.expires_at <= domain_evidence.valid_until);
-        assert!(receipt.payload.expires_at <= evaluation.valid_until());
-        let parts: Vec<_> = receipt.compact_jws.split('.').collect();
+        assert!(receipt.payload().expires_at <= domain_evidence.valid_until);
+        assert!(receipt.payload().expires_at <= evaluation.valid_until());
+        let parts: Vec<_> = receipt.compact_jws().split('.').collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(URL_SAFE_NO_PAD.decode(parts[2]).unwrap(), vec![7; 64]);
         let calls = signer.calls.lock().unwrap();
