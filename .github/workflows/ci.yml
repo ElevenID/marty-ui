@@ -3136,9 +3136,9 @@ jobs:
 
           timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          # Audit both complete scanner reports. The exact source/graph-bound
-          # dev-only picomatch disposition expires Nov 24; all other findings
-          # and scanner errors remain failures. Existing braces scope is retained.
+          # Audit both complete reports and reject every returned finding or
+          # scanner error. The withdrawn picomatch exception is retired;
+          # the existing optional-prerenderer braces scope is preserved.
           (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && python3 ../scripts/ci/audit-ui-dependencies.py') &
           ui_audit_pid=$!
           (cd tests && npm ci --ignore-scripts && timed tests-audit npm audit --package-lock-only --audit-level=low) &

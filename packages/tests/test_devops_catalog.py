@@ -97,7 +97,7 @@ def test_issuer_signing_credential_is_only_on_signing_workloads():
             for container in resource["spec"]["template"]["spec"]["containers"]:
                 if any(item.get("name") == key for item in container.get("env", [])):
                     holders.add(resource["metadata"]["name"])
-    assert holders == {"gateway", "signing-keys", "issuance", "issuance-native", "canvas-sync-worker", "flow"}
+    assert holders == {"gateway", "signing-keys", "issuance", "issuance-native", "flow"}
 
 
 def test_selfhost_example_declares_required_compose_settings():
