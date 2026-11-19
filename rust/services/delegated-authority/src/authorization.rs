@@ -649,7 +649,7 @@ mod tests {
         }
     }
     struct Proof {
-        reject: bool,
+        reject: Mutex<bool>,
         calls: Mutex<usize>,
     }
     #[async_trait]
@@ -661,7 +661,7 @@ mod tests {
             _now: DateTime<Utc>,
         ) -> Result<DateTime<Utc>, DelegateProofError> {
             *self.calls.lock().unwrap() += 1;
-            if self.reject
+            if *self.reject.lock().unwrap()
                 || request.actor != grant.terms.delegate
                 || request.proof.as_slice() != &[7, 8, 9]
             {
@@ -770,7 +770,7 @@ mod tests {
                 .await
                 .unwrap();
             let proof = Arc::new(Proof {
-                reject: false,
+                reject: Mutex::new(false),
                 calls: Mutex::new(0),
             });
             let authorizer = DelegationUseAuthorizer::with_clock(
@@ -844,7 +844,7 @@ mod tests {
     #[tokio::test]
     async fn failed_proof_and_non_permit_cedar_decisions_fail_closed() {
         let h = Harness::new(CedarDecision::Permit).await;
-        h.proof.reject = true;
+        *h.proof.reject.lock().unwrap() = true;
         assert_eq!(
             h.authorizer.evaluate(&h.request).await,
             Err(DelegationUseError::ProofNotVerified)
