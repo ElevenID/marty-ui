@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -9,9 +10,11 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   ADDITIONAL_OMISSIONS, OMITTED_DEMO_INPUTS, OMITTED_COMBINED_ADAPTERS,
-  OMITTED_DEMO_MODULES, OMITTED_COMBINED_TEST_INPUTS, RETAINED_SHARED_INPUTS, planApplicationSourceClosure,
-  rehearseApplicationSourceClosure,
+  OMITTED_DEMO_MODULES, OMITTED_COMBINED_TEST_INPUTS, OMITTED_WEBSITE_BUILD_INPUTS, RETAINED_SHARED_INPUTS,
+  planApplicationSourceClosure, rehearseApplicationSourceClosure, materializeApplicationDependencyProfile,
+  compareApplicationProfileBaseline,
 } from './application-source-closure.mjs';
+import { canonicalJson } from './web-surface-contract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import {
   APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
@@ -209,7 +212,7 @@ function fixture(t, buildOptions = {}) {
   return root;
 }
 
-test('the plan separates the original website roster from the 71-input application build/test/resource boundary', (t) => {
+test('the plan separates the original website roster from the 72-input application build/test/resource boundary', (t) => {
   const root = fixture(t);
   const plan = planApplicationSourceClosure({ repositoryRoot: root });
   assert.equal(ownership.modules.length, 34);
@@ -220,8 +223,9 @@ test('the plan separates the original website roster from the 71-input applicati
     demo_modules: [...OMITTED_DEMO_MODULES],
     combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
     public_assets: [...APPLICATION_ASSET_OMISSIONS],
+    website_build_tools: [...OMITTED_WEBSITE_BUILD_INPUTS],
   });
-  assert.equal(plan.boundary.omitted.length, 71);
+  assert.equal(plan.boundary.omitted.length, 72);
   assert.equal(APPLICATION_ASSET_OMISSIONS.length, 26);
   assert.equal(new Set(APPLICATION_ASSET_OMISSIONS).size, 26);
   assert.deepEqual(plan.boundary.retained_public_files, [...APPLICATION_RETAINED_PUBLIC_FILES]);
@@ -251,6 +255,121 @@ test('fresh installation cannot select or fall back to the reusable dependency d
   assert.equal(report.qualification.source_checkout_unchanged, true);
   assert.equal(existsSync(path.dirname(report.export_directory)), false);
 });
+
+test('profile selection requires a fresh install and a separate full-profile baseline', (t) => {
+  const root = fixture(t);
+  assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root, dependencyProfile: 'unknown' }), /Unsupported dependency profile/);
+  assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root, dependencyProfile: 'application' }), /requires a fresh install/);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    dependencyProfile: 'application' }), /baseline report is required/);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    baselineReport: '/tmp/unselected-baseline.json' }), /required only for the application/);
+});
+
+function profileMaterializationFixture(t) {
+  const root = fixture(t);
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-profile-materialization-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['package.json', 'package-lock.json']) {
+    put(root, `ui/profiles/application/${name}`, JSON.stringify({ selected: name }));
+    put(directory, `ui/${name}`, readFileSync(path.join(root, `ui/${name}`)));
+    put(directory, `ui/profiles/application/${name}`, readFileSync(path.join(root, `ui/profiles/application/${name}`)));
+  }
+  const plan = planApplicationSourceClosure({ repositoryRoot: root });
+  const inputs = new Map(plan.source.files.map((row) => [row.path, row]));
+  plan.dependency_profile = { name: 'application', substitutions: ['package.json', 'package-lock.json'].map((name) => ({
+    path: `ui/${name}`, baseline: inputs.get(`ui/${name}`), selected: inputs.get(`ui/profiles/application/${name}`),
+  })) };
+  return { root, directory, plan };
+}
+
+test('profile materialization replaces exactly two export inputs and records both source identities', (t) => {
+  const { root, directory, plan } = profileMaterializationFixture(t);
+  const before = plan.source.files.map((row) => readFileSync(path.join(root, row.path)));
+  const materialized = materializeApplicationDependencyProfile(plan, directory);
+  assert.equal(materialized.length, 2);
+  for (const row of materialized) {
+    assert.deepEqual(readFileSync(path.join(directory, row.path)), readFileSync(path.join(root, row.selected.path)));
+    assert.equal(row.materialized.sha256, row.selected.sha256);
+    assert.notEqual(row.materialized.sha256, row.baseline.sha256);
+  }
+  assert.deepEqual(plan.source.files.map((row) => readFileSync(path.join(root, row.path))), before);
+});
+
+test('profile materialization refuses changed selected inputs, extra substitutions, and destination links', (t) => {
+  const { root, directory, plan } = profileMaterializationFixture(t);
+  const selected = plan.dependency_profile.substitutions[0].selected.path;
+  const original = readFileSync(path.join(root, selected));
+  put(root, selected, `${original}\n`);
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /selected profile input changed/);
+  put(root, selected, original);
+  plan.dependency_profile.substitutions.push({ path: 'ui/vite.config.ts' });
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /two reviewed package inputs/);
+  plan.dependency_profile.substitutions.pop();
+  rmSync(path.join(directory, 'ui/package.json'));
+  symlinkSync(path.join(root, 'ui/package.json'), path.join(directory, 'ui/package.json'));
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /not a regular file/);
+});
+
+function baselineFixture(t) {
+  const root = fixture(t);
+  const plan = planApplicationSourceClosure({ repositoryRoot: root });
+  const hash = (value) => `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
+  const publicResources = APPLICATION_RETAINED_PUBLIC_FILES.map((name) => {
+    const row = plan.source.files.find((entry) => entry.path === `ui/public/${name}`);
+    return { path: name, bytes: row.bytes, sha256: row.sha256 };
+  });
+  const files = publicResources.map((row) => ({ ...row, mode: 0o600 })).sort((a, b) => a.path.localeCompare(b.path));
+  const output = { files, inventory_sha256: hash(files), public_resources: publicResources,
+    english_namespaces: namespaces, locales: [...APPLICATION_LOCALES] };
+  // Synthetic report data tests the comparison contract only. Real npm/build
+  // qualification is exercised by the frozen-source local and hosted gates.
+  const baseline = { schema: 'marty.application-source-closure-rehearsal/v4', status: 'passed', plan: structuredClone(plan),
+    build: { dependency_mode: 'fresh-npm-ci', effective_source_sha: plan.source.commit,
+      package_lock_sha256: plan.source.files.find((row) => row.path === 'ui/package-lock.json').sha256 },
+    dependency_install: { mode: 'fresh-npm-ci', status: 'passed', dependency_profile: 'full', independent_dependency_installation: true },
+    qualification: Object.fromEntries(['application_build_completed', 'application_tests_completed', 'omitted_sources_absent',
+      'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved', 'application_resource_smoke_completed',
+      'locale_fallback_observed', 'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound', 'independent_dependency_installation'].map((key) => [key, true])),
+    output: structuredClone(output), resources: { result: { public_resources: structuredClone(publicResources) } } };
+  plan.schema = 'marty.application-source-closure-plan/v5';
+  return { plan, output, baseline, hash };
+}
+
+test('a matching full fresh baseline binds every output and public resource record', (t) => {
+  const input = baselineFixture(t);
+  const comparison = compareApplicationProfileBaseline(input);
+  assert.equal(comparison.full_profile_fresh_install_passed, true);
+  assert.equal(comparison.same_source_inputs, true);
+  assert.equal(comparison.output_files_identical, true);
+  assert.equal(comparison.public_resources_identical, true);
+  assert.equal(comparison.output_inventory_sha256, input.output.inventory_sha256);
+});
+
+for (const [label, mutate] of [
+  ['failed baseline', ({ baseline }) => { baseline.status = 'failed'; }],
+  ['profile baseline', ({ baseline }) => { baseline.plan.dependency_profile = { name: 'application' }; }],
+  ['reused install', ({ baseline }) => { baseline.build.dependency_mode = 'reused-installed-node_modules'; }],
+  ['incomplete SDK proof', ({ baseline }) => { baseline.qualification.sdk_wasm_output_bound = false; }],
+  ['source commit', ({ baseline }) => { baseline.plan.source.commit = '0'.repeat(40); }],
+  ['source dirty status', ({ baseline }) => { baseline.plan.source.working_tree_dirty = true; }],
+  ['source inventory digest', ({ baseline }) => { baseline.plan.source.input_inventory_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['route contract', ({ baseline }) => { baseline.plan.route_contract.version += 1; }],
+  ['test contract', ({ baseline }) => { baseline.plan.test_profile.files.pop(); }],
+  ['omission boundary', ({ baseline }) => { baseline.plan.boundary.omitted.pop(); }],
+  ['source marker', ({ baseline }) => { baseline.build.effective_source_sha = 'development'; }],
+  ['full lock binding', ({ baseline }) => { baseline.build.package_lock_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['output digest', ({ baseline }) => { baseline.output.inventory_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['self-consistent changed output', ({ baseline, hash }) => { baseline.output.files[0].bytes += 1; baseline.output.inventory_sha256 = hash(baseline.output.files); }],
+  ['changed resource probe', ({ baseline }) => { baseline.resources.result.public_resources.pop(); }],
+  ['changed profile inventory', ({ output }) => { output.files[0].mode = 0o777; }],
+]) {
+  test(`the profile cannot reuse a baseline with a ${label}`, (t) => {
+    const input = baselineFixture(t);
+    mutate(input);
+    assert.throws(() => compareApplicationProfileBaseline(input));
+  });
+}
 
 test('runtime context planning inventories both root startup scripts only when requested', (t) => {
   const root = fixture(t);

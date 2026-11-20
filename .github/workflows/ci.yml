@@ -132,6 +132,13 @@ jobs:
         run: node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"
       - name: Build and probe the isolated application runtime
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container
+      - name: Audit the committed application dependency profile
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/ci/audit-application-dependencies.py
+      - name: Qualify the application package without website dependencies
+        run: node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"
+      - name: Build and probe the application profile runtime
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container
       - name: Bootstrap released UI dependencies
         shell: bash
         run: |
@@ -167,6 +174,22 @@ jobs:
         with:
           name: application-runtime-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/application-runtime.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application dependency profile report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-profile-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-profile-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application profile runtime report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-profile-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-profile-runtime.json
           if-no-files-found: ignore
           retention-days: 14
 

@@ -12,6 +12,7 @@ import {
   APPLICATION_INSTALL_INPUTS, installApplicationDependencies,
   inspectInstalledApplicationDependencies, runOwnedInstallCommand,
 } from './application-dependency-install.mjs';
+import { APPLICATION_PROFILE_POSTINSTALL, APPLICATION_REMOVED_DEPENDENCY_ROOTS } from './application-dependency-profile.mjs';
 
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const sdkName = '@elevenid/marty-api-core';
@@ -23,7 +24,8 @@ function put(root, relative, content) {
   writeFileSync(filename, content);
 }
 
-function fixture(t, { skipPrerender = false, skipChecker = false, mutateLock = false, failScript = false } = {}) {
+function fixture(t, { skipPrerender = false, skipChecker = false, mutateLock = false, failScript = false,
+  applicationProfile = false, mutateSelectedProfile = false } = {}) {
   const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), 'marty-application-install-'));
   t.after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
   const uiRoot = path.join(temporaryRoot, 'source/ui');
@@ -49,17 +51,22 @@ await WebAssembly.compile(readFileSync(new URL('./wasm/marty_api_client_bg.wasm'
 export const createApiClient = () => ({ get() { throw new Error('No API calls in install verification'); } });\n`,
     'src/wasm/marty_api_client_bg.wasm': Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]),
   }, { type: 'module', exports: './src/index.js' });
-  pack('@prerenderer/prerenderer', '1.2.5', { 'index.js': 'module.exports = ts_deepmerge_1.default;\n' });
+  if (!applicationProfile) pack('@prerenderer/prerenderer', '1.2.5', { 'index.js': 'module.exports = ts_deepmerge_1.default;\n' });
   const checkerBefore = '// unpatched checker\n';
   const checkerAfter = '// reviewed patched checker\n';
   pack('vite-plugin-checker', '0.14.5', { 'dist/main.js': checkerBefore }, { type: 'module' });
   const manifest = { name: 'application-install-fixture', version: '1.0.0', private: true,
-    type: 'module', scripts: { postinstall }, dependencies, devDependencies: {} };
+    type: 'module', scripts: { postinstall: applicationProfile ? APPLICATION_PROFILE_POSTINSTALL : postinstall }, dependencies, devDependencies: {} };
   put(uiRoot, 'package.json', JSON.stringify(manifest));
   put(uiRoot, 'package-lock.json', JSON.stringify({ name: manifest.name, version: manifest.version,
     lockfileVersion: 3, requires: true, packages: {
       '': { name: manifest.name, version: manifest.version, hasInstallScript: true, dependencies, devDependencies: {} }, ...packages,
     } }));
+  if (applicationProfile) {
+    for (const name of ['package.json', 'package-lock.json']) {
+      put(uiRoot, `profiles/application/${name}`, readFileSync(path.join(uiRoot, name)));
+    }
+  }
   put(uiRoot, 'bun.lock', 'The unchanged Bun lock is recorded, not used by this npm fixture.\n');
   put(uiRoot, 'scripts/checker-worker-cleanup.mjs', '// reviewed helper fixture\n');
   put(uiRoot, 'scripts/patch-prerenderer-ts-deepmerge.cjs', `
@@ -71,6 +78,7 @@ assert.equal(process.env.NODE_PATH, undefined);
 assert.notEqual(process.env.NODE_ENV, 'production');
 assert.notEqual(process.env.npm_config_ignore_scripts, 'true');
 ${failScript ? 'process.exit(9);' : ''}
+${applicationProfile ? "throw new Error('Application installation must not execute the prerender patch');" : ''}
 ${skipPrerender ? '' : `const filename = 'node_modules/@prerenderer/prerenderer/index.js';
 fs.writeFileSync(filename, fs.readFileSync(filename, 'utf8').replaceAll('ts_deepmerge_1.default', '(ts_deepmerge_1.default || ts_deepmerge_1.merge)'));`}
 ${mutateLock ? "fs.appendFileSync('package-lock.json', '\\n');" : ''}
@@ -83,6 +91,8 @@ export const checkerVersion = '0.14.5';
 export const cleanupFilename = 'marty-checker-cleanup.js';
 export const patches = [{file: 'dist/main.js', before: '${sha(checkerBefore)}', after: '${sha(checkerAfter)}'}];
 if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+${applicationProfile && failScript ? 'process.exit(9);' : ''}
+${mutateSelectedProfile ? "fs.appendFileSync('profiles/application/package-lock.json', '\\n');" : ''}
 ${skipChecker ? '' : `fs.writeFileSync('node_modules/vite-plugin-checker/dist/main.js', ${JSON.stringify(checkerAfter)});
 fs.copyFileSync('scripts/checker-worker-cleanup.mjs', 'node_modules/vite-plugin-checker/dist/marty-checker-cleanup.js');`}
 }
@@ -123,6 +133,84 @@ test('real npm ci installs only into a fresh export, runs both patches, and init
   assert.deepEqual(APPLICATION_INSTALL_INPUTS.map((name) => readFileSync(path.join(input.uiRoot, name))), original);
   assert.ok(report.command.includes('--ignore-scripts=false'));
   assert.ok(report.command.includes('--include=dev'));
+});
+
+test('the explicit application profile runs checker only, binds materialized inputs, and installs none of the four removed roots', (t) => {
+  const input = fixture(t, { applicationProfile: true });
+  const report = installApplicationDependencies({ ...input, dependencyProfile: 'application' });
+  assert.equal(report.status, 'passed');
+  assert.equal(report.dependency_profile, 'application');
+  assert.equal(report.bun_lock_selected, false);
+  assert.equal(report.postinstall.command, APPLICATION_PROFILE_POSTINSTALL);
+  assert.equal(report.postinstall.prerender_selected, false);
+  assert.deepEqual(report.postinstall.prerender_files, []);
+  assert.equal(report.postinstall.checker_files.length, 2);
+  assert.equal(report.graph.package_count, 2);
+  assert.deepEqual(report.removed_website_dependencies, { roots: [...APPLICATION_REMOVED_DEPENDENCY_ROOTS],
+    absent_from_manifest: true, absent_from_lock: true, absent_from_installed_graph: true, absent_from_installed_packages: true });
+  assert.equal(report.source_inputs.length, APPLICATION_INSTALL_INPUTS.length + 2);
+  assert.equal(report.package_graph_minimized, false);
+});
+
+test('an application materialization cannot differ from the selected profile bytes or reselect the full postinstall', (t) => {
+  const input = fixture(t, { applicationProfile: true });
+  const original = readFileSync(path.join(input.uiRoot, 'package.json'));
+  put(input.uiRoot, 'package.json', `${original.toString()}\n`);
+  assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), /differs from the selected profile/);
+  put(input.uiRoot, 'package.json', original);
+  const manifest = JSON.parse(original);
+  manifest.scripts.postinstall = postinstall;
+  for (const name of ['package.json', 'profiles/application/package.json']) put(input.uiRoot, name, JSON.stringify(manifest));
+  assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), /only the reviewed checker patch/);
+  assert.equal(existsSync(path.join(input.uiRoot, 'node_modules')), false);
+});
+
+for (const [label, options, refusal] of [
+  ['checker patch was not applied', { skipChecker: true }, /postinstall or SDK verification failed/],
+  ['selected profile was rewritten', { mutateSelectedProfile: true }, /changed a reviewed manifest, lock or postinstall source/],
+]) {
+  test(`an application install refuses when its ${label}`, (t) => {
+    const input = fixture(t, { applicationProfile: true, ...options });
+    assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), refusal);
+  });
+}
+
+test('a removed website package cannot be nested in the profile lock or restored outside npm installed records', async (t) => {
+  const input = fixture(t, { applicationProfile: true });
+  const lock = JSON.parse(readFileSync(path.join(input.uiRoot, 'package-lock.json')));
+  const removed = `node_modules/vite-plugin-checker/node_modules/${APPLICATION_REMOVED_DEPENDENCY_ROOTS[0]}`;
+  lock.packages[removed] = { version: '1.0.0', resolved: 'https://example.invalid/removed.tgz', integrity: 'sha512-YQ==' };
+  for (const name of ['package-lock.json', 'profiles/application/package-lock.json']) put(input.uiRoot, name, JSON.stringify(lock));
+  assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), /retained a removed website dependency/);
+  delete lock.packages[removed];
+  for (const name of ['package-lock.json', 'profiles/application/package-lock.json']) put(input.uiRoot, name, JSON.stringify(lock));
+  installApplicationDependencies({ ...input, dependencyProfile: 'application' });
+  put(input.uiRoot, `${removed}/package.json`, '{"name":"unrecorded website package"}');
+  await assert.rejects(inspectInstalledApplicationDependencies(input.uiRoot, { dependencyProfile: 'application' }),
+    /removed website dependency exists outside the installed lock/);
+});
+
+test('removed website identities cannot hide under lock aliases or actual nested aliases', async (t) => {
+  const input = fixture(t, { applicationProfile: true });
+  const lock = JSON.parse(readFileSync(path.join(input.uiRoot, 'package-lock.json')));
+  const alias = 'node_modules/vite-plugin-checker/node_modules/renamed-website-tool';
+  lock.packages[alias] = { name: APPLICATION_REMOVED_DEPENDENCY_ROOTS[1], version: '1.0.0',
+    resolved: 'https://example.invalid/alias.tgz', integrity: 'sha512-YQ==' };
+  for (const name of ['package-lock.json', 'profiles/application/package-lock.json']) put(input.uiRoot, name, JSON.stringify(lock));
+  assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), /retained a removed website dependency/);
+  delete lock.packages[alias];
+  for (const name of ['package-lock.json', 'profiles/application/package-lock.json']) put(input.uiRoot, name, JSON.stringify(lock));
+  installApplicationDependencies({ ...input, dependencyProfile: 'application' });
+  put(input.uiRoot, `${alias}/package.json`, JSON.stringify({ name: APPLICATION_REMOVED_DEPENDENCY_ROOTS[2] }));
+  await assert.rejects(inspectInstalledApplicationDependencies(input.uiRoot, { dependencyProfile: 'application' }),
+    /removed website dependency exists under an installed alias/);
+  rmSync(path.join(input.uiRoot, alias), { recursive: true });
+  const installedPath = path.join(input.uiRoot, 'node_modules/.package-lock.json');
+  const installed = JSON.parse(readFileSync(installedPath));
+  installed.packages['node_modules/vite-plugin-checker'].name = APPLICATION_REMOVED_DEPENDENCY_ROOTS[3];
+  writeFileSync(installedPath, JSON.stringify(installed));
+  await assert.rejects(inspectInstalledApplicationDependencies(input.uiRoot, { dependencyProfile: 'application' }),
+    /removed website dependency is recorded under an installed alias/);
 });
 
 for (const [label, options, refusal] of [

@@ -6,23 +6,25 @@ cutover remains a separate gate.
 
 ## Current continuation checkpoint
 
-Latest recorded evidence, November 19, 2026 (America/Denver):
+Latest recorded evidence, November 20, 2026 (UTC):
 
 | Workstream | Completed evidence | Next gate |
 | --- | --- | --- |
 | Standalone website producer | Successful signed `ElevenID/website` run [`44449706828`, attempt 2](https://github.com/ElevenID/website/actions/runs/44449706828/attempts/2), source `7ec0707aa348939a0e48e6a26b24fb1af8671b9b` | Preserve this exact original release selection for composition; newer source requires a newly qualified release |
 | Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) merged as `6daf2a21`; protected-main [run `44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1) signed and verified the composition; its six-file artifact and original evidence bytes were independently inspected | Qualify the actual application/OIDC flow and isolated-host promotion, rollback and recovery with this exact composition |
 | Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) merged as `cf333d61e4cc406d0fdaa870829396291d887ea7`; clean local and hosted builds passed with 37 audited inputs absent, and [normal queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44635771801) completed with 27 successful jobs and one intended skip | Preserve the accepted source boundary while expanding application test, asset and dependency qualification |
-| Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002), source `dc2372c0a3ecde82faaff6e3f00055ce86c3cb49`: clean local and [hosted v3 rehearsals](https://github.com/ElevenID/marty-ui/actions/runs/44641102200/job/135972381859) passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses; actual German/English fallback and source preservation passed | Complete the remaining required CI and normal queue admission; retain the exact diagnostic evidence recorded in the PR |
-| Fresh dependencies and isolated application runtime | [Implementation contract](application-dependency-boundary.md) adds a fresh locked install and a closed static nginx context; 111 focused tests and independent review passed | Execute the full fresh-install rehearsal from the published source and the actual nonpublishing hosted container gate before claiming either qualification |
+| Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002), source `dc2372c0a3ecde82faaff6e3f00055ce86c3cb49`: clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses; [full PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) completed with 27 successful jobs and one intended skip. The [current merge-queue rehearsal](https://github.com/ElevenID/marty-ui/actions/runs/44647472085/job/135993690096) passed and all recorded output bytes match the accepted PR rehearsal | Complete the remaining required queue CI; retain the exact diagnostic evidence recorded in the PR |
+| Fresh dependencies and isolated application runtime | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), source `7929095c071cfc9a427dc28b46643dbdadde2011`: the clean local fresh install and [actual hosted fresh-install/container gates](https://github.com/ElevenID/marty-ui/actions/runs/44645683982/job/135987684986) passed. The hosted proof contains 284 passing tests, all 88 output files readable by nginx, 73 checked HTTP resources, three missing-resource controls and successful image/container cleanup | Preserve the accepted full-lock baseline while qualifying the explicit application package profile; complete the current candidate's required CI and normal merge queue |
+| Application package profile | The next commit in [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) defines an explicit application manifest and npm lock without four audited website package roots, with a separate strict audit and selected postinstall | Freshly install both profiles from the same candidate source, require identical application output and public-resource records, and exercise both actual hosted runtime gates |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test
 rehearsal separately classifies combined adapters, demo projections and test
 setup as application omissions. Shared application inputs, assets and
-dependencies remain retained. The accepted source/asset rehearsals reused
-installed dependencies. They do not qualify source deletion, a separate dependency
-installation, signed application publication or an actual host/OIDC journey.
+dependencies remain retained in the baseline. The accepted source/asset rehearsals
+reused installed dependencies; PR #2004 separately establishes fresh locked
+installation. Neither qualification authorizes source deletion, signed application
+publication or an actual host/OIDC journey.
 
 The [public asset audit](application-assets-audit.md) records the 26 additional
 application omissions and the retained locale/runtime resources. The completed
@@ -32,12 +34,15 @@ source and independently verified hosted artifact are recorded in PR #2002. A lo
 resource probe cannot replace production server, browser startup or actual
 host/OIDC qualification.
 
-The [dependency and runtime boundary](application-dependency-boundary.md) keeps
-the current dependency graph and immutable release selections. Its fresh install
-runs before CI bootstrap changes the package manifest, and its separate container
-check must exercise the unchanged production nginx/startup files. Package graph
-minimization, a signed application producer and isolated-host/OIDC qualification
-remain subsequent gates.
+The [dependency and runtime boundary](application-dependency-boundary.md) retains
+the current full-lock baseline and immutable release selections. The explicit
+application profile is a separate selection; the root manifest, both root locks
+and default website/combined build behavior remain the baseline. Both fresh
+installations run before CI bootstrap changes the root package manifest, and both
+container checks exercise the unchanged production nginx/startup files. Removing
+the four audited roots is a bounded dependency reduction. Complete package graph
+minimization, source extraction, a signed application producer and isolated-host/OIDC
+qualification remain subsequent gates.
 
 The bootstrap status and initial sequence below preserve the November 15
 foundation. Use the checkpoint above for the current execution stage. Actual

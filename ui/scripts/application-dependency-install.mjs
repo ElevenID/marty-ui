@@ -8,6 +8,10 @@ import {
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  APPLICATION_DEPENDENCY_PROFILE_INPUTS, APPLICATION_REMOVED_DEPENDENCY_ROOTS,
+  APPLICATION_PROFILE_POSTINSTALL,
+} from './application-dependency-profile.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const SDK = '@elevenid/marty-api-core';
@@ -121,7 +125,24 @@ function installationEnvironment() {
   return { ...environment, PUPPETEER_SKIP_DOWNLOAD: 'true' };
 }
 
-function manifestContract(uiRoot) {
+function profileInputs(dependencyProfile) {
+  require(['full', 'application'].includes(dependencyProfile), 'Unsupported dependency installation profile');
+  return dependencyProfile === 'application'
+    ? [...APPLICATION_INSTALL_INPUTS, ...APPLICATION_DEPENDENCY_PROFILE_INPUTS.map((name) => name.slice('ui/'.length))]
+    : [...APPLICATION_INSTALL_INPUTS];
+}
+
+function removedRootPath(relative) {
+  return APPLICATION_REMOVED_DEPENDENCY_ROOTS.some((name) => relative === `node_modules/${name}`
+    || relative.endsWith(`/node_modules/${name}`));
+}
+
+function removedRootIdentity(row) {
+  return row && APPLICATION_REMOVED_DEPENDENCY_ROOTS.includes(row.name);
+}
+
+function manifestContract(uiRoot, dependencyProfile) {
+  profileInputs(dependencyProfile);
   for (const name of ['.npmrc', '.npm-extension.mjs', '.npm-extension.cjs', 'npm-shrinkwrap.json']) {
     require(absent(path.join(uiRoot, name)), `Unreviewed project install configuration: ${name}`);
   }
@@ -130,11 +151,59 @@ function manifestContract(uiRoot) {
   require(lock.lockfileVersion === 3 && lock.packages && lock.packages[''], 'Expected the committed npm v3 lock');
   assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies, 'npm lock dependencies differ from the manifest');
   assert.deepEqual(lock.packages[''].devDependencies, manifest.devDependencies, 'npm lock development dependencies differ from the manifest');
-  require(manifest.scripts?.postinstall === POSTINSTALL, 'Both reviewed postinstall patches must remain selected');
+  if (dependencyProfile === 'application') {
+    for (const name of ['package.json', 'package-lock.json']) {
+      require(input(uiRoot, name).bytes.equals(input(uiRoot, `profiles/application/${name}`).bytes),
+        `Materialized application ${name} differs from the selected profile`);
+    }
+    require(manifest.scripts?.postinstall === APPLICATION_PROFILE_POSTINSTALL,
+      'The application profile must select only the reviewed checker patch');
+    require(APPLICATION_REMOVED_DEPENDENCY_ROOTS.every((name) => !Object.hasOwn(manifest.dependencies || {}, name)
+      && !Object.hasOwn(manifest.devDependencies || {}, name))
+      && !Object.entries(lock.packages).some(([relative, row]) => removedRootPath(relative) || removedRootIdentity(row)),
+    'The application profile retained a removed website dependency');
+  } else {
+    require(manifest.scripts?.postinstall === POSTINSTALL, 'Both reviewed postinstall patches must remain selected');
+  }
   const sdk = lock.packages[`node_modules/${SDK}`];
   require(sdk && typeof sdk.version === 'string' && typeof sdk.resolved === 'string'
     && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(sdk.integrity), 'The SDK requires its original locked artifact integrity');
   return { manifest, lock };
+}
+
+function verifyRemovedPackagesAbsent(uiRoot, graph) {
+  require(!graph.packages.some((row) => removedRootPath(row.path)), 'A removed website dependency is installed');
+  let visited = 0;
+  // Check actual npm package directories as well as its hidden lock. A lifecycle
+  // script must not be able to restore an unrecorded removed package.
+  function visit(directory, depth = 0) {
+    require(depth <= 32, 'Installed package nesting exceeds its bound');
+    ordinaryDirectory(directory);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      require(++visited <= 8192 && entry.isDirectory() && !entry.isSymbolicLink(),
+        'Installed application graph contains an unexpected package entry');
+      const location = path.join(directory, entry.name);
+      if (entry.name.startsWith('@')) {
+        for (const scoped of readdirSync(location, { withFileTypes: true })) {
+          require(++visited <= 8192 && scoped.isDirectory() && !scoped.isSymbolicLink(),
+            'Installed application graph contains an unexpected scoped entry');
+          checkPackage(path.join(location, scoped.name), depth);
+        }
+      } else checkPackage(location, depth);
+    }
+  }
+  function checkPackage(directory, depth) {
+    require(!removedRootPath(path.relative(uiRoot, directory).split(path.sep).join('/')),
+      'A removed website dependency exists outside the installed lock');
+    require(!removedRootIdentity(document(directory, 'package.json')),
+      'A removed website dependency exists under an installed alias');
+    const nested = path.join(directory, 'node_modules');
+    if (!absent(nested)) visit(nested, depth + 1);
+  }
+  visit(path.join(uiRoot, 'node_modules'));
+  return { roots: [...APPLICATION_REMOVED_DEPENDENCY_ROOTS], absent_from_manifest: true,
+    absent_from_lock: true, absent_from_installed_graph: true, absent_from_installed_packages: true };
 }
 
 function installedGraph(uiRoot, manifest, lock) {
@@ -144,6 +213,9 @@ function installedGraph(uiRoot, manifest, lock) {
   const records = [];
   for (const [relative, row] of Object.entries(installed.packages)) {
     require(relative.startsWith('node_modules/') && row && !row.link, 'Installed graph contains a linked or invalid package');
+    if (manifest.scripts?.postinstall === APPLICATION_PROFILE_POSTINSTALL) {
+      require(!removedRootIdentity(row), 'A removed website dependency is recorded under an installed alias');
+    }
     const expected = lock.packages[relative];
     require(expected && ['version', 'resolved', 'integrity'].every((key) => row[key] === expected[key]),
       `Installed package differs from the committed lock: ${relative}`);
@@ -188,11 +260,12 @@ function prerenderPatchEvidence(uiRoot) {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export async function inspectInstalledApplicationDependencies(directory) {
+export async function inspectInstalledApplicationDependencies(directory, { dependencyProfile = 'full' } = {}) {
   const uiRoot = ordinaryDirectory(directory);
-  const { manifest, lock } = manifestContract(uiRoot);
+  const { manifest, lock } = manifestContract(uiRoot, dependencyProfile);
   const graph = installedGraph(uiRoot, manifest, lock);
-  const prerenderFiles = prerenderPatchEvidence(uiRoot);
+  const removedDependencies = dependencyProfile === 'application' ? verifyRemovedPackagesAbsent(uiRoot, graph) : undefined;
+  const prerenderFiles = dependencyProfile === 'application' ? [] : prerenderPatchEvidence(uiRoot);
   const checker = await import(pathToFileURL(path.join(uiRoot, 'scripts/patch-checker-worker-cleanup.mjs')).href);
   require(Array.isArray(checker.patches) && checker.patches.length > 0, 'Checker patch has no verified targets');
   const checkerPackage = document(uiRoot, 'node_modules/vite-plugin-checker/package.json');
@@ -224,21 +297,23 @@ export async function inspectInstalledApplicationDependencies(directory) {
     require(client && typeof client.get === 'function', 'Installed SDK client could not initialize');
   } finally { globalThis.fetch = originalFetch; }
   return {
-    graph,
-    postinstall: { command: POSTINSTALL, verified: true, prerender_files: prerenderFiles, checker_files: checkerFiles },
+    graph, ...(removedDependencies ? { removed_website_dependencies: removedDependencies } : {}),
+    postinstall: { command: manifest.scripts.postinstall, verified: true, prerender_selected: dependencyProfile === 'full',
+      prerender_files: prerenderFiles, checker_files: checkerFiles },
     sdk: { name: SDK, version: packageJson.version, resolved: locked.resolved, integrity: locked.integrity,
       entry: input(uiRoot, `${packagePrefix}/src/index.js`).record, wasm: wasm.record,
       initialized_in_node: true, browser_execution_observed: false },
   };
 }
 
-export function installApplicationDependencies({ uiRoot: directory, temporaryRoot }) {
+export function installApplicationDependencies({ uiRoot: directory, temporaryRoot, dependencyProfile = 'full' }) {
   const uiRoot = ordinaryDirectory(directory);
   const temporary = ordinaryDirectory(temporaryRoot);
   require(uiRoot !== temporary && uiRoot.startsWith(`${temporary}${path.sep}`), 'Fresh install must remain in its disposable export');
   require(absent(path.join(uiRoot, 'node_modules')), 'Fresh install cannot borrow an existing dependency directory');
-  manifestContract(uiRoot);
-  const original = APPLICATION_INSTALL_INPUTS.map((name) => input(uiRoot, name).record);
+  const selectedInputs = profileInputs(dependencyProfile);
+  manifestContract(uiRoot, dependencyProfile);
+  const original = selectedInputs.map((name) => input(uiRoot, name).record);
   const cache = path.join(temporary, 'npm-cache');
   const userConfig = path.join(temporary, 'npm-user-config');
   const globalConfig = path.join(temporary, 'npm-global-config');
@@ -266,7 +341,7 @@ export function installApplicationDependencies({ uiRoot: directory, temporaryRoo
     });
     if (installed.error) throw installed.error;
     require(installed.status === 0, `Frozen npm installation failed with exit code ${installed.status}`);
-    const inspected = runOwnedInstallCommand(process.execPath, [SELF, '--inspect-installed', uiRoot], {
+    const inspected = runOwnedInstallCommand(process.execPath, [SELF, '--inspect-installed', uiRoot, dependencyProfile], {
       cwd: uiRoot, env: environment, timeout: 30_000,
       stdoutFile: path.join(temporary, 'dependency-inspection.json'),
     });
@@ -276,19 +351,21 @@ export function installApplicationDependencies({ uiRoot: directory, temporaryRoo
     require(inspectionOutput.length <= 2 * 1024 * 1024, 'Dependency inspection exceeds its report bound');
     evidence = JSON.parse(inspectionOutput.toString('utf8'));
   } finally {
-    assert.deepEqual(APPLICATION_INSTALL_INPUTS.map((name) => input(uiRoot, name).record), original,
+    assert.deepEqual(selectedInputs.map((name) => input(uiRoot, name).record), original,
       'Fresh installation changed a reviewed manifest, lock or postinstall source');
   }
-  return { status: 'passed', mode: 'fresh-npm-ci', command: ['npm', ...args], node_version: process.version,
+  return { status: 'passed', mode: 'fresh-npm-ci', dependency_profile: dependencyProfile,
+    command: ['npm', ...args], node_version: process.version,
     npm_version: npmVersion, cache_mode: 'new-temporary-cache', npm_configuration: 'explicit-empty-user-and-global',
-    browser_download_skipped: true, source_inputs: original, ...evidence,
+    browser_download_skipped: true, bun_lock_selected: false, source_inputs: original, ...evidence,
     package_graph_minimized: false, independent_dependency_installation: true };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
   try {
-    require(process.argv.length === 4 && process.argv[2] === '--inspect-installed', 'Unsupported dependency inspection command');
-    process.stdout.write(`${JSON.stringify(await inspectInstalledApplicationDependencies(process.argv[3]))}\n`);
+    require(process.argv.length === 5 && process.argv[2] === '--inspect-installed', 'Unsupported dependency inspection command');
+    process.stdout.write(`${JSON.stringify(await inspectInstalledApplicationDependencies(process.argv[3],
+      { dependencyProfile: process.argv[4] }))}\n`);
   } catch (error) {
     console.error(`Application dependency verification failed: ${error.message || error}`);
     process.exitCode = 1;
