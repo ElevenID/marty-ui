@@ -13,6 +13,7 @@ pub(crate) fn managed_validity(
     request: &EvaluatePresentationRequest,
     query: &AuthenticatedSdJwtQueryEvidence,
     authority: &VerifiedManagedCredentialAuthority,
+    external_status_valid_until_epoch_micros: Option<i64>,
     result: &Value,
 ) -> Result<PolicyEvaluationValidityV1, PresentationVerificationError> {
     if !request.trusted_internal_context
@@ -30,9 +31,15 @@ pub(crate) fn managed_validity(
     if projected_time != Some(evaluated_at) {
         return Err(invalid());
     }
-    let deadline = query
+    let mut deadline = query
         .finalization_deadline_micros(policy)?
         .min(authority.finalization_deadline_micros(policy)?);
+    if let Some(external_deadline) = external_status_valid_until_epoch_micros {
+        if external_deadline <= evaluated_at {
+            return Err(invalid());
+        }
+        deadline = deadline.min(external_deadline);
+    }
     let policy_identity = crate::policy_revision(policy).map_err(|_| invalid())?;
     let organization_id = policy.organization_id.to_string();
     let context = Value::Object(request.context.clone());

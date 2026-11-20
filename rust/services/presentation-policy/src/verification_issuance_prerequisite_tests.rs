@@ -515,6 +515,7 @@ pub(super) async fn qualify(
     fixture: &Fixture,
     original_providers: &marty_flow::FlowProviderRegistry,
     pool: &PgPool,
+    external_deadline_epoch_micros: i64,
     values: &BTreeMap<String, String>,
 ) {
     use marty_credential_template::{
@@ -779,6 +780,19 @@ pub(super) async fn qualify(
     let second_evidence =
         complete_prerequisite(fixture, &providers, &flow_repository, &second).await;
     for (offer, evidence) in [(&first, &first_evidence), (&second, &second_evidence)] {
+        assert_eq!(
+            evidence.policy_evidence.validity.valid_until_epoch_micros,
+            external_deadline_epoch_micros,
+            "the signed external lease must survive Policy and durable Flow finalization",
+        );
+        assert!(
+            evidence.policy_evidence.trust.valid_until_epoch_seconds * 1_000_000
+                > external_deadline_epoch_micros
+        );
+        assert!(
+            evidence.policy_evidence.status.valid_until_epoch_seconds * 1_000_000
+                > external_deadline_epoch_micros
+        );
         let intent = repository
             .transaction_by_id(&offer.id)
             .await
@@ -892,10 +906,15 @@ pub(super) async fn qualify(
         issuer_public_key_thumbprint(&issued_claims["cnf"]["jwk"]).unwrap(),
         issuer_public_key_thumbprint(&public_key(&holder_key())).unwrap()
     );
-    let row=sqlx::query("SELECT tx.status,tx.issuance_intent,continuation.evidence_digest,continuation.holder_key_thumbprint,continuation.credential_id,tx.reserved_credential_id
+    let row=sqlx::query("SELECT tx.status,tx.issuance_intent,continuation.evidence_digest,continuation.holder_key_thumbprint,continuation.credential_id,(extract(epoch FROM continuation.expires_at)*1000000)::bigint AS valid_until_epoch_micros,tx.reserved_credential_id
         FROM issuance_service.issuance_transactions tx JOIN issuance_service.issuance_prerequisite_continuations continuation ON continuation.transaction_id=tx.id WHERE tx.id=$1")
         .bind(&first.id).fetch_one(pool).await.unwrap();
     assert_eq!(row.get::<String, _>("status"), "issued");
+    assert_eq!(
+        row.get::<i64, _>("valid_until_epoch_micros"),
+        external_deadline_epoch_micros,
+        "the consumed issuance continuation must retain the exact external bound",
+    );
     assert_eq!(
         row.get::<String, _>("evidence_digest"),
         first_evidence.evidence_digest
@@ -919,7 +938,8 @@ pub(super) async fn qualify(
         .is_some());
 
     // The second real owner acquisition is live before it waits for the signing
-    // lock. Expiry while blocked must be checked again using the database clock.
+    // lock. The signed external list expires first; both managed owners remain
+    // live. The signing claim must check that external bound using the DB clock.
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("SELECT id FROM issuance_service.issuance_transactions WHERE id=$1 FOR UPDATE")
         .bind(&second.id)
@@ -967,6 +987,21 @@ pub(super) async fn qualify(
         late.await.unwrap(),
         Err(CredentialIssuanceError::ApplicationEligibilityDenied)
     ));
+    let denied_at: i64 = sqlx::query_scalar(
+        "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000000)::bigint",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(denied_at >= external_deadline_epoch_micros);
+    assert!(
+        denied_at < second_evidence.policy_evidence.trust.valid_until_epoch_seconds * 1_000_000,
+        "the external lease, not the managed trust lease, expired at consumption",
+    );
+    assert!(
+        denied_at < second_evidence.policy_evidence.status.valid_until_epoch_seconds * 1_000_000,
+        "the external lease, not the managed status lease, expired at consumption",
+    );
     assert_eq!(signer_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         repository

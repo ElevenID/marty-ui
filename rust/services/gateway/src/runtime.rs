@@ -997,6 +997,9 @@ async fn tenant_authorization_middleware(
     .await
     {
         Ok(value) => value,
+        Err(SecurityError::Authorization(_)) => {
+            return detail_response(403, "Forbidden");
+        }
         Err(_) => {
             return detail_response(500, "Authorization service unavailable");
         }
@@ -1611,8 +1614,10 @@ async fn proxy_handler(
             }
         };
         if let Some(canonical) = canonical_body.as_deref() {
+            // Membership authorization has already bound the selected tenant;
+            // a principal may belong to a different tenant than its session default.
             if didcomm_contract::request_organization(canonical).as_deref()
-                != session_organization_id.as_deref()
+                != identity.organization_id.as_deref()
             {
                 return detail_response(403, "Request is not authorized for this organization");
             }

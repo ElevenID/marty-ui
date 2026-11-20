@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   ADDITIONAL_OMISSIONS, OMITTED_DEMO_INPUTS, OMITTED_COMBINED_ADAPTERS,
-  OMITTED_DEMO_MODULES, OMITTED_COMBINED_TEST_INPUTS, RETAINED_SHARED_INPUTS, planApplicationSourceClosure,
-  rehearseApplicationSourceClosure,
+  OMITTED_DEMO_MODULES, OMITTED_COMBINED_TEST_INPUTS, OMITTED_WEBSITE_BUILD_INPUTS, RETAINED_SHARED_INPUTS,
+  planApplicationSourceClosure, rehearseApplicationSourceClosure, materializeApplicationDependencyProfile,
+  compareApplicationProfileBaseline,
 } from './application-source-closure.mjs';
+import { canonicalJson } from './web-surface-contract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import {
   APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
@@ -22,6 +27,8 @@ const ownership = JSON.parse(readFileSync(path.join(repositoryRoot, 'contracts/w
 const routeBytes = readFileSync(path.join(repositoryRoot, 'contracts/web-surface-routes.json'));
 const organizationContract = readFileSync(path.join(repositoryRoot, 'contracts/organization-domain-behavior.json'));
 const namespaces = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
+const runtimeInputs = ['ui/nginx.prod.conf', 'ui/scripts/application-runtime.Dockerfile',
+  'scripts/ui-production-start.sh', 'scripts/load-secrets-env.sh'];
 
 function put(root, relative, content) {
   const target = path.join(root, relative);
@@ -37,7 +44,7 @@ function git(root, ...args) {
 }
 
 function builder({ failure = false, marketing = false, mutateSource, outputSymlink = false, recreateOmitted,
-  removePublic, tamperPublic } = {}) {
+  removePublic, tamperPublic, runtimeContext = false } = {}) {
   return `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -66,6 +73,7 @@ ${outputSymlink ? "fs.symlinkSync(process.cwd(), output, 'dir'); process.exit(0)
 fs.mkdirSync(path.join(output, 'console'), { recursive: true });
 fs.writeFileSync(path.join(output, 'index.html'), '<html><main>Application fixture</main></html>');
 fs.writeFileSync(path.join(output, 'console/index.html'), '<html><main>Console fixture</main></html>');
+${runtimeContext ? "fs.mkdirSync(path.join(output, 'assets')); fs.writeFileSync(path.join(output, 'assets/marty_api_client_bg-fixture.wasm'), Buffer.from([0,97,115,109,1,0,0,0]));" : ''}
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
@@ -120,7 +128,7 @@ ${recreateAfterTests ? `fs.writeFileSync(path.join(root, ${JSON.stringify(OMITTE
 `;
 }
 
-function resourceProbe({ resourceFailure = false, resourceFault, recreateAfterResources = false } = {}) {
+function resourceProbe({ resourceFailure = false, resourceFault, recreateAfterResources = false, runtimeContext = false } = {}) {
   return `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -137,7 +145,7 @@ function record(entry) {
 }
 const result = { schema: 'marty.application-resource-smoke/v1', status: 'passed',
   public_resources: publicFiles.map(record),
-  served_resources: [...publicFiles, 'index.html', 'console/index.html'].map((entry) => ({
+  served_resources: [...publicFiles, 'index.html', 'console/index.html', ${runtimeContext ? "'assets/marty_api_client_bg-fixture.wasm'" : ''}].map((entry) => ({
     ...record(entry), status: 200, content_type: ${JSON.stringify(APPLICATION_RESOURCE_MIME_TYPES)}[path.extname(entry)][0],
   })),
   entry_references: [], manifest_icons: [],
@@ -180,6 +188,11 @@ function fixture(t, buildOptions = {}) {
   for (const entry of APPLICATION_TEST_FILES) put(root, `ui/${entry}`, '// selected test fixture\n');
   put(root, 'ui/package.json', JSON.stringify({ type: 'module' }));
   put(root, 'ui/package-lock.json', '{}\n');
+  put(root, 'ui/bun.lock', '{}\n');
+  for (const name of ['patch-prerenderer-ts-deepmerge.cjs', 'patch-checker-worker-cleanup.mjs', 'checker-worker-cleanup.mjs']) {
+    put(root, `ui/scripts/${name}`, '// fresh-install input fixture\n');
+  }
+  for (const name of runtimeInputs) put(root, name, readFileSync(path.join(repositoryRoot, name)));
   put(root, 'ui/vite.config.ts', '// fixture config; the real Vite build is a separate rehearsal\n');
   for (const entry of ['ui/vitest.config.ts', `ui/${APPLICATION_TEST_CONFIG}`,
     'ui/scripts/application-test-profile.mjs', 'ui/scripts/application-public-assets.mjs',
@@ -199,7 +212,7 @@ function fixture(t, buildOptions = {}) {
   return root;
 }
 
-test('the plan separates the original website roster from the 71-input application build/test/resource boundary', (t) => {
+test('the plan separates the original website roster from the 72-input application build/test/resource boundary', (t) => {
   const root = fixture(t);
   const plan = planApplicationSourceClosure({ repositoryRoot: root });
   assert.equal(ownership.modules.length, 34);
@@ -210,8 +223,9 @@ test('the plan separates the original website roster from the 71-input applicati
     demo_modules: [...OMITTED_DEMO_MODULES],
     combined_test_setup_and_locale: [...OMITTED_COMBINED_TEST_INPUTS],
     public_assets: [...APPLICATION_ASSET_OMISSIONS],
+    website_build_tools: [...OMITTED_WEBSITE_BUILD_INPUTS],
   });
-  assert.equal(plan.boundary.omitted.length, 71);
+  assert.equal(plan.boundary.omitted.length, 72);
   assert.equal(APPLICATION_ASSET_OMISSIONS.length, 26);
   assert.equal(new Set(APPLICATION_ASSET_OMISSIONS).size, 26);
   assert.deepEqual(plan.boundary.retained_public_files, [...APPLICATION_RETAINED_PUBLIC_FILES]);
@@ -223,9 +237,229 @@ test('the plan separates the original website roster from the 71-input applicati
   for (const retained of RETAINED_SHARED_INPUTS) assert.ok(plan.boundary.retained.includes(retained), retained);
   assert.deepEqual(plan.test_profile.files, [...APPLICATION_TEST_FILES]);
   assert.deepEqual(plan.test_profile.shared_contracts, ['contracts/organization-domain-behavior.json']);
-  assert.equal(plan.test_profile.files.length, 23);
+  assert.equal(plan.test_profile.files.length, 24);
   assert.ok(plan.boundary.retained.includes('contracts/organization-domain-behavior.json'));
   assert.ok(plan.boundary.retained.includes('ui/package-lock.json'));
+});
+
+test('fresh installation cannot select or fall back to the reusable dependency directory', (t) => {
+  const root = fixture(t);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    dependencyDirectory: path.join(root, 'ui/node_modules') }), /mutually exclusive/);
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true });
+  assert.equal(report.status, 'failed');
+  assert.match(report.error, /committed npm v3 lock/);
+  assert.equal(report.build.dependency_mode, 'fresh-npm-ci');
+  assert.equal(report.qualification.independent_dependency_installation, false);
+  assert.equal(report.qualification.application_build_completed, false);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('profile selection requires a fresh install and a separate full-profile baseline', (t) => {
+  const root = fixture(t);
+  assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root, dependencyProfile: 'unknown' }), /Unsupported dependency profile/);
+  assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root, dependencyProfile: 'application' }), /requires a fresh install/);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    dependencyProfile: 'application' }), /baseline report is required/);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    baselineReport: '/tmp/unselected-baseline.json' }), /required only for the application/);
+});
+
+function profileMaterializationFixture(t) {
+  const root = fixture(t);
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-profile-materialization-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ['package.json', 'package-lock.json']) {
+    put(root, `ui/profiles/application/${name}`, JSON.stringify({ selected: name }));
+    put(directory, `ui/${name}`, readFileSync(path.join(root, `ui/${name}`)));
+    put(directory, `ui/profiles/application/${name}`, readFileSync(path.join(root, `ui/profiles/application/${name}`)));
+  }
+  const plan = planApplicationSourceClosure({ repositoryRoot: root });
+  const inputs = new Map(plan.source.files.map((row) => [row.path, row]));
+  plan.dependency_profile = { name: 'application', substitutions: ['package.json', 'package-lock.json'].map((name) => ({
+    path: `ui/${name}`, baseline: inputs.get(`ui/${name}`), selected: inputs.get(`ui/profiles/application/${name}`),
+  })) };
+  return { root, directory, plan };
+}
+
+test('profile materialization replaces exactly two export inputs and records both source identities', (t) => {
+  const { root, directory, plan } = profileMaterializationFixture(t);
+  const before = plan.source.files.map((row) => readFileSync(path.join(root, row.path)));
+  const materialized = materializeApplicationDependencyProfile(plan, directory);
+  assert.equal(materialized.length, 2);
+  for (const row of materialized) {
+    assert.deepEqual(readFileSync(path.join(directory, row.path)), readFileSync(path.join(root, row.selected.path)));
+    assert.equal(row.materialized.sha256, row.selected.sha256);
+    assert.notEqual(row.materialized.sha256, row.baseline.sha256);
+  }
+  assert.deepEqual(plan.source.files.map((row) => readFileSync(path.join(root, row.path))), before);
+});
+
+test('profile materialization refuses changed selected inputs, extra substitutions, and destination links', (t) => {
+  const { root, directory, plan } = profileMaterializationFixture(t);
+  const selected = plan.dependency_profile.substitutions[0].selected.path;
+  const original = readFileSync(path.join(root, selected));
+  put(root, selected, `${original}\n`);
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /selected profile input changed/);
+  put(root, selected, original);
+  plan.dependency_profile.substitutions.push({ path: 'ui/vite.config.ts' });
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /two reviewed package inputs/);
+  plan.dependency_profile.substitutions.pop();
+  rmSync(path.join(directory, 'ui/package.json'));
+  symlinkSync(path.join(root, 'ui/package.json'), path.join(directory, 'ui/package.json'));
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /not a regular file/);
+});
+
+function baselineFixture(t) {
+  const root = fixture(t);
+  const plan = planApplicationSourceClosure({ repositoryRoot: root });
+  const hash = (value) => `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
+  const publicResources = APPLICATION_RETAINED_PUBLIC_FILES.map((name) => {
+    const row = plan.source.files.find((entry) => entry.path === `ui/public/${name}`);
+    return { path: name, bytes: row.bytes, sha256: row.sha256 };
+  });
+  const files = publicResources.map((row) => ({ ...row, mode: 0o600 })).sort((a, b) => a.path.localeCompare(b.path));
+  const output = { files, inventory_sha256: hash(files), public_resources: publicResources,
+    english_namespaces: namespaces, locales: [...APPLICATION_LOCALES] };
+  // Synthetic report data tests the comparison contract only. Real npm/build
+  // qualification is exercised by the frozen-source local and hosted gates.
+  const baseline = { schema: 'marty.application-source-closure-rehearsal/v4', status: 'passed', plan: structuredClone(plan),
+    build: { dependency_mode: 'fresh-npm-ci', effective_source_sha: plan.source.commit,
+      package_lock_sha256: plan.source.files.find((row) => row.path === 'ui/package-lock.json').sha256 },
+    dependency_install: { mode: 'fresh-npm-ci', status: 'passed', dependency_profile: 'full', independent_dependency_installation: true },
+    qualification: Object.fromEntries(['application_build_completed', 'application_tests_completed', 'omitted_sources_absent',
+      'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved', 'application_resource_smoke_completed',
+      'locale_fallback_observed', 'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound', 'independent_dependency_installation'].map((key) => [key, true])),
+    output: structuredClone(output), resources: { result: { public_resources: structuredClone(publicResources) } } };
+  plan.schema = 'marty.application-source-closure-plan/v5';
+  return { plan, output, baseline, hash };
+}
+
+test('a matching full fresh baseline binds every output and public resource record', (t) => {
+  const input = baselineFixture(t);
+  const comparison = compareApplicationProfileBaseline(input);
+  assert.equal(comparison.full_profile_fresh_install_passed, true);
+  assert.equal(comparison.same_source_inputs, true);
+  assert.equal(comparison.output_files_identical, true);
+  assert.equal(comparison.public_resources_identical, true);
+  assert.equal(comparison.output_inventory_sha256, input.output.inventory_sha256);
+});
+
+for (const [label, mutate] of [
+  ['failed baseline', ({ baseline }) => { baseline.status = 'failed'; }],
+  ['profile baseline', ({ baseline }) => { baseline.plan.dependency_profile = { name: 'application' }; }],
+  ['reused install', ({ baseline }) => { baseline.build.dependency_mode = 'reused-installed-node_modules'; }],
+  ['incomplete SDK proof', ({ baseline }) => { baseline.qualification.sdk_wasm_output_bound = false; }],
+  ['source commit', ({ baseline }) => { baseline.plan.source.commit = '0'.repeat(40); }],
+  ['source dirty status', ({ baseline }) => { baseline.plan.source.working_tree_dirty = true; }],
+  ['source inventory digest', ({ baseline }) => { baseline.plan.source.input_inventory_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['route contract', ({ baseline }) => { baseline.plan.route_contract.version += 1; }],
+  ['test contract', ({ baseline }) => { baseline.plan.test_profile.files.pop(); }],
+  ['omission boundary', ({ baseline }) => { baseline.plan.boundary.omitted.pop(); }],
+  ['source marker', ({ baseline }) => { baseline.build.effective_source_sha = 'development'; }],
+  ['full lock binding', ({ baseline }) => { baseline.build.package_lock_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['output digest', ({ baseline }) => { baseline.output.inventory_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['self-consistent changed output', ({ baseline, hash }) => { baseline.output.files[0].bytes += 1; baseline.output.inventory_sha256 = hash(baseline.output.files); }],
+  ['changed resource probe', ({ baseline }) => { baseline.resources.result.public_resources.pop(); }],
+  ['changed profile inventory', ({ output }) => { output.files[0].mode = 0o777; }],
+]) {
+  test(`the profile cannot reuse a baseline with a ${label}`, (t) => {
+    const input = baselineFixture(t);
+    mutate(input);
+    assert.throws(() => compareApplicationProfileBaseline(input));
+  });
+}
+
+test('runtime context planning inventories both root startup scripts only when requested', (t) => {
+  const root = fixture(t);
+  const ordinary = planApplicationSourceClosure({ repositoryRoot: root });
+  const packaged = planApplicationSourceClosure({ repositoryRoot: root, runtimeContext: true });
+  for (const name of runtimeInputs.filter((name) => name.startsWith('scripts/'))) {
+    assert.equal(ordinary.source.files.some((entry) => entry.path === name), false);
+    assert.equal(packaged.source.files.some((entry) => entry.path === name), true);
+    assert.ok(packaged.boundary.retained.includes(name));
+  }
+});
+
+test('a runtime context is prepared only after successful source and output preservation', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-harness-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  assert.equal(report.status, 'passed', report.error);
+  assert.equal(report.qualification.runtime_context_prepared, true);
+  assert.equal(report.qualification.container_runtime_tested, false);
+  assert.equal(report.qualification.package_graph_minimized, false);
+  assert.equal(report.qualification.independent_dependency_installation, false);
+  assert.ok(existsSync(path.join(destination, 'application-runtime-context.json')));
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('source mutation during runtime preparation removes its context and revokes the preservation claim', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-source-mutation-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const actualMkdir = fs.mkdirSync;
+  let mutated = false;
+  let report;
+  try {
+    fs.mkdirSync = (filename, options) => {
+      const result = actualMkdir(filename, options);
+      if (filename === destination) {
+        writeFileSync(path.join(root, RETAINED_SHARED_INPUTS[0]), '// source changed during packaging');
+        mutated = true;
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  } finally {
+    fs.mkdirSync = actualMkdir;
+    syncBuiltinESMExports();
+  }
+  assert.equal(mutated, true, 'The mutation must happen inside the real context preparation');
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.source_checkout_unchanged, false);
+  assert.equal(report.qualification.runtime_context_prepared, false);
+  assert.equal(report.runtime_context, undefined);
+  assert.equal(existsSync(destination), false);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('a source mutation followed by a throwing context writer cannot retain the earlier preservation claim', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-source-failure-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const actualWrite = fs.writeFileSync;
+  let mutated = false;
+  let report;
+  try {
+    fs.writeFileSync = (filename, content, options) => {
+      const result = actualWrite(filename, content, options);
+      if (typeof filename === 'string' && filename.startsWith(`${destination}/`)) {
+        actualWrite(path.join(root, RETAINED_SHARED_INPUTS[0]), '// source changed before preparation failure');
+        mutated = true;
+        throw new Error('Synthetic context write failure');
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  } finally {
+    fs.writeFileSync = actualWrite;
+    syncBuiltinESMExports();
+  }
+  assert.equal(mutated, true);
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.source_checkout_unchanged, false);
+  assert.equal(report.qualification.runtime_context_prepared, false);
+  assert.equal(report.runtime_context, undefined);
+  assert.equal(existsSync(destination), false);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
 });
 
 test('dirty source changes receive their own hashes and cannot be presented as a clean committed build', (t) => {

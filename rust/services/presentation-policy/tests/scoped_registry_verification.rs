@@ -173,6 +173,7 @@ async fn data_integrity_credential_fields_cannot_bypass_registry_controls() {
     let context = CredentialVerificationContext {
         profiled_jwt_vc: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format: DetectedCredentialFormat::W3cVcdmDi,
         token: signed,
         nonce: None,
@@ -300,6 +301,7 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
         let context = CredentialVerificationContext {
             profiled_jwt_vc: None,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format,
             token: signed.clone(),
             nonce: None,
@@ -463,6 +465,7 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
             let context = CredentialVerificationContext {
                 profiled_jwt_vc: None,
                 resolved_issuer_key: None,
+                external_status_fixture_transport: None,
                 format: DetectedCredentialFormat::OpenbadgeV3,
                 token: token.clone(),
                 nonce: None,
@@ -551,6 +554,7 @@ async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
     let mut context = CredentialVerificationContext {
         profiled_jwt_vc: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["credential"].clone(),
         nonce: None,

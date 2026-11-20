@@ -94,6 +94,9 @@ pub struct VerifiedPolicyMaterial {
     pub(crate) authenticated_sd_jwt_presentation:
         Option<crate::AuthenticatedSdJwtPresentationEvidence>,
     pub(crate) managed_credential_authority: Option<crate::VerifiedManagedCredentialAuthority>,
+    /// Retained only from a live native external-status proof. It is neither a
+    /// caller fact nor a serialized authority constructor.
+    pub(crate) external_status_valid_until_epoch_micros: Option<i64>,
 }
 
 impl VerifiedPolicyMaterial {
@@ -105,6 +108,7 @@ impl VerifiedPolicyMaterial {
             authenticated_sd_jwt_query: None,
             authenticated_sd_jwt_presentation: None,
             managed_credential_authority: None,
+            external_status_valid_until_epoch_micros: None,
         }
     }
 
@@ -621,6 +625,7 @@ pub fn evaluate_verified_material_for_policy(
         authenticated_sd_jwt_query,
         authenticated_sd_jwt_presentation,
         managed_credential_authority,
+        external_status_valid_until_epoch_micros,
     } = material;
     if managed_credential_authority
         .as_ref()
@@ -765,7 +770,12 @@ pub fn evaluate_verified_material_for_policy(
             .as_ref()
             .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
         let validity = crate::evaluation_validity::managed_validity(
-            policy, request, query, authority, &result,
+            policy,
+            request,
+            query,
+            authority,
+            external_status_valid_until_epoch_micros,
+            &result,
         )
         .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
         let selected_claims = policy_facts["credentials"][0]["claims"]

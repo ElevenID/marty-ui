@@ -31,6 +31,16 @@ observations, and the request-bound Policy validity deadline. It does not
 invent a replacement V1 check inventory or discard an unsatisfied optional
 claim. The public `ManagedPolicyEvidenceProjectionV2` is correspondence data.
 
+When the signed credential declares external status, the native verifier's
+authenticated expiry and observation time remain private. Managed finalization
+also applies the Policy's configured revocation grace to that external
+observation. A positive declared status must have a valid native deadline and
+an observation no later than evaluation. Its shorter lease cannot be extended
+by a longer-lived credential, holder proof or newer managed trust/status
+observation. The resulting exclusive bound
+travels in the existing validity contract through Flow and Issuance; public
+facts and JSON cannot supply or renew the external authority.
+
 The new gRPC field `PolicyEvaluationResponse.managed_policy_evidence_json` is
 field 17. Direct HTTP evaluation removes that full internal projection. Flow
 can acquire it only through the exact client returned by its inspected keyless

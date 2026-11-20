@@ -7,7 +7,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
+CORE_REVISION = "64601c9513850e3eb60b00f6aa893cae8d9e4b0d"
 CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
@@ -24,7 +24,7 @@ LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
 LINKED_DATA_SOURCE = (
     f"git+https://github.com/ElevenID/ssi-elevenid?rev={LINKED_DATA_REVISION}#{LINKED_DATA_REVISION}"
 )
-SD_JWT_REVISION = "fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2"
+SD_JWT_REVISION = "ba5a9a154ae530ddcfcc5b52adf3da71e91b1929"
 SD_JWT_SOURCE = f"git+https://github.com/ElevenID/sd-jwt-rust?rev={SD_JWT_REVISION}#{SD_JWT_REVISION}"
 SSI_COMPANION_PACKAGES = {
     "ssi", "ecdsa", "linked-data", "linked-data-derive",

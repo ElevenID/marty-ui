@@ -62,6 +62,7 @@ def test_host_mirror_is_installed_before_docker_use_without_killing_services() -
     assert "systemctl restart" not in script
     for owner in (
         "test-ui-crawler-nginx",
+        "test-website",
         "test-openbao-didcomm-plugin",
         "test-rust-services",
         "test-rust-service-images",
@@ -69,7 +70,7 @@ def test_host_mirror_is_installed_before_docker_use_without_killing_services() -
         steps = JOBS[owner]["steps"]
         assert steps[0]["uses"].startswith("actions/checkout@"), owner
         mirror_index = 1
-        if owner != "test-ui-crawler-nginx":
+        if owner not in {"test-ui-crawler-nginx", "test-website"}:
             # Only the credential-free authorization check may precede the
             # mirror in native jobs; no Docker or fetch work can move ahead.
             assert steps[1] == {

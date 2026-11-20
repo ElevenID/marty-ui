@@ -83,8 +83,12 @@ the complete policy revision from readback:
 
 The placeholder digest above is explanatory and will fail validation. The
 allowed TTL is 60–900 seconds. It bounds the intent, verification and continuation;
-the existing offer lifetime may shorten it further. Omission on a sparse patch
-preserves the selection. Explicit `null` is rejected. Once the template leaves
+the existing offer lifetime may shorten it further. Credential, holder and
+authenticated owner deadlines also apply. A declared external-status lease is
+an independent bound. Both its signed expiry and its own observation's configured
+revocation grace can shorten the continuation even when the template TTL and
+managed owner observations last longer. Omission on a sparse patch preserves the
+selection. Explicit `null` is rejected. Once the template leaves
 draft, its prerequisite cannot be removed or rebound; create a new version for
 a new policy or Flow revision. Changing those owners requires an intentional
 template version update because the frozen selection will otherwise fail.
@@ -165,8 +169,13 @@ binding and continuation consumption. The joined
 Flow evidence persistence, the real HTTPS acquisition client, PostgreSQL signing
 claims and `HttpCredentialBuilder` with an isolated non-exportable OpenBao
 Ed25519 key. It checks positive issuance, wrong holder, absent completion, replay,
-concurrent signing and expiry during a lock wait. CI selects the database and
-KMS-backed obligations explicitly so an ignored test cannot count as qualification.
+concurrent signing and expiry during a lock wait. Its issuer-signed HTTPS status
+list exercises a shorter external lease while the managed owner observations
+remain valid, proving that external expiry reaches the signing admission check.
+Native clock tests also cover an older external observation whose configured
+revocation grace ends before the managed owner's freshness window.
+CI selects the database and KMS-backed obligations explicitly so an ignored test
+cannot count as qualification.
 
 These tests qualify this profile's component composition. They do not establish
 installed-wallet interoperability, deployment acceptance or an official external

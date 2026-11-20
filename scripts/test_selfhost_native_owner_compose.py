@@ -83,6 +83,15 @@ PASSPORT_BETA_OVERLAY_ONLY = {
     "PASSPORT_BETA_RECONCILIATION_ENABLED",
     "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
 }
+# The dedicated owner capability and HTTPS binding require an explicit opt-in;
+# the prerequisite overlay uses a read-only token file, not the raw alternative.
+# See docs/verification-before-issuance.md. Self-host defaults remain unbound.
+PREREQUISITE_OPT_IN_ONLY = {
+    "FLOW_ISSUANCE_SERVICE_TOKEN",
+    "FLOW_ISSUANCE_SERVICE_TOKEN_FILE",
+    "FLOW_PREREQUISITE_OWNER_CA_FILE",
+    "FLOW_PREREQUISITE_OWNER_URL",
+}
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
 ALTERNATE_TLS_PROVIDER_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER",
@@ -152,6 +161,8 @@ def assert_input_inventory():
     )
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(native)
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(legacy)
+    for service in model["services"].values():
+        assert PREREQUISITE_OPT_IN_ONLY.isdisjoint(service.get("environment", {}))
     assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (
         set(native) | set(legacy) | set(beta_native)
     )
@@ -165,6 +176,7 @@ def assert_input_inventory():
         | EXPLICIT_POLICY
         | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | PASSPORT_BETA_OVERLAY_ONLY
+        | PREREQUISITE_OPT_IN_ONLY
         | CONFIG_META
         | ALTERNATE_TLS_PROVIDER_INPUTS
         | UNFORWARDED

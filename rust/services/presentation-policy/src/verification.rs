@@ -76,6 +76,40 @@ pub struct CredentialStatusEvidence {
     pub warnings: Vec<String>,
 }
 
+/// Missing managed registration is not an observation about an external issuer.
+/// For two applicable authorities, denial wins and uncertainty cannot be cleared.
+fn combine_status_observations(
+    external: CredentialStatusEvidence,
+    managed: CredentialStatusEvidence,
+) -> CredentialStatusEvidence {
+    if managed == CredentialStatusEvidence::default() {
+        return external;
+    }
+    let not_revoked = match (external.not_revoked, managed.not_revoked) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    };
+    let credential_status = if external.not_revoked == Some(false) {
+        external.credential_status.clone()
+    } else if managed.not_revoked == Some(false) || not_revoked == Some(true) {
+        managed.credential_status.clone()
+    } else {
+        Some("UNKNOWN".into())
+    };
+    let mut warnings = external.warnings;
+    warnings.extend(managed.warnings);
+    CredentialStatusEvidence {
+        checked_at_epoch_seconds: external
+            .checked_at_epoch_seconds
+            .zip(managed.checked_at_epoch_seconds)
+            .map(|(a, b)| a.min(b)),
+        not_revoked,
+        credential_status,
+        warnings,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedIssuerKey {
     /// The authority which authorized this key, before signature verification.
@@ -161,6 +195,8 @@ pub struct CredentialVerificationContext {
     pub presentation_only: bool,
     /// Verifier-owned assertion key, separate from trust acceptance. Never copied from request context.
     pub resolved_issuer_key: Option<ResolvedIssuerKey>,
+    /// Set only by the deployment adapter, never request JSON or trust profiles.
+    pub external_status_fixture_transport: Option<crate::ExternalStatusFixtureTransport>,
     pub format: DetectedCredentialFormat,
     pub token: Value,
     pub nonce: Option<String>,
@@ -174,6 +210,9 @@ pub struct CredentialVerificationContext {
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialVerificationEvidence {
+    /// Complete native mdoc proof retained across owner/policy awaits.
+    #[serde(skip)]
+    pub authenticated_mdoc_presentation: Option<crate::AuthenticatedMdocPresentationEvidence>,
     #[serde(skip)]
     pub authenticated_profiled_jwt_vc: Option<crate::AuthenticatedProfiledJwtVcEvidence>,
     /// Native query/subject/key evidence has no JSON promotion path.
@@ -190,6 +229,12 @@ pub struct CredentialVerificationEvidence {
     /// Comes only from the signed outer `jti` of a valid VC-JWT.
     pub authenticated_outer_jti: Option<String>,
     pub credential_status_ids: Vec<String>,
+    /// Independent native external observation; managed status cannot replace it.
+    #[serde(skip)]
+    pub native_external_status: Option<CredentialStatusEvidence>,
+    /// Native status proof expiry; JSON cannot manufacture this authority.
+    #[serde(skip)]
+    pub external_status_valid_until_epoch_seconds: Option<u64>,
     /// Exact types authenticated by the format kernel: SD-JWT vct, mdoc
     /// docType, or W3C type entries. Never taken from the request or policy.
     pub credential_types: Vec<String>,
@@ -586,6 +631,7 @@ impl VerifiedFactsOrchestrator {
             sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format,
             token: request.vp_token.clone(),
             nonce: sd_jwt_dcql
@@ -707,6 +753,13 @@ impl VerifiedFactsOrchestrator {
             evidence.authenticated_sd_jwt_query = None;
             evidence.authenticated_sd_jwt_presentation = None;
             evidence.authenticated_profiled_jwt_vc = None;
+            evidence.authenticated_mdoc_presentation = None;
+        }
+
+        // Keep independent authorities separate until every lookup has completed.
+        let mut external_status = evidence.native_external_status.take();
+        if external_status.is_some() {
+            evidence.status = CredentialStatusEvidence::default();
         }
 
         let mut authenticated_sd_jwt_query = evidence.authenticated_sd_jwt_query.clone();
@@ -814,23 +867,112 @@ impl VerifiedFactsOrchestrator {
         } else {
             Vec::new()
         };
-        let external_authorization = if presentation_only {
-            Value::Null
+        let configured_policy = if presentation_only {
+            None
         } else {
-            self.configured_authorization(
-                policy,
-                trust_profile.as_ref(),
-                format,
-                &evidence,
-                &trust,
-                &issuer_id,
-            )
-            .await?
+            self.load_configured_authorization(policy, trust_profile.as_ref())
+                .await?
         };
+        // A native mdoc's trust roots are owner state, not a timeless key hint.
+        // Refresh after status/policy awaits and reject any snapshot change.
+        if evidence.authenticated_mdoc_presentation.is_some() {
+            let frozen = trust_profile
+                .as_ref()
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            let current = self
+                .trust
+                .load_profile(frozen.id, policy.organization_id)
+                .await?;
+            if current != *frozen {
+                return Err(PresentationVerificationError::Failed(
+                    "PRESENTATION_POLICY.MDOC_AUTHORITY_CHANGED".into(),
+                ));
+            }
+        }
         // Include every metadata/policy await in the native proof's validity
         // window; resolution must not extend the credential or holder proof.
         let evaluation_observation = (self.clock)()?;
         let evaluation_time = evaluation_observation.epoch_seconds();
+        if evidence
+            .external_status_valid_until_epoch_seconds
+            .is_some_and(|until| evaluation_time >= until)
+        {
+            if let Some(external) = external_status.as_mut() {
+                external.not_revoked = None;
+                external.credential_status = Some("UNKNOWN".into());
+                external
+                    .warnings
+                    .push("External credential status expired during evaluation".into());
+            }
+        }
+        let mut external_status_valid_until_epoch_micros = None;
+        if let Some(external) = external_status {
+            // A prerequisite capability must not escape an unresolved or denied
+            // declared external status through an ACTIVE managed observation.
+            if owner_observations.is_some() {
+                let invalid_external_status = || {
+                    PresentationVerificationError::Failed(
+                        "PRESENTATION_POLICY.EXTERNAL_STATUS_NOT_VALID".into(),
+                    )
+                };
+                let checked_at = external
+                    .checked_at_epoch_seconds
+                    .filter(|checked_at| {
+                        *checked_at <= evaluation_time
+                            && crate::evaluation_validity::seconds_to_micros(*checked_at).is_ok()
+                    })
+                    .ok_or_else(invalid_external_status)?;
+                let mut deadline = evidence
+                    .external_status_valid_until_epoch_seconds
+                    .and_then(|until| crate::evaluation_validity::seconds_to_micros(until).ok())
+                    .ok_or_else(invalid_external_status)?;
+                if let Some(grace) = policy
+                    .freshness
+                    .as_ref()
+                    .and_then(|freshness| freshness.revocation_grace_seconds)
+                {
+                    let freshness_deadline = checked_at
+                        .checked_add(grace)
+                        .and_then(|until| crate::evaluation_validity::seconds_to_micros(until).ok())
+                        .ok_or_else(invalid_external_status)?;
+                    deadline = deadline.min(freshness_deadline);
+                }
+                if external.not_revoked != Some(true)
+                    || deadline <= evaluation_observation.epoch_micros()
+                {
+                    return Err(invalid_external_status());
+                }
+                // This proof remains an independent lifetime constraint after
+                // evaluation, through Flow evidence and issuance consumption.
+                // Apply freshness to this native observation too; combining it
+                // with a newer managed observation must not renew its age.
+                external_status_valid_until_epoch_micros = Some(deadline);
+            }
+            evidence.status = combine_status_observations(external, evidence.status);
+        }
+        if let Some(proof) = evidence.authenticated_mdoc_presentation.as_ref() {
+            proof.revalidate_at(evaluation_time)?;
+            let frozen = trust_profile
+                .as_ref()
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            let upper = evaluation_time
+                .checked_add(1)
+                .and_then(|now| i64::try_from(now).ok())
+                .and_then(|now| chrono::DateTime::from_timestamp(now, 0))
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            if !crate::control_plane::evaluate_issuer_document(
+                &frozen.document,
+                &issuer_id,
+                format,
+                upper,
+            )
+            .verified
+            {
+                return Err(PresentationVerificationError::Failed(
+                    "PRESENTATION_POLICY.MDOC_AUTHORITY_NOT_CURRENT".into(),
+                ));
+            }
+        }
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
             query.revalidate_at(evaluation_observation)?;
         }
@@ -840,6 +982,21 @@ impl VerifiedFactsOrchestrator {
         if let Some(profile) = evidence.authenticated_profiled_jwt_vc.as_ref() {
             profile.revalidate_at(evaluation_time)?;
         }
+        let external_authorization = configured_policy
+            .as_ref()
+            .map(|resolved| {
+                configured_authorization(
+                    resolved,
+                    policy,
+                    format,
+                    &evidence,
+                    &trust,
+                    &issuer_id,
+                    evaluation_time,
+                )
+            })
+            .transpose()?
+            .unwrap_or(Value::Null);
         let managed_credential_authority =
             match (authenticated_sd_jwt_query.as_ref(), owner_observations) {
                 (Some(query), Some((trust, status))) => Some(
@@ -941,6 +1098,7 @@ impl VerifiedFactsOrchestrator {
             authenticated_sd_jwt_query,
             authenticated_sd_jwt_presentation,
             managed_credential_authority,
+            external_status_valid_until_epoch_micros,
         })
     }
 
@@ -999,21 +1157,16 @@ impl VerifiedFactsOrchestrator {
         Ok(matching.into_iter().collect())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn configured_authorization(
+    async fn load_configured_authorization(
         &self,
         policy: &PresentationPolicy,
         profile: Option<&ResolvedTrustProfile>,
-        format: DetectedCredentialFormat,
-        evidence: &CredentialVerificationEvidence,
-        trust: &IssuerTrustEvidence,
-        issuer_id: &str,
-    ) -> Result<Value, PresentationVerificationError> {
+    ) -> Result<Option<ResolvedVerificationPolicy>, PresentationVerificationError> {
         let Some(link) = profile
             .and_then(|profile| profile.document.get("verification_policy_set_id"))
             .filter(|value| !value.is_null())
         else {
-            return Ok(Value::Null);
+            return Ok(None);
         };
         let policy_set_id = link
             .as_str()
@@ -1032,30 +1185,43 @@ impl VerifiedFactsOrchestrator {
                 "Linked verification PolicySet identity or content is invalid",
             ));
         }
-        let cedar = CedarPolicyEngine::from_human_schema(
-            &resolved.cedar_policies,
-            CREDENTIAL_VERIFICATION_SCHEMA,
-            CedarConfig::default(),
-        )
-        .map_err(|_| failed("Linked verification PolicySet could not be compiled"))?;
-        let authorizer = CredentialVerificationPolicyEngine::new(cedar);
-        let mut decision = credential_external_authorization(
-            &authorizer,
-            policy,
-            format,
-            evidence,
-            trust,
-            issuer_id,
-            (self.clock)()?.epoch_seconds(),
-        );
-        // Preserve the exact configured source identity with the decision,
-        // while retaining Core's existing authorization-facts contract.
-        let source = format!("policy-set:{}@{}", resolved.id, resolved.revision);
-        if let Some(reasons) = decision["reasons"].as_array_mut() {
-            reasons.insert(0, json!(source));
-        }
-        Ok(decision)
+        Ok(Some(resolved))
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn configured_authorization(
+    resolved: &ResolvedVerificationPolicy,
+    policy: &PresentationPolicy,
+    format: DetectedCredentialFormat,
+    evidence: &CredentialVerificationEvidence,
+    trust: &IssuerTrustEvidence,
+    issuer_id: &str,
+    evaluation_time: u64,
+) -> Result<Value, PresentationVerificationError> {
+    let cedar = CedarPolicyEngine::from_human_schema(
+        &resolved.cedar_policies,
+        CREDENTIAL_VERIFICATION_SCHEMA,
+        CedarConfig::default(),
+    )
+    .map_err(|_| failed("Linked verification PolicySet could not be compiled"))?;
+    let authorizer = CredentialVerificationPolicyEngine::new(cedar);
+    let mut decision = credential_external_authorization(
+        &authorizer,
+        policy,
+        format,
+        evidence,
+        trust,
+        issuer_id,
+        evaluation_time,
+    );
+    // Preserve the exact configured source identity with the decision,
+    // while retaining Core's existing authorization-facts contract.
+    let source = format!("policy-set:{}@{}", resolved.id, resolved.revision);
+    if let Some(reasons) = decision["reasons"].as_array_mut() {
+        reasons.insert(0, json!(source));
+    }
+    Ok(decision)
 }
 
 fn credential_external_authorization(

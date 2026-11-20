@@ -168,6 +168,7 @@ fn fixture(
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format: DetectedCredentialFormat::W3cVc,
         token: request.vp_token.clone(),
         nonce: request.nonce.clone(),
