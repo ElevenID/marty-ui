@@ -72,6 +72,23 @@ def test_prepared_model_is_only_ready_for_an_attempt(tmp_path):
     assert set(result["checks"].values()) == {0}
 
 
+@pytest.mark.parametrize(("worker", "service"), [
+    ("canvas-sync-worker", {}),
+    ("CANVAS_SYNC_WORKER", {}),
+    ("marty-canvas-sync-worker", {}),
+    ("provider-jobs", {"container_name": "canvas-sync-worker"}),
+    ("provider-jobs", {"environment": {"SERVICE_NAME": "canvas_sync_worker"}}),
+    ("provider-jobs", {"entrypoint": ["/usr/local/bin/marty-canvas-sync-worker"]}),
+    ("provider-jobs", {"command": "exec /usr/local/bin/marty-canvas-sync-worker"}),
+])
+def test_preflight_rejects_retired_worker_in_existing_model(tmp_path, worker, service):
+    package = candidate()
+    model = prepared(tmp_path, package)
+    model["services"][worker] = {"image": model["services"]["edge"]["image"], **service}
+    with pytest.raises(ValueError, match="retired provider worker"):
+        MODULE.assess(model, package)
+
+
 def test_missing_deployment_inputs_and_synthetic_pins_block(tmp_path):
     package = candidate()
     model = prepared(tmp_path, package)
