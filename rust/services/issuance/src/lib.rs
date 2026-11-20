@@ -136,6 +136,8 @@ pub mod token_rate_limit;
 pub mod transaction_postgres;
 pub mod transaction_reads;
 pub mod transport;
+pub mod verification_prerequisite;
+pub use verification_prerequisite::owner_client as verification_prerequisite_client;
 
 pub use config::*;
 pub use runtime::*;

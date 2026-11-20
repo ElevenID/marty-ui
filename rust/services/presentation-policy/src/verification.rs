@@ -372,6 +372,35 @@ pub trait CredentialStatusResolver: Send + Sync {
 }
 
 type EpochClock = dyn Fn() -> u64 + Send + Sync;
+type MicrosecondClock = dyn Fn() -> i64 + Send + Sync;
+type ObservationClock =
+    dyn Fn() -> Result<VerificationObservation, PresentationVerificationError> + Send + Sync;
+
+/// One Policy-owned clock observation. Native JWT checks use its whole seconds;
+/// managed evidence retains the exact microseconds from that same observation.
+/// It has no transport or caller-facts constructor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerificationObservation {
+    epoch_micros: i64,
+}
+
+impl VerificationObservation {
+    fn from_epoch_micros(epoch_micros: i64) -> Result<Self, PresentationVerificationError> {
+        if epoch_micros <= 0 || chrono::DateTime::from_timestamp_micros(epoch_micros).is_none() {
+            return Err(crate::evaluation_validity::invalid());
+        }
+        Ok(Self { epoch_micros })
+    }
+
+    pub(crate) fn epoch_seconds(self) -> u64 {
+        // Construction admits only positive, representable microsecond times.
+        (self.epoch_micros / 1_000_000) as u64
+    }
+
+    pub(crate) fn epoch_micros(self) -> i64 {
+        self.epoch_micros
+    }
+}
 
 /// Converts native cryptographic, trust, and status evidence into the one
 /// canonical request accepted by `marty-verification`'s policy kernel.
@@ -379,7 +408,7 @@ pub struct VerifiedFactsOrchestrator {
     kernel: Arc<dyn CredentialVerificationKernel>,
     trust: Arc<dyn PresentationTrustResolver>,
     status: Arc<dyn CredentialStatusResolver>,
-    clock: Arc<EpochClock>,
+    clock: Arc<ObservationClock>,
 }
 
 impl VerifiedFactsOrchestrator {
@@ -388,7 +417,12 @@ impl VerifiedFactsOrchestrator {
         trust: Arc<dyn PresentationTrustResolver>,
         status: Arc<dyn CredentialStatusResolver>,
     ) -> Result<Self, PresentationVerificationError> {
-        Self::with_clock(kernel, trust, status, Arc::new(system_epoch_seconds))
+        Self::with_microsecond_clock(
+            kernel,
+            trust,
+            status,
+            Arc::new(|| Utc::now().timestamp_micros()),
+        )
     }
 
     pub fn with_clock(
@@ -401,7 +435,25 @@ impl VerifiedFactsOrchestrator {
             kernel,
             trust,
             status,
-            clock,
+            clock: Arc::new(move || {
+                VerificationObservation::from_epoch_micros(
+                    crate::evaluation_validity::seconds_to_micros(clock())?,
+                )
+            }),
+        })
+    }
+
+    pub(crate) fn with_microsecond_clock(
+        kernel: Arc<dyn CredentialVerificationKernel>,
+        trust: Arc<dyn PresentationTrustResolver>,
+        status: Arc<dyn CredentialStatusResolver>,
+        clock: Arc<MicrosecondClock>,
+    ) -> Result<Self, PresentationVerificationError> {
+        Ok(Self {
+            kernel,
+            trust,
+            status,
+            clock: Arc::new(move || VerificationObservation::from_epoch_micros(clock())),
         })
     }
 
@@ -507,8 +559,9 @@ impl VerifiedFactsOrchestrator {
         templates: &mut BTreeMap<String, ResolvedCredentialTemplate>,
     ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
         let token = canonical_token(&request.vp_token)?;
+        let prepared_at = (self.clock)()?;
         let profiled_jwt_vc =
-            crate::ProfiledJwtVcRequest::prepare(policy, request, || (self.clock)())?;
+            crate::ProfiledJwtVcRequest::prepare(policy, request, || prepared_at.epoch_seconds())?;
         let format = if profiled_jwt_vc.is_some() {
             DetectedCredentialFormat::W3cVc
         } else {
@@ -526,13 +579,12 @@ impl VerifiedFactsOrchestrator {
                 policy,
                 "unknown",
                 reason,
-                (self.clock)(),
+                prepared_at.epoch_seconds(),
                 policy.trust_profile_id.is_none() && request.trust_profile_id.is_none(),
             )));
         }
 
-        let sd_jwt_dcql =
-            crate::SdJwtDcqlRequest::prepare(policy, request, format, (self.clock)())?;
+        let sd_jwt_dcql = crate::SdJwtDcqlRequest::prepare(policy, request, format, prepared_at)?;
         let presentation_only = is_presentation_only(policy);
         let trust_profile = match profile_id {
             Some(profile_id) if policy.prerequisite_evidence_profile.is_some() => {
@@ -839,7 +891,8 @@ impl VerifiedFactsOrchestrator {
         }
         // Include every metadata/policy await in the native proof's validity
         // window; resolution must not extend the credential or holder proof.
-        let evaluation_time = (self.clock)();
+        let evaluation_observation = (self.clock)()?;
+        let evaluation_time = evaluation_observation.epoch_seconds();
         if evidence
             .external_status_valid_until_epoch_seconds
             .is_some_and(|until| evaluation_time >= until)
@@ -852,13 +905,48 @@ impl VerifiedFactsOrchestrator {
                     .push("External credential status expired during evaluation".into());
             }
         }
+        let mut external_status_valid_until_epoch_micros = None;
         if let Some(external) = external_status {
             // A prerequisite capability must not escape an unresolved or denied
             // declared external status through an ACTIVE managed observation.
-            if owner_observations.is_some() && external.not_revoked != Some(true) {
-                return Err(PresentationVerificationError::Failed(
-                    "PRESENTATION_POLICY.EXTERNAL_STATUS_NOT_VALID".into(),
-                ));
+            if owner_observations.is_some() {
+                let invalid_external_status = || {
+                    PresentationVerificationError::Failed(
+                        "PRESENTATION_POLICY.EXTERNAL_STATUS_NOT_VALID".into(),
+                    )
+                };
+                let checked_at = external
+                    .checked_at_epoch_seconds
+                    .filter(|checked_at| {
+                        *checked_at <= evaluation_time
+                            && crate::evaluation_validity::seconds_to_micros(*checked_at).is_ok()
+                    })
+                    .ok_or_else(invalid_external_status)?;
+                let mut deadline = evidence
+                    .external_status_valid_until_epoch_seconds
+                    .and_then(|until| crate::evaluation_validity::seconds_to_micros(until).ok())
+                    .ok_or_else(invalid_external_status)?;
+                if let Some(grace) = policy
+                    .freshness
+                    .as_ref()
+                    .and_then(|freshness| freshness.revocation_grace_seconds)
+                {
+                    let freshness_deadline = checked_at
+                        .checked_add(grace)
+                        .and_then(|until| crate::evaluation_validity::seconds_to_micros(until).ok())
+                        .ok_or_else(invalid_external_status)?;
+                    deadline = deadline.min(freshness_deadline);
+                }
+                if external.not_revoked != Some(true)
+                    || deadline <= evaluation_observation.epoch_micros()
+                {
+                    return Err(invalid_external_status());
+                }
+                // This proof remains an independent lifetime constraint after
+                // evaluation, through Flow evidence and issuance consumption.
+                // Apply freshness to this native observation too; combining it
+                // with a newer managed observation must not renew its age.
+                external_status_valid_until_epoch_micros = Some(deadline);
             }
             evidence.status = combine_status_observations(external, evidence.status);
         }
@@ -886,10 +974,10 @@ impl VerifiedFactsOrchestrator {
             }
         }
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
-            query.revalidate_at(evaluation_time)?;
+            query.revalidate_at(evaluation_observation)?;
         }
         if let Some(presentation) = authenticated_sd_jwt_presentation.as_mut() {
-            presentation.revalidate_at(evaluation_time)?;
+            presentation.revalidate_at(evaluation_observation)?;
         }
         if let Some(profile) = evidence.authenticated_profiled_jwt_vc.as_ref() {
             profile.revalidate_at(evaluation_time)?;
@@ -1010,6 +1098,7 @@ impl VerifiedFactsOrchestrator {
             authenticated_sd_jwt_query,
             authenticated_sd_jwt_presentation,
             managed_credential_authority,
+            external_status_valid_until_epoch_micros,
         })
     }
 
@@ -1438,9 +1527,11 @@ fn combine_verified_material(
         "audience_verified",
         "replay_check_verified",
     ] {
-        facts[field] = json!(groups.iter().all(|group| group
-            .iter()
-            .any(|material| material.policy_facts[field] == true)));
+        facts[field] = json!(groups.iter().all(|group| {
+            group
+                .iter()
+                .any(|material| material.policy_facts[field] == true)
+        }));
     }
     for field in ["holder_binding_method", "proof_profile"] {
         let values = groups
@@ -1562,10 +1653,6 @@ fn rejected_facts(
         "external_authorization": Value::Null,
         "presentation_count": 1,
     })
-}
-
-fn system_epoch_seconds() -> u64 {
-    u64::try_from(Utc::now().timestamp()).unwrap_or_default()
 }
 
 fn failed(message: &str) -> PresentationVerificationError {

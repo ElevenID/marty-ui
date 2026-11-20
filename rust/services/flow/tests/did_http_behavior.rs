@@ -131,6 +131,7 @@ fn configured_router(with_provider: bool, mutation: Option<&'static str>) -> axu
         ..FlowHttpVerificationOptions::default()
     };
     flow_read_router(FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: None,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(providers),

@@ -229,6 +229,12 @@ struct CreateTemplateRequest {
     credential_payload_format: Option<String>,
     #[serde(default, deserialize_with = "marty_jwt_vc_issuance::optional_policy")]
     jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    #[serde(
+        default,
+        deserialize_with = "marty_oid4vp_contract::issuance_prerequisite::optional_policy"
+    )]
+    verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     issuance_protocol: Option<String>,
     #[serde(default, rename = "schema_uri")]
     _schema_uri: Option<Value>,
@@ -283,6 +289,7 @@ impl CreateTemplateRequest {
             issuer_did: input.issuer_did,
             credential_payload_format: input.credential_payload_format,
             jwt_vc_profile: input.jwt_vc_profile,
+            verification_prerequisite: input.verification_prerequisite,
             issuance_protocol: input.issuance_protocol,
             now: Utc::now(),
         })
@@ -309,6 +316,12 @@ struct UpdateTemplateRequest {
     credential_payload_format: Option<String>,
     #[serde(default, deserialize_with = "marty_jwt_vc_issuance::optional_policy")]
     jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    #[serde(
+        default,
+        deserialize_with = "marty_oid4vp_contract::issuance_prerequisite::optional_policy"
+    )]
+    verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     issuance_protocol: Option<String>,
 }
 
@@ -668,6 +681,7 @@ async fn update_template(
         issuer_did: input.issuer_did,
         credential_payload_format: input.credential_payload_format,
         jwt_vc_profile: input.jwt_vc_profile,
+        verification_prerequisite: input.verification_prerequisite,
         issuance_protocol: input.issuance_protocol,
     };
     let template = state
@@ -1433,6 +1447,9 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
     });
     if let Some(profile) = &template.jwt_vc_profile {
         response["jwt_vc_profile"] = json!(profile);
+    }
+    if let Some(policy) = &template.verification_prerequisite {
+        response["verification_prerequisite"] = json!(policy);
     }
     response
         .as_object_mut()

@@ -20,6 +20,7 @@ fn router_with_auth(
         .connect_lazy("postgresql://localhost/flow")
         .expect("lazy pool");
     flow_read_router(FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),
@@ -35,6 +36,7 @@ async fn managed_https_router_exposes_only_the_workload_owner_operation() {
         .connect_lazy("postgresql://localhost/flow")
         .unwrap();
     let app = marty_flow::flow_wallet_authority_router(FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: None,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),

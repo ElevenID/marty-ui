@@ -35,6 +35,16 @@ PASSPORT_NOT_KUBERNETES_BOUND = {
     "PASSPORT_BETA_RECONCILIATION_ENABLED",
     "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
 }
+# The native prerequisite owner channel is separately configured and stays
+# absent from the baseline Kubernetes owners. The reviewed Compose opt-in uses
+# the dedicated token file; neither token source is implicitly forwarded here.
+# See docs/verification-before-issuance.md.
+PREREQUISITE_NOT_KUBERNETES_BOUND = {
+    "FLOW_ISSUANCE_SERVICE_TOKEN",
+    "FLOW_ISSUANCE_SERVICE_TOKEN_FILE",
+    "FLOW_PREREQUISITE_OWNER_CA_FILE",
+    "FLOW_PREREQUISITE_OWNER_URL",
+}
 
 
 def resources(path):
@@ -611,6 +621,16 @@ def test_all_production_native_configuration_inputs_have_a_classification():
     assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint({v["name"] for v in native["env"]})
     assert PASSPORT_NOT_KUBERNETES_BOUND <= inputs
     covered |= PASSPORT_NOT_KUBERNETES_BOUND
+    assert PREREQUISITE_NOT_KUBERNETES_BOUND.isdisjoint(covered)
+    assert PREREQUISITE_NOT_KUBERNETES_BOUND <= inputs
+    for name in ("issuance", "flow"):
+        baseline_owner = owner(
+            deployment(resources("k8s/oracle/07-microservices.yaml"), name)
+        )
+        assert PREREQUISITE_NOT_KUBERNETES_BOUND.isdisjoint(
+            {entry["name"] for entry in baseline_owner["env"]}
+        )
+    covered |= PREREQUISITE_NOT_KUBERNETES_BOUND
     assert inputs - covered == {
         "APP_ENV",
         "CARGO_PKG_VERSION",

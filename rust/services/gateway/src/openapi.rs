@@ -13,6 +13,35 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 
 pub fn schemas() -> Value {
     let mut schemas = BUNDLE["schemas"].clone();
+    schemas["schemas__issuance_response"]["properties"]["verification_prerequisite"] =
+        serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-prerequisite-launch-schema.json"
+        ))
+        .expect("native issuance prerequisite launch schema");
+    let prerequisite: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/presentation-policy-prerequisite-properties.json"
+    ))
+    .expect("native policy prerequisite readback schema");
+    schemas["schemas__presentation_policy"]["properties"]
+        .as_object_mut()
+        .expect("policy properties")
+        .extend(
+            prerequisite
+                .as_object()
+                .expect("prerequisite properties")
+                .clone(),
+        );
+    for name in [
+        "schemas__presentation_policy_create_request",
+        "schemas__presentation_policy_update_request",
+    ] {
+        schemas[name]["properties"]["prerequisite_evidence_profile"] = json!({
+            "anyOf": [prerequisite["prerequisite_evidence_profile"], {"type":"null"}]
+        });
+    }
+    schemas["schemas__presentation_policy"]["x-marty-runtime-extension"] = json!(
+        "Native managed evidence profile and read-only canonical policy revision for issuance prerequisites."
+    );
     // Create/update already reference this exact response requirement shape.
     // Keep the pinned bundle intact and extend only the explicit type-only path.
     let requirement = &mut schemas["schemas__presentation_policy"]["properties"]
@@ -968,6 +997,34 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prerequisite_schemas_cover_frozen_selection_and_public_wallet_launch() {
+        let schemas = super::schemas();
+        let policy = &schemas["schemas__presentation_policy"]["properties"];
+        assert_eq!(policy["policy_revision"]["readOnly"], true);
+        assert_eq!(policy["policy_revision"]["additionalProperties"], false);
+        for name in [
+            "schemas__presentation_policy_create_request",
+            "schemas__presentation_policy_update_request",
+        ] {
+            assert!(schemas[name]["properties"].get("policy_revision").is_none());
+            assert_eq!(
+                schemas[name]["properties"]["prerequisite_evidence_profile"]["anyOf"][0]["enum"][0],
+                "managed_sd_jwt_dcql_v1"
+            );
+        }
+        let launch =
+            &schemas["schemas__issuance_response"]["properties"]["verification_prerequisite"];
+        assert_eq!(launch["additionalProperties"], false);
+        assert!(launch["properties"].get("evidence").is_none());
+        assert!(launch["properties"].get("request_uri").is_some());
+        assert_eq!(
+            schemas["schemas__credential_template"]["properties"]["verification_prerequisite"]
+                ["$ref"],
+            "#/components/schemas/runtime__credential_template_verification_prerequisite"
+        );
+    }
+
     #[test]
     fn explicit_jwt_vc_policy_schema_covers_write_and_readback_without_defaulting_legacy() {
         use serde_json::json;

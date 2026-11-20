@@ -206,6 +206,7 @@ fn claim(name: &str) -> ClaimDefinition {
 fn command() -> CreateTemplateCommand {
     CreateTemplateCommand {
         jwt_vc_profile: None,
+        verification_prerequisite: None,
 
         user_id: "user-1".to_owned(),
         organization_id: "org-1".to_owned(),
@@ -577,6 +578,111 @@ fn direct_command() -> CreateTemplateCommand {
         ..Default::default()
     });
     value
+}
+
+fn prerequisite_command() -> CreateTemplateCommand {
+    use marty_oid4vp_contract::{issuance_prerequisite::*, FrozenPolicyIdentity};
+    let mut value = command();
+    value.credential_payload_format = Some("SD_JWT_VC".into());
+    value.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
+    value.validity_rules = Some(marty_credential_template::ValidityRules {
+        renewable: false,
+        ..Default::default()
+    });
+    value.verification_prerequisite = Some(IssuancePrerequisitePolicyV1 {
+        profile: IssuancePrerequisiteProfileV1::ManagedSdJwtDcqlSameHolderV1,
+        flow_definition_id: "verification-definition-1".into(),
+        flow_definition_version: 3,
+        policy: FrozenPolicyIdentity {
+            id: "presentation-policy-1".into(),
+            version: 5,
+            content_digest: format!("sha256:{}", "b".repeat(64)),
+        },
+        verifier_issuer_did: "did:web:verifier.example".into(),
+        ttl_seconds: 300,
+    });
+    value
+}
+
+#[tokio::test]
+async fn verification_prerequisite_survives_lifecycle_patch_and_new_version() {
+    let (_repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let expected = prerequisite_command().verification_prerequisite;
+    let draft = application
+        .create_template(prerequisite_command())
+        .await
+        .unwrap();
+    assert_eq!(draft.storage_status(), "prerequisite1_draft");
+    assert!(TemplateStatus::parse(&draft.storage_status()).is_err());
+    let edited = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: draft.id.clone(),
+            patch: UpdateTemplatePatch {
+                name: Some("Updated badge".into()),
+                ..Default::default()
+            },
+            now: Utc::now(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(edited.verification_prerequisite, expected);
+    let active = application
+        .activate_template("user-1", &draft.id, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(active.storage_status(), "prerequisite1_active");
+    assert_eq!(active.verification_prerequisite, expected);
+    let revision = active.new_version("template-revision-2".into(), Utc::now());
+    assert_eq!(revision.verification_prerequisite, expected);
+    assert_eq!(revision.storage_status(), "prerequisite1_draft");
+    assert_eq!(revision.version, active.version + 1);
+}
+
+#[tokio::test]
+async fn verification_prerequisite_rejects_unsupported_routes_before_persistence() {
+    for invalid in 0..7 {
+        let (repository, application) = build_application(ControlPlane {
+            deny_membership: false,
+            deny_revocation: false,
+            deny_trust: false,
+        });
+        let mut input = prerequisite_command();
+        match invalid {
+            0 => input.validity_rules.as_mut().unwrap().renewable = true,
+            1 => input.application_template_id = Some("application-1".into()),
+            2 => input.issuance_protocol = Some("OID4VCI_AUTH_CODE".into()),
+            3 => input.supported_formats.push(CredentialFormat::Mdoc),
+            4 => {
+                input
+                    .verification_prerequisite
+                    .as_mut()
+                    .unwrap()
+                    .policy
+                    .version = 0
+            }
+            5 => {
+                input
+                    .verification_prerequisite
+                    .as_mut()
+                    .unwrap()
+                    .ttl_seconds = 901
+            }
+            _ => {
+                input.jwt_vc_profile =
+                    Some(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap())
+            }
+        }
+        assert!(
+            application.create_template(input).await.is_err(),
+            "case {invalid}"
+        );
+        assert!(repository.templates.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]

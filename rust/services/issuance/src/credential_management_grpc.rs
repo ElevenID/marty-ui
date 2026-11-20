@@ -494,6 +494,12 @@ fn issuance_response(value: InitiationOfferResponse) -> IssuanceResponse {
         credential_offer_labels: value.credential_offer_labels.into_iter().collect(),
         pre_auth_code: value.pre_auth_code,
         expires_at: value.expires_at,
+        verification_prerequisite_json: value
+            .verification_prerequisite
+            .map(|prerequisite| {
+                serde_json::to_string(&prerequisite).expect("typed prerequisite serializes")
+            })
+            .unwrap_or_default(),
     }
 }
 

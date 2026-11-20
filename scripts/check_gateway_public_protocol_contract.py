@@ -92,6 +92,11 @@ FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "session_token",
 }
 ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS = {
+    "issuance-response.json": {"verification_prerequisite"},
+    "credential-template.json": {"verification_prerequisite"},
+    "presentation-policy.json": {"policy_revision", "prerequisite_evidence_profile"},
+    "presentation-policy-create-request.json": {"prerequisite_evidence_profile"},
+    "presentation-policy-update-request.json": {"prerequisite_evidence_profile"},
     "trust-profile.json": {"trust_purposes", "trusted_assertion_formats"},
     "issued-credential-lifecycle-request.json": {"comments"},
 }

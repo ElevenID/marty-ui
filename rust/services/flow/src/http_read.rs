@@ -31,6 +31,7 @@ const MAXIMUM_PAGE_SIZE: usize = 500;
 #[derive(Clone)]
 pub struct FlowHttpState {
     pub service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
+    pub issuance_prerequisite_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
     pub repository: PostgresFlowRepository,
     pub providers: Arc<FlowProviderRegistry>,
     pub public_base_url: String,
@@ -1156,6 +1157,13 @@ fn not_found(detail: &str) -> FlowHttpError {
 
 impl From<RepositoryError> for FlowHttpError {
     fn from(error: RepositoryError) -> Self {
+        if matches!(error, RepositoryError::IssuancePrerequisiteConflict) {
+            return Self::new(
+                StatusCode::CONFLICT,
+                "issuance_prerequisite_conflict",
+                "The issuance transaction is bound to another or expired prerequisite",
+            );
+        }
         if matches!(error, RepositoryError::PhysicalStartKeyConflict) {
             return Self::new(
                 StatusCode::CONFLICT,
@@ -1338,6 +1346,7 @@ mod tests {
             .connect_lazy("postgresql://localhost/flow")
             .unwrap();
         FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: None,
             repository: PostgresFlowRepository::new(pool),
             providers: Arc::new(FlowProviderRegistry::default()),

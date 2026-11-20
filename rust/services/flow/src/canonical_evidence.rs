@@ -250,6 +250,7 @@ fn validate_stable_request(
     binding: &ManagedFlowRequestBindingV2,
     candidate: &ManagedPolicyEvidenceProjectionV2,
 ) -> Result<(), RepositoryError> {
+    crate::issuance_prerequisite::bound_intent(instance)?;
     binding.validate().map_err(|_| invalid())?;
     let frozen = load_frozen_flow_presentation_request(instance).map_err(|_| invalid())?;
     let authority = frozen.credential_authority.as_ref().ok_or_else(invalid)?;

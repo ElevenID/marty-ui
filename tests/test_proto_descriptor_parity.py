@@ -107,6 +107,7 @@ def test_public_field_numbers_remain_wire_compatible():
     assert credential["compliance_profile_id"] == 22
     assert credential["derived_attributes"] == 26
     assert credential["jwt_vc_profile_json"] == 28
+    assert credential["verification_prerequisite_json"] == 29
     assert (
         fields("credential_template_service.proto", "UpdateTemplateRequest")[
             "jwt_vc_profile_json"
@@ -118,6 +119,18 @@ def test_public_field_numbers_remain_wire_compatible():
             "jwt_vc_profile_json"
         ]
         == 34
+    )
+    assert (
+        fields("credential_template_service.proto", "UpdateTemplateRequest")[
+            "verification_prerequisite_json"
+        ]
+        == 25
+    )
+    assert (
+        fields("credential_template_service.proto", "TemplateResponse")[
+            "verification_prerequisite_json"
+        ]
+        == 35
     )
     initiation = fields("issuance_service.proto", "InitiateIssuanceRequest")
     assert {
@@ -139,6 +152,12 @@ def test_public_field_numbers_remain_wire_compatible():
         "claims_json": 12,
     }
     assert initiation["offer_ttl_seconds"] == 13
+    assert (
+        fields("issuance_service.proto", "IssuanceResponse")[
+            "verification_prerequisite_json"
+        ]
+        == 10
+    )
     token = fields("issuance_service.proto", "ExchangeTokenRequest")
     assert token["client_assertion_type"] == 7
     assert token["client_assertion"] == 8

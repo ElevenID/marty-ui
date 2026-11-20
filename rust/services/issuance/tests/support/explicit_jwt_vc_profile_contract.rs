@@ -215,6 +215,8 @@ async fn explicit_profile_migrations_old_writers_and_concurrent_claims_fail_clos
         .unwrap()
         .unwrap();
     let authority = CredentialSigningAuthorization {
+        prerequisite: None,
+        holder_key_thumbprint: None,
         transaction: &admitted,
         authorization_session: None,
         access_token: "explicit-token",
@@ -388,7 +390,18 @@ async fn assert_json_overload_is_not_the_owned_predicate(pool: &sqlx::PgPool, fu
     validate_credential_template_schema(pool).await.unwrap();
     // ALTER TYPE reparses the existing CHECK. Its redundant JSONB cast was
     // omitted by PostgreSQL, so the JSON overload must already be available.
+    // Preserve the separate prerequisite predicate's owned JSONB binding while
+    // mutating only the JWT-VC predicate under test. Its initially redundant
+    // wallet cast was deparsed away too, and becomes necessary after ALTER.
+    let prerequisite_definition: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='credential_template_service.credential_templates'::regclass AND conname='ck_template_verification_prerequisite'")
+        .fetch_one(pool).await.unwrap();
+    let prerequisite_definition =
+        prerequisite_definition.replace("wallet_configs,", "wallet_configs::jsonb,");
+    sqlx::query("ALTER TABLE credential_template_service.credential_templates DROP CONSTRAINT ck_template_verification_prerequisite")
+        .execute(pool).await.unwrap();
     sqlx::query("ALTER TABLE credential_template_service.credential_templates ALTER COLUMN wallet_configs TYPE json USING wallet_configs::json")
+        .execute(pool).await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("ALTER TABLE credential_template_service.credential_templates ADD CONSTRAINT ck_template_verification_prerequisite {prerequisite_definition}")))
         .execute(pool).await.unwrap();
     sqlx::query("ALTER TABLE credential_template_service.credential_templates DROP CONSTRAINT ck_template_explicit_jwt_vc_profile")
         .execute(pool).await.unwrap();

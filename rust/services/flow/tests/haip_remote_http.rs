@@ -88,6 +88,7 @@ async fn terminal_haip_http_replays_decrypt_with_remote_custody() -> TestResult 
         "synthetic-issuer-sign-key-32-characters",
     )?;
     let http_state = FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: None,
         repository: PostgresFlowRepository::new(pool.clone()),
         providers: Arc::new(FlowProviderRegistry {

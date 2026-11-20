@@ -3859,6 +3859,7 @@ name = "marty-oid4vp-contract"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "marty-canonical-digest",
  "marty-oid4vci",
  "p256",

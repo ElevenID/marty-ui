@@ -24,6 +24,9 @@ pub struct InitiationOfferResponse {
     pub credential_offer_labels: BTreeMap<String, String>,
     pub pre_auth_code: String,
     pub expires_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisiteStartResponseV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +61,7 @@ pub enum InitiationDidcommDeliveryError {
 pub struct InitiationOfferProjector {
     issuer_base_url: Arc<str>,
     didcomm: Arc<dyn InitiationDidcommDelivery>,
+    prerequisites: Option<Arc<crate::verification_prerequisite_client::FlowPrerequisiteClient>>,
 }
 
 impl std::fmt::Debug for InitiationOfferProjector {
@@ -81,7 +85,17 @@ impl InitiationOfferProjector {
         Ok(Self {
             issuer_base_url: Arc::from(issuer_base_url.trim_end_matches('/')),
             didcomm,
+            prerequisites: None,
         })
+    }
+
+    #[must_use]
+    pub fn with_prerequisites(
+        mut self,
+        client: Option<Arc<crate::verification_prerequisite_client::FlowPrerequisiteClient>>,
+    ) -> Self {
+        self.prerequisites = client;
+        self
     }
 
     pub async fn project(
@@ -93,6 +107,17 @@ impl InitiationOfferProjector {
         transaction
             .validate_jwt_vc_profile()
             .map_err(|_| InitiationOfferProjectionError::OfferUnavailable)?;
+        let verification_prerequisite = match transaction.issuance_intent.as_ref() {
+            Some(intent) => Some(
+                self.prerequisites
+                    .as_ref()
+                    .ok_or(InitiationOfferProjectionError::OfferUnavailable)?
+                    .start(intent)
+                    .await
+                    .map_err(|_| InitiationOfferProjectionError::OfferUnavailable)?,
+            ),
+            None => None,
+        };
         let mut response_status = transaction.status;
         let credential_type = transaction
             .credential_type
@@ -181,6 +206,7 @@ impl InitiationOfferProjector {
             expires_at: transaction
                 .expires_at
                 .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false),
+            verification_prerequisite,
         })
     }
 
@@ -330,6 +356,7 @@ mod tests {
             transaction: CredentialTransaction {
                 jwt_vc_profile: None,
                 jwt_vc_signing_timing: None,
+                issuance_intent: None,
 
                 id: "transaction-1".into(),
                 organization_id: "org-1".into(),

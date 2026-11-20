@@ -155,6 +155,8 @@ message IssuanceResponse {
   map<string, string> credential_offer_labels = 7;
   string pre_auth_code = 8;
   string expires_at = 9;
+  // Public prerequisite request only; private verification evidence stays in Flow.
+  string verification_prerequisite_json = 10;
 }
 
 message ExchangeTokenRequest {

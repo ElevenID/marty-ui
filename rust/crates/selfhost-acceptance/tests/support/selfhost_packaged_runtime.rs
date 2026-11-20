@@ -259,6 +259,7 @@ fn valid_stage(value: &str) -> bool {
                 | "verify-ownership"
                 | "grant"
                 | "authenticate"
+                | "catalog-access"
                 | "seed"
         );
     valid_case && (common_stage || database_stage)
@@ -474,10 +475,17 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         return Err("Packaged selfhost qualification failed: database:ownership".into());
     }
     record_database_stage("grant");
+    // Production CT and Issuance share the marty database owner. This isolated
+    // clone deliberately retains the oracle's CT ownership, so grant only the
+    // catalog read and row-lock capability needed by the native anti-omission
+    // trigger. PostgreSQL requires UPDATE on a column for SELECT FOR SHARE.
     for statement in [
         "GRANT USAGE ON SCHEMA issuance_service TO marty",
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA issuance_service TO marty",
         "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA issuance_service TO marty",
+        "GRANT USAGE ON SCHEMA credential_template_service TO marty",
+        "GRANT SELECT ON credential_template_service.credential_templates TO marty",
+        "GRANT UPDATE(id) ON credential_template_service.credential_templates TO marty",
     ] {
         sqlx::query(statement)
             .execute(&pool)
@@ -510,10 +518,49 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     marty_issuance_service::migration::migrate_jwt_vc_profile(&check)
         .await
         .map_err(|_| "Packaged selfhost qualification failed: database:migrate-jwt-vc-profile")?;
+    record_database_stage("catalog-access");
+    verify_catalog_access(&check).await?;
     record_database_stage("seed");
     seed(&check).await?;
     check.close().await;
     Ok(pool)
+}
+
+async fn verify_catalog_access(pool: &sqlx::PgPool) -> Result<(), String> {
+    let access: (bool, bool, bool, bool, bool) = sqlx::query_as(
+        "SELECT
+           has_schema_privilege(current_user, 'credential_template_service', 'USAGE'),
+           has_table_privilege(current_user, 'credential_template_service.credential_templates', 'SELECT'),
+           has_column_privilege(current_user, 'credential_template_service.credential_templates', 'id', 'UPDATE'),
+           NOT has_table_privilege(current_user, 'credential_template_service.credential_templates', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),
+           NOT EXISTS (
+             SELECT 1 FROM pg_attribute
+             WHERE attrelid='credential_template_service.credential_templates'::regclass
+               AND attnum > 0 AND NOT attisdropped AND attname <> 'id'
+               AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE'))",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|_| ERROR)?;
+    require(access == (true, true, true, true, true))?;
+    let empty = sqlx::query(
+        "SELECT id FROM credential_template_service.credential_templates WHERE false FOR SHARE",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| ERROR)?;
+    require(empty.is_none())?;
+    // A row-lock grant must not silently become general template mutation.
+    let forbidden = sqlx::query(
+        "UPDATE credential_template_service.credential_templates SET name=name WHERE false",
+    )
+    .execute(pool)
+    .await;
+    require(forbidden.is_err_and(|error| {
+        error
+            .as_database_error()
+            .is_some_and(|error| error.code().as_deref() == Some("42501"))
+    }))
 }
 
 async fn seed(pool: &sqlx::PgPool) -> Result<(), String> {
@@ -895,6 +942,10 @@ mod tests {
         assert_eq!(
             last_child_stage(stderr).as_deref(),
             Some("raw-and-file:verify-log-boundary")
+        );
+        assert_eq!(
+            last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:database:catalog-access").as_deref(),
+            Some("database:catalog-access")
         );
         assert_eq!(
             last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:correct:C:\\private\\secret"),

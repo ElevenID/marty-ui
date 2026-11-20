@@ -584,6 +584,7 @@ mod public_session {
     #[tokio::test]
     async fn public_http_requires_one_authenticated_gateway_token_before_any_handler_work() {
         let router = marty_flow::flow_read_router(marty_flow::FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
             )),
@@ -648,6 +649,7 @@ mod public_session {
     #[tokio::test]
     async fn public_http_is_disabled_without_operator_configuration() {
         let router = marty_flow::flow_read_router(marty_flow::FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
             )),
@@ -720,6 +722,7 @@ mod public_session {
             "limits":{"starts_per_minute":2, "starts_per_day":2, "maximum_active":1}
         }).to_string(), false).unwrap();
         let router = marty_flow::flow_read_router(marty_flow::FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
             )),

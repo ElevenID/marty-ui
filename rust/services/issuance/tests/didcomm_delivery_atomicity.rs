@@ -31,6 +31,7 @@ fn transaction() -> CredentialTransaction {
     CredentialTransaction {
         jwt_vc_profile: None,
         jwt_vc_signing_timing: None,
+        issuance_intent: None,
 
         id: "transaction-atomicity".to_owned(),
         organization_id: "organization-atomicity".to_owned(),

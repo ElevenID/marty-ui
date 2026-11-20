@@ -210,6 +210,7 @@ impl OrdinaryInternalApplicationApprover {
         Ok(CredentialTransaction {
             jwt_vc_profile: None,
             jwt_vc_signing_timing: None,
+            issuance_intent: None,
 
             id: seed.transaction_id,
             organization_id: application.organization_id.clone(),

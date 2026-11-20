@@ -157,14 +157,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         SchemaStartupMode::Migrate => {
             async {
                 migration::migrate(&pool).await?;
-                migration::migrate_jwt_vc_profile(&pool).await
+                migration::migrate_jwt_vc_profile(&pool).await?;
+                marty_issuance_service::verification_prerequisite::migrate(&pool).await
             }
             .await
         }
         SchemaStartupMode::Validate => {
             async {
                 migration::validate(&pool).await?;
-                migration::validate_jwt_vc_profile(&pool).await
+                migration::validate_jwt_vc_profile(&pool).await?;
+                marty_issuance_service::verification_prerequisite::validate(&pool).await
             }
             .await
         }
@@ -425,8 +427,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.issuer_base_url.clone(),
     )?
     .with_offer_ttl_minutes(config.issuance_offer_ttl_minutes.clone());
+    let prerequisites = config
+        .flow_prerequisite_owner
+        .as_ref()
+        .map(|owner| {
+            let ca_pem = std::fs::read(&owner.ca_file)?;
+            Ok::<_, Box<dyn std::error::Error>>(Arc::new(
+            marty_issuance_service::verification_prerequisite_client::FlowPrerequisiteClient::new(
+                &owner.origin, &owner.service_token, &ca_pem,
+            )?
+        ))
+        })
+        .transpose()?;
     let initiation_projector =
-        InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?;
+        InitiationOfferProjector::new(config.issuer_base_url.clone(), didcomm_delivery)?
+            .with_prerequisites(prerequisites.clone());
     let initiation_http = InitiationHttpService::new(
         initiation.clone(),
         initiation_projector.clone(),
@@ -450,7 +465,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             notification_ids: Arc::new(UuidNotificationIdGenerator),
         },
         &config.issuer_base_url,
-    );
+    )
+    .with_prerequisites(prerequisites);
     let lifecycle_events = CredentialLifecycleEventBus::default();
     let credential_management = CredentialManagementService::new(
         Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),

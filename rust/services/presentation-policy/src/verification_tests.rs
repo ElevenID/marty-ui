@@ -2642,6 +2642,16 @@ mod bounded_sd_jwt_query_evidence {
         };
         use std::sync::atomic::AtomicU64;
 
+        mod issuance_prerequisite_handoff {
+            use super::*;
+            include!("verification_issuance_prerequisite_tests.rs");
+        }
+
+        mod evaluation_precision {
+            use super::*;
+            include!("verification_precision_tests.rs");
+        }
+
         #[derive(Clone, Copy)]
         enum Mode {
             Valid,
@@ -2656,7 +2666,6 @@ mod bounded_sd_jwt_query_evidence {
             StaleAfterTemplate,
             ShortTrustDeadline,
             ShortStatusDeadline,
-            LiveTrustDeadline,
         }
 
         struct Owners {
@@ -2666,6 +2675,7 @@ mod bounded_sd_jwt_query_evidence {
             clock: Arc<AtomicU64>,
             trust_calls: Mutex<Vec<CredentialTrustEvaluationRequestV1>>,
             status_calls: Mutex<Vec<ManagedCredentialStatusRequestV1>>,
+            external_status_token: Mutex<Option<String>>,
         }
 
         #[async_trait]
@@ -2766,7 +2776,6 @@ mod bounded_sd_jwt_query_evidence {
                     valid_until_epoch_seconds: self.now
                         + match self.mode {
                             Mode::ShortTrustDeadline => 5,
-                            Mode::LiveTrustDeadline => 20,
                             _ => 60,
                         },
                     evidence_digest: String::new(),
@@ -2938,6 +2947,7 @@ mod bounded_sd_jwt_query_evidence {
                 clock: clock.clone(),
                 trust_calls: Mutex::new(Vec::new()),
                 status_calls: Mutex::new(Vec::new()),
+                external_status_token: Mutex::new(None),
             });
             let now = fixture.now;
             let first = AtomicBool::new(true);
@@ -3544,6 +3554,8 @@ mod bounded_sd_jwt_query_evidence {
         async fn qualify_live_managed_flow(
             fixture: &Fixture,
             network: Arc<NetworkOwners>,
+            kernel: Arc<dyn CredentialVerificationKernel>,
+            external_deadline_epoch_micros: i64,
             values: &std::collections::BTreeMap<String, String>,
         ) {
             use std::{
@@ -3638,14 +3650,8 @@ mod bounded_sd_jwt_query_evidence {
                 crate::grpc_security::PresentationGrpcSecurity::from_config(&config).unwrap(),
             );
             let acceptor = security.server_tls_acceptor().await.unwrap().unwrap();
-            let orchestrator = Arc::new(
-                VerifiedFactsOrchestrator::new(
-                    Arc::new(RustCredentialKernel),
-                    network.clone(),
-                    network,
-                )
-                .unwrap(),
-            );
+            let orchestrator =
+                Arc::new(VerifiedFactsOrchestrator::new(kernel, network.clone(), network).unwrap());
             let application = Arc::new(crate::PolicyApplication::new(
                 Arc::new(LivePolicyRepository(fixture.policy.clone())),
                 Arc::new(LivePolicyAuthorization),
@@ -4076,12 +4082,25 @@ mod bounded_sd_jwt_query_evidence {
                 assert!(rejected, "{corrupt} corruption must fail owner recovery");
             }
 
+            issuance_prerequisite_handoff::qualify(
+                fixture,
+                &providers,
+                &pool,
+                external_deadline_epoch_micros,
+                values,
+            )
+            .await;
+
             // Historical recovery observes the actual passage of the short
-            // owner's deadline. No persisted timestamps or evidence are forged.
+            // signed external status deadline. No persisted timestamps or
+            // evidence are forged, and the list is never renewed.
             let deadline = projection.policy_evidence.validity.valid_until_epoch_micros;
-            assert_eq!(
-                deadline,
-                projection.policy_evidence.trust.valid_until_epoch_seconds * 1_000_000
+            assert_eq!(deadline, external_deadline_epoch_micros);
+            assert!(
+                deadline < projection.policy_evidence.trust.valid_until_epoch_seconds * 1_000_000
+            );
+            assert!(
+                deadline < projection.policy_evidence.status.valid_until_epoch_seconds * 1_000_000
             );
             let remaining = deadline - chrono::Utc::now().timestamp_micros();
             if remaining > 0 {
@@ -4190,7 +4209,8 @@ mod bounded_sd_jwt_query_evidence {
 
         /// Runs with the same disposable OpenBao fixture as the owner-channel
         /// contract. Credential signatures are real synthetic issuer/holder
-        /// signatures; only the HTTPS owner transport uses the remote TLS keys.
+        /// signatures. The external status list is signed by that issuer and
+        /// served over the same keyless HTTPS fixture as the managed owner.
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         #[ignore = "requires isolated owner OpenBao fixture and disposable PostgreSQL"]
         async fn live_keyless_managed_policy_evidence() {
@@ -4198,8 +4218,8 @@ mod bounded_sd_jwt_query_evidence {
 
             use axum::{
                 extract::{Path, State},
-                http::HeaderMap,
-                routing::post,
+                http::{header::CONTENT_TYPE, HeaderMap},
+                routing::{get, post},
                 Json, Router,
             };
             use marty_service_runtime::{
@@ -4263,6 +4283,18 @@ mod bounded_sd_jwt_query_evidence {
                 )
             }
 
+            async fn external_status(
+                State(owner): State<Arc<Owners>>,
+                headers: HeaderMap,
+            ) -> ([(axum::http::HeaderName, &'static str); 1], String) {
+                assert!(headers.get("x-service-token").is_none());
+                assert!(headers.get("x-api-key").is_none());
+                // The list is issued once before any verification. Refetching
+                // the resource cannot renew its signed expiration.
+                let token = owner.external_status_token.lock().unwrap().clone().unwrap();
+                ([(CONTENT_TYPE, "application/statuslist+jwt")], token)
+            }
+
             let values: BTreeMap<String, String> = std::env::vars().collect();
             let identity = RemoteTlsIdentityFiles::from_values(
                 |name| values.get(name).map(String::as_str),
@@ -4277,7 +4309,7 @@ mod bounded_sd_jwt_query_evidence {
                     .get("MARTY_TEST_POLICY_OWNER_CA_CERT")
                     .expect("fixture must supply the owner CA"),
             );
-            let (mut fixture, owners) = fixture(Mode::LiveTrustDeadline, 0);
+            let (mut fixture, owners) = fixture(Mode::Valid, 0);
             let trust_router = Router::new()
                 .route(
                     "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
@@ -4287,7 +4319,9 @@ mod bounded_sd_jwt_query_evidence {
                     "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
                     post(trust),
                 );
-            let status_router = Router::new().route(MANAGED_STATUS_OBSERVATION_PATH, post(status));
+            let status_router = Router::new()
+                .route(MANAGED_STATUS_OBSERVATION_PATH, post(status))
+                .route("/fixture-status-list", get(external_status));
             let mut origins = Vec::new();
             let mut servers = Vec::new();
             for router in [trust_router, status_router] {
@@ -4306,6 +4340,46 @@ mod bounded_sd_jwt_query_evidence {
                 servers.push((shutdown, task));
             }
             assert_ne!(origins[0], origins[1]);
+            let external_uri = format!("{}/fixture-status-list", origins[1]);
+            let external_issued_at = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+            let external_expiry = external_issued_at + 20;
+            let external_deadline_epoch_micros =
+                i64::try_from(external_expiry).unwrap() * 1_000_000;
+            let compressed = {
+                use std::io::Write;
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&[0_u8; 4]).unwrap();
+                encoder.finish().unwrap()
+            };
+            let status_claims = json!({
+                "sub": external_uri,
+                "iat": external_issued_at,
+                "exp": external_expiry,
+                "status_list": {"bits": 1, "lst": URL_SAFE_NO_PAD.encode(compressed)},
+            });
+            *owners.external_status_token.lock().unwrap() = Some(sign_jwt(
+                &issuer_key(),
+                json!({"typ": "statuslist+jwt", "alg": "EdDSA"}),
+                &status_claims,
+            ));
+            fixture.claims["status"] = json!({"status_list": {"idx": 3, "uri": external_uri}});
+            fixture.request = fixture.request_for_token(presentation(
+                &fixture.claims,
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ));
+            let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(
+                crate::ResolvingCredentialKernel::new(Arc::new(MustNotResolve))
+                    .with_external_status_fixture_transport(
+                        crate::ExternalStatusFixtureTransport::new(
+                            &origins[1],
+                            std::fs::read(&ca).unwrap(),
+                        )
+                        .unwrap(),
+                    ),
+            );
             let network = Arc::new(NetworkOwners {
                 channels: crate::owner_channel::ManagedOwnerChannels::new(
                     &crate::ManagedOwnerChannelConfig {
@@ -4318,12 +4392,9 @@ mod bounded_sd_jwt_query_evidence {
                 .unwrap(),
                 catalog: owners.clone(),
             });
-            fixture.orchestrator = VerifiedFactsOrchestrator::new(
-                Arc::new(RustCredentialKernel),
-                network.clone(),
-                network.clone(),
-            )
-            .unwrap();
+            fixture.orchestrator =
+                VerifiedFactsOrchestrator::new(kernel.clone(), network.clone(), network.clone())
+                    .unwrap();
             let frozen = fixture
                 .orchestrator
                 .freeze_credential_authority(&fixture.policy)
@@ -4338,6 +4409,11 @@ mod bounded_sd_jwt_query_evidence {
                 .unwrap()
                 .credential_authority = Some(frozen);
             let material = fixture.verify(&fixture.request).await;
+            assert_eq!(
+                material.external_status_valid_until_epoch_micros,
+                Some(external_deadline_epoch_micros),
+                "the private lifetime must come from the actual signed list",
+            );
             let facts = material.policy_facts().clone();
             let result =
                 evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
@@ -4349,6 +4425,12 @@ mod bounded_sd_jwt_query_evidence {
             assert_eq!(evidence.selected_claims["email"], EMAIL);
             assert_eq!(evidence.trust.profile, owners.snapshot.profile);
             assert_eq!(evidence.status.state, ManagedCredentialStatusState::Active);
+            assert_eq!(
+                evidence.validity.valid_until_epoch_micros,
+                external_deadline_epoch_micros
+            );
+            assert!(evidence.trust.valid_until_epoch_seconds > external_expiry as i64);
+            assert!(evidence.status.valid_until_epoch_seconds > external_expiry as i64);
             assert_eq!(owners.trust_calls.lock().unwrap().len(), 1);
             assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
             assert!(
@@ -4356,7 +4438,14 @@ mod bounded_sd_jwt_query_evidence {
                     .is_err()
             );
 
-            qualify_live_managed_flow(&fixture, network, &values).await;
+            qualify_live_managed_flow(
+                &fixture,
+                network,
+                kernel,
+                external_deadline_epoch_micros,
+                &values,
+            )
+            .await;
 
             for (shutdown, _) in &servers {
                 shutdown.send(true).unwrap();
@@ -4367,7 +4456,7 @@ mod bounded_sd_jwt_query_evidence {
                     .unwrap()
                     .unwrap();
             }
-            // The joined path has already observed the real owner deadline.
+            // The joined path has already observed the real signed list deadline.
             // This is an expired-input rejection, not a fresh outage/fallback
             // qualification; the owner-channel contract covers fresh outages.
             assert!(

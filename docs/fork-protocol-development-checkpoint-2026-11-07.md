@@ -5,6 +5,11 @@ This checkpoint continues **ElevenID Fork and Protocol Implementation Plan,
 fork adoption and identifies the next bounded implementation work. The plan's
 21 work packages are not all complete.
 
+The W05 row below includes the subsequent
+[verification-before-issuance implementation](verification-before-issuance.md).
+The foundation sections retain the history of the earlier increments; their
+original scope statements do not replace the current profile and rollout guide.
+
 ## Recovered foundation
 
 | Repository | Merged foundation | Commit |
@@ -39,7 +44,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence, opt-in managed issuer/type/status authority, a separate Flow finalization receipt, and authenticated owner acquisition over keyless HTTPS | Canonical evidence composition and an issuance-owned continuation are still required |
+| W05 — verified prerequisites before issuance | Managed V2 evidence composition, immutable issuance intent, authenticated Flow acquisition, native same-holder proof, and an expiring continuation consumed under the atomic signing claim; API configuration, database rollout and retention guards included | The first profile is pre-authorized SD-JWT with managed single-credential DCQL. Other profiles, installed-wallet interoperability and deployed-stack acceptance retain independent gates; see the current profile guide |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary

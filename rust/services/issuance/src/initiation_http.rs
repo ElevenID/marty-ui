@@ -96,7 +96,11 @@ impl InitiationHttpService {
     ) -> Result<InitiationReservation, InitiationHttpError> {
         reject_direct_signing_headers(headers)?;
         self.initiation
-            .initiate(request, header(headers, "Idempotency-Key"))
+            .initiate_with_principal(
+                request,
+                header(headers, "Idempotency-Key"),
+                trusted_initiating_principal(headers, &request.organization_id),
+            )
             .await
             .map_err(Into::into)
     }
@@ -286,10 +290,60 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+/// These identity headers become meaningful only after the Gateway service
+/// credential has been accepted. The first profile uses the existing Flow user
+/// membership path. API-key actors require a future typed actor handoff, so
+/// missing, duplicated or mixed identities cannot authorize a prerequisite.
+fn trusted_initiating_principal<'a>(headers: &'a HeaderMap, organization: &str) -> Option<&'a str> {
+    fn one<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+        if headers.get_all(name).iter().count() != 1 {
+            return None;
+        }
+        let value = headers.get(name)?.to_str().ok()?;
+        if value.is_empty() || value.trim() != value {
+            return None;
+        }
+        Some(value)
+    }
+    if one(headers, "x-organization-id")? != organization {
+        return None;
+    }
+    match (
+        headers.contains_key("x-user-id"),
+        headers.contains_key("x-api-key-id"),
+    ) {
+        (true, false) => one(headers, "x-user-id"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::initiation::InitiationError;
+
+    #[test]
+    fn prerequisite_principal_requires_single_authenticated_user_and_matching_tenant() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-1".parse().unwrap());
+        headers.insert("x-user-id", "user-1".parse().unwrap());
+        assert_eq!(
+            trusted_initiating_principal(&headers, "org-1"),
+            Some("user-1")
+        );
+        assert_eq!(trusted_initiating_principal(&headers, "org-2"), None);
+        headers.insert("x-api-key-id", "key-1".parse().unwrap());
+        assert_eq!(trusted_initiating_principal(&headers, "org-1"), None);
+        headers.remove("x-user-id");
+        assert_eq!(trusted_initiating_principal(&headers, "org-1"), None);
+        headers.remove("x-api-key-id");
+        headers.append("x-user-id", "user-1".parse().unwrap());
+        headers.append("x-user-id", "user-1".parse().unwrap());
+        assert_eq!(trusted_initiating_principal(&headers, "org-1"), None);
+        headers.remove("x-user-id");
+        headers.insert("x-user-id", " user-1 ".parse().unwrap());
+        assert_eq!(trusted_initiating_principal(&headers, "org-1"), None);
+    }
 
     #[test]
     fn direct_signing_headers_are_rejected_only_when_non_empty() {

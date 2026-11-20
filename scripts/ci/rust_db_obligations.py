@@ -53,6 +53,7 @@ LIBRARY_UNIT_REQUIRED_CASES = frozenset({
     "credential_lifecycle::tests::renewal_revocation_rejects_a_status_entry_from_another_profile",
 })
 LIBRARY_UNIT_IGNORED_OWNERS = {
+    "verification_prerequisite::tests::prerequisite_postgres_fences_omission_retargeting_unsupported_writers_and_replay": ".github/workflows/ci.yml:issuance_prerequisite_fences",
     **{
         "credential_builder::tests::"
         + name: "scripts/probe_integration_secret_coordinated_restore.py"

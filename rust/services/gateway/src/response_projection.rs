@@ -16,6 +16,9 @@ struct IssuanceResponse {
     credential_offer_uris: Value,
     credential_offer_labels: Value,
     expires_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisiteStartResponseV1>,
 }
 
 impl PublicModel for IssuanceResponse {
@@ -28,6 +31,7 @@ impl PublicModel for IssuanceResponse {
         "credential_offer_uris",
         "credential_offer_labels",
         "expires_at",
+        "verification_prerequisite",
     ];
 }
 
@@ -494,5 +498,30 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn issuance_projection_preserves_only_public_verification_launch() {
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuance-response-projection.json"
+        ))
+        .unwrap();
+        let mut input = contract.cases[0].input.clone();
+        let launch = serde_json::json!({
+            "contract":"marty.issuance-prerequisite-start-response/v1",
+            "intent_digest":format!("sha256:{}", "a".repeat(64)),
+            "flow_instance_id":"flow-one",
+            "request_uri":"https://flow.example/request",
+            "qr_data":"openid4vp://authorize?client_id=flow.example&request_uri=https%3A%2F%2Fflow.example%2Frequest",
+            "expires_at_epoch_micros":1800000000000000_i64,
+        });
+        input["verification_prerequisite"] = launch.clone();
+        input["issuance_intent"] = serde_json::json!({"private":"must-not-leak"});
+        let public = project_one::<IssuanceResponse>(input.clone()).unwrap();
+        assert_eq!(public["verification_prerequisite"], launch);
+        assert!(public.get("issuance_intent").is_none());
+        assert!(public.get("pre_auth_code").is_none());
+        input["verification_prerequisite"]["evidence"] = serde_json::json!({});
+        assert!(project_one::<IssuanceResponse>(input).is_err());
     }
 }

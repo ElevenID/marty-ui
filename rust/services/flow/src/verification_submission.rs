@@ -246,6 +246,8 @@ pub async fn prepare_verification_submission(
     options: &VerificationSubmissionOptions,
     now: DateTime<Utc>,
 ) -> Result<PreparedVerificationSubmission, FlowVerificationSubmissionError> {
+    crate::issuance_prerequisite::bound_intent(&instance)
+        .map_err(|_| FlowVerificationSubmissionError::InvalidContext("issuance prerequisite"))?;
     let submission_digest = payload_digest(&json!({
         "vp_token": input.vp_token,
         "presentation_submission": input.presentation_submission,

@@ -306,7 +306,7 @@ def test_library_unit_selection_allows_new_ordinary_cases_but_not_unowned_ignore
     expected = set(INVENTORY.LIBRARY_UNIT_REQUIRED_CASES) | {"new_module::new_ordinary_case"}
     ignored = set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
     INVENTORY.verify_library_unit_roster(["--test-threads=4"], expected, ignored)
-    assert len(ignored) == 11
+    assert len(ignored) == 12
     assert INVENTORY.obligation("issuance_library_unit")[:2] == ("marty-issuance-service", "marty_issuance_service")
     for arguments, selected, excluded in (
         (["retired_worker_prefix", "--test-threads=4"], expected, ignored),
@@ -345,6 +345,7 @@ def test_library_unit_ignored_inventory_matches_actual_fixture_and_child_sources
             "passport_http::reconciliation_tests::",
         ),
         ("outbound_http.rs", "outbound_http::tests::"),
+        ("verification_prerequisite_tests.rs", "verification_prerequisite::tests::"),
     ):
         source = (roots / filename).read_text(encoding="utf-8")
         ignored.update(
