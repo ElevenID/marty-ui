@@ -25,6 +25,8 @@ pub mod installer_bundle;
 pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_change_watch;
 pub mod installer_command;
 pub mod installer_compose;
 #[cfg(all(test, target_os = "linux"))]
@@ -799,3 +801,26 @@ mod operator_http;
 #[cfg(target_os = "linux")]
 mod operator_process;
 pub mod snapshot;
+
+#[cfg(target_os = "linux")]
+pub mod installer_census_helper;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_complete_purge_plan;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_creation_receipt_validation;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_namespace_census;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_namespace_projection;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_coordinator;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_plan;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_compose_volume_creation;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_docker_observation;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_compose_cleanup_evidence;

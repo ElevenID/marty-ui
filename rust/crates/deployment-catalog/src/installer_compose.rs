@@ -2111,6 +2111,11 @@ impl RuntimeOperationOwner {
     }
 }
 
+struct ComposeOperationStart {
+    prior: ProjectResources,
+    intent_sha256: String,
+}
+
 enum Evidence<'a> {
     Install(&'a mut InstallerState),
     Maintenance(&'a mut LockedMaintenance, Option<RuntimeOperationOwner>),
@@ -3005,25 +3010,32 @@ impl ComposeSession {
             &serde_json::to_vec(value).map_err(|_| REFUSED)?,
         )
     }
-    fn begin(&self, state: &mut Evidence<'_>, operation: &str, command: &[&str]) -> Result<()> {
+    fn begin(
+        &self,
+        state: &mut Evidence<'_>,
+        operation: &str,
+        command: &[&str],
+    ) -> Result<ComposeOperationStart> {
         require(self.generation_transition.is_none())?;
         if self.runtime_recovery_roles.is_some() {
             require(command.first() == Some(&"start"))?;
             self.runtime_selection_roles()?;
         }
         let observed = self.observe(false)?;
-        self.write(
-            state,
-            operation,
-            "intent",
-            &json!({
-                "schema":"elevenid.installer-compose-intent/v1", "project":self.inputs.project,
-                "engine_id":self.binding.engine_id,"configuration_sha256":self.configuration_sha256,
-                "input_files":self.bindings,"command":command,"prior_resources":observed,
-                "selected_services":self.inputs.services,
-                "automatic_retry":false,"installation_ready":false
-            }),
-        )
+        let intent = json!({
+            "schema":"elevenid.installer-compose-intent/v1", "project":self.inputs.project,
+            "engine_id":self.binding.engine_id,"configuration_sha256":self.configuration_sha256,
+            "input_files":self.bindings,"command":command,"prior_resources":&observed,
+            "selected_services":self.inputs.services,
+            "automatic_retry":false,"installation_ready":false
+        });
+        self.write(state, operation, "intent", &intent)?;
+        Ok(ComposeOperationStart {
+            prior: observed,
+            intent_sha256: crate::installer_release::sha256(
+                &serde_json::to_vec(&intent).map_err(|_| REFUSED)?,
+            ),
+        })
     }
     fn receipt(
         &self,
@@ -3080,6 +3092,69 @@ impl ComposeSession {
         }
     }
 
+    /// Persist only successful first-install creation observations. Failed or
+    /// unvalidated operations retain their intent/result but cannot acquire this
+    /// receipt through a later inspection or maintenance retry.
+    fn record_created_volumes(
+        &self,
+        state: &mut Evidence<'_>,
+        operation: &str,
+        start: &ComposeOperationStart,
+        receipt: &ComposeReceipt,
+    ) -> Result<()> {
+        use crate::installer_compose_volume_creation::{capture, CaptureContext};
+        require(
+            matches!(state, Evidence::Install(_))
+                && receipt.command_succeeded
+                && receipt.observation_validated,
+        )?;
+        let after = receipt.resources.as_ref().ok_or(REFUSED)?;
+        if after
+            .volumes
+            .difference(&start.prior.volumes)
+            .next()
+            .is_none()
+        {
+            return Ok(());
+        }
+        let mut declared = BTreeMap::new();
+        for (key, value) in self.model["volumes"].as_object().ok_or(REFUSED)? {
+            let name = text(&value["name"])?;
+            require(declared.insert(name.to_owned(), key.clone()).is_none())?;
+        }
+        let result_value = serde_json::to_value(receipt).map_err(|_| REFUSED)?;
+        let record = capture(
+            CaptureContext {
+                installation_id: state.journal().installation_id(),
+                project: self.inputs.project.clone(),
+                engine_id: self.binding.engine_id.clone(),
+                operation: operation.into(),
+                configuration_sha256: self.configuration_sha256.clone(),
+                intent_sha256: start.intent_sha256.clone(),
+                result_sha256: crate::installer_release::sha256(
+                    &serde_json::to_vec(&result_value).map_err(|_| REFUSED)?,
+                ),
+            },
+            &start.prior.volumes,
+            &after.volumes,
+            &declared,
+            |name| {
+                let mut rows: Vec<Value> =
+                    serde_json::from_str(&self.docker.run_checked(&["volume", "inspect", name])?)
+                        .map_err(|_| REFUSED)?;
+                require(rows.len() == 1)?;
+                Ok(rows.remove(0))
+            },
+        )?
+        .ok_or(REFUSED)?;
+        self.write(
+            state,
+            operation,
+            "created-volumes",
+            &serde_json::to_value(record).map_err(|_| REFUSED)?,
+        )
+    }
+
     pub fn up_wait(
         &self,
         state: &mut InstallerState,
@@ -3100,7 +3175,7 @@ impl ComposeSession {
             "--wait-timeout",
             &seconds,
         ];
-        self.begin(&mut state, operation, &command)?;
+        let start = self.begin(&mut state, operation, &command)?;
         let began = Instant::now();
         let result = self.compose(&command, true, timeout + Duration::from_secs(60));
         // A native --wait timeout exits normally with a nonzero code. Keep it
@@ -3122,7 +3197,9 @@ impl ComposeSession {
             }
             _ => false,
         };
-        self.receipt(&mut state, operation, &result, complete, resources, status)
+        let receipt = self.receipt(&mut state, operation, &result, complete, resources, status)?;
+        self.record_created_volumes(&mut state, operation, &start, &receipt)?;
+        Ok(receipt)
     }
 
     /// Exactly one first-install job, with no dependency start/stop side effects.
@@ -3156,7 +3233,7 @@ impl ComposeSession {
             service,
             service,
         ];
-        self.begin(&mut state, &operation, &command)?;
+        let start = self.begin(&mut state, &operation, &command)?;
         let result = self.compose_setup(&command);
         let resources = self.observe(true);
         let statuses = self.status();
@@ -3168,14 +3245,16 @@ impl ComposeSession {
             }
             _ => false,
         };
-        self.receipt(
+        let receipt = self.receipt(
             &mut state,
             &operation,
             &result,
             exited_zero,
             resources,
             statuses,
-        )
+        )?;
+        self.record_created_volumes(&mut state, &operation, &start, &receipt)?;
+        Ok(receipt)
     }
 
     /// Start only retained runtime containers. The runtime layer must remove all

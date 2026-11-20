@@ -3,7 +3,9 @@
 //! neither this snapshot nor its later historical digest check authenticates
 //! a signature on its own.
 use super::{release, require, Result, VerificationTools, REFUSED};
-use crate::{installer_host_fs as fs, installer_state::InstallerState};
+use crate::{
+    installer_change_watch::ChangeWatch, installer_host_fs as fs, installer_state::InstallerState,
+};
 use std::{
     collections::BTreeMap,
     fs::{File, Metadata},
@@ -92,6 +94,8 @@ pub(super) struct HeldAsset {
     digest: String,
     mode: u32,
     deadline: std::time::Instant,
+    parent_watch: ChangeWatch,
+    file_watch: ChangeWatch,
 }
 impl HeldAsset {
     pub(super) fn open(
@@ -105,9 +109,11 @@ impl HeldAsset {
         let parent_path = path.parent().ok_or(REFUSED)?;
         crate::installer_runtime::private_parent(parent_path)?;
         let parent = fs::directory(parent_path, REFUSED)?;
+        let parent_watch = ChangeWatch::new(&parent).map_err(|_| REFUSED)?;
         let parent_binding = DirectoryBinding::observe(&parent)?;
         let name = path.file_name().and_then(|v| v.to_str()).ok_or(REFUSED)?;
         let file = fs::open_child(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, REFUSED)?;
+        let file_watch = ChangeWatch::new(&file).map_err(|_| REFUSED)?;
         let mode = if executable { 0o700 } else { 0o600 };
         let binding =
             Binding::observe_mode(file.metadata().map_err(|_| REFUSED)?, size as usize, mode)?;
@@ -121,12 +127,16 @@ impl HeldAsset {
             digest: digest.into(),
             mode,
             deadline,
+            parent_watch,
+            file_watch,
         };
         held.check()?;
         Ok(held)
     }
     pub(super) fn check(&self) -> Result<()> {
         use sha2::{Digest, Sha256};
+        self.parent_watch.unchanged().map_err(|_| REFUSED)?;
+        self.file_watch.unchanged().map_err(|_| REFUSED)?;
         let parent_path = self.path.parent().ok_or(REFUSED)?;
         crate::installer_runtime::private_parent(parent_path)?;
         fs::require_directory_binding(parent_path, &self.parent, REFUSED)?;
@@ -170,7 +180,10 @@ impl HeldAsset {
             )? == self.binding,
         )?;
         fs::require_directory_binding(parent_path, &self.parent, REFUSED)?;
-        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)
+        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)?;
+        self.parent_watch.unchanged().map_err(|_| REFUSED)?;
+        self.file_watch.unchanged().map_err(|_| REFUSED)?;
+        Ok(())
     }
 }
 
@@ -182,6 +195,8 @@ pub(super) struct HeldInput {
     binding: Binding,
     maximum: usize,
     bytes: Vec<u8>,
+    parent_watch: ChangeWatch,
+    file_watch: ChangeWatch,
 }
 impl HeldInput {
     pub(super) fn open(path: &Path, maximum: usize) -> Result<Self> {
@@ -189,9 +204,11 @@ impl HeldInput {
         let parent_path = path.parent().ok_or(REFUSED)?;
         crate::installer_runtime::private_parent(parent_path)?;
         let parent = fs::directory(parent_path, REFUSED)?;
+        let parent_watch = ChangeWatch::new(&parent).map_err(|_| REFUSED)?;
         let parent_binding = DirectoryBinding::observe(&parent)?;
         let name = path.file_name().and_then(|v| v.to_str()).ok_or(REFUSED)?;
         let file = fs::open_child(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, REFUSED)?;
+        let file_watch = ChangeWatch::new(&file).map_err(|_| REFUSED)?;
         let binding = Binding::observe(file.metadata().map_err(|_| REFUSED)?, maximum)?;
         let bytes = Self::read(&file, binding.length as usize)?;
         let result = Self {
@@ -202,6 +219,8 @@ impl HeldInput {
             binding,
             maximum,
             bytes,
+            parent_watch,
+            file_watch,
         };
         result.check()?;
         Ok(result)
@@ -224,6 +243,8 @@ impl HeldInput {
         &self.path
     }
     pub(super) fn check(&self) -> Result<()> {
+        self.parent_watch.unchanged().map_err(|_| REFUSED)?;
+        self.file_watch.unchanged().map_err(|_| REFUSED)?;
         let parent = self.path.parent().ok_or(REFUSED)?;
         crate::installer_runtime::private_parent(parent)?;
         fs::require_directory_binding(parent, &self.parent, REFUSED)?;
@@ -249,7 +270,10 @@ impl HeldInput {
             )?;
         }
         fs::require_directory_binding(parent, &self.parent, REFUSED)?;
-        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)
+        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)?;
+        self.parent_watch.unchanged().map_err(|_| REFUSED)?;
+        self.file_watch.unchanged().map_err(|_| REFUSED)?;
+        Ok(())
     }
 }
 
