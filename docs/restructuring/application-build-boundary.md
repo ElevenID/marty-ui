@@ -50,7 +50,7 @@ remains a later gate.
 
 `ui/scripts/application-source-closure.mjs` inventories the UI source and the
 two existing ownership/routing contracts plus the exact session-test contract,
-then creates a fresh directory outside the checkout. Its export omits 71 inputs:
+then creates a fresh directory outside the checkout. Its export omits 72 inputs:
 
 - The 34 modules in `contracts/website-source-ownership.json`.
 - The three raw demo catalog inputs `ui/public/demos/manifests/index.json`,
@@ -62,6 +62,7 @@ then creates a fresh directory outside the checkout. Its export omits 71 inputs:
   `ui/src/generated/demoWalletSchema.generated.json`.
 - The combined test setup `ui/src/test/i18nTestSetup.js` and its English
   `ui/public/locales/en/marketing.json` input.
+- The website-only build helper `ui/scripts/website-build-tools.mjs`.
 - The 26 additional public asset paths listed in
   [the application public asset audit](application-assets-audit.md): website RSS,
   author/demo/social images, `llms.txt` and the five remaining marketing locales.
@@ -73,7 +74,7 @@ application-only classifications; the exclusive-website ownership roster stays
 at 34 modules. In particular, the combined adapters retain their original
 combined behavior in the checkout. All 42 application locale files and 12 shared
 public resources are required and must retain their exact original source bytes.
-The 71 omissions do not constitute a complete
+The 72 omissions do not constitute a complete
 website source, asset, package or workflow extraction manifest.
 
 The harness runs the existing `build-web-surface.mjs application` entrypoint and
@@ -81,7 +82,9 @@ then runs the application Vitest profile within the same omitted-input export.
 It requires every selected test source to exist before export. A successful
 Vitest exit must also provide a JSON report naming exactly the selected files,
 with passing assertions and no skipped or pending tests. Build and test
-completion are recorded separately in the version 3 diagnostic report.
+completion are recorded separately in the version 4 full-profile diagnostic report.
+The explicitly selected application dependency profile uses version 5 to record
+its two package-input substitutions and comparison with a fresh full-profile baseline.
 
 It checks the emitted application/source/route marker, the main and console
 entrypoints, all seven English fallback translation namespaces, and absence of
@@ -142,6 +145,20 @@ From `ui/`:
 ```sh
 npm run test:application
 npm run check:application-source-closure -- --report /tmp/application-source-closure.json
+
+# Install the unchanged full npm lock into a fresh export, then prepare a
+# separate static context for the nonpublishing container check.
+npm run check:application-source-closure -- --fresh-install \
+  --runtime-context /tmp/application-runtime-context \
+  --report /tmp/application-source-closure-fresh.json
+
+# From the same unchanged source, materialize the reviewed application package
+# profile and require byte-identical output to that fresh full-profile baseline.
+npm run check:application-source-closure -- --fresh-install \
+  --dependency-profile application \
+  --baseline-report /tmp/application-source-closure-fresh.json \
+  --runtime-context /tmp/application-profile-runtime-context \
+  --report /tmp/application-profile-source-closure.json
 ```
 
 The report must be a new file outside the source checkout. Omit `--report` to
@@ -151,19 +168,38 @@ installation, and `--keep-export` retains the generated source and build for
 inspection. The report identifies the export location. A failed build, test,
 resource probe, report validation, output check or source-preservation check exits nonzero.
 
-This rehearsal reuses installed dependencies. Its report records the dependency
-directory and source lockfile hash, and explicitly sets
-`independent_dependency_installation` to `false`. A successful rehearsal does
-not qualify a separate package installation or claim that its dependencies were
-installed from that lockfile. In CI, the existing verified release-package
-bootstrap may edit the working package manifest; the report records that dirty
-state rather than presenting it as a clean committed-source release.
+The default rehearsal reuses installed dependencies and keeps
+`independent_dependency_installation` false. `--fresh-install` instead runs a
+strict npm clean installation from the unchanged source lock, verifies both
+postinstall patches and the actual SDK WASM, and binds that binary to emitted
+output. It cannot be combined with `--dependencies` and has no fallback to a
+borrowed installation. The full-profile mode qualifies installation of the
+existing full graph. The application profile independently installs its committed npm lock, verifies the
+checker patch without running the website prerender patch, and checks that all
+four reviewed website dependencies are absent, including nested packages and
+aliases. Both modes retain Puppeteer and the actual API SDK. Neither claims
+that the complete application dependency graph is minimized.
+See [the dependency and runtime boundary](application-dependency-boundary.md)
+for installation isolation, packaging rules and failure handling.
 
-The required `Website Surface` lane runs the focused application tests and the
-real temporary-export build/test/resource rehearsal in addition to its existing website, application
-and customer builds. It retains the JSON report as
+The existing verified release-package bootstrap may edit the working package
+manifest and Bun lock. The required CI lane therefore executes the fresh gate
+before that bootstrap. Other callers that use dirty sources still receive the
+`development` marker and recorded source hashes.
+
+The required `Website Surface` lane runs the full fresh temporary-export
+build/test/resource rehearsal and nonpublishing container check, followed by a
+strict selected-profile npm audit and independent application-profile fresh
+rehearsal and container check. All five checks run before the existing bootstrap
+and website, application and customer builds. The application profile must
+match the full-profile output inventory and every preserved public resource
+from the same source commit, dirty state, input inventory and contracts. It retains the JSON report as
 `application-source-closure-RUN-ATTEMPT` for 14 days when a report is available.
-This diagnostic artifact has no release authority.
+The full-profile container result is retained separately as
+`application-runtime-RUN-ATTEMPT`. The application-profile reports use
+`application-profile-source-closure-RUN-ATTEMPT` and
+`application-profile-runtime-RUN-ATTEMPT` with the same retention. These
+diagnostic artifacts have no release authority.
 
 ## Acceptance and next gates
 
@@ -173,8 +209,12 @@ output hashes, local validation and the exact hosted CI result. Run the final
 candidate rehearsal after committing the reviewed changes so that its source
 identity can be reproduced. Record the resulting evidence in the candidate PR.
 
-The report keeps source extraction, independent dependency installation, signed
-publication, host deployment and OIDC qualification explicitly incomplete.
+Reused-dependency reports keep independent installation incomplete. Fresh mode
+can qualify that one operation after it actually succeeds. Both modes keep
+dependency minimization, complete source extraction, signed publication, host
+deployment and OIDC qualification explicitly incomplete. Preparing a runtime
+context does not claim that Docker ran; the separate hosted checker must observe
+the actual image build and resource checks.
 The separate website composition checkpoint records the signed producer evidence;
 this application rehearsal does not replace its combined application image.
 Next classify the remaining source/assets and qualify an independent

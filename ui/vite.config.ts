@@ -1,10 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import checker from 'vite-plugin-checker'
-import prerender from '@prerenderer/rollup-plugin'
-import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
-import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -182,8 +179,19 @@ export default defineConfig(async ({ mode }) => {
   let authorRoutes = []
   let blogRoutes = []
   let demoRoutes = []
+  let prerender
+  let PuppeteerRenderer
+  let Sitemap
 
   if (!isSelfhostBuild && !isApplicationBuild) {
+    // Native URL loading keeps website package resolution inside this branch
+    // when Vite bundles the config. The application export omits this helper.
+    const websiteBuildTools = await import(
+      new URL('./scripts/website-build-tools.mjs', import.meta.url).href
+    )
+    prerender = websiteBuildTools.prerender
+    PuppeteerRenderer = websiteBuildTools.PuppeteerRenderer
+    Sitemap = websiteBuildTools.Sitemap
     // Keep the website catalog helper out of application config resolution.
     // A file URL leaves this import inside its owning branch when Vite bundles
     // the config, so application exports can omit the demo source entirely.
@@ -201,7 +209,7 @@ export default defineConfig(async ({ mode }) => {
       ARTICLE_META,
       getBrowseVisiblePosts,
       buildBlogTagPath,
-    } = await import('@elevenid/marty-blog/prerender-data')
+    } = websiteBuildTools
 
     const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
     const tagPaths = new Set()

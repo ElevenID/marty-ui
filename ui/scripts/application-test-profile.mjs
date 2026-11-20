@@ -1,9 +1,10 @@
-// A bounded application routing/authentication suite. This is not the complete
+// A bounded application routing/authentication/startup suite. This is not the complete
 // UI test suite or an OIDC/host qualification; combined/website tests keep their
 // existing configuration and discovery rules.
 export const APPLICATION_TEST_CONFIG = 'vitest.application.config.ts';
 
 export const APPLICATION_TEST_FILES = Object.freeze([
+  'src/__tests__/startupRecovery.test.ts',
   'src/application/routing/appHandoff.test.ts',
   'src/application/routing/applyEntry.test.ts',
   'src/application/routing/authCallback.test.ts',
