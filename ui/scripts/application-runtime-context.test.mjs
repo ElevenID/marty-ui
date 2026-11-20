@@ -11,11 +11,13 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { APPLICATION_RETAINED_PUBLIC_FILES, APPLICATION_RESOURCE_MIME_TYPES } from './application-public-assets.mjs';
 import {
   APPLICATION_RUNTIME_BASE_IMAGE, APPLICATION_RUNTIME_INPUTS, checkApplicationRuntimeContainer,
-  createApplicationRuntimeContext, expectedDefaultRuntimeBytes, validateApplicationRuntimeContext,
+  createApplicationRuntimeContext, expectedDefaultRuntimeBytes, validateApplicationRuntimeContext, runApplicationBrowserProcess,
 } from './application-runtime-context.mjs';
+import { APPLICATION_BROWSER_ROUTES } from './application-browser-startup.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -277,7 +279,243 @@ test('a mock Docker protocol fixture cannot claim real container qualification',
   assert.deepEqual(result.cleanup, { container_removed: true, image_removed: true });
   assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
   assert.deepEqual(JSON.parse(readFileSync(reportPath)), result);
+  assert.equal(Object.hasOwn(result, 'browser_startup'), false, 'Default v1 reports retain their original field set');
 });
+
+function browserFixtureEvidence(input, options, { realLooking = false } = {}) {
+  const verified = validateApplicationRuntimeContext(input.destination);
+  const expected = new Map(input.outputInventory.files.map((item) => [item.path,
+    expectedDefaultRuntimeBytes(item.path, readFileSync(path.join(input.outputRoot, item.path)))]));
+  const csp = readFileSync(path.join(ROOT, 'ui/nginx.prod.conf'), 'utf8').match(/add_header Content-Security-Policy "([^"]+)" always;/)[1];
+  const asset = (name) => ({ path: name, url: `${options.origin}/${name}`, bytes: expected.get(name).length,
+    sha256: digest(expected.get(name)), status: 200, content_type: APPLICATION_RESOURCE_MIME_TYPES[path.extname(name)][0],
+    from_cache: false, from_service_worker: false });
+  const observation = (route, negative = false) => ({
+    route, final_url: `${options.origin}${route}`, context_isolated: true, cookies_initially_empty: true,
+    cache_disabled: true, context_closed: true,
+    navigation: { ...asset(route.startsWith('/console') ? 'console/index.html' : 'index.html'),
+      url: `${options.origin}${route}`, content_security_policy: csp },
+    assets: [...expected.keys()].filter((name) => !negative || name !== SDK).map(asset),
+    wasm: negative ? null : asset(SDK), violations: [], external_requests: [], console_errors: [], failed_requests: [],
+    session_checks: negative ? [] : [0, 1].map(() => ({ method: 'GET', path: '/v1/auth/me', outcome: 'http-502', status: 502 })),
+    page_errors: negative ? ['Failed to fetch SDK WASM'] : [], aborted_wasm_requests: negative ? 1 : 0,
+    ready: !negative, root_populated: !negative, heading: negative ? null : 'Sign-in is temporarily unavailable',
+    retry: negative ? undefined : { label: 'Retry sign-in check', enabled: true, clicked: true, session_rechecked: true },
+    recovery: { visible: negative, title: 'ElevenID could not start',
+      message: 'Part of the application could not be loaded. Reload this page to try again.',
+      retry_label: 'Reload page', retry_enabled: true },
+  });
+  return {
+    report: { schema: 'marty.application-browser-startup/v1', status: realLooking ? 'passed' : 'fixture-passed', fixture: !realLooking,
+      context_sha256: verified.manifest_sha256, source_commit: COMMIT, effective_source_sha: COMMIT,
+      exact_committed_source: true, origin: options.origin,
+      browser: { channel: 'chrome', sandboxed: realLooking, version: 'Synthetic protocol fixture' },
+      qualification: { browser_startup_observed: realLooking, sdk_wasm_initialized_in_browser: realLooking,
+        host_deployment_tested: false, oidc_journey_tested: false, published: false, activated: false },
+      cleanup: { browser_closed: true, chromium_exited: true, contexts_closed: true, profile_removed: true },
+      routes: APPLICATION_BROWSER_ROUTES.map((route) => observation(route)),
+      negative_control: observation(APPLICATION_BROWSER_ROUTES[0], true) },
+    process_evidence: { schema: 'marty.application-browser-process/v1', status: 'passed', descendants_reaped: true,
+      guardian: { path: 'scripts/installer_startup_process.py', sha256: record(ROOT, 'scripts/installer_startup_process.py').sha256 } },
+    driver_inputs: ['ui/scripts/application-runtime-context.mjs', 'ui/scripts/application-browser-startup.mjs',
+      'ui/scripts/application-browser-process.py', 'scripts/installer_startup_process.py'].map((name) => record(ROOT, name)),
+  };
+}
+
+function browserOptions(input) {
+  return { context: input.destination, reportPath: path.join(input.temporary, 'browser-runtime.json'), browserStartup: true,
+    browserReportPath: path.join(input.temporary, 'browser-startup.json'), browserChannel: 'chrome' };
+}
+
+test('browser integration observes the live owned endpoint and publishes both bound reports only after cleanup', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input);
+  const options = browserOptions(input);
+  let called = false;
+  const browserWorker = async (request) => {
+    called = true;
+    assert.deepEqual(protocol.states(), { imageExists: true, containerExists: true });
+    assert.equal(existsSync(options.reportPath), false);
+    assert.equal(existsSync(options.browserReportPath), false);
+    assert.equal(request.runtimeContext, input.destination);
+    assert.equal(request.contextManifestSha256, validateApplicationRuntimeContext(input.destination).manifest_sha256);
+    assert.equal(request.channel, 'chrome');
+    assert.ok(request.timeoutMs > 0 && request.timeoutMs <= 120_000);
+    assert.equal((await fetch(`${request.origin}/runtime-config.js`)).status, 200);
+    return browserFixtureEvidence(input, request, { realLooking: true });
+  };
+  const result = await checkApplicationRuntimeContainer(options, { ...protocol, browserWorker });
+  assert.equal(called, true);
+  assert.equal(result.status, 'fixture-passed');
+  assert.equal(result.qualification.browser_startup_observed, false);
+  assert.equal(result.browser_startup.sdk_wasm_initialized_in_browser, false);
+  assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+  const bytes = readFileSync(options.browserReportPath);
+  const browser = JSON.parse(bytes);
+  assert.equal(result.browser_startup.sha256, digest(bytes));
+  assert.equal(result.browser_startup.bytes, bytes.length);
+  assert.equal(browser.status, 'fixture-passed');
+  assert.equal(browser.fixture, true);
+  assert.equal(browser.browser.sandboxed, false);
+  assert.equal(browser.qualification.browser_startup_observed, false);
+  assert.equal(browser.qualification.sdk_wasm_initialized_in_browser, false);
+  assert.deepEqual(browser.runtime.cleanup, { container_removed: true, image_removed: true });
+  assert.equal(browser.runtime.image_id, result.image_id);
+  assert.equal(browser.runtime.context_sha256, result.context_sha256);
+});
+
+for (const [label, alter] of [
+  ['context', (item) => { item.report.context_sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['source', (item) => { item.report.source_commit = '0'.repeat(40); }],
+  ['origin', (item) => { item.report.origin = 'http://127.0.0.1:1'; }],
+  ['WASM', (item) => { item.report.routes[0].wasm.sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['document bytes', (item) => { item.report.routes[0].navigation.sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['asset bytes', (item) => { item.report.routes[0].assets[0].sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['missing entrypoint', (item) => { item.report.routes.pop(); }],
+  ['missing negative control', (item) => { item.report.negative_control = null; }],
+  ['Chromium cleanup', (item) => { item.report.cleanup.chromium_exited = false; }],
+  ['descendant cleanup', (item) => { item.process_evidence.descendants_reaped = false; }],
+  ['guardian', (item) => { item.process_evidence.guardian.sha256 = `sha256:${'0'.repeat(64)}`; }],
+  ['driver source', (item) => { item.driver_inputs.pop(); }],
+  ['broadened OIDC claim', (item) => { item.report.qualification.oidc_journey_tested = true; }],
+]) {
+  test(`browser integration refuses mismatched ${label} and still removes its runtime`, async (t) => {
+    const input = fixture(t);
+    const protocol = await dockerFixture(t, input);
+    const options = browserOptions(input);
+    await assert.rejects(checkApplicationRuntimeContainer(options, { ...protocol, browserWorker: async (request) => {
+      const evidence = browserFixtureEvidence(input, request);
+      alter(evidence);
+      return evidence;
+    } }));
+    assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+    assert.equal(existsSync(options.reportPath), false);
+    assert.equal(existsSync(options.browserReportPath), false);
+  });
+}
+
+test('a throwing browser worker cannot hide a changed context or prevent container/image cleanup', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input);
+  const options = browserOptions(input);
+  await assert.rejects(checkApplicationRuntimeContainer(options, { ...protocol, browserWorker: async () => {
+    write(input.destination, 'html/config.json', '{}');
+    throw new Error('Synthetic browser failure');
+  } }), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.ok(error.errors.some((item) => /Synthetic browser failure/.test(item.message)));
+    assert.ok(error.errors.some((item) => /changed, missing, or extra files/.test(item.message)));
+    return true;
+  });
+  assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+  assert.equal(existsSync(options.browserReportPath), false);
+});
+
+test('a successful browser fixture cannot publish before failed runtime cleanup', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input, { cleanupFails: true });
+  const options = browserOptions(input);
+  await assert.rejects(checkApplicationRuntimeContainer(options,
+    { ...protocol, browserWorker: async (request) => browserFixtureEvidence(input, request) }));
+  assert.equal(protocol.states().imageExists, false);
+  assert.equal(existsSync(options.reportPath), false);
+  assert.equal(existsSync(options.browserReportPath), false);
+});
+
+test('browser startup rejects incomplete or unsafe option combinations before Docker', async (t) => {
+  const input = fixture(t);
+  createApplicationRuntimeContext(input);
+  for (const change of [{ browserReportPath: undefined }, { browserChannel: 'chromium' },
+    { browserStartup: false }, { browserReportPath: path.join(input.destination, 'browser.json') },
+    { browserReportPath: path.join(input.temporary, 'browser-runtime.json') }]) {
+    let called = false;
+    await assert.rejects(checkApplicationRuntimeContainer({ ...browserOptions(input), ...change },
+      { docker: async () => { called = true; throw new Error('Docker must not run'); }, browserWorker: async () => {} }));
+    assert.equal(called, false);
+  }
+});
+
+test('the browser bridge uses the existing guardian and excludes inherited Node/Python injection', async () => {
+  const saved = { NODE_OPTIONS: process.env.NODE_OPTIONS, PYTHONPATH: process.env.PYTHONPATH };
+  try {
+    process.env.NODE_OPTIONS = '--require /unreviewed/browser-injection.js';
+    process.env.PYTHONPATH = '/unreviewed/python';
+    const script = "require('node:assert/strict').equal(process.env.NODE_OPTIONS, undefined);"
+      + "require('node:assert/strict').equal(process.env.PYTHONPATH, undefined);process.stdout.write('owned-browser-fixture');";
+    const result = await runApplicationBrowserProcess({ argv: [process.execPath, '-e', script], timeoutMs: 3000 });
+    assert.equal(result.status, 'passed');
+    assert.equal(result.descendants_reaped, true);
+    assert.equal(result.guardian.sha256, record(ROOT, 'scripts/installer_startup_process.py').sha256);
+    assert.equal(result.stdout_sha256, digest('owned-browser-fixture'));
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('a nonresponsive browser controller cannot extend the outer deadline or claim cleanup', { timeout: 25_000 }, async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-browser-controller-fixture-'));
+  const pidPath = path.join(directory, 'controller.pid');
+  // Substitute only this test process's interpreter lookup. No guardian or
+  // browser is launched; the owned controller fixture deliberately ignores
+  // cancellation so the parent must abandon its wait without cleanup proof.
+  write(directory, 'python3', `#!${process.execPath}\nconst fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync(${JSON.stringify(pidPath)},String(process.pid));setInterval(()=>{},1000);\n`, 0o755);
+  const savedPath = process.env.PATH;
+  let pid;
+  t.after(async () => {
+    if (pid) {
+      try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') break; throw error; }
+        await delay(10);
+      }
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const started = Date.now();
+  try {
+    process.env.PATH = directory;
+    await assert.rejects(runApplicationBrowserProcess({ argv: [process.execPath, '-e', 'process.exit(0)'], timeoutMs: 1 }),
+      (error) => { assert.equal(error.cleanupComplete, false); assert.equal(error.processEvidence, undefined); return true; });
+  } finally {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+    if (existsSync(pidPath)) pid = Number(readFileSync(pidPath, 'utf8'));
+  }
+  assert.ok(Number.isSafeInteger(pid) && pid > 1);
+  assert.doesNotThrow(() => process.kill(pid, 0), 'The outer wait must not kill an unknown isolated owner');
+  assert.ok(Date.now() - started < 20_000, 'The controller cancellation wait must remain bounded');
+});
+
+for (const outcome of ['immediate-success', 'immediate-failure', 'deadline']) {
+  test(`the kernel browser owner reaps detached children after ${outcome} without a launch journal`, async (t) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-browser-owner-fixture-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const pidPath = path.join(directory, 'detached.pid');
+    const heartbeat = path.join(directory, 'heartbeat');
+    const descendant = `const fs=require('node:fs');process.on('SIGTERM',()=>{});setInterval(()=>fs.appendFileSync(${JSON.stringify(heartbeat)},'x'),10);`;
+    const worker = `const fs=require('node:fs');const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{detached:true,stdio:'ignore'});fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid));`
+      + (outcome === 'deadline' ? "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);" : `process.exit(${outcome === 'immediate-success' ? 0 : 7});`);
+    if (outcome === 'immediate-success') {
+      const result = await runApplicationBrowserProcess({ argv: [process.execPath, '-e', worker], timeoutMs: 3000 });
+      assert.equal(result.descendants_reaped, true);
+    } else {
+      await assert.rejects(runApplicationBrowserProcess({ argv: [process.execPath, '-e', worker], timeoutMs: outcome === 'deadline' ? 600 : 3000 }),
+        (error) => { assert.equal(error.cleanupComplete, true); return true; });
+    }
+    const pid = Number(readFileSync(pidPath, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'The adopted detached process must be reaped, not merely signalled');
+    if (outcome === 'deadline') {
+      const stopped = readFileSync(heartbeat);
+      assert.ok(stopped.length > 0);
+      await delay(80);
+      assert.deepEqual(readFileSync(heartbeat), stopped);
+    }
+  });
+}
 
 for (const [label, options] of [
   ['corrupt immutable resource', { corrupt: 'assets/application.js' }],

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync,
@@ -15,6 +16,12 @@ const MANIFEST = 'application-runtime-context.json';
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 const MAX_ENTRIES = 4096;
+const BROWSER_WORKER = fileURLToPath(new URL('./application-browser-startup.mjs', import.meta.url));
+const BROWSER_PROCESS_BRIDGE = fileURLToPath(new URL('./application-browser-process.py', import.meta.url));
+const BROWSER_DRIVER_INPUTS = Object.freeze([
+  'ui/scripts/application-runtime-context.mjs', 'ui/scripts/application-browser-startup.mjs',
+  'ui/scripts/application-browser-process.py', 'scripts/installer_startup_process.py',
+]);
 export const APPLICATION_RUNTIME_BASE_IMAGE = 'nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8';
 export const APPLICATION_RUNTIME_INPUTS = Object.freeze([
   { path: 'ui/scripts/application-runtime.Dockerfile', target: 'Dockerfile', mode: 0o644 },
@@ -328,13 +335,197 @@ async function defaultDocker(args, { timeout = 30_000, allowFailure = false } = 
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
+function browserEnvironment() {
+  const environment = {};
+  for (const name of ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'LC_CTYPE']) {
+    if (process.env[name] !== undefined) environment[name] = process.env[name];
+  }
+  require(typeof environment.HOME === 'string' && path.isAbsolute(environment.HOME), 'Browser process requires the unchanged absolute HOME');
+  return environment;
+}
+
+// The existing Linux owner is a kernel subreaper: even a Chrome process that
+// detaches and outlives a failed launcher is adopted, killed and reaped. A
+// process-group timeout alone cannot provide that guarantee for Puppeteer.
+export async function runApplicationBrowserProcess({ argv, timeoutMs = 120_000 }) {
+  require(process.platform === 'linux' && Array.isArray(argv) && path.isAbsolute(argv[0]),
+    'Application browser ownership requires a fixed absolute Linux command');
+  require(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 120_000, 'Invalid browser process deadline');
+  const environment = browserEnvironment();
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn('python3', ['-I', '-S', BROWSER_PROCESS_BRIDGE,
+      '--parent', String(process.pid), '--timeout', String(timeoutMs / 1000), '--', ...argv],
+    { cwd: ROOT, env: environment, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const output = [];
+    let bytes = 0;
+    let overflow = false;
+    let timedOut = false;
+    let settled = false;
+    let cancellationDeadline;
+    const finish = ({ code = null, signal = null, abandoned = false } = {}, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(cancellationDeadline);
+      if (abandoned) {
+        // Stop waiting on this controller without terminating the independent
+        // subreaper. Unknown ownership preserves the temporary browser state.
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+      }
+      if (error) reject(error);
+      else resolve({ code, signal, overflow, timedOut, stdout: Buffer.concat(output).toString('utf8') });
+    };
+    const cancel = () => {
+      child.kill('SIGTERM');
+      cancellationDeadline ??= setTimeout(() => finish({ abandoned: true }), 2000);
+    };
+    // The owner implements the workload deadline and its own cleanup window.
+    // This outer deadline cancels only its controller, never the subreaper,
+    // then bounds the remaining wait even if the controller cannot exit.
+    const deadline = setTimeout(() => { timedOut = true; cancel(); }, timeoutMs + 15_000);
+    const capture = (chunk, stdout) => {
+      bytes += chunk.length;
+      if (bytes > 64 * 1024) { overflow = true; cancel(); }
+      else if (stdout) output.push(chunk);
+    };
+    child.stdout.on('data', (chunk) => capture(chunk, true));
+    child.stderr.on('data', (chunk) => capture(chunk, false));
+    child.once('error', (error) => finish({}, error));
+    child.once('close', (code, signal) => finish({ code, signal }));
+  });
+  let evidence;
+  if (!result.overflow && !result.timedOut && result.signal === null) {
+    try { evidence = JSON.parse(result.stdout); } catch { /* No ownership proof. */ }
+  }
+  const valid = evidence?.schema === 'marty.application-browser-process/v1'
+    && ['passed', 'failed', 'cleanup-pending'].includes(evidence.status)
+    && typeof evidence.descendants_reaped === 'boolean'
+    && evidence.guardian?.path === 'scripts/installer_startup_process.py'
+    && evidence.guardian.sha256 === read(ROOT, 'scripts/installer_startup_process.py').record.sha256;
+  if (!valid || result.code !== 0 || evidence.status !== 'passed' || !evidence.descendants_reaped) {
+    const error = new Error(valid && evidence.descendants_reaped
+      ? 'Application browser worker failed after descendant cleanup'
+      : 'Application browser process cleanup is unproven; its isolated owner remains responsible when available');
+    error.cleanupComplete = Boolean(valid && evidence.descendants_reaped);
+    error.processEvidence = valid ? evidence : undefined;
+    throw error;
+  }
+  return evidence;
+}
+
+async function defaultBrowserWorker({ origin, runtimeContext, contextManifestSha256, channel, timeoutMs }) {
+  const drivers = BROWSER_DRIVER_INPUTS.map((name) => read(ROOT, name).record);
+  const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-application-browser-'));
+  const output = path.join(temporary, 'browser.json');
+  let cleaned = false;
+  try {
+    const processEvidence = await runApplicationBrowserProcess({ timeoutMs,
+      argv: [process.execPath, BROWSER_WORKER, '--worker', '--origin', origin, '--context', runtimeContext,
+        '--manifest-sha256', contextManifestSha256, '--temporary-root', temporary, '--report', output, '--channel', channel] });
+    cleaned = true;
+    const raw = read(temporary, 'browser.json');
+    require(raw.record.bytes <= 1024 * 1024, 'Application browser report exceeds its bound');
+    const browser = JSON.parse(raw.bytes.toString('utf8'));
+    assert.deepEqual(BROWSER_DRIVER_INPUTS.map((name) => read(ROOT, name).record), drivers, 'Browser diagnostic tool source changed');
+    return { report: browser, process_evidence: processEvidence, driver_inputs: drivers };
+  } catch (error) {
+    cleaned ||= error.cleanupComplete === true;
+    if (cleaned) {
+      try {
+        const failure = JSON.parse(read(temporary, 'browser.json').bytes.toString('utf8'));
+        const phase = failure.failure?.phase;
+        if (failure.status === 'failed' && typeof phase === 'string' && /^[a-z0-9:/?=%&_-]{1,128}$/i.test(phase)) {
+          error.message += ` (worker stage: ${phase})`;
+          const detail = failure.failure?.message;
+          if (typeof detail === 'string' && detail.length <= 1000) {
+            error.message += `: ${detail.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800)}`;
+          }
+        }
+      } catch { /* A missing failure diagnostic cannot hide the process failure. */ }
+    } else error.message += `; retained owned diagnostic directory: ${temporary}`;
+    throw error;
+  } finally {
+    // CleanupPending deliberately leaves the directory with its surviving
+    // owner. Never remove a live browser profile or call that case successful.
+    if (cleaned) rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+async function verifyBrowserResult(browser, { origin, root, manifest, contextSha, channel }) {
+  require(browser?.schema === 'marty.application-browser-startup/v1' && ['passed', 'fixture-passed'].includes(browser.status)
+    && typeof browser.fixture === 'boolean' && (browser.status === 'fixture-passed') === browser.fixture,
+  'Application browser worker did not complete its qualification');
+  require(browser.context_sha256 === contextSha && browser.origin === origin
+    && browser.source_commit === manifest.source_commit && browser.effective_source_sha === manifest.effective_source_sha
+    && browser.exact_committed_source === manifest.exact_committed_source,
+  'Application browser report differs from the owned runtime identity');
+  require(browser.browser?.channel === channel && browser.browser.sandboxed === !browser.fixture
+    && typeof browser.browser.version === 'string' && browser.browser.version.length > 0,
+  'Application browser did not prove the selected sandboxed browser');
+  require(browser.cleanup?.browser_closed === true && browser.cleanup.chromium_exited === true
+    && browser.cleanup.contexts_closed === true && browser.cleanup.profile_removed === true,
+  'Application browser cleanup was incomplete');
+  for (const key of ['browser_startup_observed', 'sdk_wasm_initialized_in_browser']) {
+    require(browser.qualification?.[key] === !browser.fixture, 'Application browser fixture overstates its qualification');
+  }
+  for (const key of ['host_deployment_tested', 'oidc_journey_tested', 'published', 'activated']) {
+    require(browser.qualification?.[key] === false, 'Application browser report broadened its qualification');
+  }
+  // Importing the observation validator never loads Puppeteer. The browser
+  // dependency itself is resolved only by the explicit, separately owned worker.
+  const { APPLICATION_BROWSER_ROUTES, validateApplicationBrowserRouteEvidence } = await import('./application-browser-startup.mjs');
+  require(Array.isArray(browser.routes) && browser.routes.length === APPLICATION_BROWSER_ROUTES.length,
+    'Application browser omitted a required entrypoint');
+  const wasm = manifest.output_inventory.files.find((row) => row.path === manifest.sdk_wasm);
+  const expected = new Map(manifest.output_inventory.files.map((row) => [row.path,
+    expectedDefaultRuntimeBytes(row.path, read(root, `html/${row.path}`).bytes)]));
+  const policy = read(ROOT, 'ui/nginx.prod.conf').bytes.toString('utf8').match(/add_header Content-Security-Policy "([^"]+)" always;/)?.[1];
+  require(policy, 'Reviewed runtime CSP is missing');
+  function bindObservedResources(route, negative = false) {
+    const navigationPath = route.route.startsWith('/console') ? 'console/index.html' : 'index.html';
+    const document = expected.get(navigationPath);
+    require(route.navigation.bytes === document.length && route.navigation.sha256 === digest(document)
+      && route.navigation.content_security_policy === policy, 'Browser document bytes or CSP differ from the owned runtime');
+    const seen = new Set();
+    for (const item of route.assets) {
+      const bytes = expected.get(item.path);
+      const url = new URL(item.url);
+      require(bytes && item.bytes === bytes.length && item.sha256 === digest(bytes)
+        && url.origin === origin && url.pathname === `/${item.path}`
+        && (!url.search || (item.path === 'favicon.ico' && url.search === '?v=2')),
+      'Browser asset bytes or identity differ from the owned runtime');
+      seen.add(item.path);
+    }
+    for (const name of ['runtime-config.js', 'startup.js', ...(negative ? [] : ['config.json', 'locales/en/common.json', wasm.path])]) {
+      require(seen.has(name), `Browser did not observe a required startup resource: ${name}`);
+    }
+  }
+  for (let index = 0; index < APPLICATION_BROWSER_ROUTES.length; index++) {
+    validateApplicationBrowserRouteEvidence(browser.routes[index], { origin, route: APPLICATION_BROWSER_ROUTES[index], wasm });
+    bindObservedResources(browser.routes[index]);
+  }
+  validateApplicationBrowserRouteEvidence(browser.negative_control,
+    { origin, route: APPLICATION_BROWSER_ROUTES[0], wasm, negative: true });
+  bindObservedResources(browser.negative_control, true);
+}
+
 // A substituted runner is only for protocol fixtures; it can never issue a
 // report claiming that a real Docker image or container was qualified.
-export async function checkApplicationRuntimeContainer({ context, reportPath }, { docker = defaultDocker } = {}) {
+export async function checkApplicationRuntimeContainer({ context, reportPath, browserStartup = false,
+  browserReportPath, browserChannel }, { docker = defaultDocker, browserWorker = defaultBrowserWorker } = {}) {
   const verified = validateApplicationRuntimeContext(context);
   const report = newDestination(reportPath, [verified.root]);
   require(path.extname(report) === '.json', 'Runtime report must use a JSON path');
-  const fixture = docker !== defaultDocker;
+  require(typeof browserStartup === 'boolean' && (browserStartup
+    ? Boolean(browserReportPath) && browserChannel === 'chrome' : !browserReportPath && !browserChannel),
+  'Browser startup requires a separate report and the sandboxed chrome channel');
+  const browserReport = browserStartup ? newDestination(browserReportPath, [verified.root]) : undefined;
+  require(!browserReport || (path.extname(browserReport) === '.json' && browserReport !== report), 'Browser and runtime reports must be distinct JSON files');
+  const fixture = docker !== defaultDocker || (browserStartup && browserWorker !== defaultBrowserWorker);
+  require(!browserStartup || docker === defaultDocker || browserWorker !== defaultBrowserWorker,
+    'A Docker protocol fixture must also supply a browser fixture');
   const operationDeadline = Date.now() + 8 * 60_000;
   const remaining = (limit = 30_000) => {
     require(Date.now() < operationDeadline, 'Runtime container check deadline exceeded');
@@ -351,6 +542,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath }, 
   let runAttempted = false;
   let failure;
   let result;
+  let browserEvidence;
   const cleanup = { container_removed: false, image_removed: false };
   try {
     buildAttempted = true;
@@ -411,10 +603,23 @@ export async function checkApplicationRuntimeContainer({ context, reportPath }, 
       missing.push({ path: relative, status: response.status });
     }
     require(served.find((item) => item.path === manifest.sdk_wasm)?.content_type === 'application/wasm', 'SDK WASM MIME was not observed');
+    if (browserStartup) {
+      browserEvidence = await browserWorker({ origin, runtimeContext: root, contextManifestSha256: contextSha,
+        channel: browserChannel, timeoutMs: remaining(120_000) });
+      require(browserEvidence?.process_evidence?.status === 'passed' && browserEvidence.process_evidence.descendants_reaped === true,
+        'Application browser did not prove complete worker descendant cleanup');
+      assert.deepEqual(browserEvidence.driver_inputs, BROWSER_DRIVER_INPUTS.map((name) => read(ROOT, name).record),
+        'Application browser diagnostic tool identity differs');
+      require(browserEvidence.process_evidence.guardian?.path === 'scripts/installer_startup_process.py'
+        && browserEvidence.process_evidence.guardian.sha256 === read(ROOT, 'scripts/installer_startup_process.py').record.sha256,
+      'Application browser used a different process guardian');
+      await verifyBrowserResult(browserEvidence.report, { origin, root, manifest, contextSha, channel: browserChannel });
+    }
     require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha, 'Runtime checker changed its closed context');
+    const qualificationFixture = fixture || Boolean(browserEvidence?.report.fixture);
     result = {
-      schema: 'marty.application-runtime-container/v1', status: fixture ? 'fixture-passed' : 'passed',
-      fixture, context_sha256: contextSha, source_commit: manifest.source_commit,
+      schema: 'marty.application-runtime-container/v1', status: qualificationFixture ? 'fixture-passed' : 'passed',
+      fixture: qualificationFixture, context_sha256: contextSha, source_commit: manifest.source_commit,
       effective_source_sha: manifest.effective_source_sha, exact_committed_source: manifest.exact_committed_source,
       base_image: APPLICATION_RUNTIME_BASE_IMAGE, image_id: imageId, container_id: containerId,
       endpoint: { host: '127.0.0.1', port }, public_resources_readable: [...APPLICATION_RETAINED_PUBLIC_FILES],
@@ -422,8 +627,8 @@ export async function checkApplicationRuntimeContainer({ context, reportPath }, 
       served_resources: served, route_metadata: routeMetadata, missing_resources: missing,
       runtime_transformations: manifest.output_inventory.files.filter((item) => item.path === 'runtime-config.js' || item.path.endsWith('.html'))
         .map((item) => ({ path: item.path, original_sha256: item.sha256, runtime_sha256: digest(expected.get(item.path)), mode: 0o644 })),
-      qualification: { context_prepared: true, container_image_built: !fixture, container_resources_checked: !fixture,
-        browser_startup_observed: false, host_deployment_tested: false, oidc_journey_tested: false,
+      qualification: { context_prepared: true, container_image_built: !qualificationFixture, container_resources_checked: !qualificationFixture,
+        browser_startup_observed: browserStartup && !qualificationFixture, host_deployment_tested: false, oidc_journey_tested: false,
         published: false, activated: false }, cleanup,
     };
   } catch (error) { failure = error; }
@@ -453,10 +658,29 @@ export async function checkApplicationRuntimeContainer({ context, reportPath }, 
         cleanup.image_removed = true;
       }
     } catch (error) { cleanupErrors.push(error); }
+    try {
+      require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha,
+        'Runtime check or cleanup changed its closed context');
+    } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) failure = new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], 'Runtime check or cleanup failed');
   }
   if (failure) throw failure;
   require(cleanup.container_removed && cleanup.image_removed, 'Runtime cleanup was incomplete');
+  if (browserStartup) {
+    const observation = browserEvidence.report;
+    const browser = { ...observation, status: result.fixture ? 'fixture-passed' : 'passed', fixture: result.fixture,
+      browser: { ...observation.browser, sandboxed: !result.fixture },
+      qualification: { ...observation.qualification, browser_startup_observed: !result.fixture,
+        sdk_wasm_initialized_in_browser: !result.fixture },
+      process_evidence: browserEvidence.process_evidence, diagnostic_tool_inputs: browserEvidence.driver_inputs,
+      runtime: { schema: result.schema, context_sha256: contextSha, image_id: imageId, container_id: containerId,
+        endpoint: result.endpoint, cleanup: { ...cleanup } } };
+    const bytes = Buffer.from(`${JSON.stringify(browser, null, 2)}\n`);
+    writeFileSync(browserReport, bytes, { flag: 'wx', mode: 0o600 });
+    result.browser_startup = { report_path: browserReport, bytes: bytes.length, sha256: digest(bytes),
+      schema: browser.schema, status: browser.status, sdk_wasm_initialized_in_browser: !result.fixture,
+      worker_descendants_reaped: true };
+  }
   writeFileSync(report, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   return result;
 }
@@ -466,14 +690,16 @@ function cli(args) {
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (flag === '--check-container') { require(!options.check, 'Duplicate runtime option'); options.check = true; }
-    else if (flag === '--context' || flag === '--report') {
-      require(!options[flag] && args[index + 1], 'Duplicate or missing runtime option');
+    else if (flag === '--browser-startup') { require(!options.browserStartup, 'Duplicate runtime option'); options.browserStartup = true; }
+    else if (['--context', '--report', '--browser-report', '--browser-channel'].includes(flag)) {
+      require(!options[flag] && args[index + 1] && !args[index + 1].startsWith('--'), 'Duplicate or missing runtime option');
       options[flag] = args[++index];
     } else throw new Error(`Unknown runtime option: ${flag}`);
   }
   require(options.check && options['--context'] && options['--report'],
     'Usage: application-runtime-context.mjs --context ABS_DIR --report ABS_NEW_JSON --check-container');
-  return { context: options['--context'], reportPath: options['--report'] };
+  return { context: options['--context'], reportPath: options['--report'], browserStartup: Boolean(options.browserStartup),
+    browserReportPath: options['--browser-report'], browserChannel: options['--browser-channel'] };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {

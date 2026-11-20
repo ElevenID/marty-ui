@@ -15,7 +15,8 @@ Latest recorded evidence, November 20, 2026 (UTC):
 | Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) merged as `cf333d61e4cc406d0fdaa870829396291d887ea7`; clean local and hosted builds passed with 37 audited inputs absent, and [normal queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44635771801) completed with 27 successful jobs and one intended skip | Preserve the accepted source boundary while expanding application test, asset and dependency qualification |
 | Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002), source `dc2372c0a3ecde82faaff6e3f00055ce86c3cb49`: clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses; [full PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) completed with 27 successful jobs and one intended skip. The [current merge-queue rehearsal](https://github.com/ElevenID/marty-ui/actions/runs/44647472085/job/135993690096) passed and all recorded output bytes match the accepted PR rehearsal | Complete the remaining required queue CI; retain the exact diagnostic evidence recorded in the PR |
 | Fresh dependencies and isolated application runtime | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), source `7929095c071cfc9a427dc28b46643dbdadde2011`: the clean local fresh install and [actual hosted fresh-install/container gates](https://github.com/ElevenID/marty-ui/actions/runs/44645683982/job/135987684986) passed. The hosted proof contains 284 passing tests, all 88 output files readable by nginx, 73 checked HTTP resources, three missing-resource controls and successful image/container cleanup | Preserve the accepted full-lock baseline while qualifying the explicit application package profile; complete the current candidate's required CI and normal merge queue |
-| Application package profile | The next commit in [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) defines an explicit application manifest and npm lock without four audited website package roots, with a separate strict audit and selected postinstall | Freshly install both profiles from the same candidate source, require identical application output and public-resource records, and exercise both actual hosted runtime gates |
+| Application package profile | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), source `d4cb8be181fb50a41082c012ea05c39674ae54d4`: both clean local fresh installations passed 284 tests and produced identical 88-file application output and 54 public resources. Installed package records decreased from 613 to 512, with no changed retained identities. The selected audit passed without findings; both fresh installations and actual container gates also passed in [current CI](https://github.com/ElevenID/marty-ui/actions/runs/44651027127/job/136005728296) | Current hosted artifacts independently verified; complete required CI and normal queue integration |
+| Application browser startup | The [browser boundary](application-browser-boundary.md) adds an explicit sandboxed browser replay of the application-profile nginx context, covering public and console rendering, the actual SDK WASM and an aborted-WASM recovery control | Qualify actual hosted browser execution and owned-process cleanup; retain unavailable-session behavior as distinct from a successful OIDC journey |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test
@@ -43,6 +44,18 @@ container checks exercise the unchanged production nginx/startup files. Removing
 the four audited roots is a bounded dependency reduction. Complete package graph
 minimization, source extraction, a signed application producer and isolated-host/OIDC
 qualification remain subsequent gates.
+
+The browser increment replays the immutable application-profile context after the
+existing UI bootstrap makes diagnostic browser tooling available. It keeps all
+five fresh-install, audit and container gates before bootstrap. The browser probe
+must observe actual application rendering and the exact SDK WASM response under
+production nginx/CSP, then independently fail startup when that WASM is blocked.
+No identity provider or deployment account is needed for this bounded startup
+check. Successful authentication and the actual host/OIDC journey remain separate.
+The console entrypoint also carries the existing startup recovery shell, so a
+module failure can offer the same reload action as the public entrypoint. Both
+documents use the unchanged startup script, and their recovery regression cases
+are included in the selected application test suite.
 
 The bootstrap status and initial sequence below preserve the November 15
 foundation. Use the checkpoint above for the current execution stage. Actual

@@ -148,6 +148,8 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
           bun x --no-install puppeteer browsers install
+      - name: Qualify application browser startup and WASM recovery
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome
       - name: Test website routing and all surface boundary guards
         run: |
           bun run test:website
@@ -190,6 +192,16 @@ jobs:
         with:
           name: application-profile-runtime-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/application-profile-runtime.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application browser startup reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/application-browser-runtime.json
+            ${{ runner.temp }}/application-browser-startup.json
           if-no-files-found: ignore
           retention-days: 14
 

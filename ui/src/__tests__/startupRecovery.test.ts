@@ -4,10 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const projectRoot = path.resolve(__dirname, '../..');
 const script = fs.readFileSync(path.join(projectRoot, 'public/startup.js'), 'utf8');
-const html = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
-const shell = new DOMParser().parseFromString(html, 'text/html').querySelector('.app-loading-shell')!.outerHTML;
-
-describe('startup recovery before the application module loads', () => {
+describe.each(['index.html', 'console/index.html'])('%s startup recovery before the application module loads', (entry) => {
+  const html = fs.readFileSync(path.join(projectRoot, entry), 'utf8');
+  const shell = new DOMParser().parseFromString(html, 'text/html').querySelector('.app-loading-shell')!.outerHTML;
   let reload: ReturnType<typeof vi.fn>;
   let reportRuntimeError: () => void;
 

@@ -267,7 +267,8 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
                     'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container',
                     'python3 scripts/ci/audit-application-dependencies.py',
                     'node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"',
-                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container'):
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome'):
         assert command in commands
     steps = jobs["test-website"]["steps"]
     closure = next(step for step in steps if "application-source-closure.mjs --fresh-install --runtime-context" in step.get("run", ""))
@@ -276,15 +277,26 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
     profile = next(step for step in steps if "--dependency-profile application" in step.get("run", ""))
     profile_runtime = next(step for step in steps if 'application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context"' in step.get("run", ""))
     bootstrap = next(step for step in steps if "download-verified-ui-release-assets.sh" in step.get("run", ""))
-    assert steps.index(closure) < steps.index(runtime) < steps.index(profile_audit) < steps.index(profile) < steps.index(profile_runtime) < steps.index(bootstrap)
+    browser = next(step for step in steps if "--browser-startup" in step.get("run", ""))
+    surface_tests = next(step for step in steps if "bun run test:application" in step.get("run", ""))
+    assert steps.index(closure) < steps.index(runtime) < steps.index(profile_audit) < steps.index(profile) < steps.index(profile_runtime) < steps.index(bootstrap) < steps.index(browser) < steps.index(surface_tests)
     assert profile_audit["working-directory"] == "${{ github.workspace }}"
-    for step in (closure, runtime, profile_audit, profile, profile_runtime):
+    for step in (closure, runtime, profile_audit, profile, profile_runtime, browser):
         assert "if" not in step and "continue-on-error" not in step
         assert "--dependencies" not in step["run"] and "||" not in step["run"]
+    assert "--browser-channel chrome" in browser["run"] and "--no-sandbox" not in browser["run"]
+    browser_upload = next(step for step in steps if step.get("with", {}).get("name") == "application-browser-${{ github.run_id }}-${{ github.run_attempt }}")
+    assert browser_upload["if"] == "always()"
+    assert browser_upload["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/application-browser-runtime.json",
+        "${{ runner.temp }}/application-browser-startup.json",
+    ]
+    assert browser_upload["with"]["retention-days"] == 14
     package_scripts = json.loads((ROOT / "ui/package.json").read_text())["scripts"]
     for test in ("scripts/application-config.test.mjs", "scripts/application-source-closure.test.mjs",
                  "scripts/application-dependency-install.test.mjs", "scripts/application-runtime-context.test.mjs",
-                 "scripts/application-dependency-profile.test.mjs", "scripts/website-build-tools.test.mjs"):
+                 "scripts/application-dependency-profile.test.mjs", "scripts/website-build-tools.test.mjs",
+                 "scripts/application-browser-startup.test.mjs"):
         assert test in package_scripts["test:application"]
     guard = next(step for step in jobs["ci-gate"]["steps"] if "CI_PLAN" in step.get("env", {}))
     assert guard["env"]["CI_NEEDS_JSON"] == "${{ toJSON(needs) }}"
