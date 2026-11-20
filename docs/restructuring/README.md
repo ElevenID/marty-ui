@@ -1,7 +1,7 @@
 # Repository restructuring foundation
 
 Status: standalone website publication and signed cross-owner composition are
-qualified. Application source and test separation is in progress. Production
+qualified. Application source, test, asset and dependency separation is in progress. Production
 cutover remains a separate gate.
 
 ## Current continuation checkpoint
@@ -12,24 +12,32 @@ Latest recorded evidence, November 19, 2026 (America/Denver):
 | --- | --- | --- |
 | Standalone website producer | Successful signed `ElevenID/website` run [`44449706828`, attempt 2](https://github.com/ElevenID/website/actions/runs/44449706828/attempts/2), source `7ec0707aa348939a0e48e6a26b24fb1af8671b9b` | Preserve this exact original release selection for composition; newer source requires a newly qualified release |
 | Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) merged as `6daf2a21`; protected-main [run `44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1) signed and verified the composition; its six-file artifact and original evidence bytes were independently inspected | Qualify the actual application/OIDC flow and isolated-host promotion, rollback and recovery with this exact composition |
-| Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001): clean local and hosted builds passed with 37 audited inputs absent; required CI completed with 27 successful jobs and one intended skip; composition sequencing prerequisite is satisfied | Complete normal merge-queue admission, then qualify the application-specific test profile and expanded omission set before asset and dependency closure |
-| Application source and tests | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002), source `b0481ea15b9e8e02d35d031878115fdb296e44ea`: clean local and [hosted build/test rehearsals](https://github.com/ElevenID/marty-ui/actions/runs/44637362247/job/135959306334) passed with 45 inputs absent and all 284 tests across 23 selected files passing; original source was preserved | Complete the remaining required CI and normal queue admission after PR #2001, then qualify the public asset boundary |
+| Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) merged as `cf333d61e4cc406d0fdaa870829396291d887ea7`; clean local and hosted builds passed with 37 audited inputs absent, and [normal queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44635771801) completed with 27 successful jobs and one intended skip | Preserve the accepted source boundary while expanding application test, asset and dependency qualification |
+| Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002), source `dc2372c0a3ecde82faaff6e3f00055ce86c3cb49`: clean local and [hosted v3 rehearsals](https://github.com/ElevenID/marty-ui/actions/runs/44641102200/job/135972381859) passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses; actual German/English fallback and source preservation passed | Complete the remaining required CI and normal queue admission; retain the exact diagnostic evidence recorded in the PR |
+| Fresh dependencies and isolated application runtime | [Implementation contract](application-dependency-boundary.md) adds a fresh locked install and a closed static nginx context; 111 focused tests and independent review passed | Execute the full fresh-install rehearsal from the published source and the actual nonpublishing hosted container gate before claiming either qualification |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test
 rehearsal separately classifies combined adapters, demo projections and test
 setup as application omissions. Shared application inputs, assets and
-dependencies remain retained. Neither rehearsal qualifies source
-deletion, a separate dependency installation, signed application publication or
-an actual host/OIDC journey.
+dependencies remain retained. The accepted source/asset rehearsals reused
+installed dependencies. They do not qualify source deletion, a separate dependency
+installation, signed application publication or an actual host/OIDC journey.
 
 The [public asset audit](application-assets-audit.md) records the 26 additional
-application omissions and the retained locale/runtime resources. The next
-rehearsal omits 71 inputs and binds 54 retained public resources to their original
-bytes, with actual local HTTP and translation-fallback checks. Its exact
-committed source and hosted acceptance belong in the candidate PR. A local
+application omissions and the retained locale/runtime resources. The completed
+71-input rehearsal binds 54 retained public resources to their original bytes,
+with actual local HTTP and translation-fallback checks. Its exact committed
+source and independently verified hosted artifact are recorded in PR #2002. A local
 resource probe cannot replace production server, browser startup or actual
 host/OIDC qualification.
+
+The [dependency and runtime boundary](application-dependency-boundary.md) keeps
+the current dependency graph and immutable release selections. Its fresh install
+runs before CI bootstrap changes the package manifest, and its separate container
+check must exercise the unchanged production nginx/startup files. Package graph
+minimization, a signed application producer and isolated-host/OIDC qualification
+remain subsequent gates.
 
 The bootstrap status and initial sequence below preserve the November 15
 foundation. Use the checkpoint above for the current execution stage. Actual

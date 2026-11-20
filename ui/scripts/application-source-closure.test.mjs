@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +24,8 @@ const ownership = JSON.parse(readFileSync(path.join(repositoryRoot, 'contracts/w
 const routeBytes = readFileSync(path.join(repositoryRoot, 'contracts/web-surface-routes.json'));
 const organizationContract = readFileSync(path.join(repositoryRoot, 'contracts/organization-domain-behavior.json'));
 const namespaces = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
+const runtimeInputs = ['ui/nginx.prod.conf', 'ui/scripts/application-runtime.Dockerfile',
+  'scripts/ui-production-start.sh', 'scripts/load-secrets-env.sh'];
 
 function put(root, relative, content) {
   const target = path.join(root, relative);
@@ -37,7 +41,7 @@ function git(root, ...args) {
 }
 
 function builder({ failure = false, marketing = false, mutateSource, outputSymlink = false, recreateOmitted,
-  removePublic, tamperPublic } = {}) {
+  removePublic, tamperPublic, runtimeContext = false } = {}) {
   return `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -66,6 +70,7 @@ ${outputSymlink ? "fs.symlinkSync(process.cwd(), output, 'dir'); process.exit(0)
 fs.mkdirSync(path.join(output, 'console'), { recursive: true });
 fs.writeFileSync(path.join(output, 'index.html'), '<html><main>Application fixture</main></html>');
 fs.writeFileSync(path.join(output, 'console/index.html'), '<html><main>Console fixture</main></html>');
+${runtimeContext ? "fs.mkdirSync(path.join(output, 'assets')); fs.writeFileSync(path.join(output, 'assets/marty_api_client_bg-fixture.wasm'), Buffer.from([0,97,115,109,1,0,0,0]));" : ''}
 function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
@@ -120,7 +125,7 @@ ${recreateAfterTests ? `fs.writeFileSync(path.join(root, ${JSON.stringify(OMITTE
 `;
 }
 
-function resourceProbe({ resourceFailure = false, resourceFault, recreateAfterResources = false } = {}) {
+function resourceProbe({ resourceFailure = false, resourceFault, recreateAfterResources = false, runtimeContext = false } = {}) {
   return `
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -137,7 +142,7 @@ function record(entry) {
 }
 const result = { schema: 'marty.application-resource-smoke/v1', status: 'passed',
   public_resources: publicFiles.map(record),
-  served_resources: [...publicFiles, 'index.html', 'console/index.html'].map((entry) => ({
+  served_resources: [...publicFiles, 'index.html', 'console/index.html', ${runtimeContext ? "'assets/marty_api_client_bg-fixture.wasm'" : ''}].map((entry) => ({
     ...record(entry), status: 200, content_type: ${JSON.stringify(APPLICATION_RESOURCE_MIME_TYPES)}[path.extname(entry)][0],
   })),
   entry_references: [], manifest_icons: [],
@@ -180,6 +185,11 @@ function fixture(t, buildOptions = {}) {
   for (const entry of APPLICATION_TEST_FILES) put(root, `ui/${entry}`, '// selected test fixture\n');
   put(root, 'ui/package.json', JSON.stringify({ type: 'module' }));
   put(root, 'ui/package-lock.json', '{}\n');
+  put(root, 'ui/bun.lock', '{}\n');
+  for (const name of ['patch-prerenderer-ts-deepmerge.cjs', 'patch-checker-worker-cleanup.mjs', 'checker-worker-cleanup.mjs']) {
+    put(root, `ui/scripts/${name}`, '// fresh-install input fixture\n');
+  }
+  for (const name of runtimeInputs) put(root, name, readFileSync(path.join(repositoryRoot, name)));
   put(root, 'ui/vite.config.ts', '// fixture config; the real Vite build is a separate rehearsal\n');
   for (const entry of ['ui/vitest.config.ts', `ui/${APPLICATION_TEST_CONFIG}`,
     'ui/scripts/application-test-profile.mjs', 'ui/scripts/application-public-assets.mjs',
@@ -226,6 +236,111 @@ test('the plan separates the original website roster from the 71-input applicati
   assert.equal(plan.test_profile.files.length, 23);
   assert.ok(plan.boundary.retained.includes('contracts/organization-domain-behavior.json'));
   assert.ok(plan.boundary.retained.includes('ui/package-lock.json'));
+});
+
+test('fresh installation cannot select or fall back to the reusable dependency directory', (t) => {
+  const root = fixture(t);
+  assert.throws(() => rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true,
+    dependencyDirectory: path.join(root, 'ui/node_modules') }), /mutually exclusive/);
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root, freshInstall: true });
+  assert.equal(report.status, 'failed');
+  assert.match(report.error, /committed npm v3 lock/);
+  assert.equal(report.build.dependency_mode, 'fresh-npm-ci');
+  assert.equal(report.qualification.independent_dependency_installation, false);
+  assert.equal(report.qualification.application_build_completed, false);
+  assert.equal(report.qualification.source_checkout_unchanged, true);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('runtime context planning inventories both root startup scripts only when requested', (t) => {
+  const root = fixture(t);
+  const ordinary = planApplicationSourceClosure({ repositoryRoot: root });
+  const packaged = planApplicationSourceClosure({ repositoryRoot: root, runtimeContext: true });
+  for (const name of runtimeInputs.filter((name) => name.startsWith('scripts/'))) {
+    assert.equal(ordinary.source.files.some((entry) => entry.path === name), false);
+    assert.equal(packaged.source.files.some((entry) => entry.path === name), true);
+    assert.ok(packaged.boundary.retained.includes(name));
+  }
+});
+
+test('a runtime context is prepared only after successful source and output preservation', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-harness-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  assert.equal(report.status, 'passed', report.error);
+  assert.equal(report.qualification.runtime_context_prepared, true);
+  assert.equal(report.qualification.container_runtime_tested, false);
+  assert.equal(report.qualification.package_graph_minimized, false);
+  assert.equal(report.qualification.independent_dependency_installation, false);
+  assert.ok(existsSync(path.join(destination, 'application-runtime-context.json')));
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('source mutation during runtime preparation removes its context and revokes the preservation claim', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-source-mutation-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const actualMkdir = fs.mkdirSync;
+  let mutated = false;
+  let report;
+  try {
+    fs.mkdirSync = (filename, options) => {
+      const result = actualMkdir(filename, options);
+      if (filename === destination) {
+        writeFileSync(path.join(root, RETAINED_SHARED_INPUTS[0]), '// source changed during packaging');
+        mutated = true;
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  } finally {
+    fs.mkdirSync = actualMkdir;
+    syncBuiltinESMExports();
+  }
+  assert.equal(mutated, true, 'The mutation must happen inside the real context preparation');
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.source_checkout_unchanged, false);
+  assert.equal(report.qualification.runtime_context_prepared, false);
+  assert.equal(report.runtime_context, undefined);
+  assert.equal(existsSync(destination), false);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
+});
+
+test('a source mutation followed by a throwing context writer cannot retain the earlier preservation claim', (t) => {
+  const root = fixture(t, { runtimeContext: true });
+  const parent = mkdtempSync(path.join(os.tmpdir(), 'marty-runtime-source-failure-'));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const destination = path.join(parent, 'context');
+  const actualWrite = fs.writeFileSync;
+  let mutated = false;
+  let report;
+  try {
+    fs.writeFileSync = (filename, content, options) => {
+      const result = actualWrite(filename, content, options);
+      if (typeof filename === 'string' && filename.startsWith(`${destination}/`)) {
+        actualWrite(path.join(root, RETAINED_SHARED_INPUTS[0]), '// source changed before preparation failure');
+        mutated = true;
+        throw new Error('Synthetic context write failure');
+      }
+      return result;
+    };
+    syncBuiltinESMExports();
+    report = rehearseApplicationSourceClosure({ repositoryRoot: root, runtimeContextDirectory: destination });
+  } finally {
+    fs.writeFileSync = actualWrite;
+    syncBuiltinESMExports();
+  }
+  assert.equal(mutated, true);
+  assert.equal(report.status, 'failed');
+  assert.equal(report.qualification.source_checkout_unchanged, false);
+  assert.equal(report.qualification.runtime_context_prepared, false);
+  assert.equal(report.runtime_context, undefined);
+  assert.equal(existsSync(destination), false);
+  assert.equal(existsSync(path.dirname(report.export_directory)), false);
 });
 
 test('dirty source changes receive their own hashes and cannot be presented as a clean committed build', (t) => {

@@ -12,6 +12,8 @@ import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_INSTALL_INPUTS, installApplicationDependencies } from './application-dependency-install.mjs';
+import { createApplicationRuntimeContext } from './application-runtime-context.mjs';
 import {
   APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
   APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RESOURCE_MIME_TYPES,
@@ -20,6 +22,8 @@ import {
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TEST_CONTRACTS = ['contracts/organization-domain-behavior.json'];
 const CONTRACTS = ['contracts/website-source-ownership.json', 'contracts/web-surface-routes.json', ...TEST_CONTRACTS];
+const RUNTIME_ROOT_INPUTS = ['scripts/ui-production-start.sh', 'scripts/load-secrets-env.sh'];
+const RUNTIME_INPUTS = ['ui/nginx.prod.conf', 'ui/scripts/application-runtime.Dockerfile', ...RUNTIME_ROOT_INPUTS];
 
 // These fixed omissions describe application build/test inputs. They do not
 // expand the exclusive-website ownership roster used by the combined build.
@@ -120,13 +124,13 @@ function readInput(root, relative) {
   }
 }
 
-function sourcePaths(root) {
-  const listed = git(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'ui', ...CONTRACTS])
+function sourcePaths(root, extraInputs = []) {
+  const listed = git(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', 'ui', ...CONTRACTS, ...extraInputs])
     .split('\0').filter(Boolean);
   const paths = [...new Set(listed)].filter((entry) => !/^ui\/(?:node_modules|dist(?:-[^/]+)?)(?:\/|$)/.test(entry));
   for (const entry of paths) {
     relativeInput(entry);
-    require(entry.startsWith('ui/') || CONTRACTS.includes(entry), 'Source export is outside the reviewed UI boundary');
+    require(entry.startsWith('ui/') || CONTRACTS.includes(entry) || extraInputs.includes(entry), 'Source export is outside the reviewed UI boundary');
   }
   return paths.sort();
 }
@@ -139,26 +143,29 @@ function identity(records) {
   return digest(canonicalJson(records));
 }
 
-export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT } = {}) {
+export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, freshInstall = false, runtimeContext = false } = {}) {
   const root = realpathSync(repositoryRoot);
   require(realpathSync(git(root, ['rev-parse', '--show-toplevel']).trim()) === root, 'Select the actual repository root');
   const sourceSha = git(root, ['rev-parse', 'HEAD']).trim();
   require(/^[0-9a-f]{40}$/.test(sourceSha), 'Source checkout requires an exact commit');
   const ownership = validateWebsiteSourceOwnership(JSON.parse(readInput(root, CONTRACTS[0]).bytes.toString('utf8')), root);
   const routes = validateWebSurfaceContract(JSON.parse(readInput(root, CONTRACTS[1]).bytes.toString('utf8')));
-  const paths = sourcePaths(root);
+  const extraInputs = runtimeContext ? RUNTIME_ROOT_INPUTS : [];
+  const paths = sourcePaths(root, extraInputs);
   const omitted = new Set([...ownership.modules, ...ADDITIONAL_OMISSIONS]);
-  for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS]) {
+  const modeInputs = [...(runtimeContext ? RUNTIME_INPUTS : []),
+    ...(freshInstall ? APPLICATION_INSTALL_INPUTS.map((entry) => `ui/${entry}`) : [])];
+  for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS, ...modeInputs]) {
     require(paths.includes(entry), `Required reviewed source input is missing: ${entry}`);
   }
   for (const entry of RETAINED_SHARED_INPUTS) require(!omitted.has(entry), `Shared input cannot be omitted: ${entry}`);
   const files = paths.map((entry) => readInput(root, entry).record);
   const status = sourceStatus(root);
   return {
-    schema: 'marty.application-source-closure-plan/v3',
+    schema: 'marty.application-source-closure-plan/v4',
     repository_root: root,
     source: { commit: sourceSha, working_tree_dirty: status.length > 0, git_status: status,
-      input_inventory_sha256: identity(files), files },
+      input_inventory_sha256: identity(files), files, extra_inputs: [...extraInputs] },
     route_contract: { version: routes.schema_version, sha256: digest(canonicalJson(routes)) },
     test_profile: { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES], shared_contracts: [...TEST_CONTRACTS] },
     boundary: {
@@ -348,25 +355,54 @@ function verifyApplicationResourceResult(temporary, exported, output) {
   return { ...result, report_sha256: digest(raw) };
 }
 
-export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, dependencyDirectory,
-  keepExport = false } = {}) {
-  const plan = planApplicationSourceClosure({ repositoryRoot });
-  const dependencies = realpathSync(dependencyDirectory || path.join(plan.repository_root, 'ui/node_modules'));
+function verifyOriginalSource(plan) {
+  assert.deepEqual(sourcePaths(plan.repository_root, plan.source.extra_inputs), plan.source.files.map((entry) => entry.path), 'Original source input list changed');
+  const after = plan.source.files.map((entry) => readInput(plan.repository_root, entry.path).record);
+  assert.deepEqual(after, plan.source.files, 'Original source bytes changed');
+  assert.deepEqual(sourceStatus(plan.repository_root), plan.source.git_status, 'Original Git status changed');
+}
+
+function requireInstalledDependencies(dependencies) {
   require(lstatSync(dependencies).isDirectory() && path.basename(dependencies) === 'node_modules', 'Select an installed node_modules directory');
   for (const executable of ['tsc', 'vite']) require(existsSync(path.join(dependencies, '.bin', executable)), `Installed build dependency is missing: ${executable}`);
   require(existsSync(path.join(dependencies, 'vitest/vitest.mjs')), 'Installed test dependency is missing: vitest');
+}
+
+export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, dependencyDirectory,
+  freshInstall = false, runtimeContextDirectory, keepExport = false } = {}) {
+  require(!(freshInstall && dependencyDirectory), 'Fresh install and reused dependencies are mutually exclusive');
+  const plan = planApplicationSourceClosure({ repositoryRoot, freshInstall, runtimeContext: Boolean(runtimeContextDirectory) });
+  if (runtimeContextDirectory) {
+    require(path.isAbsolute(runtimeContextDirectory), 'Runtime context must be an absolute new directory');
+    const parent = realpathSync(path.dirname(runtimeContextDirectory));
+    require(parent === path.dirname(path.resolve(runtimeContextDirectory)), 'Runtime context parent cannot use a symlink');
+    runtimeContextDirectory = path.resolve(runtimeContextDirectory);
+    require(outside(plan.repository_root, runtimeContextDirectory), 'Runtime context must be outside the original source');
+    let present = true;
+    try { lstatSync(runtimeContextDirectory); } catch (error) {
+      if (error.code === 'ENOENT') present = false;
+      else throw error;
+    }
+    require(!present, 'Runtime context must not replace an existing path');
+  }
+  let dependencies;
+  if (!freshInstall) {
+    dependencies = realpathSync(dependencyDirectory || path.join(plan.repository_root, 'ui/node_modules'));
+    requireInstalledDependencies(dependencies);
+  }
   require(outside(plan.repository_root, realpathSync(os.tmpdir())), 'Temporary exports must be outside the source checkout');
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-application-source-closure-'));
   const exported = path.join(temporary, 'source');
+  if (freshInstall) dependencies = path.join(exported, 'ui/node_modules');
   const testArguments = ['node_modules/vitest/vitest.mjs', 'run', '--config', APPLICATION_TEST_CONFIG,
     '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')];
   const resourceArguments = ['scripts/application-resource-smoke.mjs', '--dist', 'dist-application',
     '--report', path.join(temporary, 'application-resources.json')];
   const report = {
-    schema: 'marty.application-source-closure-rehearsal/v3',
+    schema: 'marty.application-source-closure-rehearsal/v4',
     status: 'failed', plan,
     build: { command: ['node', 'scripts/build-web-surface.mjs', 'application'], node_version: process.version,
-      dependency_mode: 'reused-installed-node_modules', dependency_directory: dependencies,
+      dependency_mode: freshInstall ? 'fresh-npm-ci' : 'reused-installed-node_modules', dependency_directory: dependencies,
       package_lock_sha256: plan.source.files.find((entry) => entry.path === 'ui/package-lock.json').sha256,
       effective_source_sha: effectiveSourceSha(plan) },
     tests: { command: ['node', ...testArguments], selected_files: [...APPLICATION_TEST_FILES] },
@@ -375,13 +411,24 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
       application_output_checked: false, source_checkout_unchanged: false, source_extraction_complete: false,
       public_assets_preserved: false, application_resource_smoke_completed: false,
       locale_fallback_observed: false, browser_startup_observed: false,
+      runtime_context_prepared: false, container_runtime_tested: false, package_graph_minimized: false,
+      sdk_wasm_initialized_in_node: false, sdk_wasm_output_bound: false,
       independent_dependency_installation: false, oidc_journey_tested: false, host_deployment_tested: false,
       signed_release_produced: false },
     export_directory: exported, export_retained: keepExport,
   };
+  let ownedContext = false;
   try {
     exportSource(plan, exported);
-    symlinkSync(dependencies, path.join(exported, 'ui/node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    if (freshInstall) {
+      report.dependency_install = installApplicationDependencies({ uiRoot: path.join(exported, 'ui'), temporaryRoot: temporary });
+      requireOmittedInputsAbsent(plan, exported);
+      requireInstalledDependencies(dependencies);
+      report.qualification.independent_dependency_installation = true;
+      report.qualification.sdk_wasm_initialized_in_node = true;
+    } else {
+      symlinkSync(dependencies, path.join(exported, 'ui/node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    }
     const result = spawnSync(process.execPath, ['scripts/build-web-surface.mjs', 'application'], {
       cwd: path.join(exported, 'ui'), env: buildEnvironment(report.build.effective_source_sha), stdio: ['ignore', 2, 2],
       timeout: 20 * 60 * 1000, shell: false,
@@ -410,6 +457,14 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     const finalOutput = verifyApplicationClosureOutput(exported, plan);
     assert.deepEqual(finalOutput, report.output, 'Resource probe changed the built output inventory');
     report.resources.result = verifyApplicationResourceResult(temporary, exported, finalOutput);
+    if (freshInstall) {
+      const sdkWasm = report.dependency_install.sdk.wasm;
+      const emitted = finalOutput.files.filter((entry) => /^assets\/marty_api_client_bg-[^/]+\.wasm$/.test(entry.path));
+      require(emitted.length === 1 && emitted[0].bytes === sdkWasm.bytes && emitted[0].sha256 === sdkWasm.sha256,
+        'Application output differs from the freshly installed SDK WASM');
+      report.dependency_install.sdk.emitted_wasm = emitted[0];
+      report.qualification.sdk_wasm_output_bound = true;
+    }
     report.qualification.application_resource_smoke_completed = true;
     report.qualification.public_assets_preserved = true;
     report.qualification.locale_fallback_observed = true;
@@ -420,16 +475,57 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     report.error = error.message;
   } finally {
     try {
-      assert.deepEqual(sourcePaths(plan.repository_root), plan.source.files.map((entry) => entry.path), 'Original source input list changed');
-      const after = plan.source.files.map((entry) => readInput(plan.repository_root, entry.path).record);
-      assert.deepEqual(after, plan.source.files, 'Original source bytes changed');
-      assert.deepEqual(sourceStatus(plan.repository_root), plan.source.git_status, 'Original Git status changed');
+      verifyOriginalSource(plan);
       report.qualification.source_checkout_unchanged = true;
     } catch (error) {
       report.status = 'failed';
       report.error = `Source preservation failed: ${error.message}`;
     }
-    if (!keepExport) rmSync(temporary, { recursive: true, force: true });
+    try {
+      if (report.status === 'passed' && runtimeContextDirectory) {
+        report.qualification.source_checkout_unchanged = false;
+        const original = new Map(plan.source.files.map((entry) => [entry.path, entry]));
+        for (const name of RUNTIME_INPUTS) {
+          const actual = readInput(exported, name).record;
+          const expected = original.get(name);
+          require(actual.sha256 === expected.sha256 && actual.bytes === expected.bytes,
+            `Runtime packaging input differs from inventoried source: ${name}`);
+        }
+        report.runtime_context = createApplicationRuntimeContext({ sourceRoot: exported,
+          outputRoot: path.join(exported, 'ui/dist-application'), destination: runtimeContextDirectory,
+          sourceCommit: plan.source.commit, outputInventory: report.output, resourceResult: report.resources.result });
+        ownedContext = true;
+        assert.deepEqual(verifyApplicationClosureOutput(exported, plan), report.output, 'Runtime packaging changed the built output inventory');
+        requireOmittedInputsAbsent(plan, exported);
+      }
+    } catch (error) {
+      report.status = 'failed';
+      report.error = `Runtime context failed: ${error.message}`;
+    }
+    // Context preparation can fail before returning ownership. Revalidate the
+    // original inputs on that path too; no earlier preservation claim survives
+    // an unverified preparation attempt.
+    if (runtimeContextDirectory) {
+      report.qualification.source_checkout_unchanged = false;
+      try {
+        verifyOriginalSource(plan);
+        report.qualification.source_checkout_unchanged = true;
+      } catch (error) {
+        report.status = 'failed';
+        report.error = `Source preservation failed after runtime preparation: ${error.message}`;
+      }
+    }
+    try {
+      if (!keepExport) rmSync(temporary, { recursive: true, force: true });
+    } catch (error) {
+      report.status = 'failed';
+      report.error = `Export cleanup failed: ${error.message}`;
+    }
+    if (report.status !== 'passed' && ownedContext) {
+      rmSync(runtimeContextDirectory, { recursive: true, force: true });
+      delete report.runtime_context;
+    }
+    report.qualification.runtime_context_prepared = report.status === 'passed' && ownedContext;
   }
   return report;
 }
@@ -441,11 +537,13 @@ function main() {
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (argument === '--keep-export') options.keepExport = true;
-    else if (['--repository-root', '--dependencies', '--report'].includes(argument)) {
+    else if (argument === '--fresh-install') options.freshInstall = true;
+    else if (['--repository-root', '--dependencies', '--runtime-context', '--report'].includes(argument)) {
       const value = arguments_[++index];
       require(value && !value.startsWith('--'), `Missing value for ${argument}`);
       if (argument === '--repository-root') options.repositoryRoot = value;
       else if (argument === '--dependencies') options.dependencyDirectory = value;
+      else if (argument === '--runtime-context') options.runtimeContextDirectory = value;
       else reportPath = path.resolve(value);
     } else throw new Error(`Unknown option: ${argument}`);
   }

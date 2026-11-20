@@ -263,13 +263,20 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
     commands = "\n".join(step.get("run", "") for step in jobs["test-website"]["steps"])
     for command in ("bun run test:website", "bun run test:application", "bun run build:website", "bun run build:application",
                     "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website",
-                    'node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"'):
+                    'node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container'):
         assert command in commands
-    closure = next(step for step in jobs["test-website"]["steps"]
-                   if "application-source-closure.mjs --report" in step.get("run", ""))
-    assert "if" not in closure and "continue-on-error" not in closure
+    steps = jobs["test-website"]["steps"]
+    closure = next(step for step in steps if "application-source-closure.mjs --fresh-install" in step.get("run", ""))
+    runtime = next(step for step in steps if "application-runtime-context.mjs" in step.get("run", ""))
+    bootstrap = next(step for step in steps if "download-verified-ui-release-assets.sh" in step.get("run", ""))
+    assert steps.index(closure) < steps.index(runtime) < steps.index(bootstrap)
+    for step in (closure, runtime):
+        assert "if" not in step and "continue-on-error" not in step
+        assert "--dependencies" not in step["run"] and "||" not in step["run"]
     package_scripts = json.loads((ROOT / "ui/package.json").read_text())["scripts"]
-    for test in ("scripts/application-config.test.mjs", "scripts/application-source-closure.test.mjs"):
+    for test in ("scripts/application-config.test.mjs", "scripts/application-source-closure.test.mjs",
+                 "scripts/application-dependency-install.test.mjs", "scripts/application-runtime-context.test.mjs"):
         assert test in package_scripts["test:application"]
     guard = next(step for step in jobs["ci-gate"]["steps"] if "CI_PLAN" in step.get("env", {}))
     assert guard["env"]["CI_NEEDS_JSON"] == "${{ toJSON(needs) }}"
