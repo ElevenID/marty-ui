@@ -12,11 +12,10 @@ use axum::{
 use chrono::{DateTime, TimeZone, Utc};
 use http_body_util::BodyExt;
 use marty_issuance_service::{
+    application_issuance::{ApplicationClock, ApprovalSeed, ApprovalSeedGenerator},
     application_template_domain::{
         ApplicationTemplateCreate, ApplicationTemplateRecord, ApplicationTemplateStatus,
     },
-    canvas_award_candidate_approval::{CanvasAwardApprovalSeed, CanvasAwardApprovalSeedGenerator},
-    canvas_lti_launch::CanvasLtiClock,
     credential::{
         CredentialIssuanceError, CredentialTransaction, IssuerContext, IssuerContextResolver,
     },
@@ -207,7 +206,7 @@ impl InternalApplicationIdGenerator for FixedRuntime {
     }
 }
 
-impl CanvasLtiClock for FixedRuntime {
+impl ApplicationClock for FixedRuntime {
     fn now(&self) -> DateTime<Utc> {
         fixed_time()
     }
@@ -265,9 +264,9 @@ impl IssuerContextResolver for FailingIssuerContextResolver {
 
 struct FixedApprovalSeeds;
 
-impl CanvasAwardApprovalSeedGenerator for FixedApprovalSeeds {
-    fn generate(&self) -> CanvasAwardApprovalSeed {
-        CanvasAwardApprovalSeed {
+impl ApprovalSeedGenerator for FixedApprovalSeeds {
+    fn generate(&self) -> ApprovalSeed {
+        ApprovalSeed {
             transaction_id: "transaction-probe-1".to_owned(),
             pre_authorized_code: "pre-authorized-code-probe-1".to_owned(),
         }
@@ -416,7 +415,7 @@ async fn document() -> String {
             "family_name": ["Lovelace"],
             "email": "ignored@example.test"
         },
-        "integration_context": {"source": "feature-regression-probe"}
+        "integration_context": {}
     });
 
     let repository = Arc::new(MemoryRepository::with_template(active_template()));

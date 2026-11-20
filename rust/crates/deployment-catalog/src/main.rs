@@ -897,74 +897,13 @@ fn run() -> Result<(), String> {
             }
             #[cfg(target_os = "linux")]
             Some(
-                command @ ("kubernetes-legacy-recovery-targets"
+                "kubernetes-legacy-recovery-targets"
                 | "kubernetes-legacy-recovery-predecessors"
                 | "kubernetes-legacy-recovery-stage"
-                | "kubernetes-legacy-recovery-qualify"),
-            ) if args.len() == 2 => {
-                use marty_deployment_catalog::kubernetes_legacy_recovery as recovery;
-                let mut input = Vec::new();
-                std::io::stdin()
-                    .take(512 * 1024 + 1)
-                    .read_to_end(&mut input)
-                    .map_err(|_| REFUSAL)?;
-                if input.len() > 512 * 1024 {
-                    return Err(REFUSAL.into());
-                }
-                let summary = if command == "kubernetes-legacy-recovery-targets" {
-                    recovery::secret_targets(&input)?
-                } else if command == "kubernetes-legacy-recovery-predecessors" {
-                    recovery::inspect_predecessors(&input)?
-                } else {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| REFUSAL)?;
-                    if command == "kubernetes-legacy-recovery-stage" {
-                        runtime.block_on(recovery::stage_candidate(&input))?
-                    } else {
-                        runtime.block_on(recovery::qualify_candidate(&input))?
-                    }
-                };
-                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
-            }
-            #[cfg(target_os = "linux")]
-            Some("kubernetes-legacy-recovery-target") if args.len() == 4 => {
-                let summary = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| REFUSAL)?
-                    .block_on(
-                        marty_deployment_catalog::kubernetes_legacy_recovery::target(
-                            std::path::Path::new(&args[2]),
-                            &args[3],
-                        ),
-                    )?;
-                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
-            }
-            #[cfg(target_os = "linux")]
-            Some("kubernetes-legacy-recovery-inspect") if args.len() == 3 => {
-                use std::path::Path;
-                let mut input = Vec::new();
-                std::io::stdin()
-                    .take(512 * 1024 + 1)
-                    .read_to_end(&mut input)
-                    .map_err(|_| REFUSAL)?;
-                if input.len() > 512 * 1024 {
-                    return Err(REFUSAL.into());
-                }
-                let summary = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| REFUSAL)?
-                    .block_on(
-                        marty_deployment_catalog::kubernetes_legacy_recovery::inspect_to_file(
-                            &input,
-                            Path::new(&args[2]),
-                        ),
-                    )?;
-                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
-            }
+                | "kubernetes-legacy-recovery-qualify"
+                | "kubernetes-legacy-recovery-target"
+                | "kubernetes-legacy-recovery-inspect",
+            ) => Err(marty_deployment_catalog::kubernetes_legacy_recovery::RECOVERY),
             Some("beta-rehearsal") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()

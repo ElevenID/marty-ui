@@ -76,14 +76,6 @@ def optional_local_secrets(catalog_path: Path = SECRET_CATALOG) -> frozenset[str
 
 OPTIONAL_LOCAL_SECRET_NAMES = optional_local_secrets()
 FALSE_VALUES = frozenset({"false", "0", "no", "n", "off"})
-CANVAS_DISABLED_FLAGS = frozenset({
-    "CANVAS_PORTABLE_INTEGRATION_ENABLED", "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
-    "CANVAS_MIRROR_WORKER_ENABLED",
-})
-CANVAS_UNUSED_SETTINGS = frozenset({
-    "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-    "CANVAS_CREDENTIALS_ISSUER_ID", "CANVAS_CREDENTIALS_BADGECLASS_ID",
-})
 PASSPORT_DISABLED_FLAGS = {
     "gateway": ("PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED",
                 "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"),
@@ -309,6 +301,23 @@ def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
     if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
         return frozenset()
     services = model["services"]
+    # Retired connector inputs are invalid even when false or empty. This tool
+    # must never stage credentials for an in-platform connector deployment.
+    for name, entry in services.items():
+        if isinstance(name, str) and (name.replace("_", "-").startswith("canvas-")
+                                     or "-canvas-" in name.replace("_", "-")):
+            raise ValueError("retired connector service in self-host model")
+        env = entry.get("environment", {}) if isinstance(entry, dict) else {}
+        keys = env if isinstance(env, dict) else (
+            item.split("=", 1)[0] for item in env if isinstance(item, str)
+        ) if isinstance(env, list) else ()
+        if any(key.startswith(("CANVAS_", "ISSUANCE_CANVAS_"))
+               or key in {"SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN",
+                          "KEYCLOAK_SEED_CANVAS_ADMIN_USER"} for key in keys):
+            raise ValueError("retired connector configuration in self-host model")
+    if any(isinstance(name, str) and (name.startswith("canvas_") or "_canvas_" in name)
+           for name in model.get("secrets", {})):
+        raise ValueError("retired connector secret in self-host model")
 
     def environment(service: str) -> dict | None:
         entry = services.get(service)
@@ -327,29 +336,6 @@ def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
                 and keycloak.get("KEYCLOAK_SMTP_USERNAME") == ""
                 and notification.get("SMTP_USERNAME") == ""):
             allowed.add("smtp_password")
-    observed_canvas: set[str] = set()
-    canvas_disabled = True
-    for service in sorted(LOCAL_SERVICES):
-        env = environment(service)
-        if env is None:
-            continue
-        for name in CANVAS_DISABLED_FLAGS:
-            if name in env:
-                observed_canvas.add(name)
-                value = env[name]
-                if not isinstance(value, str) or value.lower() not in FALSE_VALUES:
-                    canvas_disabled = False
-        for name in CANVAS_UNUSED_SETTINGS:
-            if name in env:
-                observed_canvas.add(name)
-                if env[name] != "":
-                    canvas_disabled = False
-    if (canvas_disabled and observed_canvas ==
-            CANVAS_DISABLED_FLAGS | CANVAS_UNUSED_SETTINGS):
-        allowed.add("canvas_credentials_shared_secret")
-        if all((environment(owner) or {}).get("CANVAS_CREDENTIALS_API_TOKEN_FILE") == ""
-               for owner in ("issuance", "issuance-native")):
-            allowed.add("canvas_credentials_api_token")
     # Default-empty files are permitted only with complete, explicitly disabled
     # consumer controls. A selected path, raw credential, missing flag or active
     # provider must not be turned into an empty credential by this legacy tool.

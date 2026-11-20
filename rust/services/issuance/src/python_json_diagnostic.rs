@@ -77,11 +77,11 @@ mod tests {
     #[test]
     fn frozen_published_syntax_diagnostics() {
         let cases: Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-review-input-scenarios.json"
+            "../../../../contracts/http-json-diagnostic-scenarios.json"
         ))
         .unwrap();
         let oracle: Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-review-input-oracle.json"
+            "../../../../contracts/http-json-diagnostic-oracle.json"
         ))
         .unwrap();
         let mut checked = 0;

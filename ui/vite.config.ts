@@ -184,6 +184,12 @@ export default defineConfig(async ({ mode }) => {
   let demoRoutes = []
 
   if (!isSelfhostBuild && !isApplicationBuild) {
+    // Keep the website catalog helper out of application config resolution.
+    // A file URL leaves this import inside its owning branch when Vite bundles
+    // the config, so application exports can omit the demo source entirely.
+    const { platformDemoScenarios } = await import(
+      new URL('./src/services/platformDemoScenarios.js', import.meta.url).href
+    )
     const {
       BLOG_POSTS,
       BLOG_AUTHORS,
@@ -240,9 +246,9 @@ export default defineConfig(async ({ mode }) => {
     demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
       const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
       demoRoutes.push(`/demos/${stackVersion}`)
-      manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
+      platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
       if (demoIndex.latest_approved_stack_version === stackVersion) {
-        manifest.scenarios.forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
+        platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
       }
     })
   }
@@ -299,7 +305,7 @@ export default defineConfig(async ({ mode }) => {
     define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify(assetBase) },
     resolve: {
       alias: {
-        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : 'public'}.js`, import.meta.url)),
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : isApplicationBuild ? 'application' : 'public'}.js`, import.meta.url)),
         '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : isApplicationBuild ? 'application' : 'public'}.jsx`, import.meta.url)),
         '@marty/commerce-extension': commerceExtensionPath,
         'react-router-dom': 'react-router',

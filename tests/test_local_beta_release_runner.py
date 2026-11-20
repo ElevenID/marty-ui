@@ -40,15 +40,11 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert re.search(r'"db-migrate"\s*\)', script)
     assert '"BAO_ADDR=http://openbao:8200"' not in script
-    assert "CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid" in script
-    assert '"did:web:${betaHost}:orgs:marty"' in script
+    assert "CANVAS_LTI_TOOL_ISSUER_DID" not in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" not in script
     assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" not in script
-    assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" in script
-    assert (
-        '$env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"'
-        in script
-    )
+    assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" not in script
+    assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL" not in script
     assert "$rehearsalKmsEnabled" not in script
     assert "$kmsBootstrapEnabled" not in script
     assert '"elevenid-beta-copy-openbao-' in native
@@ -98,11 +94,11 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert "promotion_eligible = $promotionEligible" in script
     assert "promotion_eligible -ne $false" in script
     assert "release_ready = $false" in script
-    assert '"canvas-sync-worker"' in script
+    assert '"canvas-sync-worker"' not in script
     assert "New-BetaApplicationImagePlan @applicationImageArguments" in script
     assert "$applicationImagePlan | Where-Object { $_.build_eligible }" in script
-    assert '$env:CANVAS_ALLOW_PRIVATE_BASE_URLS = "false"' in script
-    assert '$env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"' in script
+    assert "CANVAS_ALLOW_PRIVATE_BASE_URLS" not in script
+    assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS" not in script
     assert '$script:InfrastructureWriterServices = @("keycloak")' in script
     assert "Start-ContainersBestEffort" in script
     assert "if ($LASTEXITCODE -ne 0)" in script
@@ -146,7 +142,6 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     beta_compose_paths = (
         "docker-compose.base.yml",
-        "docker-compose.profile.canvas-real.yml",
         "docker-compose.profile.waltid.yml",
         "docker-compose.profile.tunnel.yml",
     )
@@ -184,10 +179,6 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "config/keycloak",
         "config/envoy/envoy.yaml",
         "docker/openbao-init.sh",
-        "docker/canvas-localhost-bridge/Cargo.toml",
-        "docker/canvas-localhost-bridge/Cargo.lock",
-        "docker/canvas-localhost-bridge/Dockerfile",
-        "docker/canvas-localhost-bridge/src/main.rs",
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):
@@ -323,12 +314,12 @@ def test_direct_ui_proxy_uses_canonical_gateway() -> None:
         assert "proxy_pass http://gateway:8000" not in config
 
 
-def test_canvas_beta_wrapper_enables_only_the_disposable_portable_target() -> None:
-    script = text("scripts/deploy-canvas-oss-beta.ps1")
+def test_governed_beta_wrapper_preserves_target_and_maintenance_guards() -> None:
+    script = text("scripts/deploy-governed-beta-release.ps1")
 
     assert 'BetaOrigin = "https://beta.elevenidllc.com"' in script
-    assert "EnablePortableCanvas = $true" in script
-    assert 'CanvasOrigin = "https://canvas-test.elevenidllc.com"' in script
+    assert "EnablePortableCanvas" not in script
+    assert "CanvasOrigin" not in script
     assert 'PilotOrganizationId = "00000000-0000-0000-0000-000000000001"' in script
     assert "selfhost_production_touched" in script
     assert '"America/Denver", "Mountain Standard Time"' in script
@@ -399,7 +390,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
 
 
 def test_official_beta_wrapper_requires_release_bundle_and_recorder_revision() -> None:
-    script = text("scripts/deploy-canvas-oss-beta.ps1")
+    script = text("scripts/deploy-governed-beta-release.ps1")
 
     assert "[switch]$OfficialStackRelease" in script
     assert "[string]$RecorderRevision" in script
@@ -466,7 +457,7 @@ $official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRe
         arguments = cases[name]
         assert arguments.get("EnablePassportNative", False) is expected_passport
         assert arguments.get("EnableDidcommAuthcrypt", False) is expected_didcomm
-        assert arguments["EnablePortableCanvas"] is True
+        assert "EnablePortableCanvas" not in arguments
         assert arguments["BetaOrigin"] == contract["beta_origin"]
     assert cases["official"]["OfficialStackRelease"] is True
     assert cases["official"]["RecorderRevision"] == "a" * 40
@@ -485,20 +476,11 @@ def test_beta_inventory_tolerates_services_added_by_the_release() -> None:
     assert 'throw "Could not inspect Docker container: $container"' in script
 
 
-def test_canvas_dev_profiles_are_safe_to_override_for_portable_beta() -> None:
-    for profile in (
-        "docker-compose.profile.canvas-real.yml",
-        "docker-compose.profile.canvas-sandbox.yml",
-    ):
-        compose = text(profile)
-        assert (
-            "CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-true}"
-            in compose
-        )
-        assert (
-            "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-true}"
-            in compose
-        )
+def test_beta_source_matrix_excludes_retired_provider_profiles() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+    initial = script.split("$script:ComposeFiles = @(", 1)[1].split(")\n", 1)[0]
+    assert "canvas" not in initial.lower()
+
 
 
 def test_beta_restore_is_explicit_and_project_scoped() -> None:
@@ -520,8 +502,8 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
         "$gatewayRecord[0].runtime_marker_environment.PSObject.Properties[$name]"
         in script
     )
-    assert '"canvas-sync-worker" -notin @($preDeploy.service)' in script
-    assert 'Invoke-Checked docker @("rm", "--force", $worker)' in script
+    assert "Unsupported prior service requires a separately reviewed recovery plan before mutation" in script
+    assert "$unsupportedRecovery.Count -ne 0" in script
     assert "$preDeployDocument | ForEach-Object { $_ }" in script
     assert "$preDeploy = @(Get-Content" not in script
     assert 'PSObject.Properties["rollback_environment"]' in script
@@ -760,7 +742,6 @@ def assert_beta_service_authentication(beta, shared):
         "device-registration",
         "event-stream",
         "issuance",
-        "canvas-sync-worker",
         "verification",
         "issuance-native",
     }
@@ -1087,3 +1068,27 @@ def test_native_runtime_staging_preserves_unicode_paths_through_windows_powershe
                             text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
     assert Path(base64.b64decode(result.stdout.strip()).decode("utf-8")) == directory
+
+
+@pytest.mark.parametrize("service,running,refused", [
+    ("gateway", True, False), ("issuance-native", True, False),
+    ("canvas-sync-worker", True, True), ("unknown-worker", True, True),
+    ("unknown-worker", False, False),
+])
+def test_restore_refuses_unsupported_running_roles_before_mutation(tmp_path, service, running, refused):
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    script = text("scripts/restore-local-beta-release.ps1")
+    roles = "$applicationServices = @(" + script.split("$applicationServices = @(", 1)[1].split("\n)", 1)[0] + "\n)"
+    gate = script.split("$supportedRecoveryServices =", 1)[1].split("foreach ($record in $preDeploy)", 1)[0]
+    harness = tmp_path / "recovery-role-gate.ps1"
+    harness.write_text(
+        roles + "\n$preDeploy = @(@{service='" + service + "';running=$" + str(running).lower() + "})\n"
+        + "try { $supportedRecoveryServices =" + gate + "\n@{refused=$false} | ConvertTo-Json -Compress }"
+        + " catch { @{refused=$true} | ConvertTo-Json -Compress }\n", encoding="utf-8",
+    )
+    result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["refused"] is refused

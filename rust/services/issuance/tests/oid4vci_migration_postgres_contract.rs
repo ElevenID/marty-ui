@@ -498,6 +498,17 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
     .await
     .unwrap();
 
+    // Historical connector-owned delivery state is retained as a negative
+    // fixture. Platform revocation must not enqueue provider synchronization.
+    let legacy_delivery_before: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(delivery)
+         FROM issuance_service.credential_delivery_records AS delivery
+         WHERE id = 'delivery-service-concurrent'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
     let repository = PostgresOid4vciManagementRepository::new(pool.clone());
     let mut write = RegisteredClientWrite {
         organization_id: "org-a".to_owned(),
@@ -751,20 +762,17 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
         "the single credential audit must retain the winning request reason"
     );
 
-    let canvas_metadata: Value = sqlx::query_scalar(
-        "SELECT metadata
-         FROM issuance_service.credential_delivery_records
+    let legacy_delivery_after: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(delivery)
+         FROM issuance_service.credential_delivery_records AS delivery
          WHERE id = 'delivery-service-concurrent'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(canvas_metadata["status_sync_state"], "pending");
-    assert_eq!(canvas_metadata["last_status_sync_action"], "revoke");
-    assert_eq!(canvas_metadata["requested_credential_status"], "revoked");
     assert_eq!(
-        canvas_metadata["requested_status_sync_reason"],
-        json!(authoritative_reason)
+        legacy_delivery_after, legacy_delivery_before,
+        "platform revocation must leave retired connector delivery records unchanged"
     );
 
     assert_eq!(publisher.publications.load(Ordering::SeqCst), 3);

@@ -88,9 +88,10 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // managed_policy_evidence_json string field 17, and
     // FlowResultResponse canonical_evidence_digest string field 8; typed
     // PolicyRevision message fields 13/8/15 and its content_digest string.
+    // ValidateSessionResponse optional non_impersonated_session bool field 5.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "87cbb781472d86bfbcdf7df242b275ad21bd44fff8ab8b9a7b988da284c7c43a"
+        "afd7ea3fe89f0941717f9aff2d244b4460e67641dedad20f321dd59f2e6efd79"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -220,6 +221,41 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 }
             );
         }
+    }
+}
+
+#[test]
+fn validated_session_own_consent_is_additive_and_keeps_explicit_presence() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.name == "auth_service.proto")
+        .unwrap();
+    assert_eq!(file.package, "marty.ui.auth.v1");
+    let response = file
+        .messages
+        .iter()
+        .find(|message| message.name == "ValidateSessionResponse")
+        .unwrap();
+    assert_eq!(response.fields.len(), 5);
+    for (field, (name, number, kind, optional, type_name)) in response.fields.iter().zip([
+        ("valid", 1, 8, false, ""),
+        ("user", 2, 11, false, ".marty.ui.auth.v1.UserInfo"),
+        ("expires_at", 3, 9, false, ""),
+        ("authentication_time_unix", 4, 3, true, ""),
+        ("non_impersonated_session", 5, 8, true, ""),
+    ]) {
+        assert_eq!(
+            (
+                field.name.as_str(),
+                field.number,
+                field.kind,
+                field.proto3_optional,
+                field.type_name.as_str(),
+            ),
+            (name, number, kind, optional, type_name)
+        );
     }
 }
 

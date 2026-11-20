@@ -385,3 +385,25 @@ class DemoManifestValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_current_catalog_cannot_promote_the_retired_provider_demo():
+    import pytest
+    from scripts.create_demo_manifest_draft import build_manifest
+    current = build_manifest()
+    archived = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+    for slug in ["canvas-learning-achievement", "external-evidence-to-credential"]:
+        candidate=copy.deepcopy(current)
+        retired=next(item for item in archived["scenarios"] if item["slug"] == slug)
+        candidate["scenarios"].append(copy.deepcopy(retired))
+        with pytest.raises(ManifestValidationError, match="retired connector scenario"):
+            validate_manifest(candidate)
+
+
+def test_historical_provider_demo_contract_is_not_silently_relaxed():
+    import pytest
+    archived = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+    retired = next(item for item in archived["scenarios"] if item["slug"] == "canvas-learning-achievement")
+    retired["recording_plan"]["happy_path"] = []
+    with pytest.raises(ManifestValidationError, match="happy path differs"):
+        validate_manifest(archived)

@@ -31,14 +31,14 @@ class CanonicalNativeBuildOptionsTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(arguments[:5], ["build", "--locked", "--release", "--offline", "-j1"])
         self.assertIn("--message-format=json", arguments)
-        self.assertEqual(arguments.count("--bin"), 31)
+        self.assertEqual(arguments.count("--bin"), 29)
         self.assertIn("marty-acme-http01", arguments)
 
     def test_default_without_options_still_builds_same_set(self):
         code, arguments = self.invoke("default")
         self.assertEqual(code, 0)
         self.assertEqual(arguments[:3], ["build", "--locked", "--release"])
-        self.assertEqual(arguments.count("--bin"), 31)
+        self.assertEqual(arguments.count("--bin"), 29)
         self.assertIn("marty-acme-http01", arguments)
 
     def test_feature_package_and_profile_overrides_are_rejected_before_cargo(self):

@@ -28,7 +28,6 @@ if ($PlanOnly -and -not $PhysicalProviderSnapshot) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-. (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
     $TunnelEnvFile = Join-Path $repoRoot ".env.tunnel.beta.local"
@@ -85,8 +84,7 @@ $env:MARTY_NETWORK_NAME = "elevenid-beta-network"
 $composeFiles = @(
     "docker-compose.base.yml", "docker-compose.beta.yml", "docker-compose.profile.dev.yml",
     "docker-compose.profile.tunnel.yml",
-    "docker-compose.profile.waltid.yml",
-    "docker-compose.profile.canvas-real.yml", "docker-compose.profile.canvas-sandbox.yml"
+    "docker-compose.profile.waltid.yml"
 ) | ForEach-Object { Join-Path $repoRoot $_ }
 $uiCompose = Join-Path $repoRoot "docker-compose.ui-release.yml"
 $envFiles = @(
@@ -206,7 +204,7 @@ $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
     "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
-    "issuance-native", "canvas-sync-worker", "gateway"
+    "issuance-native", "gateway"
 )
 $priorBureau = @($preDeploy | Where-Object { $_.service -eq "passport-beta-bureau" })
 $priorSigner = @($preDeploy | Where-Object { $_.service -eq "passport-callback-signer" })
@@ -404,17 +402,13 @@ $yaml = @("services:")
 $restoreServices = @()
 # Complete rollback launch/image/environment validation is read-only and precedes
 # the first stop/database/volume mutation. Never print resolved Compose secrets.
-$workerRecords = @($preDeploy | Where-Object { $_.service -eq "canvas-sync-worker" -and $_.running })
-if ($workerRecords.Count -gt 1) { throw "Ambiguous beta worker recovery records" }
-$workerLaunch = $null
-if ($workerRecords.Count -eq 1) {
-    $workerRecord = $workerRecords[0]
-    if ($workerRecord.image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid worker rollback image ID" }
-    $rawImage = & docker image inspect $workerRecord.image_id
-    if ($LASTEXITCODE -ne 0) { throw "Worker rollback image must be available for preflight inspection before stopping beta" }
-    $image = @((($rawImage -join "`n") | ConvertFrom-Json))
-    if ($image.Count -ne 1 -or $image[0].Id -cne $workerRecord.image_id) { throw "Worker rollback image identity mismatch" }
-    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -ImageConfig $image[0].Config
+$supportedRecoveryServices = $applicationServices + @(
+    "postgres", "redis", "keycloak", "openbao", "docs", "cloudflared", "nginx-proxy", "envoy",
+    "waltid-wallet-api", "waltid-verifier-api", "waltid-nginx"
+)
+$unsupportedRecovery = @($preDeploy | Where-Object { $_.running -and $_.service -notin $supportedRecoveryServices })
+if ($unsupportedRecovery.Count -ne 0) {
+    throw "Unsupported prior service requires a separately reviewed recovery plan before mutation"
 }
 foreach ($record in $preDeploy) {
     if ($record.running -and $record.service -in $applicationServices) {
@@ -422,12 +416,10 @@ foreach ($record in $preDeploy) {
         $restoreServices += [string]$record.service
         $yaml += "  $($record.service):"
         $yaml += "    image: $($record.image_id)"
-        $hasWorkerLaunch = $record.service -eq 'canvas-sync-worker'
-        if ($hasWorkerLaunch) { $yaml += @(ConvertTo-BetaWorkerRollbackLines -Launch $workerLaunch) }
         $compatibility = $record.PSObject.Properties["rollback_environment"]
         if ($null -ne $compatibility -and $null -ne $compatibility.Value) {
             $environment = @($compatibility.Value.PSObject.Properties)
-            if ($environment.Count -gt 0 -and -not $hasWorkerLaunch) {
+            if ($environment.Count -gt 0) {
                 $yaml += "    environment:"
             }
             foreach ($property in $environment) {
@@ -539,10 +531,6 @@ Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-
 Wait-ForServiceHealth (@("keycloak") + $restoreServices)
 if ($callbackRestore.Count -eq 2) { Assert-RestoredPassportCallbackNetwork }
 
-if ("canvas-sync-worker" -notin @($preDeploy.service)) {
-    $worker = Find-ServiceContainer "canvas-sync-worker"
-    if ($worker) { Invoke-Checked docker @("rm", "--force", $worker) }
-}
 if ("issuance-native" -notin @($preDeploy.service)) {
     $nativeIssuance = Find-ServiceContainer "issuance-native"
     if ($nativeIssuance) { Invoke-Checked docker @("rm", "--force", $nativeIssuance) }

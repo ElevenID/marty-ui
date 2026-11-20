@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import ui_release as ui
 import website_release as web
 import website_provenance as proof
+import website_producer_policy as policy
 
 SOURCE, PRIVATE = "a" * 40, "c" * 40
 DIGEST = "sha256:" + "b" * 64
@@ -25,7 +26,7 @@ def verified(producer):
         "runnerEnvironment": "github-hosted",
         "sourceRepositoryURI": "https://github.com/" + producer["repository"],
         "sourceRepositoryDigest": producer["source_sha"], "sourceRepositoryRef": web.REF,
-        "sourceRepositoryIdentifier": web.REPOSITORIES[producer["repository"]],
+        "sourceRepositoryIdentifier": policy.repositories_for("website")[producer["repository"]],
         "buildSignerURI": f"https://github.com/{producer['repository']}/{producer['workflow']}@{web.REF}",
     }}}}]
 
@@ -161,3 +162,86 @@ def test_image_signature_cannot_name_another_digest(files):
         proof.verify_image({"uri": web.PUBLIC_IMAGE, "digest": DIGEST, "platform": "linux/amd64"},
                            files / "image.provenance.jsonl", producer=producer,
                            gh=files / "gh", cosign=files / "cosign", runner=run)
+
+
+def test_standalone_subject_and_image_bind_original_website_identity_without_private_credentials(files, monkeypatch):
+    producer = web.standalone_producer(SOURCE, "21", "2")
+    for suffix in ("", ".provenance.jsonl", ".sigstore.json"):
+        (files / ("website-release.json" + suffix)).write_bytes(b"original website evidence")
+    calls = []
+    def run(args):
+        calls.append(args)
+        if args[1] == "attestation":
+            return json.dumps(verified(producer))
+        return json.dumps([{"critical": {"image": {"docker-manifest-digest": DIGEST}}}])
+    monkeypatch.setattr(proof.auth, "registry_command", lambda *_args, **_kwargs: pytest.fail("public website used private credentials"))
+    proof.verify_subject(files / "website-release.json", producer=producer, role="website",
+                         gh=files / "gh", cosign=files / "cosign", runner=run)
+    proof.verify_image({"uri": policy.STANDALONE_IMAGE, "digest": DIGEST, "platform": "linux/amd64"},
+                       files / "image.provenance.jsonl", producer=producer, role="website",
+                       gh=files / "gh", cosign=files / "cosign", runner=run,
+                       registry_config=files / "must-not-read.json")
+    assert len(calls) == 4
+    assert all("--no-public-good" not in args for args in calls)
+    for args in (calls[0], calls[2]):
+        assert args[args.index("--repo") + 1] == policy.STANDALONE_REPOSITORY
+        assert args[args.index("--source-digest") + 1] == SOURCE
+        assert args[args.index("--signer-workflow") + 1] == policy.STANDALONE_REPOSITORY + "/" + policy.STANDALONE_WORKFLOW
+        assert "--deny-self-hosted-runners" in args
+    for args in (calls[1], calls[3]):
+        assert args[args.index("--certificate-identity") + 1] == (
+            "https://github.com/" + policy.STANDALONE_REPOSITORY + "/" + policy.STANDALONE_WORKFLOW + "@refs/heads/main")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("sourceRepositoryIdentifier", "1140864197"),
+    ("sourceRepositoryURI", "https://github.com/ElevenID/marty-ui"),
+    ("sourceRepositoryDigest", "d" * 40),
+    ("sourceRepositoryRef", "refs/heads/topic"),
+    ("buildSignerURI", "https://github.com/ElevenID/website/.github/workflows/ci.yml@refs/heads/main"),
+    ("runInvocationURI", "https://github.com/ElevenID/website/actions/runs/21/attempts/1"),
+    ("runnerEnvironment", "self-hosted"),
+    ("issuer", "https://issuer.invalid"),
+])
+def test_standalone_certificate_rejects_legacy_or_changed_owner_workflow_source_and_attempt(key, value):
+    producer = web.standalone_producer(SOURCE, "21", "2")
+    result = verified(producer)
+    result[0]["verificationResult"]["signature"]["certificate"][key] = value
+    with pytest.raises(ValueError):
+        proof.verified_certificate(json.dumps(result), producer, role="website")
+
+
+@pytest.mark.parametrize("role", [None, "application", "composition", "backend"])
+def test_standalone_cannot_gain_generic_application_composition_or_backend_authority(files, role):
+    producer = web.standalone_producer(SOURCE, "21", "2")
+    with pytest.raises(ValueError):
+        proof.validate_producer(producer, role=role)
+    with pytest.raises(ValueError):
+        proof.verified_certificate(json.dumps(verified(producer)), producer, role=role)
+    with pytest.raises(ValueError):
+        proof.verify_subject(files / "subject.json", producer=producer, role=role,
+                             gh=files / "gh", cosign=files / "cosign",
+                             runner=lambda *_args: pytest.fail("unauthorized producer reached verifier"))
+
+
+@pytest.mark.parametrize("role", ["", False, 0])
+def test_explicit_invalid_role_does_not_fall_back_to_legacy_authority(role):
+    with pytest.raises(ValueError, match="producer role"):
+        proof.validate_producer(web.producer(SOURCE, None, "21", "2"), role=role)
+
+
+@pytest.mark.parametrize("name", ["production-web-release.json", "application-web-compatibility.json", "web-composition.json", "web-composition.zip"])
+def test_website_role_cannot_be_used_to_verify_another_role_subject(files, name):
+    with pytest.raises(ValueError, match="subject does not belong"):
+        proof.verify_subject(files / name, producer=web.standalone_producer(SOURCE, "21", "2"), role="website",
+                             gh=files / "gh", cosign=files / "cosign",
+                             runner=lambda *_args: pytest.fail("wrong subject reached verifier"))
+
+
+@pytest.mark.parametrize("uri", [web.PUBLIC_IMAGE, web.COMMERCE_IMAGE, ui.PUBLIC_IMAGE, ui.COMMERCE_IMAGE])
+def test_standalone_website_identity_cannot_relabel_a_legacy_or_application_image(files, uri):
+    with pytest.raises(ValueError):
+        proof.verify_image({"uri": uri, "digest": DIGEST, "platform": "linux/amd64"},
+                           files / "image.provenance.jsonl", producer=web.standalone_producer(SOURCE, "21", "2"), role="website",
+                           gh=files / "gh", cosign=files / "cosign",
+                           runner=lambda *_args: pytest.fail("wrong image reached verifier"))

@@ -1,10 +1,10 @@
-// Shared Flow/Canvas acceptance fixture: exact-owned base-profile Redis,
+// Shared platform acceptance fixture: exact-owned base-profile Redis,
 // never an operator Redis URL.
 // Uses the existing Docker fixture command/inspection boundary. The base image
 // tag is resolved locally to an immutable image ID before container creation;
 // this is runtime evidence, not authenticated release provenance.
 
-use super::canvas_published_database::{docker, docker_with_timeout, inspect, PublishedDatabase};
+use super::platform_test_database::{docker, docker_with_timeout, inspect, PublishedDatabase};
 use mmf_security::RedisRateLimiter;
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -160,7 +160,7 @@ pub(super) struct OwnedRedis {
 impl OwnedRedis {
     #[allow(
         dead_code,
-        reason = "Flow retains the shared loopback API; Canvas uses the owned database namespace"
+        reason = "Shared loopback API and owned database-namespace isolation helpers"
     )]
     pub(super) async fn start() -> Result<Self, String> {
         Self::start_owned(Network::Loopback, Uuid::new_v4(), Readiness::Actual).await
@@ -331,7 +331,7 @@ impl OwnedRedis {
 
     #[allow(
         dead_code,
-        reason = "Flow retains the shared loopback API; Canvas uses the owned database namespace"
+        reason = "Shared loopback API and owned database-namespace isolation helpers"
     )]
     pub(super) fn url(&self) -> &str {
         &self.url
@@ -342,7 +342,7 @@ impl OwnedRedis {
     /// Docker authority or permission to select an ambient Redis endpoint.
     #[allow(
         dead_code,
-        reason = "Only Canvas's registered DIDComm fixture uses database 13"
+        reason = "Shared database-isolation helper retained by the Flow acceptance module"
     )]
     pub(super) fn prepare_signing_keys_database(&self) -> Result<String, String> {
         self.network.verify_parent()?;
@@ -371,7 +371,7 @@ impl OwnedRedis {
 
     #[allow(
         dead_code,
-        reason = "Only Canvas's registered DIDComm fixture uses database 13"
+        reason = "Shared database-isolation helper retained by the Flow acceptance module"
     )]
     pub(super) fn verify_signing_keys_database(&self, nonce: &str) -> Result<(), String> {
         self.network.verify_parent()?;

@@ -14,6 +14,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+http-body-util.workspace = true
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
@@ -54,6 +55,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-auth = { path = "../auth" }
 marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 hex.workspace = true
 hmac.workspace = true

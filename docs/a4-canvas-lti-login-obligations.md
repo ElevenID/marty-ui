@@ -1,4 +1,13 @@
-# Canvas LTI login test-pyramid slice
+# Canvas LTI login test-pyramid slice — historical record
+
+> Historical pre-split seam inventory. The Canvas LTI submission implementation
+> and provider HTTP/PostgreSQL suites described below are retired from this
+> platform repository. Provider protocols, administration and tests now belong
+> to [`canvas-integration`](https://github.com/ElevenID/canvas-integration), using
+> only the public Gateway. See the current [connector boundary](architecture/external-connector-boundary.md).
+> The original inventory below preserves its qualification scope; it is not a
+> current test selector or a production connector qualification claim.
+
 
 The source-owned `CanvasLtiLoginSubmission::validate` unit matrix covers the pure
 missing-hint, issuer-mismatch, and client-ID-mismatch decisions with literal

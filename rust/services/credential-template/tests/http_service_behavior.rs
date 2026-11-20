@@ -1412,11 +1412,20 @@ async fn template_compatibility_and_delivery_destination_routes_are_complete() {
         .oneshot(request("GET", "/v1/delivery-destinations", json!({}), true))
         .await
         .unwrap();
+    let destinations = json_body(response).await;
+    let destinations = destinations.as_array().unwrap();
     assert_eq!(
-        json_body(response).await.as_array().unwrap().len(),
+        destinations.len(),
         contract["catalog"]["system_delivery_destinations"]
             .as_u64()
             .unwrap() as usize
+    );
+    assert_eq!(
+        destinations
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["dd-elevenid-wallet", "dd-oid4vci-compatible-wallet"])
     );
 
     let response = app
@@ -1461,7 +1470,20 @@ async fn template_compatibility_and_delivery_destination_routes_are_complete() {
         ))
         .await
         .unwrap();
-    assert_eq!(json_body(response).await.as_array().unwrap().len(), 5);
+    let scoped_destinations = json_body(response).await;
+    let scoped_destinations = scoped_destinations.as_array().unwrap();
+    assert_eq!(scoped_destinations.len(), 3);
+    assert_eq!(
+        scoped_destinations
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "dd-elevenid-wallet",
+            "dd-oid4vci-compatible-wallet",
+            "destination-campus"
+        ])
+    );
 
     let response = app
         .clone()

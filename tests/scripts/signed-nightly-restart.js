@@ -1,4 +1,5 @@
 "use strict";
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // One reviewed Desktop recovery, preserving the failed original journal and independent readback.
 const assert = require('node:assert/strict');
 const {isDeepStrictEqual} = require('node:util');
@@ -54,6 +55,8 @@ function configuration(original, row, pinnedHistoricalLabels = false) {
   equal(networks(row), networks(original), 'Recovery changed networks');
 }
 function restartSuccessor(ref, byRole, roles, tools) {
+  assertPlatformRuntimeRoles([...byRole.keys()]);
+  assert(roles.every(role=>PLATFORM_RUNTIME_ROLES.includes(role)),'PLATFORM_RUNTIME_ROLE_SET_CHANGED');
   const value = tools.boundJson(ref);
   assert.equal(value.schema, 'marty.functional-signed-desktop-recovery/v1');
   equal(Object.keys(value).sort(), ['schema','previousObservation',...Object.keys(PINS)].sort(), 'Unknown recovery authority field');
@@ -96,7 +99,7 @@ function restartSuccessor(ref, byRole, roles, tools) {
     assert(previous&&current,'Main role absent from recovery');
     // Added Desktop UI labels are accepted only in this exact hash-pinned historical preimage.
     configuration(original,previous,true); configuration(previous,current);
-    assert.equal(current.State.Running,true); assert.equal(current.State.OOMKilled,false); assert(current.State.Health?.Status==='healthy'||(role==='canvas-sync-worker'&&!current.State.Health));
+    assert.equal(current.State.Running,true); assert.equal(current.State.OOMKilled,false); assert.equal(current.State.Health?.Status,'healthy');
     assert(Number.isSafeInteger(current.State.Pid)&&current.State.Pid>0);
     assert(Date.parse(previous.State.StartedAt)>=Date.parse(original.State.StartedAt));
     assert(Date.parse(current.State.StartedAt)>Date.parse(previous.State.StartedAt),'Recovered generation must be newer');

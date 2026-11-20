@@ -17,6 +17,7 @@ import time
 import urllib.request
 from scoped_native_runtime import (
     read_ref,
+    reject_retired_runtime_roles,
     read_executable_ref,
     ref,
     require,
@@ -52,6 +53,7 @@ SOURCE_FILES = frozenset(
         "validate_demo_manifests.py",
         "demo_asset_hashes.py",
         "../deploy-config/catalog/demo-portfolio-v3.json",
+        "../contracts/demo-portfolio-2026-08-reference.json",
         "../deploy-config/schemas/stack-demo-manifest.schema.json",
     }
 )
@@ -155,6 +157,7 @@ def static_contract(c):
         "SIGNED_RUNTIME_REQUIRED",
     )
     rows = observation["binding"]["roles"]
+    reject_retired_runtime_roles(row["role"] for row in rows)
     require(
         len(rows) == 22 and len({r["role"] for r in rows}) == 22,
         "EXACT_RUNTIME22_REQUIRED",
@@ -392,6 +395,7 @@ class Operation:
         return value
 
     def retained_twenty(self):
+        reject_retired_runtime_roles(self.identities)
         require(len(self.identities) == 22, "EXACT_RUNTIME22_REQUIRED")
         for role, expected in self.identities.items():
             if role in ROLES:
@@ -417,10 +421,7 @@ class Operation:
                 "RETAINED_ROLE_GENERATION_CHANGED",
             )
             require(
-                row["State"].get("Health", {}).get("Status") == "healthy"
-                or (
-                    role == "canvas-sync-worker" and row["State"].get("Health") is None
-                ),
+                (row["State"].get("Health") or {}).get("Status") == "healthy",
                 "RETAINED_ROLE_UNHEALTHY",
             )
 

@@ -182,18 +182,18 @@ mod tests {
 
     #[test]
     fn metadata_read_uses_the_same_valid_scoped_evidence_selector() {
-        let requirement = json!({"requirement_id":"score","fact_type":"canvas.ags_result"});
+        let requirement = json!({"requirement_id":"score","fact_type":"assessment.result"});
         let pointer = "/assertion/activity_name";
         let rule = json!({"claim_name":"activity","source":"EVIDENCE_EXTRACTION",
-            "source_config":{"requirement_id":"score","fact_type":"canvas.ags_result","json_pointer":pointer}});
+            "source_config":{"requirement_id":"score","fact_type":"assessment.result","json_pointer":pointer}});
         assert!(evidence_pointer_requested(
             std::slice::from_ref(&rule),
             &requirement,
             pointer
         ));
         for changed in [
-            json!({"requirement_id":"other","fact_type":"canvas.ags_result"}),
-            json!({"requirement_id":"score","fact_type":"canvas.quiz_score"}),
+            json!({"requirement_id":"other","fact_type":"assessment.result"}),
+            json!({"requirement_id":"score","fact_type":"assessment.quiz_score"}),
         ] {
             assert!(!evidence_pointer_requested(
                 std::slice::from_ref(&rule),
@@ -225,10 +225,10 @@ mod tests {
             .unwrap()
             .clone();
         let rules = json!([
-            {"claim_name":"score","source":"EVIDENCE_EXTRACTION","source_config":{"fact_type":"canvas.quiz_score","json_pointer":"/assertion/score_percent"}},
+            {"claim_name":"score","source":"EVIDENCE_EXTRACTION","source_config":{"fact_type":"assessment.quiz_score","json_pointer":"/assertion/score_percent"}},
             {"claim_name":"result","source":"EVIDENCE_EXTRACTION","source_config":{"requirement_id":"quiz","json_pointer":"/assertion"}}
         ]).as_array().unwrap().clone();
-        let fact = json!({"requirement_id":"quiz","fact_type":"canvas.quiz_score","assertion":{"score_percent":0,"completed":false}});
+        let fact = json!({"requirement_id":"quiz","fact_type":"assessment.quiz_score","assertion":{"score_percent":0,"completed":false}});
         let mut claims = form.clone();
         apply_rules(
             &mut claims,

@@ -115,19 +115,8 @@ impl Peer {
     pub(crate) fn request_count(&self) -> usize {
         self.state.lock().unwrap().requests.len()
     }
-    pub(crate) fn assert_last_resolution_request(&self) {
-        let state = self.state.lock().unwrap();
-        let request = state.requests.last().unwrap();
-        assert_eq!(request.method, "GET");
-        assert!(request.uri.starts_with("/internal/resolve-issuer-did?"));
-        assert!(request.uri.contains("organization_id=org-a"));
-        assert!(request.body.is_empty());
-    }
     fn take_requests(&self) -> Vec<RequestRecord> {
         std::mem::take(&mut self.state.lock().unwrap().requests)
-    }
-    pub(crate) async fn failure(body: &[u8]) -> (Self, SigningResponseFailure) {
-        Self::failure_for(body, SigningOperation::Sign).await
     }
     pub(crate) async fn failure_for(
         body: &[u8],
@@ -184,7 +173,7 @@ fn operation(name: &str) -> SigningOperation {
 #[tokio::test]
 async fn six_frozen_operations_cross_real_http_before_shared_classification() {
     let reference: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-privacy-reference.json"
+        "../../../../contracts/signing-error-privacy-reference.json"
     ))
     .unwrap();
     let peer = Peer::new(Reply::json(503, b"{}".as_slice())).await;
@@ -664,7 +653,7 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
 
 #[test]
 fn each_existing_text_error_retains_its_python_exception_category() {
-    use CanvasResponseTextError::*;
+    use HttpResponseTextError::*;
     for (error, class, name) in [
         (
             InternalCodec,

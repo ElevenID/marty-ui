@@ -23,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from canvas_worker_runtime import classify_worker_launch  # noqa: E402
 from selfhost_native_operator import operator_command  # noqa: E402
 from passport_model_policy import evaluate as native_admission  # noqa: E402
 
@@ -326,8 +325,8 @@ def validate_signing_grant_credentials(secret_dir: Path) -> str:
         "sign_grant_mint_gateway_service_token",
         "sign_grant_mint_gateway_issuer_did_token",
         "sign_grant_mint_issuance_credential_token",
-        "sign_grant_mint_issuance_canvas_token",
-        "sign_grant_mint_issuance_readiness_token",
+
+
         "sign_grant_mint_issuance_passport_token",
     )
     provider_files = (
@@ -455,93 +454,6 @@ def validate_selfhost_catalog_templates(env_file: Path, compose_file: Path) -> s
     return f"active_template={active_templates[0][0]}:{active_templates[0][1]}"
 
 
-def validate_issuer_did_signing(env_file: Path, compose_file: Path) -> str:
-    command = r"""
-python - <<'PY'
-import json
-import os
-import pathlib
-import sys
-import urllib.error
-import urllib.request
-
-api_key_file = os.environ.get("ISSUANCE_API_KEY_FILE") or "/run/secrets/issuance_api_key"
-try:
-    api_key = pathlib.Path(api_key_file).read_text(encoding="utf-8").strip()
-except OSError as exc:
-    print(f"Unable to read issuance API key secret at {api_key_file}: {exc}", file=sys.stderr)
-    raise SystemExit(20) from exc
-
-organization_id = os.environ.get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "").strip()
-issuer_did = os.environ.get("CANVAS_LTI_TOOL_ISSUER_DID", "").strip()
-if not organization_id or not issuer_did:
-    print("Canvas LTI issuer DID signing configuration is incomplete", file=sys.stderr)
-    raise SystemExit(22)
-
-payload = {
-    "issuer_did": issuer_did,
-    "credential_format": "lti_tool_jwt",
-    "key_purpose": "lti_tool_signing",
-    "payload_b64": "dGVzdA",
-    "algorithm": "RS256",
-}
-query = urllib.parse.urlencode({"organization_id": organization_id})
-request = urllib.request.Request(
-    f"http://127.0.0.1:8000/internal/signing-keys/issuer-dids/sign?{query}",
-    data=json.dumps(payload).encode("utf-8"),
-    headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-    method="POST",
-)
-
-try:
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - in-container operator health check
-        print(response.read().decode("utf-8"))
-except urllib.error.HTTPError as exc:
-    body = exc.read().decode("utf-8", errors="replace").strip()
-    print(f"HTTP {exc.code}: {body}", file=sys.stderr)
-    raise SystemExit(exc.code) from exc
-except OSError as exc:
-    print(f"Issuer DID signing endpoint is unreachable: {exc}", file=sys.stderr)
-    raise SystemExit(21) from exc
-PY
-""".strip()
-    result = run_compose_command(
-        env_file,
-        compose_file,
-        "exec",
-        "-T",
-        "gateway",
-        "sh",
-        "-lc",
-        command,
-    )
-    if result.returncode != 0:
-        error_output = (result.stderr or result.stdout).strip()
-        raise CheckError(f"Issuer DID signing check failed: {error_output}")
-
-    try:
-        payload_doc = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise CheckError(
-            "Issuer DID signing check returned non-JSON output: "
-            f"{result.stdout.strip()}"
-        ) from exc
-
-    if (
-        payload_doc.get("ok") is not True
-        or not payload_doc.get("signature_b64")
-        or not payload_doc.get("issuer_did")
-        or not payload_doc.get("verification_method_id")
-        or payload_doc.get("service_id")
-    ):
-        raise CheckError(
-            f"Issuer DID signing check returned an invalid payload: {payload_doc}"
-        )
-
-    return (
-        f"issuer_did={payload_doc.get('issuer_did')} "
-        f"algorithm={payload_doc.get('algorithm')}"
-    )
 
 
 def validate_credential_login_config(env_values: dict[str, str]) -> str:
@@ -684,22 +596,6 @@ def validate_selfhost_ui_bundle_origins(env_values: dict[str, str]) -> str:
     )
 
 
-def validate_selfhost_canvas_frame_ancestors() -> str:
-    template_path = REPO_ROOT / "docker" / "nginx-selfhost.prod.conf.template"
-    content = template_path.read_text(encoding="utf-8")
-    forbidden = {
-        "http://localhost:8088",
-        "http://127.0.0.1:8088",
-    }
-    hits = sorted(origin for origin in forbidden if origin in content)
-    if hits:
-        raise CheckError(
-            "Self-host production nginx template must not allow local Canvas LMS frame ancestors: "
-            + ", ".join(hits)
-        )
-    if "https://${CANVAS_REAL_PUBLIC_HOST}" not in content:
-        raise CheckError("Self-host production nginx template is missing the Canvas LMS HTTPS frame ancestor.")
-    return "no-local-canvas-frame-ancestors"
 
 
 def _public_dns_host(host: str, *, label: str) -> str:
@@ -728,211 +624,8 @@ def _validate_public_https_url(value: str, *, label: str) -> str:
     return _public_dns_host(parsed.hostname, label=label)
 
 
-def validate_selfhost_canvas_public_config(
-    env_values: dict[str, str], worker_service: dict[str, Any] | None = None,
-) -> str:
-    checked: list[str] = []
-    for key in (
-        "PUBLIC_API_URL",
-        "ISSUER_BASE_URL",
-        "CANVAS_LTI_EXPERIENCE_BASE_URL",
-        "CANVAS_CREDENTIALS_PUBLIC_BASE_URL",
-        "CANVAS_API_BASE_URL",
-    ):
-        value = env_values.get(key, "").strip()
-        if value:
-            _validate_public_https_url(value, label=key)
-            checked.append(key)
-
-    for key in ("CANVAS_REAL_PUBLIC_HOST", "CANVAS_SANDBOX_PUBLIC_HOST"):
-        value = env_values.get(key, "").strip()
-        if value:
-            parsed = urlparse(value if "://" in value else f"https://{value}")
-            _public_dns_host(parsed.hostname or value, label=key)
-            checked.append(key)
-
-    provider = env_values.get("CANVAS_CREDENTIALS_PROVIDER", "").strip().lower()
-    if provider in {"bridge", "sandbox", "proxy", "bridge_api"}:
-        raise CheckError(
-            "CANVAS_CREDENTIALS_PROVIDER must use the real Canvas Credentials API in self-host production, "
-            f"not {provider!r}."
-        )
-    if provider:
-        checked.append("CANVAS_CREDENTIALS_PROVIDER")
-
-    portable_enabled = env_values.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false").strip().lower() == "true"
-    if portable_enabled:
-        experience_base_url = env_values.get("CANVAS_LTI_EXPERIENCE_BASE_URL", "").strip()
-        if not experience_base_url:
-            raise CheckError(
-                "CANVAS_LTI_EXPERIENCE_BASE_URL is required when the portable Canvas integration is enabled."
-            )
-        pilot_orgs = [
-            value.strip()
-            for value in env_values.get("CANVAS_PILOT_ORGANIZATION_IDS", "").split(",")
-            if value.strip()
-        ]
-        if not pilot_orgs:
-            raise CheckError(
-                "CANVAS_PILOT_ORGANIZATION_IDS must explicitly allow at least one organization when Canvas is enabled."
-            )
-        if env_values.get("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false").strip().lower() == "true":
-            raise CheckError(
-                "CANVAS_LEGACY_EVENT_INGEST_ENABLED must remain false for the portable production pilot."
-            )
-        signer_keys = (
-            "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-            "CANVAS_LTI_TOOL_ISSUER_DID",
-            "CANVAS_LTI_TOOL_ACTIVE_KID",
-            "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-        )
-        missing_signer_keys = [key for key in signer_keys if not env_values.get(key, "").strip()]
-        if missing_signer_keys:
-            raise CheckError(
-                "Portable Canvas requires the dedicated RS256 tool signer configuration: "
-                + ", ".join(missing_signer_keys)
-            )
-        issuer_did = env_values["CANVAS_LTI_TOOL_ISSUER_DID"].strip()
-        if not issuer_did.startswith("did:"):
-            raise CheckError(
-                "CANVAS_LTI_TOOL_ISSUER_DID must be a DID controlled by the selected issuer profile."
-            )
-        credential_profile_ids = {
-            value.strip()
-            for value in env_values.get(
-                "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-                "",
-            ).split(",")
-            if value.strip()
-        }
-        if not credential_profile_ids:
-            raise CheckError(
-                "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS must inventory credential "
-                "issuer profile IDs when portable Canvas is enabled."
-            )
-        try:
-            public_jwks = json.loads(env_values["CANVAS_LTI_TOOL_PUBLIC_JWKS"])
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must be valid compact JSON.") from exc
-        jwks_keys = public_jwks.get("keys") if isinstance(public_jwks, dict) else None
-        if not isinstance(jwks_keys, list) or not jwks_keys:
-            raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must contain at least one public RSA key.")
-        private_parameters = {"d", "p", "q", "dp", "dq", "qi", "oth"}
-        active_kid = env_values["CANVAS_LTI_TOOL_ACTIVE_KID"].strip()
-        if not active_kid.startswith(f"{issuer_did}#"):
-            raise CheckError(
-                "CANVAS_LTI_TOOL_ACTIVE_KID must be a verification method of CANVAS_LTI_TOOL_ISSUER_DID."
-            )
-        seen_kids: set[str] = set()
-        for jwk in jwks_keys:
-            if not isinstance(jwk, dict):
-                raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS keys must be JSON objects.")
-            if private_parameters.intersection(jwk):
-                raise CheckError("CANVAS_LTI_TOOL_PUBLIC_JWKS must never contain private RSA parameters.")
-            if jwk.get("kty") != "RSA" or jwk.get("alg") != "RS256" or not jwk.get("n") or not jwk.get("e"):
-                raise CheckError("Every Canvas LTI tool JWK must be a public RSA/RS256 key with n and e.")
-            kid = str(jwk.get("kid") or "").strip()
-            if not kid or kid in seen_kids:
-                raise CheckError("Every Canvas LTI tool JWK must have a unique non-empty kid.")
-            seen_kids.add(kid)
-        if active_kid not in seen_kids:
-            raise CheckError("CANVAS_LTI_TOOL_ACTIVE_KID must identify a key in CANVAS_LTI_TOOL_PUBLIC_JWKS.")
-        runtime = "python"
-        processor_environment = env_values
-        if worker_service is not None:
-            processor_environment = worker_service.get("environment", {})
-            runtime = classify_worker_launch(
-                worker_service.get("entrypoint"), worker_service.get("command"),
-                processor_environment,
-            )
-            if runtime is None:
-                raise CheckError("Canvas worker launch must select a reviewed native or Python runtime.")
-        if runtime == "python":
-            processor = (processor_environment.get("CANVAS_SYNC_PROCESSOR") or "").strip()
-            module_name, separator, function_name = processor.partition(":")
-            if not separator or not module_name or not function_name:
-                raise CheckError(
-                    "CANVAS_SYNC_PROCESSOR must use module:function syntax when portable Canvas is enabled."
-                )
-        if env_values.get("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS", "").strip() != "600":
-            raise CheckError(
-                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS must be 600 when portable Canvas is enabled."
-            )
-        checked.extend(
-            [
-                "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-                "CANVAS_PILOT_ORGANIZATION_IDS",
-                *signer_keys,
-                "Canvas native worker launch" if runtime == "native" else "CANVAS_SYNC_PROCESSOR",
-                "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
-            ]
-        )
-        checked.append("CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS")
-
-    if env_values.get("CANVAS_ALLOW_PRIVATE_BASE_URLS", "false").strip().lower() == "true":
-        allowlist = [
-            value.strip()
-            for value in env_values.get("CANVAS_PRIVATE_ORIGIN_ALLOWLIST", "").split(",")
-            if value.strip()
-        ]
-        if not allowlist:
-            raise CheckError(
-                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST is required when private Canvas origins are enabled."
-            )
-        checked.append("CANVAS_PRIVATE_ORIGIN_ALLOWLIST")
-
-    self_managed_origins = [
-        value.strip().rstrip("/")
-        for value in env_values.get("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST", "").split(",")
-        if value.strip()
-    ]
-    if len(self_managed_origins) != len(set(self_managed_origins)):
-        raise CheckError("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST cannot contain duplicate origins.")
-    for origin in self_managed_origins:
-        parsed = urlparse(origin)
-        if (
-            parsed.scheme != "https"
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.path not in ("", "/")
-            or parsed.params
-            or parsed.query
-            or parsed.fragment
-            or origin != f"https://{parsed.netloc}"
-        ):
-            raise CheckError(
-                "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST must contain exact HTTPS origins without paths or credentials."
-            )
-    if self_managed_origins:
-        checked.append("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST")
-
-    return f"checked={','.join(checked) if checked else 'none-configured'}"
 
 
-def validate_selfhost_canvas_configuration(
-    env_values: dict[str, str], env_file: Path, compose_file: Path,
-) -> str:
-    effective = dict(env_values)
-    effective.update(
-        (key, value)
-        for key, value in os.environ.items()
-        if key.startswith("CANVAS_")
-    )
-    if effective.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "").strip().lower() != "true":
-        return validate_selfhost_canvas_public_config(effective)
-    result = run_compose_command(env_file, compose_file, "config", "--format", "json")
-    if result.returncode:
-        # Compose output can contain expanded secrets; never echo it here.
-        raise CheckError("Could not inspect the configured Canvas worker launch.")
-    try:
-        model = json.loads(result.stdout)
-        worker = model["services"]["canvas-sync-worker"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise CheckError("Configured Canvas worker model is missing or invalid.") from exc
-    if not isinstance(worker, dict):
-        raise CheckError("Configured Canvas worker model is invalid.")
-    return validate_selfhost_canvas_public_config(effective, worker)
 
 
 def validate_auth_login_redirect_hosts(env_values: dict[str, str]) -> str:
@@ -1443,14 +1136,8 @@ def main() -> int:
         run_check("credential-login-config", lambda: validate_credential_login_config(env_values)),
         run_check("marty-login-trust-profile", lambda: validate_marty_login_trust_profile(env_file, prod_compose_file, env_values)),
         run_check("selfhost-catalog-templates", lambda: validate_selfhost_catalog_templates(env_file, prod_compose_file)),
-        run_check(
-            "issuer-did-signing",
-            lambda: validate_issuer_did_signing(env_file, prod_compose_file),
-        ),
         run_check("ui-origin-config", lambda: validate_ui_origin_config(env_values)),
         run_check("selfhost-ui-bundle-origins", lambda: validate_selfhost_ui_bundle_origins(env_values)),
-        run_check("selfhost-canvas-frame-ancestors", validate_selfhost_canvas_frame_ancestors),
-        run_check("selfhost-canvas-public-config", lambda: validate_selfhost_canvas_configuration(env_values, env_file, prod_compose_file)),
         run_check("auth-login-redirects", lambda: validate_auth_login_redirect_hosts(env_values)),
         run_check("keycloak-open-badge-option", lambda: validate_keycloak_open_badge_option(env_values)),
         run_check("credential-login-page", lambda: validate_credential_login_page(env_values)),

@@ -73,7 +73,7 @@ candidate or revoke the old application tokens.
 ## Kubernetes changes and proof
 
 Native code builds one private JSON Patch for `marty-secrets`. The patch tests
-the original Secret UID and resourceVersion, replaces exactly the 11 ordinary
+the original Secret UID and resourceVersion, replaces exactly the nine ordinary
 token keys, and sets an opaque activation marker. Other Secret data and existing
 annotations are preserved. Stale preconditions cause refusal; the command does
 not refresh a conflicting Secret and overwrite it.
@@ -84,8 +84,15 @@ not refresh a conflicting Secret and overwrite it.
 | `notification` | `NOTIFICATION_OPENBAO_TOKEN` |
 | `gateway` | `GATEWAY_SIGN_GRANT_MINT_TOKEN`, `GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN` |
 | `flow` | `FLOW_SIGN_GRANT_MINT_TOKEN` |
-| `issuance-native` | `ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN`, `ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN`, `ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN`, `ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN` |
-| `canvas-sync-worker`, when present | Reuses `ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN` |
+| `issuance-native` | `ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN`, `ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN` |
+
+The current owner inventory is `deploy-config/catalog/kubernetes-application-tokens.json`.
+Its eleven entries include two legacy/bootstrap inputs excluded from ordinary
+activation, leaving the nine keys above. Retired Canvas/readiness signing origins
+and the connector worker are not activation consumers. Do not recreate their
+grants or add a connector to this platform Secret. The
+[external connector boundary](architecture/external-connector-boundary.md) keeps
+provider protocols and credentials separate and uses only the public Common Gateway.
 
 For signing-keys, the environment variable `OPENBAO_SERVICE_TOKEN` receives the
 `SIGNING_KEYS_OPENBAO_TOKEN` key. The legacy Secret key `OPENBAO_SERVICE_TOKEN`

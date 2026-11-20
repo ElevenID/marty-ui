@@ -13,8 +13,6 @@ TOKEN_ROLES = {
     "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "grant-verify",
     "FLOW_SIGN_GRANT_MINT_TOKEN_FILE": "grant-flow",
     "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE": "grant-issuance-credential",
-    "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE": "grant-issuance-canvas",
-    "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE": "grant-issuance-readiness",
     "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE": "grant-issuance-passport",
     "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE": "grant-gateway-service",
     "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE": "grant-gateway-issuer",

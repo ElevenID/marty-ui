@@ -9,7 +9,6 @@ env:
   # Exact BuildKit index digest; the selected registry may be the public cache or Docker Hub.
   MARTY_CI_BUILDKIT_PIN: moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
   # Weekly and manual runs retain the complete historical-reference matrices.
-  MARTY_CANVAS_FULL_QUALIFICATION: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
 
 on:
   pull_request:
@@ -17,12 +16,6 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
-    inputs:
-      canvas_migrated_base_pilot:
-        description: 'Run extra Canvas migrated-base parity diagnostics'
-        required: false
-        type: boolean
-        default: false
   schedule:
     - cron: '17 4 * * 0'
 
@@ -76,9 +69,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 2
           persist-credentials: false
       - name: Verify private fork access policy
         run: python3 -m unittest discover -s tests -p test_private_forks.py
+      - name: Validate changed website composition against its integration parent
+        env:
+          COMPOSITION_INTEGRATION_BASE: ${{ github.event.merge_group.base_sha || '' }}
+        run: python3 scripts/web_composition_manifest.py --check-integration
       - name: Validate source release metadata before expensive setup
         env:
           SOURCE_SHA: ${{ github.sha }}
@@ -137,7 +135,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD=true bun install
           bun x --no-install puppeteer browsers install
       - name: Test website routing and all surface boundary guards
-        run: bun run test:website
+        run: |
+          bun run test:website
+          bun run test:application
       - name: Build and check crawlable website output
         run: |
           bun run build:website
@@ -146,6 +146,16 @@ jobs:
         run: |
           bun run build:application
           bun run build:selfhost
+      - name: Build application with audited website inputs absent
+        run: node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"
+      - name: Upload application source boundary report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   fast-feedback:
     name: Fast Feedback
@@ -544,6 +554,10 @@ jobs:
       - name: Verify packaged plugin and self-host helpers
         run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt && test -x /usr/local/bin/selfhost-tls-init && test -x /usr/local/bin/selfhost-unseal'
       - name: Build the pinned Keycloak remote-key image
+        id: keycloak_image_build
+        # Retry identical inputs once after a transient dependency fetch failure.
+        # The required guard below keeps image construction a merge gate.
+        continue-on-error: true
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -552,6 +566,36 @@ jobs:
           push: false
           tags: marty-keycloak-openbao:ci
           provenance: false
+      - name: Wait before retrying the pinned Keycloak image
+        if: steps.keycloak_image_build.outcome == 'failure'
+        run: sleep 10
+      - name: Retry the pinned Keycloak remote-key image
+        id: keycloak_image_retry
+        if: steps.keycloak_image_build.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: keycloak/openbao-provider/Dockerfile
+          load: true
+          push: false
+          tags: marty-keycloak-openbao:ci
+          provenance: false
+      - name: Require the pinned Keycloak image build
+        if: always()
+        shell: bash
+        env:
+          PRIMARY_OUTCOME: ${{ steps.keycloak_image_build.outcome }}
+          RETRY_OUTCOME: ${{ steps.keycloak_image_retry.outcome }}
+        run: |
+          set -euo pipefail
+          case "$PRIMARY_OUTCOME:$RETRY_OUTCOME" in
+            success:skipped|failure:success) ;;
+            *)
+              echo "Pinned Keycloak image build did not succeed" >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
@@ -645,33 +689,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A maintainer may label a PR before its next synchronize event for an
-        # additive hosted worker or self-host rehearsal. Label changes do not trigger
-        # this full workflow, avoiding extra runs for unrelated labels.
-        # Its normal Canvas/contracts/selfhost lanes and every merge-group gate remain.
+        # Diagnostics are additive; normal lanes and merge-group gates remain required.
         lane: >-
           ${{ fromJSON(github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
-          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost","renewal-unit"]' ||
-          github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
-          needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","selfhost","renewal-unit"]' ||
-          github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
-          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
-          needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost"]' ||
-          github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
-          needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost"]' ||
+          '["contracts","flow","selfhost","renewal-unit"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","selfhost"]' || needs.changes.outputs.rust_matrix) }}
+          '["contracts","flow","selfhost"]' || needs.changes.outputs.rust_matrix) }}
     permissions:
       actions: read
       contents: read
@@ -831,41 +858,6 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - name: Prepare isolated Canvas worker harness dependencies
-        if: matrix.lane == 'canvas' || matrix.lane == 'worker'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/canvas-worker-harness"
-          # These import-only harness dependencies are separate from production
-          # services and the immutable published worker's own environment.
-          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install \
-            --disable-pip-version-check --only-binary=:all: --no-deps \
-            SQLAlchemy==2.0.52 greenlet==3.4.0 typing_extensions==4.15.0 PyYAML==6.0.3
-          "$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE" <<'PY'
-          from pathlib import Path
-          import sys
-          assert sys.version_info[:2] == (3, 12)
-          # Rendered base/Flow fixtures use this same selected interpreter.
-          import yaml
-          assert yaml.__version__ == "6.0.3"
-          assert yaml.safe_load("services: {issuance-native: {command: []}}") == {
-              "services": {"issuance-native": {"command": []}}
-          }
-          root = Path(sys.argv[1])
-          sys.path.insert(0, str(root / "scripts"))
-          import test_canvas_worker_body_timeout_https as controller
-          matrix, reports, responses = controller.load_inputs(root)
-          assert len(matrix["cases"]) == len(reports) == len(responses) == 6
-          import test_canvas_worker_lease_expiry_https as expiry_controller
-          expiry_matrix, expiry_reports, expiry_response = expiry_controller.load_inputs(root)
-          assert len(expiry_matrix["cases"]) == len(expiry_reports) == 2
-          assert expiry_response["status"] == 200
-          print("Native Canvas BODY and lease-expiry harness imports and frozen inputs verified")
-          PY
-          # Rust invokes python3 by name in preflights AND the full suite.
-          # Publish this interpreter only after both installation and smoke pass.
-          printf '%s\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"
       - name: Prepare isolated Flow renderer dependency
         if: matrix.lane == 'flow'
         shell: bash
@@ -902,21 +894,14 @@ jobs:
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Prepare source-matched Rust execution policy
         run: bash scripts/ci/prepare-native-ci-execution.sh
-      - name: Require Kubernetes deployment contract executables
-        if: matrix.lane == 'canvas'
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v bash
-          command -v envsubst
       - name: Bind offline compiler cache to the exact Bookworm recipe
         id: bookworm-cache-key
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'flow' || matrix.lane == 'selfhost')
         env:
           RUST_LANE: ${{ matrix.lane }}
         run: python3 scripts/ci/bookworm_cache_key.py
       - name: Restore trusted offline Bookworm compiler objects
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'flow' || matrix.lane == 'selfhost')
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -924,9 +909,16 @@ jobs:
           key: ${{ steps.bookworm-cache-key.outputs.key }}
           restore-keys: ${{ steps.bookworm-cache-key.outputs.prefix }}
       - name: Install verified portable compiler cache
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'flow' || matrix.lane == 'selfhost')
         continue-on-error: true
         run: bash scripts/ci/install-bookworm-sccache.sh
+      - name: Require Kubernetes deployment contract executables
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash
+          command -v envsubst
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash
@@ -946,11 +938,11 @@ jobs:
             # this package-scoped compile has no database, image or service fixture.
             cargo test --locked -p marty-issuance-service --lib --no-run \
               --timings --message-format=json > "$artifacts"
-            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+            python3 ../scripts/ci/verify-platform-test-artifacts.py \
               --renewal-unit-only "$artifacts" target
-          elif [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
+          elif [[ "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
             # Exact test-source owners compile in the same pinned Bookworm
-            # environment as the full Canvas lane. The merge group stays full.
+            # environment as the full platform qualification. The merge group stays full.
             cargo fetch --locked
             mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }' ../services/Dockerfile)
             [[ ${#builder_images[@]} == 1 ]]
@@ -988,13 +980,6 @@ jobs:
               sh -ceu '
                 . ../scripts/ci/bookworm-cache-env.sh
                 case "$MARTY_RUST_ACCEPTANCE_SCOPE" in
-                  worker)
-                    cargo test --locked --offline -p marty-canvas-worker-acceptance \
-                      --test canvas_published_worker_contract --no-run \
-                      --timings --message-format=json
-                    cargo build --locked --offline -p marty-issuance-service \
-                      --bin marty-canvas-sync-worker --message-format=json
-                    ;;
                   flow)
                     cargo test --locked --offline -p marty-flow-acceptance \
                       --test flow_published_schema_contract --no-run \
@@ -1013,130 +998,22 @@ jobs:
                 esac
               ' > "$artifacts"
             if [[ "${{ matrix.lane }}" == flow ]]; then
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              python3 ../scripts/ci/verify-platform-test-artifacts.py \
                 --flow-only "$artifacts" target
             elif [[ "${{ matrix.lane }}" == selfhost ]]; then
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              python3 ../scripts/ci/verify-platform-test-artifacts.py \
                 --selfhost-only "$artifacts" target
             else
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
-                --worker-only "$artifacts" target
+              exit 2
             fi
           elif [[ "${{ matrix.lane }}" == contracts ]]; then
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
             cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json >> "$artifacts"
           else
-            mkdir -p "$RUNNER_TEMP/rust-build-evidence"
-            host_metrics="$RUNNER_TEMP/rust-build-evidence/bookworm-host-phases.tsv"
-            printf 'phase\telapsed_seconds\texit_code\n' > "$host_metrics"
-            run_host_phase() {
-              local phase="$1" started elapsed exit_code
-              shift
-              started="$(date +%s)"
-              printf 'Bookworm host phase %s started\n' "$phase" >&2
-              if "$@"; then
-                exit_code=0
-              else
-                exit_code="$?"
-              fi
-              elapsed="$(( $(date +%s) - started ))"
-              printf '%s\t%s\t%s\n' "$phase" "$elapsed" "$exit_code" >> "$host_metrics"
-              printf 'Bookworm host phase %s: %ss, exit %s\n' \
-                "$phase" "$elapsed" "$exit_code" >&2
-              return "$exit_code"
-            }
-            # Fetch on the host before closing the builder's network. The
-            # pinned Bookworm compiler writes to the normal host-visible target,
-            # so both host and Bookworm checks consume these exact executables.
-            run_host_phase cargo_fetch cargo fetch --locked
-            mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }' ../services/Dockerfile)
-            [[ ${#builder_images[@]} == 1 ]]
-            bookworm_builder="${builder_images[0]}"
-            [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
-            bookworm_builder="$(run_host_phase builder_pull bash \
-              ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
-            # setup-mold installs this pinned host tool, but docker run does
-            # not inherit it. Bind only the linker executable into Bookworm;
-            # keep its filesystem and compiler network isolated.
-            host_mold="$(command -v mold)"
-            [[ "$(realpath "$host_mold")" == /usr/local/bin/mold ]]
-            mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
-            host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-            test -d "$host_cargo_home"
-            mkdir -p target
-            [[ ! -L target ]]
-            [[ "$(realpath target)" == "$GITHUB_WORKSPACE/rust/target" ]]
-            [[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]
-            run_host_phase container_compile docker run --rm --network none --read-only \
-              "${bookworm_cache_args[@]}" \
-              --user "$(id -u):$(id -g)" \
-              --env HOME=/tmp \
-              --env "CARGO_HOME=$host_cargo_home" \
-              --env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target" \
-              --env CARGO_INCREMENTAL=0 \
-              --env CARGO_PROFILE_TEST_DEBUG=0 \
-              --env CARGO_PROFILE_DEV_DEBUG=0 \
-              --env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold' \
-              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-              --volume "$host_mold:/usr/local/bin/ld.mold:ro" \
-              --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
-              --volume "$host_cargo_home:$host_cargo_home" \
-              --volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw" \
-              --workdir "$GITHUB_WORKSPACE/rust" \
-              "$bookworm_builder" \
-              sh -ceu '
-                . ../scripts/ci/bookworm-cache-env.sh
-                 ld.mold --version | grep -Eq "^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$"
-                 probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"
-                 printf "int main(void){return 0;}\\n" | cc -x c - \
-                   -fuse-ld=mold -o "$probe"
-                 "$probe"
-                 rm -- "$probe"
-                 metrics="$CARGO_TARGET_DIR/bookworm-compile-phases.tsv"
-                 printf "phase\telapsed_seconds\ttarget_bytes\texit_code\n" > "$metrics"
-                 run_cargo_phase() {
-                   phase="$1"
-                   shift
-                   started="$(date +%s)"
-                   printf "Bookworm Cargo phase %s started\n" "$phase" >&2
-                   if "$@"; then
-                     exit_code=0
-                   else
-                     exit_code="$?"
-                   fi
-                   elapsed="$(( $(date +%s) - started ))"
-                   target_bytes="$(du -sb "$CARGO_TARGET_DIR" | cut -f1)"
-                   printf "%s\t%s\t%s\t%s\n" \
-                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >> "$metrics"
-                   printf "Bookworm Cargo phase %s: %ss, %s target bytes, exit %s\n" \
-                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >&2
-                   return "$exit_code"
-                 }
-                # Resolve shared test features once. Acceptance libraries are
-                # empty ownership markers; the Issuance library harness is
-                # executed by the renewal-unit lane, not this Canvas lane.
-                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-flow-acceptance -p marty-selfhost-acceptance -p marty-issuance-service \
-                  --test canvas_published_worker_contract \
-                  --test canvas_published_schema_contract \
-                  --test flow_published_schema_contract \
-                  --test selfhost_public_image_contract \
-                  --test canvas_oauth_behavior --test issuance-behavior \
-                  --no-run --timings --message-format=json
-                # Retain package-specific feature resolution for each binary.
-                 run_cargo_phase issuance_binaries cargo build --locked --offline \
-                  -p marty-issuance-service -p marty-organization -p marty-credential-template \
-                  --bin marty-issuance-service --bin marty-canvas-sync-worker \
-                  --bin marty-organization --bin marty-credential-template \
-                  --message-format=json
-                 run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway \
-                  --message-format=json
-                 run_cargo_phase flow_binary cargo build --locked --offline -p marty-flow --bin marty-flow \
-                  --message-format=json
-              ' > "$artifacts"
-            run_host_phase verify_artifacts python3 ../scripts/ci/verify-canvas-test-artifacts.py \
-              --check-worker-inventory \
-              "$artifacts" target
+            echo "Unsupported Rust CI lane" >&2
+            exit 2
           fi
+
       - name: Capture host compiler cache counters after compile
         if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
@@ -1202,20 +1079,6 @@ jobs:
           if [[ "${{ matrix.lane }}" == flow ]]; then
             printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
           fi
-      - name: Fail fast on image-free Canvas renewal configuration
-        if: matrix.lane == 'canvas'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/ci/install-compose-renderer.sh
-          export MARTY_BASE_COMPOSE_BINARY="$RUNNER_TEMP/compose-render-v5.4.0"
-          MARTY_DIDCOMM_TEST_PYTHON="$(command -v python3)"
-          export MARTY_DIDCOMM_TEST_PYTHON
-          export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1
-          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
-          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
-          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"
-          python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'
         shell: bash
@@ -1227,102 +1090,6 @@ jobs:
             --features feature-regression-observer \
             internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up \
             -- --exact
-      - name: Compile Bookworm-compatible base runtime acceptance
-        if: matrix.lane == 'canvas'
-        shell: bash
-        run: |
-          set -euo pipefail
-          compat_target="$GITHUB_WORKSPACE/rust/target"
-          compat_artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
-          compat_executable="$(jq -sr '
-            [.[] | select(.reason == "compiler-artifact")
-            | select(.target.name == "canvas_published_schema_contract")
-            | select(.package_id | contains("#marty-canvas-acceptance@"))
-            | select(.executable != null) | .executable] | unique
-            | if length == 1 then .[0] else error("Expected one Bookworm-compatible base runtime executable") end
-          ' "$compat_artifacts")"
-          [[ "$(dirname "$compat_executable")" == "$compat_target/debug/deps" ]]
-          [[ "${compat_executable##*/}" =~ ^canvas_published_schema_contract-[a-f0-9]{16}$ ]]
-          test -x "$compat_executable"
-          test -x "$compat_target/debug/marty-issuance-service"
-          test -x "$compat_target/debug/marty-gateway"
-          # The shared test executable must be a Bookworm-compatible ELF, not
-          # a host-built artifact accidentally selected from an old target.
-          for executable in "$compat_executable" \
-            "$compat_target/debug/marty-issuance-service" \
-            "$compat_target/debug/marty-gateway"; do
-            [[ ! -L "$executable" ]]
-            [[ "$(realpath "$executable")" == "$compat_target"/* ]]
-            program_headers="$(readelf -l "$executable")"
-            [[ "$program_headers" == *'/lib64/ld-linux-x86-64.so.2'* ]]
-            versions="$(readelf --version-info "$executable")"
-            ! grep -Eq 'GLIBC_([3-9][0-9]*|2\.(3[7-9]|[4-9][0-9]|[0-9]{3,}))' <<< "$versions"
-          done
-          printf 'MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s\n' "$compat_executable" >> "$GITHUB_ENV"
-      - name: Test native Canvas AGS/NRPS over real HTTPS
-        if: matrix.lane == 'canvas'
-        working-directory: rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 --version
-          openssl version
-          https_executable="$(jq -sr '
-            [.[] | select(.reason == "compiler-artifact")
-            | select(.target.name == "canvas_oauth_behavior")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null) | .executable] | unique
-            | if length == 1 then .[0] else error("Expected one Canvas OAuth executable") end
-          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
-          test -x "$https_executable"
-          https_test='canvas_authoritative_https::actual_ags_nrps_https_uses_child_scoped_trust'
-          test_list="$("$https_executable" --list)"
-          [[ "$test_list" == *"$https_test: test"* ]]
-          source ../scripts/ci/rust_contract_execution.sh
-          run_timed canvas_native_https "$https_executable" "$https_test" --exact --nocapture --test-threads=1
-      - name: Test Canvas publication adapter over real HTTPS
-        if: matrix.lane == 'canvas'
-        working-directory: rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          publication_executable="$(jq -sr '
-            [.[] | select(.reason == "compiler-artifact")
-            | select(.target.name == "issuance-behavior")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null) | .executable] | unique
-            | if length == 1 then .[0] else error("Expected one issuance behavior executable") end
-          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
-          test -x "$publication_executable"
-          test_list="$("$publication_executable" --list)"
-          [[ "$test_list" == *"canvas_publication_behavior::https_child: test"* ]]
-          python3 ../scripts/test_canvas_publication_https.py "$publication_executable"
-      - name: Prepare required rendered base executable acceptance
-        if: matrix.lane == 'canvas'
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -x "$MARTY_BASE_COMPOSE_BINARY"
-          test -x rust/target/debug/marty-issuance-service
-          test -x rust/target/debug/marty-gateway
-          test -x rust/target/debug/marty-flow
-          redis_image="$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
-            redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)"
-          docker tag "$redis_image" redis:7-alpine
-          # Resolve the actual source Dockerfile build to a local immutable ID.
-          # This is runtime identity evidence, not release provenance.
-          docker build --tag marty-envoy:native-contract config/envoy
-          envoy_image_id="$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)"
-          printf 'MARTY_ENVOY_TEST_IMAGE=%s\n' "$envoy_image_id" >> "$GITHUB_ENV"
-          test -x "$MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
-          test -x "$MARTY_DIDCOMM_TEST_PYTHON"
-      # These published worker cases use the verified Bookworm executables and
-      # their own pinned fixtures, not the public selfhost image built below.
-      - name: Preflight published worker parity in two isolated groups
-        if: matrix.lane == 'canvas'
-        working-directory: rust
-        shell: bash
-        run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Prepare public selfhost image loader acceptance
         if: matrix.lane == 'selfhost'
         shell: bash
@@ -1446,7 +1213,7 @@ jobs:
             echo "Unable to locate the compiled Application Template PostgreSQL contract executable." >&2
             exit 1
           fi
-          resolve_issuance_canvas_contracts >/dev/null
+          resolve_issuance_database_contracts >/dev/null
           trust_profile_executable="$(resolve_recorded_contract_executable marty-trust-profile migration_contract)"
           if [[ -z "$trust_profile_executable" || ! -x "$trust_profile_executable" ]]; then
             echo "Unable to locate the compiled Trust Profile PostgreSQL contract executable." >&2
@@ -1564,11 +1331,9 @@ jobs:
             set +e
             MARTY_DEMO_SEED_TEST_DATABASE_REQUIRED=1 \
             MARTY_DEMO_SEED_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test \
-            MARTY_CANVAS_SEED_REQUIRE_DATABASE_TEST=1 \
-            MARTY_CANVAS_SEED_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test \
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")
@@ -1644,10 +1409,10 @@ jobs:
         if: matrix.lane == 'contracts'
         shell: bash
         run: python3 -m scripts.ci.check_public_vector_execution "$RUNNER_TEMP/rust-workspace.log"
-      - name: Require terminal validation worker fast-owner execution
+      - name: Require platform lifecycle unit execution
         if: matrix.lane == 'contracts'
         shell: bash
-        run: python3 scripts/ci/check_canvas_tier_obligations.py --require-execution contracts "$RUNNER_TEMP/rust-workspace.log"
+        run: python3 scripts/ci/check_platform_unit_execution.py "$RUNNER_TEMP/rust-workspace.log"
       - name: Require all Gateway Signing acceptance cases
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1894,39 +1659,10 @@ jobs:
             --openbao "$binary" -- "$owner_executable" "$owner_test" \
             --ignored --exact --nocapture | tee "$RUNNER_TEMP/managed-owner-channels.log"
           grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/managed-owner-channels.log"
-      - name: Prepare owned runtime failure diagnostics
-        if: matrix.lane == 'canvas'
-        shell: bash
-        run: |
-          set -euo pipefail
-          diagnostics="$RUNNER_TEMP/marty-owned-runtime-diagnostics"
-          mkdir -m 700 "$diagnostics"
-          owner="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-          (set -o noclobber; printf '%s' "$owner" > "$diagnostics/.owner")
-          printf 'MARTY_RUNTIME_DIAGNOSTICS=%s\n' "$diagnostics" >> "$GITHUB_ENV"
-          printf 'MARTY_RUNTIME_DIAGNOSTICS_OWNER=%s\n' "$owner" >> "$GITHUB_ENV"
-      - name: Build disposable Canvas DIDComm KMS backend
-        if: matrix.lane == 'canvas'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: openbao/didcomm-authcrypt/Dockerfile
-          load: true
-          push: false
-          tags: marty-openbao-didcomm:canvas
-          provenance: false
-      - name: Probe Canvas host and namespace KMS fixtures
-        if: matrix.lane == 'canvas'
-        env:
-          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:canvas
-        run: python3 scripts/probe_canvas_didcomm_sidecar.py
       - name: Run isolated database contract suites concurrently
         if: matrix.lane != 'renewal-unit'
         working-directory: rust
         shell: bash
-        env:
-          MARTY_CANVAS_OPENBAO_IMAGE: marty-openbao-didcomm:canvas
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE: ${{ matrix.lane == 'canvas' && '1' || '0' }}
         run: |
           set -euo pipefail
           if [[ "${{ matrix.lane }}" == contracts ]]; then
@@ -1954,51 +1690,14 @@ jobs:
             export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"
             export BAO_TOKEN=test-only
           fi
-          if [[ "${{ matrix.lane }}" == worker ]]; then
-            python3 ../scripts/ci/run-db-contract-groups.py worker-preflights
-            python3 ../scripts/ci/run-db-contract-groups.py worker-canvas
-          elif [[ "${{ matrix.lane }}" == flow ]]; then
+          if [[ "${{ matrix.lane }}" == flow ]]; then
             bash ../scripts/ci/run-flow-acceptance-contracts.sh
           elif [[ "${{ matrix.lane }}" == selfhost ]]; then
-            python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas
+            bash ../scripts/ci/run-selfhost-acceptance-contracts.sh
           else
-            python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}
+            python3 ../scripts/ci/run-db-contract-groups.py rust-db
           fi
-      - name: Verify opted-in Canvas migrated-base parity and isolation
-        if: github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas'
-        timeout-minutes: 20
-        working-directory: rust
-        shell: bash
-        env:
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE: '1'
-          MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: '1'
-        run: |
-          set -euo pipefail
-          # The normal published runner pulls this oracle-pinned image in its
-          # own process; the standalone ignored diagnostics need the same setup.
-          postgres_image="$(jq -er '.observed_postgres_image' \
-            ../contracts/canvas-worker-consumer-range-oracle.json)"
-          [[ "$postgres_image" =~ ^postgres@sha256:[a-f0-9]{64}$ ]]
-          MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \
-            ../scripts/ci/pull-pinned-dockerhub-image.sh "$postgres_image")"
-          export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
-          mapfile -t executables < <(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.package_id | contains("#marty-canvas-acceptance@"))
-            | select(.target.name == "canvas_published_schema_contract")
-            | select(.executable != null) | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
-          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE=0 python3 \
-            ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" \
-            canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads
-          for test_name in \
-            canvas_published_database::diagnostic_tests::fresh_probe_and_cached_restore_keep_roundtrip_schema_and_data \
-            canvas_published_database::diagnostic_tests::immutable_published_base_keeps_revision_parity_and_case_isolation \
-            canvas_published_database::diagnostic_tests::concurrent_published_base_keeps_eight_cases_isolated \
-            canvas_published_database::diagnostic_tests::failed_published_base_restore_removes_only_its_owned_container; do
-            python3 ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" "$test_name"
-          done
+
       - name: Test beta passport reconciliation and native batch on PostgreSQL
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -2025,23 +1724,15 @@ jobs:
           done
           run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
-      - name: Preserve synthetic runtime failure diagnostics
-        if: always() && matrix.lane == 'canvas'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*
-          if-no-files-found: ignore
-          retention-days: 3
-      - name: Test native Canvas operation timeout TLS parity
+      - name: Test native outbound HTTP timeout TLS parity
         # Contracts already compiles this exact Issuance library harness.
         # Keep the owned TLS/socket parity gate mandatory without rebuilding
-        # the otherwise unexecuted harness in the Canvas acceptance lane.
+        # an additional test harness or provider acceptance lane.
         if: matrix.lane == 'contracts'
         working-directory: rust
         run: |
-          python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"
-          "$RUNNER_TEMP/canvas-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
+          python3 -m venv "$RUNNER_TEMP/outbound-operation-tls"
+          "$RUNNER_TEMP/outbound-operation-tls/bin/pip" install --disable-pip-version-check cryptography==44.0.3
           mapfile -t executables < <(jq -r '
             select(.reason == "compiler-artifact")
             | select(.package_id | contains("marty-issuance-service"))
@@ -2051,8 +1742,8 @@ jobs:
             | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-          "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
-          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification "$MARTY_CANVAS_FULL_QUALIFICATION"
+          "${executables[0]}" --list | grep -Fx 'outbound_http::tests::native_socket_case: test'
+          "$RUNNER_TEMP/outbound-operation-tls/bin/python" ../scripts/run_outbound_http_timeout_oracle.py --native-executable "${executables[0]}" --qualification 1
       - name: Report compiler cache effectiveness
         if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
@@ -2073,31 +1764,6 @@ jobs:
           retention-days: 2
       # Check both records before either upload. A failed overall workflow is
       # still inadmissible evidence even if this job produced both files.
-      - name: Require paired fresh full-main worker evidence
-        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s "$RUNNER_TEMP/canvas-startup-fresh-run.json"
-          test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"
-      - name: Preserve fresh full-main startup attestation
-        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/canvas-startup-fresh-run.json
-          if-no-files-found: error
-          retention-days: 14
-      # This separate record is produced only after the unchanged REST oracle
-      # comparison and owned cleanup. It attests a new run, not the old capture.
-      - name: Preserve fresh full-main REST requalification evidence
-        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: canvas-rest-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/canvas-rest-fresh-run.json
-          if-no-files-found: error
-          retention-days: 14
       - name: Remove owned Rust test services and volumes
         if: always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'
         shell: bash
@@ -2110,13 +1776,13 @@ jobs:
       # Diagnostic identity only; never permission to skip merge-group qualification.
       # success() includes all Rust checks and the owned cleanup above.
       - name: Record successful PR Rust checkout identity
-        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'flow' || matrix.lane == 'contracts')
         shell: bash
         env:
           MARTY_RUST_ATTESTATION_LANE: ${{ matrix.lane }}
         run: python3 scripts/ci/write_pr_rust_checkout_attestation.py "$RUNNER_TEMP/pr-rust-checkout-attestation.json"
       - name: Upload successful PR Rust checkout identity
-        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'flow' || matrix.lane == 'contracts')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: pr-rust-checkout-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2124,7 +1790,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Save successful trusted-main offline compiler objects
-        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (success() && github.repository == 'ElevenID/marty-ui' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.lane == 'canvas')
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (success() && github.repository == 'ElevenID/marty-ui' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.lane == 'flow')
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -2472,22 +2138,11 @@ jobs:
         env:
           PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
         run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
-      - name: Verify merged Canvas worker deployment configuration
-        run: python3 scripts/test_canvas_worker_compose_render.py
       - name: Verify self-host native owner preservation
         run: python3 scripts/test_selfhost_native_owner_compose.py
-      - name: Verify captured worker rollback launch configuration
-        run: python3 scripts/test_beta_worker_launch_compose.py
-      - name: Verify complete Canvas worker consumer configurations
+      - name: Install pinned Compose renderer for configuration checks
         shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/ci/install-compose-renderer.sh
-          compose_renderer="$RUNNER_TEMP/compose-render-v5.4.0"
-          python3 scripts/test_canvas_worker_compose_render.py \
-            --suite bundle --compose-command "$compose_renderer"
-          python3 scripts/test_canvas_worker_compose_render.py \
-            --suite consumers --compose-command "$compose_renderer"
+        run: bash scripts/ci/install-compose-renderer.sh
       - name: Verify generated beta application image configuration
         run: python3 scripts/test_beta_application_image_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Verify native DIDComm configuration ownership
@@ -2898,10 +2553,6 @@ jobs:
           exit 1
       - name: Smoke-test issuance image
         run: bash scripts/smoke-issuance-image.sh marty-issuance:ci
-      - name: Smoke-test Canvas worker image entrypoint and secret preflight
-        run: python3 scripts/test_canvas_worker_image_entrypoint.py marty-issuance:ci
-      - name: Test packaged Canvas worker startup with published schema and secret sources
-        run: python3 scripts/test_canvas_worker_image_startup.py marty-issuance:ci
       - name: Smoke-test organization image with PostgreSQL and Redis
         shell: bash
         run: |
@@ -3143,7 +2794,7 @@ jobs:
           # Actual database execution remains in the isolated Rust/Docker gate.
           uv pip install --system pytest pytest-xdist==3.8.0 pytest-asyncio pyyaml 'jsonschema[format]>=4.23' cryptography playwright sqlalchemy httpx -r requirements-proto.txt "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Install Python browser transport runtime
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: python -m playwright install --with-deps --only-shell chromium
       - name: Verify released mdoc binding evidence contract
         shell: bash
@@ -3197,10 +2848,10 @@ jobs:
           PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
         run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare Rust KMS operator for release contracts
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/prepare-native-model-operator.sh
       - name: Prepare Rust execution policy for release contracts
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/prepare-native-ci-execution.sh
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
@@ -3213,11 +2864,6 @@ jobs:
           tests/test_didcomm_native_consumer_ownership.py
           tests/test_ci_workflow_performance.py::test_didcomm_policy_test_sources_have_exact_release_owner
           -v --tb=short
-      - name: Run rollback-test-owned PR checks
-        if: needs.changes.outputs.rollback_test_only == 'true'
-        run: >-
-          python -m pytest tests/test_beta_worker_launch_rollback.py
-          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run Kubernetes policy test-source PR checks
         if: needs.changes.outputs.k8s_policy_test_only == 'true'
         run: >-
@@ -3230,10 +2876,10 @@ jobs:
           tests/test_passport_supported_consumer_routing.py
           tests/test_ci_workflow_performance.py -v --tb=short
       - name: Prepare source-only deployment registry renderer
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/install-compose-renderer.sh
       - name: Run repository release checks
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_COMPOSE_RENDERER: ${{ runner.temp }}/compose-render-v5.4.0
         shell: bash
@@ -3245,7 +2891,7 @@ jobs:
           trap 'status=$?; printf "release-contract memory counters after:\n"; cat /sys/fs/cgroup/memory.events 2>/dev/null || true; grep "^oom_kill " /proc/vmstat 2>/dev/null || true; exit "$status"' EXIT
           python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -3275,7 +2921,7 @@ jobs:
               raise SystemExit("root-owned TLS cases did not all execute and pass")
           PY
       - name: Exercise root-owned fresh VM creation contracts
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -3315,14 +2961,14 @@ jobs:
               raise SystemExit("root-owned VM creation cases did not all execute and pass")
           PY
       - name: Exercise root-owned optional secret staging contracts
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
           python_bin="$(command -v python)"
           report="$RUNNER_TEMP/selfhost-root-optional-secrets-contracts.xml"
           sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
-            tests/test_stage_selfhost_disabled_optional_secrets.py::test_creates_exact_nine_empty_private_files \
+            tests/test_stage_selfhost_disabled_optional_secrets.py::test_creates_exact_seven_empty_private_files \
             tests/test_stage_selfhost_disabled_optional_secrets.py::test_enabled_integration_cannot_receive_empty_secret \
             tests/test_stage_selfhost_disabled_optional_secrets.py::test_late_mode_failure_rolls_back_owned_outputs \
             -p no:cacheprovider --junitxml="$report"
@@ -3337,7 +2983,7 @@ jobs:
               raise SystemExit("root-owned optional secret test report is missing")
           cases = list(suite.iter("testcase"))
           expected_names = {
-              "test_creates_exact_nine_empty_private_files",
+              "test_creates_exact_seven_empty_private_files",
               "test_enabled_integration_cannot_receive_empty_secret",
               "test_late_mode_failure_rolls_back_owned_outputs",
           }
@@ -3353,7 +2999,7 @@ jobs:
               raise SystemExit("root-owned optional secret cases did not all execute and pass")
           PY
       - name: Configure the pinned containerd image store
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6 # v5.7.0
         with:
           version: v29.7.2
@@ -3365,7 +3011,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -3374,13 +3020,13 @@ jobs:
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Require the exact supported OCI backend
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
-        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-
@@ -3495,12 +3141,10 @@ jobs:
 
           timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          # GHSA-vfj7-8cjw-p6xm has no patched braces release. It enters only
-          # through the prerenderer's optional build-time proxy; our prerender
-          # routes are fixed in vite.config.ts. Bun still audits every package
-          # except this one advisory. npm audits the non-optional graph, which
-          # Bun also covers, until the upstream package can be replaced/patched.
-          (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit --ignore GHSA-vfj7-8cjw-p6xm && npm audit --omit=optional --package-lock-only --audit-level=low') &
+          # Audit both complete reports and reject every returned finding or
+          # scanner error. The withdrawn picomatch exception is retired;
+          # the existing optional-prerenderer braces scope is preserved.
+          (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && python3 ../scripts/ci/audit-ui-dependencies.py') &
           ui_audit_pid=$!
           (cd tests && npm ci --ignore-scripts && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
@@ -3647,25 +3291,19 @@ jobs:
                "$OPENBAO_SELECTED" == false &&
                "$VERIFICATION_SELECTED" == false && "$SECURITY_SELECTED" == false ]]
           fi
-          if [[ "$ROLLBACK_TEST_ONLY" == true ]]; then
-            [[ "${{ github.event_name }}" == pull_request &&
-               "$RELEASE_SELECTED" == true && "$SECURITY_SELECTED" == true &&
-               "$UI_SELECTED" == false && "$PYTHON_SELECTED" == false &&
-               "$RUST_SELECTED" == false && "$RUST_RUNTIME_SELECTED" == false &&
-               "$VERIFICATION_SELECTED" == false ]]
-          fi
+          [[ "$ROLLBACK_TEST_ONLY" == false ]]
           # The aggregate matrix result alone cannot prove all required lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
-            'true:true:["canvas","contracts","selfhost"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts","selfhost"]') ;;
-            'true:false:["worker"]'|'true:false:["flow"]'|'true:false:["selfhost"]'|'true:false:["renewal-unit"]')
+            'true:true:["contracts","flow","selfhost"]'|'false:false:["contracts","flow","selfhost"]') ;;
+            'true:false:["contracts"]'|'true:false:["flow"]'|'true:false:["selfhost"]'|'true:false:["renewal-unit"]')
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
           if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
-               "$RUST_MATRIX" == '["canvas","contracts","selfhost"]' ]]
+               "$RUST_MATRIX" == '["contracts","flow","selfhost"]' ]]
             for result in "${results[@]}"; do
               [[ "$result" == success ]]
             done

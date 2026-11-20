@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from check_canvas_oss_runner import (
+from beta_runner_common import (
     GIB,
     REQUIRED_TOOLS,
     check_runner_process_quiescence,
@@ -28,7 +28,7 @@ BETA_TUNNELS = ("elevenid-beta-nginx-proxy-1", "elevenid-beta-cloudflared-1")
 PRODUCTION_PREFIX = "marty-selfhost-prod-"
 REQUIRED_PRODUCTION = {
     PRODUCTION_PREFIX + service + "-1" for service in (
-        "applicant", "auth", "canvas-sync-worker", "cloudflared",
+        "applicant", "auth", "cloudflared",
         "compliance-profile", "credential-template", "deployment-profile",
         "device-registration", "edge", "event-stream", "flow", "gateway",
         "issuance", "keycloak", "notification", "organization", "postgres",
@@ -57,7 +57,6 @@ HISTORICAL_EXIT_CODES = {
 }
 NO_HEALTHCHECK_PRODUCTION = {
     "marty-selfhost-prod-cloudflared-1",
-    "marty-selfhost-prod-canvas-sync-worker-1",
 }
 PASSPORT_DISPOSABLE_PREFIX = "marty-passport-"
 

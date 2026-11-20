@@ -24,7 +24,7 @@ const getStatusConfigs = (t) => ({
   draft: { label: t('status.draft'), color: 'default', icon: DraftsIcon },
   disabled: { label: t('status.disabled'), color: 'error', icon: BlockIcon },
   pending: { label: t('status.pending'), color: 'warning', icon: PendingIcon },
-  // Canvas award candidates and evidence synchronization jobs.
+  // External evidence candidates and synchronization jobs.
   observed: { label: t('status.observed', 'Observed'), color: 'default', icon: PendingIcon },
   identity_link_required: { label: t('status.identityLinkRequired', 'Identity Link Required'), color: 'warning', icon: WarningIcon },
   eligible: { label: t('status.eligible', 'Eligible'), color: 'info', icon: CheckCircleIcon },

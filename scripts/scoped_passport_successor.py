@@ -1,4 +1,4 @@
-"""D12 selection from the canonical all-service build, never a new build scope.
+"""Read-only D12 selection from historical receipts, never a new build scope.
 
 Read the original durable journal with its original frozen worker. A local
 receipt, provisional build, or a successful compile without loader/UID evidence
@@ -10,15 +10,15 @@ import json
 from pathlib import Path
 import re
 
-from scoped_native_profiles import OFFICIAL_ALL_SERVICES, D12_PASSPORT_CURRENT
+from scoped_native_profiles import legacy_profile_reference, D12_PASSPORT_CURRENT
 from scoped_native_runtime import ROLE_BINARIES, read_ref, require, sha
 
 PROFILE = "d12-passport-canonical-subset"
 BASE_PROFILE_SHA256 = "6877251e868d692b43825761a4ac99fecf133b519f295a347d12221970b5a7f3"
 BASE_BINDING_SHA256 = "09b2a8c03ff1907b6444baa91517c8a22ccaeabdbf82992e4198b76c92017fdc"
 PREPARED_SHA256 = "c9b77a332139e5d7eb0e2684b5b54514ecad262531873e2f4c36dcd599da4c1a"
-SOURCE = OFFICIAL_ALL_SERVICES.ui_revision
-CORE = OFFICIAL_ALL_SERVICES.core_revision
+SOURCE = "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"
+CORE = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 
 
 def _terminal_build(receipt, prepared, prepared_sha, build_profile, exact_prepared):
@@ -44,7 +44,7 @@ def _terminal_build(receipt, prepared, prepared_sha, build_profile, exact_prepar
 
 
 def terminal_build(receipt, prepared, prepared_sha):
-    return _terminal_build(receipt, prepared, prepared_sha, OFFICIAL_ALL_SERVICES, PREPARED_SHA256)
+    return _terminal_build(receipt, prepared, prepared_sha, legacy_profile_reference("oid4vc-all-services"), PREPARED_SHA256)
 
 
 def _select_canonical_binaries(prepared_ref, receipt_ref, journal, build_profile, roles, rollout_profile, exact_prepared):
@@ -116,7 +116,7 @@ def _selected_elfs(binaries):
 
 
 def select_canonical_binaries(prepared_ref, receipt_ref, journal):
-    return _select_canonical_binaries(prepared_ref, receipt_ref, journal, OFFICIAL_ALL_SERVICES,
+    return _select_canonical_binaries(prepared_ref, receipt_ref, journal, legacy_profile_reference("oid4vc-all-services"),
                                       ROLE_BINARIES, PROFILE, PREPARED_SHA256)
 
 

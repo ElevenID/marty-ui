@@ -310,7 +310,7 @@ export function buildApplicantProfileData({ user, formData }) {
   };
 }
 
-export function buildStandardApplicationPayload({ organizationId, credentialConfig, formData, canvasLtiContext = null }) {
+export function buildStandardApplicationPayload({ organizationId, credentialConfig, formData }) {
   const canonicalFields = credentialConfig?.application_template?.form_fields;
   const allowedFields = Array.isArray(canonicalFields)
     ? new Set(canonicalFields.map((field) => field?.field_id).filter(Boolean))
@@ -327,7 +327,7 @@ export function buildStandardApplicationPayload({ organizationId, credentialConf
     organization_id: organizationId,
     application_template_id: credentialConfig?.application_template_id,
     form_data: publicFormData,
-    integration_context: canvasLtiContext ? { canvas_lti: canvasLtiContext } : {},
+    integration_context: {},
   };
 }
 

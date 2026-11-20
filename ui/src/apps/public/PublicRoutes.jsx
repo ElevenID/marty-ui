@@ -12,7 +12,6 @@ import ApiDocumentation from '../../components/ApiDocumentation';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
-import CanvasLtiExperiencePage from '../../components/pages/CanvasLtiExperiencePage';
 import BrowserRedirect from '../../components/BrowserRedirect';
 import { getPublicLoginFallback, renderPublicRoot, renderMarketingRoutes } from '@ui-public-routes';
 import { IS_SELFHOST_UI } from '@ui-public-config';
@@ -84,7 +83,6 @@ function PublicRoutes() {
         <Route path="flows/:flowId" element={<PreviewFlowPage />} />
       </Route>
 
-      <Route path="/canvas/lti/experience" element={<CanvasLtiExperiencePage />} />
 
       <Route element={<PublicLayout />}>
         <Route path="/" element={renderPublicRoot({ isAuthenticated, isAdministrator, isVendor, isApplicant })} />

@@ -17,7 +17,7 @@ import tempfile
 
 import ui_release as ui
 import verify_installer_provenance as verifier
-import website_release as web
+import website_producer_policy as policy
 
 CONFIG_LIMIT = 64 * 1024
 ERROR_LIMIT = 64 * 1024
@@ -168,9 +168,10 @@ class GitHubReader:
 
     def __init__(self, *, gh: Path, repository: str, run_id: str, attempt: str,
                  kind: str, token_env: str | None = "GH_TOKEN"):
-        ui.require(repository in web.REPOSITORIES and kind in {"website", "application"}
+        ui.require(kind in {"website", "application"}
                    and all(isinstance(value, str) and ui.RUN.fullmatch(value) for value in (run_id, attempt)),
                    "invalid authenticated Actions intake selection")
+        policy.producer_policy(repository, role=kind)
         verifier.local_file(gh)
         ui.require(token_env in {"GH_TOKEN", "GITHUB_TOKEN"},
                    "Actions intake requires --github-token-env GH_TOKEN or GITHUB_TOKEN")

@@ -141,6 +141,7 @@ def native_evidence(operation: Path, intent: dict, verification: Path, *, fresh:
 
 
 def validate(operation: Path, state: Path, verification: Path, *, fresh: bool = False) -> tuple[object, dict, object]:
+    from reload_kubernetes_legacy_workloads import WORKLOADS
     retained, intent = request(operation, state)
     completed = record(verification / "adoption-complete.json")
     value = completed.value
@@ -159,7 +160,7 @@ def validate(operation: Path, state: Path, verification: Path, *, fresh: bool = 
         and delivery.value.get("adoptionId") == intent["adoptionId"]
         and delivery.value.get("binding") == intent["binding"]
         and delivery.value.get("candidateInputs") == intent["candidateInputs"]
-        and delivery.value.get("secretCount") == 34 and delivery.value.get("workloadCount") == 16
+        and delivery.value.get("secretCount") == 34 and delivery.value.get("workloadCount") == len(WORKLOADS)
         and delivery.value.get("credentialDeliveryVerified") is True
         and delivery.value.get("credentialConsumptionVerified") is False)
     observations = delivery.value.get("observationHashes")

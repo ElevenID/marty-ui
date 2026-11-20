@@ -25,6 +25,16 @@ from test_bootstrap_kubernetes_openbao import assert_private_directory_command, 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private transport")
 
+# Frozen original inputs model retained credentials, independently of the current
+# platform contract. Recovery must never reinterpret an old generation as new.
+LEGACY_REFERENCE_RAW = (Path(__file__).parent / "fixtures/kubernetes-legacy-credential-reference.json").read_bytes()
+assert hashlib.sha256(LEGACY_REFERENCE_RAW).hexdigest() == "49895ad57044ebd755d46550a39603e7148ebb81c38e107d5919aabeed1edb17"
+LEGACY_REFERENCE = json.loads(LEGACY_REFERENCE_RAW)
+LEGACY_CATALOG = LEGACY_REFERENCE["catalogs"]["secrets"]["value"]
+LEGACY_TOKEN_FILES = {entry["input"]: entry["file"]
+                      for entry in LEGACY_REFERENCE["catalogs"]["application_tokens"]["value"]["tokens"]}
+
+
 
 def test_inspection_private_directories_clear_inherited_setgid(flow, tmp_path, monkeypatch):
     commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
@@ -79,7 +89,8 @@ def flow(tmp_path, monkeypatch):
         recovery_build_run_attempt=1)
     original_operator = b"synthetic authenticated original operator; never executed"
     operator = b"synthetic authenticated recovery operator; never executed"
-    initializer = (bootstrap.ROOT / "docker/openbao-init.sh").read_bytes()
+    initializer = LEGACY_REFERENCE["original_initializer"]["text"].encode("utf8")
+    assert hashlib.sha256(initializer).hexdigest() == inspection.INITIALIZER_SHA256
     original = {"release": {"runtimeSourceSha": inspection.LEGACY_RUNTIME,
         "chartSourceSha": args.chart_source_sha, "tag": args.original_release_tag,
         "buildRunId": 123, "buildRunAttempt": 1, "inventorySha256": "4" * 64,
@@ -120,7 +131,7 @@ def flow(tmp_path, monkeypatch):
         "contexts": [{"name": "retained-context", "context": {"cluster": "retained-cluster", "user": "retained-user"}}],
         "clusters": [{"name": "retained-cluster", "cluster": {"server": "https://127.0.0.1:6443", "certificate-authority-data": "public-ca"}}],
         "users": [{"name": "retained-user", "user": {"client-certificate-data": "public-client", "client-key-data": KUBECONFIG_KEY}}]}))
-    names = set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES | set(bootstrap.TOKEN_FILES.values())
+    names = set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES | set(LEGACY_TOKEN_FILES.values())
     snapshot = {name: (("PRIVATE_CURRENT_CREDENTIAL_" + name).encode(), 0o600) for name in names}
     snapshot["openbao_tls_ca_cert"] = b"PUBLIC_RETAINED_OPENBAO_CA", 0o644
     snapshot["optional-empty"] = b"", 0o640

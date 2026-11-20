@@ -206,7 +206,7 @@ export const normalizeApplicationOffer = (data) => ({
  * Acquire the server-governed issuance offer for an application.
  * The native claim endpoint reuses an unexpired pending offer and delegates
  * renewal through flow orchestration. It accepts an empty options object;
- * holder destination and Canvas mirror selection are not implemented there.
+ * holder destination selection is not implemented there.
  *
  * @param {string} applicationId
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}

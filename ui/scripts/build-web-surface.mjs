@@ -32,7 +32,9 @@ function run(command, args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-run(process.execPath, [path.join(projectRoot, 'scripts/generate-demo-manifest-module.mjs')]);
+// Demo catalog and wallet projections are consumed by the website DemoPages
+// entry. Application builds must not require the website's demo source inputs.
+if (surface === 'website') run(process.execPath, [path.join(projectRoot, 'scripts/generate-demo-manifest-module.mjs')]);
 run(localBin('tsc'), ['-p', 'tsconfig.build.json']);
 run(localBin('vite'), ['build']);
 if (surface === 'application') pruneSelfhostDist(path.join(projectRoot, 'dist-application'));

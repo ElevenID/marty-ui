@@ -138,13 +138,6 @@ const DeploymentProfileWizardForm = () => {
         qr_code: true,
         nfc: false,
         ble: false,
-        enable_canvas_evidence: false,
-        enable_canvas_lti: false,
-        enable_canvas_mirror_publish: false,
-        enable_canvas_mirror_ops: false,
-        enable_canvas_deep_linking: false,
-        enable_canvas_ags: false,
-        enable_canvas_nrps: false,
       },
       environment_config: {
         theme: 'light',

@@ -184,7 +184,7 @@ class PipelineTests(unittest.TestCase):
     def test_full_ci_and_each_claim_producer_use_exact_returned_ids_without_manual_inputs(self) -> None:
         ci = self.driver("qualify", name="ci.json")
         self.assertEqual(ci.execute(), {"ci_run_id": 200, "stable_tag": "v1.2.3"})
-        self.assertEqual(self.github.posts[-1][1]["inputs"], {"canvas_migrated_base_pilot": False})
+        self.assertEqual(self.github.posts[-1][1]["inputs"], {})
         nightly = self.driver("nightly", name="nightly.json")
         self.assertEqual(nightly.execute(ci_run_id=200), {"nightly_claim_run_id": 201, "nightly_run_id": 202})
         self.assertEqual(self.github.posts[-1][1]["inputs"], {"claim_run_id": "201", "publish_cloudflare_addon": False})
@@ -610,7 +610,12 @@ class WorkflowContractTests(unittest.TestCase):
         for name, (path, keys, required_jobs) in pipeline.DISPATCH.items():
             with self.subTest(stage=name):
                 workflow = self.load(path)
-                self.assertTrue(keys <= set(workflow["on"]["workflow_dispatch"]["inputs"]))
+                dispatch = workflow["on"]["workflow_dispatch"]
+                if dispatch in (None, ""):
+                    self.assertFalse(keys)
+                    dispatch = {}
+                self.assertIsInstance(dispatch, dict)
+                self.assertTrue(keys <= set(dispatch.get("inputs", {})))
                 actual = {job.get("name", key) for key, job in workflow["jobs"].items()}
                 self.assertTrue(required_jobs <= actual, (name, required_jobs - actual))
         publisher = self.load(pipeline.PUBLISHER)

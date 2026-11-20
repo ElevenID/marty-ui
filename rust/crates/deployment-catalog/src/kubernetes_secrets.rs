@@ -134,8 +134,6 @@ fn validate(values: &BTreeMap<String, String>, mandatory: &[String]) -> Result<(
     let grants = [
         "FLOW_SIGN_GRANT_MINT_TOKEN",
         "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN",
-        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN",
-        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN",
         "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN",
         "GATEWAY_SIGN_GRANT_MINT_TOKEN",
         "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN",

@@ -5,7 +5,7 @@
  * Credentials are filtered based on the vendor organization's configuration.
  */
 
-import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Container,
   Grid,
@@ -52,7 +52,6 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
-import { getCurrentCanvasLtiExperience } from '../../services/canvasLtiExperience';
 import { listApplications } from '../../services/applicantApi';
 import { listApplicationTemplates } from '../../services/applicationTemplatesApi';
 import { hasAsciiControlCharacters } from '../../utils/hasAsciiControlCharacters';
@@ -62,12 +61,7 @@ import {
   filterCredentialCatalogItems,
   getCredentialCatalogCategories,
   loadCredentialCatalogItems,
-  scopeCredentialCatalogItemsForCanvasLaunch,
 } from '../../application/applications';
-
-function getLtiSessionValue(session, key) {
-  return session?.[key] || null;
-}
 
 function normalizeOrganizationIdCandidate(value) {
   if (value === null || value === undefined) {
@@ -180,67 +174,14 @@ const CredentialCatalog = () => {
   const [catalogMissingOrganization, setCatalogMissingOrganization] = useState(false);
   const [existingApplications, setExistingApplications] = useState([]);
   const [appStatusInfo, setAppStatusInfo] = useState(createEmptyApplicationStatusInfo);
-  const [canvasLtiSession, setCanvasLtiSession] = useState(() => location.state?.canvasLtiSession || null);
-  // An explicitly scoped catalog preview must not inherit another launch's
-  // organization, template restrictions or navigation state.
-  const activeCanvasLtiSession = previewOrganization.explicit ? null : canvasLtiSession;
-  const [canvasLtiLoading, setCanvasLtiLoading] = useState(false);
   const catalogRequest = useRef(0);
   const applicationsRequest = useRef(0);
 
-  const canvasLtiState = useMemo(
-    () => previewOrganization.explicit ? '' : new URLSearchParams(location.search || '').get('canvas_lti_state') || '',
-    [location.search, previewOrganization.explicit]
-  );
-  const canvasLtiOrganizationId = useMemo(
-    () => getLtiSessionValue(activeCanvasLtiSession, 'organization_id'),
-    [activeCanvasLtiSession]
-  );
   const effectiveOrganizationId = useMemo(
     () => previewOrganization.explicit ? previewOrganization.id
-      : canvasLtiOrganizationId || resolveEffectiveOrganizationId(organizationId, user),
-    [previewOrganization.explicit, previewOrganization.id, canvasLtiOrganizationId, organizationId, user]
+      : resolveEffectiveOrganizationId(organizationId, user),
+    [previewOrganization.explicit, previewOrganization.id, organizationId, user]
   );
-
-  useEffect(() => {
-    if (previewOrganization.explicit) {
-      setCanvasLtiSession(null);
-      return;
-    }
-    if (location.state?.canvasLtiSession) {
-      setCanvasLtiSession(location.state.canvasLtiSession);
-    }
-  }, [location.state, previewOrganization.explicit]);
-
-  useEffect(() => {
-    let alive = true;
-
-    async function loadCanvasLtiSession() {
-      if (!canvasLtiState || canvasLtiSession || location.state?.canvasLtiSession) {
-        setCanvasLtiLoading(false);
-        return;
-      }
-
-      setCanvasLtiLoading(true);
-      try {
-        const data = await getCurrentCanvasLtiExperience();
-        if (alive) {
-          setCanvasLtiSession(data);
-        }
-      } catch (error) {
-        console.error('Failed to resolve Canvas LTI catalog context:', error);
-      } finally {
-        if (alive) {
-          setCanvasLtiLoading(false);
-        }
-      }
-    }
-
-    loadCanvasLtiSession();
-    return () => {
-      alive = false;
-    };
-  }, [canvasLtiState, canvasLtiSession, location.state?.canvasLtiSession]);
 
   const listCredentialTemplates = useCallback((currentOrganizationId) => {
     const normalizedOrganizationId = normalizeOrganizationIdCandidate(currentOrganizationId);
@@ -355,55 +296,24 @@ const CredentialCatalog = () => {
   /**
    * Filter credentials based on search and category
    */
-  const canvasLtiCredentialTemplateId = useMemo(
-    () => getLtiSessionValue(activeCanvasLtiSession, 'credential_template_id'),
-    [activeCanvasLtiSession]
-  );
-  const canvasLtiApplicationTemplateId = useMemo(
-    () => getLtiSessionValue(activeCanvasLtiSession, 'application_template_id'),
-    [activeCanvasLtiSession]
-  );
   useLayoutEffect(() => {
-    // Details belong to the selected account, organization, and course launch.
-    // A same-organization Canvas transition can change the offered template
-    // without refetching the catalog, so invalidate its dialog separately.
     setSelectedCredential(null);
     setDetailsOpen(false);
-  }, [effectiveOrganizationId, user?.user_id, canvasLtiState, canvasLtiCredentialTemplateId, canvasLtiApplicationTemplateId]);
-  const canvasScopedCredentials = useMemo(() => {
-    return scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
-      credentialTemplateIds: canvasLtiCredentialTemplateId ? [canvasLtiCredentialTemplateId] : [],
-    });
-  }, [credentials, canvasLtiCredentialTemplateId]);
+  }, [effectiveOrganizationId, user?.user_id]);
   const filteredCredentials = useMemo(() => {
-    return filterCredentialCatalogItems(canvasScopedCredentials, { searchTerm, categoryFilter });
-  }, [canvasScopedCredentials, searchTerm, categoryFilter]);
-
-  const canvasLtiNavigationContext = useMemo(() => {
-    if (!canvasLtiState) {
-      return null;
-    }
-    return {
-      state: canvasLtiState,
-      canvas_program_binding_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_program_binding_id'),
-      canvas_platform_id: getLtiSessionValue(activeCanvasLtiSession, 'canvas_platform_id'),
-      application_template_id: canvasLtiApplicationTemplateId,
-      credential_template_id: canvasLtiCredentialTemplateId,
-    };
-  }, [canvasLtiApplicationTemplateId, canvasLtiCredentialTemplateId, activeCanvasLtiSession, canvasLtiState]);
+    return filterCredentialCatalogItems(credentials, { searchTerm, categoryFilter });
+  }, [credentials, searchTerm, categoryFilter]);
 
   /**
    * Handle credential application
    */
   const handleApply = (credential) => {
-    if (loading || canvasLtiLoading || catalogLoadError || !canvasScopedCredentials.includes(credential)) return;
+    if (loading || catalogLoadError || !credentials.includes(credential)) return;
     try {
       const navigation = buildCredentialApplicationNavigationState(credential, {
         currentPathname: location.pathname,
         isPreview,
         organizationId: effectiveOrganizationId,
-        canvasLtiContext: canvasLtiNavigationContext,
-        canvasLtiSession: activeCanvasLtiSession,
       });
       navigate(navigation.path, { state: navigation.state });
     } catch (error) {
@@ -593,7 +503,7 @@ const CredentialCatalog = () => {
             </FormControl>
           </Grid>
           <Grid size={{ xs: 12, md: 2 }}>
-            {!loading && !canvasLtiLoading && !catalogLoadError && (
+            {!loading && !catalogLoadError && (
               <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }} data-testid="credentials-count">
                 {t('catalog.resultsCount', { count: filteredCredentials.length })}
               </Typography>
@@ -603,7 +513,7 @@ const CredentialCatalog = () => {
       </Paper>
       {/* Credential Grid */}
       <Grid container spacing={3}>
-        {loading || canvasLtiLoading ? (
+        {loading ? (
           // Loading skeletons
           ([...Array(6)].map((_, index) => (
             <Grid size={{ xs: 12, sm: 6, md: 4 }} key={index}>
@@ -635,18 +545,16 @@ const CredentialCatalog = () => {
           <Grid size={12}>
             <Alert
               severity="info"
-              action={canvasScopedCredentials.length > 0 && (
+              action={credentials.length > 0 && (
                 <Button color="inherit" onClick={() => { setSearchTerm(''); setCategoryFilter('all'); }}>
                   {t('catalog.filters.clear', 'Clear filters')}
                 </Button>
               )}
             >
-              {canvasScopedCredentials.length === 0 ? (
+              {credentials.length === 0 ? (
                 <>
                   <AlertTitle>{t('catalog.empty.title')}</AlertTitle>
-                  {canvasLtiCredentialTemplateId
-                    ? t('catalog.empty.launchUnavailable', 'The credential for this course is not currently available. Contact the course provider.')
-                    : t('catalog.empty.description')}
+                  {t('catalog.empty.description')}
                 </>
               ) : t('catalog.empty.message')}
             </Alert>

@@ -60,12 +60,12 @@ def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any
                 and functional["receiptSha256"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256")
                 == hashlib.sha256(raw).hexdigest(), "Passport functional receipt changed")
         observed = json.loads(raw)
-        require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
+        require(observed.get("schema") == "marty.platform-functional-runtime-observation/v1"
                 and observed.get("profileSha256") == functional["profileSha256"]
                 and observed.get("scope") == "FUNCTIONAL_ONLY"
                 and observed.get("releaseQualified") is False and observed.get("recordingQualified") is False,
                 "Passport functional observation differs from recorder ACK")
-        # Full actual22 observations remain owned by the recorder before/after
+        # Full platform21 observations remain owned by the recorder before/after
         # capture. Image markers and simulator deployment checks stay separate.
         return dict(functional)
     require(functional is None, "Unexpected functional ACK without selected observation")
@@ -269,7 +269,7 @@ def verify_functional_runtime(capture, observed, manifest, *, observe=docker_jso
                                     "sha256": acknowledgement["receiptSha256"]}),
             "Current passport observation differs from its immutable bytes")
     binding = observed.get("binding", {})
-    require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
+    require(observed.get("schema") == "marty.platform-functional-runtime-observation/v1"
             and observed.get("profileSha256") == acknowledgement["profileSha256"]
             and binding.get("schema") == "marty.functional-mixed-runtime-binding/v2"
             and binding.get("scope") == "FUNCTIONAL_ONLY" and binding.get("releaseQualified") is False
@@ -658,7 +658,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     from scripts import probe_passport_beta_negative_callbacks as negative
     from scripts.probe_passport_beta_aggregate_kms import private_signing_request
     from scripts.probe_passport_beta_host import production_snapshot, production_attachment_sha256
-    from scripts.canvas_oss_beta_lifecycle import assert_beta
+    from scripts.beta_public_health import assert_beta
     from playwright.sync_api import sync_playwright
 
     capture._passport_failure_stage = "DIRECT_TRANSPORT"

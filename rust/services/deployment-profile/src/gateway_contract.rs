@@ -1,7 +1,7 @@
 //! Shared Gateway request and response boundary for Deployment Profiles.
 
 use chrono::Utc;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{
     AssignDeviceRequest, CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentProfile,
@@ -124,7 +124,6 @@ fn project_profile(value: Value) -> Result<Value, DeploymentContractError> {
         ("presentation_policy_ids", Value::Array(Vec::new())),
         ("credential_template_ids", Value::Array(Vec::new())),
         ("enabled_flow_ids", Value::Array(Vec::new())),
-        ("canvas_feature_flags", Value::Object(Map::new())),
         ("lanes", Value::Array(Vec::new())),
     ] {
         object.entry(name).or_insert(value);
@@ -257,7 +256,6 @@ const PROFILE_FIELDS: &[&str] = &[
     "offline_cache_ttl_hours",
     "operator_biometric_authentication_required",
     "audit_all_events",
-    "canvas_feature_flags",
     "lanes",
     "api_key_prefix",
     "created_at",

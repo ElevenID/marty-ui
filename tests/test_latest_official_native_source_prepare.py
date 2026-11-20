@@ -14,15 +14,15 @@ import prepare_local_official_native_build as prepare
 
 
 class LatestPreparationTests(unittest.TestCase):
-    def test_historical_selection_remains_frozen(self):
-        self.assertEqual(prepare.selected_sources(prepare.build.OFFICIAL_PROFILE),
-                         (prepare.PRODUCT, prepare.CORE, prepare.FREEZE_SHA256))
+    def test_historical_profile_is_retired_without_changing_its_source_identity(self):
         self.assertEqual(prepare.PRODUCT, "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f")
+        with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+            prepare.selected_sources(prepare.build.OFFICIAL_PROFILE)
 
-    def test_latest_selection_is_exact_closed_source(self):
-        self.assertEqual(prepare.selected_sources(prepare.LATEST_PROFILE),
-                         ("852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34", prepare.CORE,
-                          "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"))
+    def test_latest_legacy_profile_and_unknown_selections_are_not_buildable(self):
+        self.assertEqual(prepare.LATEST_PRODUCT, "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34")
+        with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+            prepare.selected_sources(prepare.LATEST_PROFILE)
         with self.assertRaisesRegex(ValueError, "UNKNOWN_REVIEWED_BUILD_PROFILE"):
             prepare.selected_sources("caller-supplied-target")
 

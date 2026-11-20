@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@test/utils';
 
 import CredentialCatalog from '../applicant/CredentialCatalog';
-import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
 
 const { mockNavigate, mockGet, mockGetApplicantByUser, mockAuthState, mockPreview } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -93,10 +92,6 @@ describe('CredentialCatalog', () => {
     vi.clearAllMocks();
     mockPreview.isPreview = false;
     sessionStorage.clear();
-    storeCanvasLtiSession({
-      session_token: 'canvas-session-token',
-      expires_at: '2099-01-01T00:00:00.000Z',
-    });
     mockPathname = '/';
     mockSearch = '';
     mockLocationState = null;
@@ -104,20 +99,6 @@ describe('CredentialCatalog', () => {
     mockAuthState.organizationName = 'Acme Org';
     mockAuthState.user = { user_id: 'user-1' };
     mockGet.mockImplementation((endpoint: string) => {
-      if (endpoint.includes('/v1/integrations/canvas/lti/experience-sessions/current')) {
-        return Promise.resolve({
-          organization_id: 'marty-canvas-org',
-          canvas_platform_id: 'platform-1',
-          canvas_program_binding_id: 'binding-1',
-          application_template_id: 'app-tpl-1',
-          credential_template_id: 'cfg-1',
-          canvas_context: { course_id: 'course-1', title: 'Canvas Course' },
-          learner_display_name: 'Canvas Learner',
-          identity_mapping_status: 'linked',
-          roles: ['Learner'],
-        });
-      }
-
       if (endpoint.includes('/v1/credential-templates')) {
         return Promise.resolve([
           {
@@ -265,23 +246,7 @@ describe('CredentialCatalog', () => {
     expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('organization_id=another-org'))).toBe(false);
   });
 
-  it('does not carry another Canvas launch into an explicitly scoped catalog preview', async () => {
-    mockPreview.isPreview = true;
-    mockPathname = '/applicant/preview/catalog';
-    mockSearch = '?organization_id=selected-org&canvas_lti_state=old-state';
-    mockLocationState = { canvasLtiSession: {
-      organization_id: 'canvas-org', credential_template_id: 'cfg-2', application_template_id: 'other-app',
-      canvas_program_binding_id: 'other-binding', canvas_platform_id: 'other-platform',
-    } };
-    const { user } = render(<CredentialCatalog />);
-    const card = await screen.findByTestId('credential-card-cfg-1');
-    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=selected-org&status=active');
-    expect(mockGet.mock.calls.some(([endpoint]) => String(endpoint).includes('/v1/integrations/canvas/'))).toBe(false);
-    await user.click(within(card).getByTestId('apply-btn'));
-    expect(mockNavigate).toHaveBeenCalledWith('/applicant/preview/applications/app-tpl-1?organization_id=selected-org', {
-      state: expect.not.objectContaining({ canvasLtiSession: expect.anything() }),
-    });
-  });
+
 
   it('discards an old explicit organization catalog after the preview query changes', async () => {
     mockPreview.isPreview = true;
@@ -338,57 +303,9 @@ describe('CredentialCatalog', () => {
     });
   });
 
-  it('scopes Canvas-launched catalog choices and preserves launch context into apply', async () => {
-    mockPathname = '/console/applicant/catalog';
-    mockSearch = '?canvas_lti_state=state-1';
 
-    const { user } = render(<CredentialCatalog />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
-      expect(screen.queryByTestId('credential-card-cfg-2')).not.toBeInTheDocument();
-    });
 
-    await user.click(within(screen.getByTestId('credential-card-cfg-1')).getByTestId('apply-btn'));
-
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/console/applicant/apply/cfg-1?canvas_lti_state=state-1&canvas_program_binding_id=binding-1&canvas_platform_id=platform-1&application_template_id=app-tpl-1&credential_template_id=cfg-1',
-      {
-        state: {
-          credential: expect.objectContaining({
-            id: 'cfg-1',
-            name: 'Member Login Credential',
-          }),
-          applicationTemplate: expect.objectContaining({
-            id: 'app-tpl-1',
-            credential_template_id: 'cfg-1',
-          }),
-          canvasLtiSession: expect.objectContaining({
-            credential_template_id: 'cfg-1',
-            canvas_program_binding_id: 'binding-1',
-            canvas_context: { course_id: 'course-1', title: 'Canvas Course' },
-            identity_mapping_status: 'linked',
-          }),
-        },
-      },
-    );
-  });
-
-  it('uses the Canvas launch organization when the learner has no org context', async () => {
-    mockPathname = '/console/applicant/catalog';
-    mockSearch = '?canvas_lti_state=state-1';
-    mockAuthState.organizationId = null;
-    mockAuthState.organizationName = null;
-    mockAuthState.user = { user_id: 'canvas-learner-1', roles: ['canvas_lti_learner'] };
-
-    render(<CredentialCatalog />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
-    });
-
-    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=marty-canvas-org&status=active');
-  });
 
   it('navigates directly to the applicant application route from the console catalog', async () => {
     mockPathname = '/console/applicant/catalog';
@@ -483,97 +400,11 @@ describe('CredentialCatalog', () => {
     expect(catalogRequests).toBe(2);
   });
 
-  it('explains an unavailable Canvas launch credential without offering to clear its scope', async () => {
-    mockPathname = '/console/applicant/catalog';
-    mockSearch = '?canvas_lti_state=state-1';
-    mockLocationState = {
-      canvasLtiSession: {
-        organization_id: 'org-1',
-        credential_template_id: 'cfg-unpublished',
-      },
-    };
 
-    render(<CredentialCatalog />);
 
-    expect(await screen.findByText('catalog.empty.launchUnavailable')).toBeInTheDocument();
-    expect(screen.queryByText('catalog.empty.description')).not.toBeInTheDocument();
-    expect(screen.queryByText('catalog.empty.message')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'catalog.filters.clear' })).not.toBeInTheDocument();
-    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('credential-card-cfg-2')).not.toBeInTheDocument();
-  });
 
-  it.each(['success', 'credential error', 'application template error'])('ignores a late initial-organization %s after the Canvas catalog loads', async (outcome) => {
-    mockSearch = '?canvas_lti_state=state-1';
-    const canvasSession = deferred<any>();
-    const initialCredentials = deferred<any[]>();
-    const initialApplicationTemplates = deferred<any[]>();
-    const defaultGet = mockGet.getMockImplementation()!;
-    mockGet.mockImplementation((endpoint: string) => {
-      if (endpoint.includes('/experience-sessions/current')) return canvasSession.promise;
-      if (endpoint.includes('organization_id=org-1')) {
-        if (endpoint.includes('/v1/credential-templates')) return initialCredentials.promise;
-        if (endpoint.includes('/v1/application-templates')) return initialApplicationTemplates.promise;
-      }
-      return defaultGet(endpoint);
-    });
-    render(<CredentialCatalog />);
 
-    await act(async () => canvasSession.resolve({
-      organization_id: 'marty-canvas-org',
-      credential_template_id: 'cfg-1',
-    }));
-    expect(await screen.findByTestId('credential-card-cfg-1')).toBeInTheDocument();
-    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=marty-canvas-org&status=active');
 
-    await act(async () => {
-      if (outcome === 'credential error') initialCredentials.reject(new Error('Old catalog failed'));
-      else initialCredentials.resolve([]);
-      if (outcome === 'application template error') initialApplicationTemplates.reject(new Error('Old application templates failed'));
-      else initialApplicationTemplates.resolve([]);
-      await Promise.allSettled([initialCredentials.promise, initialApplicationTemplates.promise]);
-    });
-
-    expect(screen.getByTestId('credential-card-cfg-1')).toBeInTheDocument();
-    expect(screen.queryByTestId('credential-card-cfg-2')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('catalog-load-alert')).not.toBeInTheDocument();
-    expect(screen.queryByText('catalog.empty.launchUnavailable')).not.toBeInTheDocument();
-    expect(screen.getByTestId('credentials-count')).toHaveTextContent('catalog.resultsCount:1');
-  });
-
-  it('keeps the Canvas catalog loading when the initial-organization request finishes first', async () => {
-    mockSearch = '?canvas_lti_state=state-1';
-    const canvasSession = deferred<any>();
-    const initialCredentials = deferred<any[]>();
-    const currentCredentials = deferred<any[]>();
-    const defaultGet = mockGet.getMockImplementation()!;
-    mockGet.mockImplementation((endpoint: string) => {
-      if (endpoint.includes('/experience-sessions/current')) return canvasSession.promise;
-      if (endpoint.includes('/v1/credential-templates')) {
-        return endpoint.includes('organization_id=org-1')
-          ? initialCredentials.promise
-          : currentCredentials.promise;
-      }
-      return defaultGet(endpoint);
-    });
-    render(<CredentialCatalog />);
-    await act(async () => canvasSession.resolve({
-      organization_id: 'marty-canvas-org',
-      credential_template_id: 'cfg-1',
-    }));
-    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=marty-canvas-org&status=active');
-
-    await act(async () => initialCredentials.resolve([]));
-
-    expect(screen.queryByTestId('credentials-count')).not.toBeInTheDocument();
-    expect(screen.queryByText('catalog.empty.launchUnavailable')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('catalog-load-alert')).not.toBeInTheDocument();
-
-    await act(async () => currentCredentials.resolve(await defaultGet('/v1/credential-templates')));
-
-    expect(await screen.findByTestId('credential-card-cfg-1')).toBeInTheDocument();
-    expect(screen.getByTestId('credentials-count')).toHaveTextContent('catalog.resultsCount:1');
-  });
 
   it.each(['success', 'failure'])('ignores stale catalog and application %s after switching accounts in the same organization', async (outcome) => {
     const previousCredentials = deferred<any[]>();
@@ -642,7 +473,7 @@ describe('CredentialCatalog', () => {
     expect(screen.queryByText('Application Status')).not.toBeInTheDocument();
   });
 
-  it.each(['organization', 'account', 'Canvas launch'])('closes credential details when the %s scope changes', async (scope) => {
+  it.each(['organization', 'account'])('closes credential details when the %s scope changes', async (scope) => {
     const { user, rerender } = render(<CredentialCatalog />);
     const originalCard = await screen.findByTestId('credential-card-cfg-1');
     await user.click(within(originalCard).getByTestId('credential-details-btn'));
@@ -652,23 +483,16 @@ describe('CredentialCatalog', () => {
       mockAuthState.organizationId = 'org-2';
     } else if (scope === 'account') {
       mockAuthState.user = { user_id: 'user-2' };
-    } else {
-      mockSearch = '?canvas_lti_state=another-course';
-      mockLocationState = { canvasLtiSession: {
-        organization_id: 'org-1',
-        credential_template_id: 'cfg-2',
-        application_template_id: 'app-tpl-2',
-      } };
     }
     rerender(<CredentialCatalog />);
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(mockNavigate).not.toHaveBeenCalled();
-    const currentCard = await screen.findByTestId(`credential-card-${scope === 'Canvas launch' ? 'cfg-2' : 'cfg-1'}`);
+    const currentCard = await screen.findByTestId('credential-card-cfg-1');
     await user.click(within(currentCard).getByTestId('credential-details-btn'));
     const currentDialog = await screen.findByRole('dialog');
-    expect(currentDialog).toHaveTextContent(scope === 'Canvas launch' ? 'Digital Passport' : 'Member Login Credential');
-    if (scope !== 'Canvas launch') {
+    expect(currentDialog).toHaveTextContent('Member Login Credential');
+    {
       await user.click(within(currentDialog).getByRole('button', { name: 'catalog.card.actions.apply' }));
       expect(mockNavigate).toHaveBeenCalledWith('/apply/cfg-1', {
         state: expect.objectContaining({ applicationTemplate: expect.objectContaining({
@@ -678,34 +502,18 @@ describe('CredentialCatalog', () => {
     }
   });
 
-  it('uses new route-provided Canvas context while a previous lookup is still pending', async () => {
-    const previousLaunch = deferred<any>();
-    const defaultGet = mockGet.getMockImplementation()!;
-    mockSearch = '?canvas_lti_state=previous-course';
-    mockGet.mockImplementation((endpoint: string) => endpoint.includes('/v1/integrations/canvas/lti/experience-sessions/current')
-      ? previousLaunch.promise
-      : defaultGet(endpoint));
-    const { rerender } = render(<CredentialCatalog />);
-    await waitFor(() => expect(mockGet.mock.calls.some(([endpoint]) => endpoint === '/v1/integrations/canvas/lti/experience-sessions/current')).toBe(true));
 
-    mockSearch = '?canvas_lti_state=current-course';
-    mockLocationState = { canvasLtiSession: {
-      organization_id: 'org-1',
-      credential_template_id: 'cfg-2',
-      application_template_id: 'app-tpl-2',
-    } };
-    rerender(<CredentialCatalog />);
-
-    expect(await screen.findByTestId('credential-card-cfg-2')).toBeInTheDocument();
-    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
-    expect(screen.getByTestId('credentials-count')).toHaveTextContent('catalog.resultsCount:1');
-    await act(async () => previousLaunch.resolve({
-      organization_id: 'previous-org', credential_template_id: 'cfg-1', application_template_id: 'app-tpl-1',
-    }));
-
-    expect(screen.getByTestId('credential-card-cfg-2')).toBeInTheDocument();
-    expect(screen.queryByTestId('credential-card-cfg-1')).not.toBeInTheDocument();
-    expect(mockGet.mock.calls.filter(([endpoint]) => String(endpoint).includes('/v1/integrations/canvas/lti/experience-sessions/current'))).toHaveLength(1);
-    expect(mockGet).not.toHaveBeenCalledWith('/v1/credential-templates?organization_id=previous-org&status=active');
+  it('ignores legacy launch state and uses the authenticated organization', async () => {
+    mockSearch = '?canvas_lti_state=retired';
+    mockLocationState = { canvasLtiSession: { organization_id: 'foreign-org', credential_template_id: 'cfg-2' } };
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-cfg-1');
+    expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=org-1&status=active');
+    expect(mockGet.mock.calls.some(([url]) => String(url).includes('/integrations/'))).toBe(false);
+    await user.click(within(card).getByTestId('apply-btn'));
+    expect(mockNavigate).toHaveBeenCalledWith('/apply/cfg-1', {
+      state: expect.not.objectContaining({ canvasLtiSession: expect.anything() }),
+    });
   });
+
 });

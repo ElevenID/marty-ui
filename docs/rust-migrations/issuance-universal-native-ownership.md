@@ -41,3 +41,14 @@ Required source gates:
 - first-party direct-client anti-bypass checks;
 - existing DIDComm consumer, base/native Compose, Kubernetes, conformance and
   Envoy regression suites.
+
+
+Current platform scope excludes the 59 retired provider HTTP operations. The
+frozen 131-route observation remains unchanged: 63 current native operations,
+nine retained legacy operations and those 59 historical routes are disjoint.
+The ownership contract's current packaged-image loader is
+`selfhost_public_image_loader_isolated`; it proves retained platform startup and
+custody, not the removed provider worker lifecycle or connector qualification.
+Historical provider retirement evidence remains in Git at `3dadd7a0`. Full Python
+service deletion remains unauthorized, and the existing DIDComm qualification
+TODO is unchanged.

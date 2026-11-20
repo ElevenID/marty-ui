@@ -3,7 +3,6 @@
 from copy import deepcopy
 from pathlib import Path
 import runpy
-import re
 
 import pytest
 import yaml
@@ -182,71 +181,20 @@ def test_regular_file_guard_does_not_confuse_config_render_with_file_existence(
         GATE["assert_model"](baseline, selected, path)
 
 
-def assert_registration(source, runner, workflow):
-    for name in (
-        "base_profile_envoy_composition_isolated",
-        "base_profile_envoy_composition_child",
-        "envoy_actual_image_validates_candidate",
-    ):
-        matches = re.findall(
-            r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
-        )
-        attribute = (
-            '#[tokio::test(flavor = "multi_thread")]\n'
-            if name == "base_profile_envoy_composition_child"
-            else "#[tokio::test]\n"
-        )
-        assert matches == [attribute], name
-        assert f"'{name}: test'" in runner, name
-    assert "preflight_skips=()" in runner
-    assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
-    assert '[[ -f "$evidence" ]]' in runner
-    assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
-        in runner
-    )
-    jobs = workflow["jobs"]
-    steps = jobs["test-rust-services"]["steps"]
-    builds = [
-        step
-        for step in steps
-        if "docker build --tag marty-envoy:native-contract config/envoy"
-        in step.get("run", "")
-    ]
-    assert len(builds) == 1
-    assert not builds[0].get("continue-on-error")
-    assert builds[0]["if"] == "matrix.lane == 'canvas'"
-    assert "MARTY_ENVOY_TEST_IMAGE=%s" in builds[0]["run"]
-    compose = [
-        step
-        for step in jobs["test-rust-service-images"]["steps"]
-        if "scripts/test_envoy_native_compose.py" in step.get("run", "")
-    ]
-    assert (
-        len(compose) == 1
-        and "if" not in compose[0]
-        and not compose[0].get("continue-on-error")
-    )
+def require_model_gate(workflow):
+    steps = workflow["jobs"]["test-rust-service-images"]["steps"]
+    selected = [step for step in steps if "scripts/test_envoy_native_compose.py" in step.get("run", "")]
+    assert len(selected) == 1
+    assert "if" not in selected[0]
+    assert not selected[0].get("continue-on-error")
 
 
-def registration_inputs():
-    return (
-        (
-            ROOT
-            / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
-        ).read_text(encoding="utf-8"),
-        (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
-            encoding="utf-8"
-        ),
-        yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")),
-    )
+def test_current_envoy_compose_model_gate_is_mandatory():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    require_model_gate(workflow)
 
 
-def test_actual_envoy_gate_is_mandatory_and_unignored():
-    assert_registration(*registration_inputs())
-
-
-def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
+def test_scalar_yaml_contract_retains_its_fast_renderer_owner():
     name = "feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers"
     renderer = (ROOT / "rust/crates/release-evidence/src/envoy_config.rs").read_text(
         encoding="utf-8"
@@ -263,50 +211,18 @@ def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
         'serde_json = { workspace = true, features = ["arbitrary_precision"] }'
         in manifest
     )
-    assert_registration(*registration_inputs())
 
 
-@pytest.mark.parametrize(
-    "kind",
-    (
-        "ignored",
-        "cfg",
-        "missing-body",
-        "missing-runner",
-        "missing-image",
-        "optional-image",
-        "missing-compose",
-    ),
-)
-def test_disconnected_or_optional_runtime_gate_is_rejected(kind):
-    source, runner, workflow = registration_inputs()
-    name = "base_profile_envoy_composition_isolated"
-    if kind == "ignored":
-        source = source.replace(f"async fn {name}", f"#[ignore]\nasync fn {name}")
-    elif kind == "cfg":
-        source = source.replace(f"async fn {name}", f"#[cfg(any())]\nasync fn {name}")
-    elif kind == "missing-body":
-        source = source.replace(f"async fn {name}", "async fn disconnected")
-    elif kind == "missing-runner":
-        runner = runner.replace(f"'{name}: test'", "'disconnected: test'")
-    elif kind in ("missing-image", "optional-image"):
-        steps = workflow["jobs"]["test-rust-services"]["steps"]
-        step = next(
-            step
-            for step in steps
-            if "docker build --tag marty-envoy:native-contract config/envoy"
-            in step.get("run", "")
-        )
-        if kind == "missing-image":
-            steps.remove(step)
-        else:
-            step["continue-on-error"] = True
+@pytest.mark.parametrize("fault", ["missing", "optional", "conditional"])
+def test_disconnected_or_optional_model_gate_is_rejected(fault):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["test-rust-service-images"]["steps"]
+    step = next(step for step in steps if "scripts/test_envoy_native_compose.py" in step.get("run", ""))
+    if fault == "missing":
+        steps.remove(step)
+    elif fault == "optional":
+        step["continue-on-error"] = True
     else:
-        steps = workflow["jobs"]["test-rust-service-images"]["steps"]
-        steps[:] = [
-            step
-            for step in steps
-            if "scripts/test_envoy_native_compose.py" not in step.get("run", "")
-        ]
+        step["if"] = "false"
     with pytest.raises(AssertionError):
-        assert_registration(source, runner, workflow)
+        require_model_gate(workflow)

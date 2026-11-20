@@ -387,7 +387,7 @@ def delivery(verification: Path, intent: dict, original: dict, legacy: dict, tra
     inspection.openbao_identity(transport, original["images"]["openbao_didcomm"], uid=openbao["uid"])
     write(verification / "delivery.json", {"schema": adoption.DELIVERY_SCHEMA, "binding": intent["binding"],
         "adoptionId": intent["adoptionId"], "candidateInputs": intent["candidateInputs"],
-        "secretCount": 34, "workloadCount": 16, "workloads": observed_workloads,
+        "secretCount": 34, "workloadCount": len(reload.WORKLOADS), "workloads": observed_workloads,
         "observationHashes": observation_hashes, "credentialDeliveryVerified": True,
         "credentialConsumptionVerified": False})
 

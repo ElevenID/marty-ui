@@ -94,22 +94,6 @@ server {
     {{- else }}
     location ~ ^/(realms|resources)/ { return 404; }
     {{- end }}
-    location ^~ /v1/integrations/canvas/lti/ {
-        proxy_pass http://gateway:8000;
-        proxy_hide_header X-Frame-Options;
-        proxy_hide_header Content-Security-Policy;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Content-Security-Policy "frame-ancestors {{ .Values.ui.canvasFrameAncestors }}" always;
-    }
-    location = /canvas/lti/experience {
-        {{- if $development.enabled }}
-        {{- include "marty.uiDevelopmentProxy" . | nindent 8 }}
-        {{- else }}
-        try_files /index.html =404;
-        {{- end }}
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Content-Security-Policy "frame-ancestors {{ .Values.ui.canvasFrameAncestors }}" always;
-    }
     {{- if $development.enabled }}
     # Retain the deployment's public runtime flags from the installed UI image.
     location = /runtime-config.js { try_files $uri =404; }

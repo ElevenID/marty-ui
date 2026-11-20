@@ -1,5 +1,7 @@
 # Beta stack releases
 
+
+The platform release runner excludes the external Canvas connector. Its protocol, provider and deployment workflows belong to `canvas-integration`; production connector qualification and cutover are separate work. Historical source snapshots are not a supported deployment recipe.
 Marty beta delivery is an aggregate, immutable Rust stack release. The former
 per-repository Python-wheel beta process is retired. Do not publish or install
 Python MMF beta packages and do not recreate `release-beta.yml` workflows.
@@ -217,7 +219,7 @@ aggregate release completes the same gates.
 The historical passport aggregate and SQL cutover entrypoints now refuse
 execution. Their [acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md)
 retains historical evidence; it is not a current executable deployment sequence.
-`deploy-canvas-oss-beta.ps1` still calls the active local beta transaction in
+`deploy-governed-beta-release.ps1` still calls the active local beta transaction in
 `deploy-local-beta-release.ps1`, which invokes Rust migration binaries. That
 transaction does not substitute for source-bound Passport acceptance or remove
 the physical-provider and post-mutation recovery holds.
@@ -256,7 +258,7 @@ git worktree add --detach $releaseWorktree $releaseTag
 New-Item -ItemType Directory -Force -Path $releaseArtifacts | Out-Null
 gh release download $releaseTag --repo ElevenID/marty-ui --dir $releaseArtifacts
 
-& (Join-Path $releaseWorktree "scripts\deploy-canvas-oss-beta.ps1") `
+& (Join-Path $releaseWorktree "scripts\deploy-governed-beta-release.ps1") `
   -ArtifactDir $releaseArtifacts `
   -AuditPath (Join-Path $releaseArtifacts "beta-deployment-audit.json") `
   -OfficialStackRelease `
@@ -287,7 +289,7 @@ immediately before the maintenance window. It retains the existing preflight
 backup, isolated migration rehearsal, quiesced backup, supervised rollback,
 runtime-marker, public-origin, and self-host-production invariant gates. A
 `-PlanOnly` invocation of the lower-level runner performs no artifact writes;
-the governed Canvas wrapper intentionally performs the actual maintenance-window
+the governed beta wrapper intentionally performs the actual maintenance-window
 deployment and audit.
 
 ## Recovery dispatch

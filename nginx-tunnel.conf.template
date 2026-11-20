@@ -6,8 +6,6 @@
 #   PUBLIC_DOMAIN    - The public domain (e.g., beta.elevenidllc.com)
 #   UI_DEV_PORT      - The port where the UI runs on the host (default: 3000)
 #   GATEWAY_UPSTREAM - The backend gateway upstream reachable from Docker
-#   CANVAS_REAL_PUBLIC_HOST - Public hostname for real Canvas route
-#   CANVAS_SANDBOX_PUBLIC_HOST - Public hostname for Canvas sandbox route
 #   NORTHSTAR_ADMISSIONS_PUBLIC_HOST - Public hostname for the D-11 partner app
 
 # Use variable to force DNS resolution at runtime (IPv4 only)
@@ -267,25 +265,6 @@ server {
         proxy_set_header X-Forwarded-Host $host;
     }
 
-    # Canvas LTI launches are intentionally embedded inside Canvas. Keep this
-    # exception narrow so the rest of the app remains protected by SAMEORIGIN.
-    location ^~ /v1/integrations/canvas/lti/ {
-        set $backend_api ${GATEWAY_UPSTREAM};
-        proxy_pass http://$backend_api;
-        proxy_http_version 1.1;
-        proxy_redirect off;
-        proxy_hide_header X-Frame-Options;
-        proxy_hide_header Content-Security-Policy;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
-    }
-
     # V1 API routes (including auth endpoints)
     location /v1/ {
         set $backend_api ${GATEWAY_UPSTREAM};
@@ -359,33 +338,6 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Canvas LTI embedded experience. This route is the React landing page after
-    # the verified launch callback and must render inside the Canvas iframe.
-    location = /canvas/lti/experience {
-        set $ui_upstream host.docker.internal:${UI_DEV_PORT};
-        proxy_pass http://$ui_upstream;
-        proxy_http_version 1.1;
-        proxy_hide_header X-Frame-Options;
-        proxy_hide_header Content-Security-Policy;
-
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Content-Security-Policy "frame-ancestors 'self' https://${CANVAS_REAL_PUBLIC_HOST} https://${CANVAS_SANDBOX_PUBLIC_HOST} http://localhost:8088" always;
-
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
-    }
-
     # UI routes - proxy to Vite dev server on host
     location / {
         set $ui_upstream host.docker.internal:${UI_DEV_PORT};
@@ -432,59 +384,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-# ==========================================================================
-# Real Canvas LMS test environment — ${CANVAS_REAL_PUBLIC_HOST}
-# ==========================================================================
-# Requires a Cloudflare tunnel public hostname entry:
-#   ${CANVAS_REAL_PUBLIC_HOST} → http://tunnel-nginx-proxy:80
-# ==========================================================================
-server {
-    listen 80;
-    server_name ${CANVAS_REAL_PUBLIC_HOST};
-
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-
-    location / {
-        set $canvas_real_upstream canvas-real:3000;
-        proxy_pass http://$canvas_real_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
-    }
-}
-
-# ==========================================================================
-# Canvas Credentials Test Sandbox — ${CANVAS_SANDBOX_PUBLIC_HOST}
-# ==========================================================================
-# Requires a Cloudflare tunnel public hostname entry:
-#   ${CANVAS_SANDBOX_PUBLIC_HOST} → http://tunnel-nginx-proxy:80
-# ==========================================================================
-server {
-    listen 80;
-    server_name ${CANVAS_SANDBOX_PUBLIC_HOST};
-
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-
-    location / {
-        set $canvas_sandbox_upstream canvas-sandbox:8017;
-        proxy_pass http://$canvas_sandbox_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
     }
 }
 

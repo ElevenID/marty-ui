@@ -1,13 +1,10 @@
 use axum::{routing::post, Json, Router};
 use chrono::{Duration, TimeZone, Utc};
 use hmac::{Hmac, Mac};
-use marty_issuance_service::canvas_issuance_guard::{
-    CanvasGuardConfig, PostgresCanvasIssuanceGuard,
-};
 use marty_issuance_service::credential::{
     CredentialAccessTokenGrant, CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
     CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
-    IssuedCredential, IssuerContext,
+    IssuedCredential,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_management::{
@@ -38,7 +35,7 @@ use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
-use std::{collections::BTreeSet, time::Duration as StdDuration};
+use std::time::Duration as StdDuration;
 use url::Url;
 use uuid::Uuid;
 
@@ -315,7 +312,7 @@ fn token_digest(key: &[u8], token: &str) -> String {
 }
 
 #[tokio::test]
-async fn credential_management_repository_is_concurrency_safe_and_canvas_durable() {
+async fn credential_management_repository_is_concurrency_safe_and_audited() {
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;
     };
@@ -508,46 +505,10 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
             .is_err(),
         "a stale lifecycle writer must not overwrite the canonical status"
     );
-    repository
-        .synchronize_canvas(
-            &credential,
-            CredentialLifecycleAction::Suspend,
-            Some("manual review"),
-        )
-        .await
-        .expect("durable Canvas lifecycle request");
-    let metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(metadata["status_sync_state"], "pending");
-    assert_eq!(metadata["last_status_sync_action"], "suspend");
-    assert_eq!(metadata["requested_credential_status"], "suspended");
-    assert_eq!(metadata["requested_status_sync_reason"], "manual review");
-    assert!(repository
-        .synchronize_canvas(
-            &credential,
-            CredentialLifecycleAction::Suspend,
-            Some("-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----"),
-        )
-        .await
-        .is_err());
-    let retained_metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(retained_metadata, metadata);
-
     let mut credential = credential;
     credential.status = ManagedCredentialStatus::Active;
     credential.status_updated_at = Utc::now();
-    let credential = repository
+    let _credential = repository
         .persist(
             &credential,
             ManagedCredentialStatus::Suspended,
@@ -559,20 +520,6 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
         )
         .await
         .expect("reinstate projection persistence");
-    repository
-        .synchronize_canvas(&credential, CredentialLifecycleAction::Reinstate, None)
-        .await
-        .expect("nullable Canvas lifecycle reason");
-    let metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(metadata["requested_credential_status"], "active");
-    assert!(metadata["requested_status_sync_reason"].is_null());
-
     let events: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT event_type, metadata FROM issuance_service.issuance_events
          WHERE transaction_id = 'transaction-managed' ORDER BY created_at, id",
@@ -697,56 +644,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         .unwrap()
         .expect("Python-compatible HMAC token lookup");
     assert_eq!(transaction.nonce.as_deref(), Some(nonce.as_str()));
-    let guard = PostgresCanvasIssuanceGuard::new(
-        pool.clone(),
-        CanvasGuardConfig {
-            enabled: true,
-            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
-            evidence_max_age: StdDuration::from_secs(900),
-            readiness_max_age: StdDuration::from_secs(900),
-        },
-    );
-    let issuer_did = "did:web:issuer.example";
-    let issuer = IssuerContext {
-        issuer_profile_id: "issuer-profile-a".to_owned(),
-        issuer_did: issuer_did.to_owned(),
-        signing_service_id: "kms-service-a".to_owned(),
-        algorithm: "ES256".to_owned(),
-        verification_method_id: Some(format!("{issuer_did}#key-a")),
-        public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
-        certificate_chain: Vec::new(),
-        raw_context: json!({
-            "organization_id":"org-a", "issuer_did":issuer_did,
-            "verification_method_id":format!("{issuer_did}#key-a"),
-            "key_purpose":"vc_jwt_issuer", "algorithm":"ES256",
-            "public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y"},
-            "issuer_profile":{
-                "id":"issuer-profile-a", "status":"active", "organization_id":"org-a",
-                "issuer_did":issuer_did, "verification_method_id":format!("{issuer_did}#key-a"),
-                "key_purpose":"vc_jwt_issuer"
-            },
-            "service":{"id":"kms-service-a","algorithm":"ES256"}
-        }),
-    };
-    assert!(guard.ensure_ready(&transaction, &issuer).await.unwrap());
-    sqlx::query(
-        "UPDATE issuance_service.evidence_facts
-         SET verification = '{\"status\":\"UNVERIFIED\"}'::jsonb WHERE id = 'fact-a'",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    assert!(matches!(
-        guard.ensure_ready(&transaction, &issuer).await,
-        Err(CredentialIssuanceError::CanvasEligibilityDenied)
-    ));
-    sqlx::query(
-        "UPDATE issuance_service.evidence_facts
-         SET verification = '{\"status\":\"VERIFIED\"}'::jsonb WHERE id = 'fact-a'",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     let credential_id = "urn:uuid:credential-postgres-contract";
     let authorization = CredentialSigningAuthorization {
         transaction: &transaction,
@@ -817,6 +714,50 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
             0
         );
     }
+    assert!(matches!(
+        repository
+            .finalize(&claimed, &issued, "notification-contract")
+            .await,
+        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE transaction_id=$1"
+        )
+        .bind(&claimed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE issuance_service.applications SET organization_id='other-tenant' WHERE id='application-a'")
+        .execute(&pool).await.unwrap();
+    assert!(matches!(
+        repository
+            .finalize(&claimed, &issued, "notification-contract")
+            .await,
+        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE transaction_id=$1"
+        )
+        .bind(&claimed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::query(
+        "UPDATE issuance_service.applications SET organization_id='org-a' WHERE id='application-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Switch this disposable fixture to an ordinary application to exercise the
+    // independent canonical projection. This is not a production migration.
+    sqlx::query("UPDATE issuance_service.applications SET integration_context='{}'::jsonb WHERE id='application-a'")
+        .execute(&pool).await.unwrap();
     repository
         .finalize(&claimed, &issued, "notification-contract")
         .await
@@ -827,12 +768,6 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         revocation_url,
         Some("contract-service-token"),
         StdDuration::from_secs(1),
-        CanvasGuardConfig {
-            enabled: true,
-            pilot_organizations: BTreeSet::from(["org-a".to_owned()]),
-            evidence_max_age: StdDuration::from_secs(900),
-            readiness_max_age: StdDuration::from_secs(900),
-        },
     )
     .unwrap();
     lifecycle
@@ -1017,30 +952,27 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(candidate.try_get::<String, _>("state").unwrap(), "claimed");
+    assert_eq!(
+        candidate.try_get::<String, _>("state").unwrap(),
+        "pending_claim"
+    );
     assert_eq!(
         candidate
             .try_get::<Option<String>, _>("claimed_credential_id")
             .unwrap()
             .as_deref(),
-        Some(credential_id)
+        None
     );
-    let drift = sqlx::query(
-        "SELECT target_type, schedule_seconds, metadata
-         FROM issuance_service.canvas_evidence_sync_targets
-         WHERE organization_id = 'org-a' AND logical_key = 'application:application-a'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
     assert_eq!(
-        drift.try_get::<String, _>("target_type").unwrap(),
-        "issued_drift"
-    );
-    assert_eq!(drift.try_get::<i32, _>("schedule_seconds").unwrap(), 21_600);
-    assert_eq!(
-        drift.try_get::<serde_json::Value, _>("metadata").unwrap()["claimed_credential_id"],
-        credential_id
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_evidence_sync_targets
+             WHERE organization_id = 'org-a' AND logical_key = 'application:application-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0,
+        "platform issuance must not schedule provider drift work"
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -1060,25 +992,15 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0]
-            .try_get::<String, _>("delivery_target")
-            .unwrap(),
-        "canvas_credentials"
-    );
-    assert_eq!(
-        deliveries[0].try_get::<String, _>("status").unwrap(),
-        "pending"
-    );
-    assert_eq!(
-        deliveries[1]
             .try_get::<String, _>("delivery_target")
             .unwrap(),
         "wallet"
     );
     assert_eq!(
-        deliveries[1].try_get::<String, _>("status").unwrap(),
+        deliveries[0].try_get::<String, _>("status").unwrap(),
         "delivered"
     );
     let source = sqlx::query(

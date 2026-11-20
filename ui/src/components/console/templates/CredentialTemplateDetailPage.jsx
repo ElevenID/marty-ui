@@ -1,9 +1,7 @@
 import {
   Alert,
   Box,
-  Button,
   Chip,
-  Divider,
   LinearProgress,
   Paper,
   Stack,
@@ -15,11 +13,10 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import BadgeIcon from '@mui/icons-material/WorkspacePremium';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import WarningIcon from '@mui/icons-material/Warning';
-import { Link, useParams } from 'react-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useParams } from 'react-router';
+import { useState } from 'react';
 
 import { ResourcePage } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
@@ -27,55 +24,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { getCredentialTemplate } from '../../../services/presentationPolicyApi';
 import TemplateWalletCompatibility from './TemplateWalletCompatibility';
-import {
-  createDeliveryDestination,
-  listDeliveryDestinations,
-  updateDeliveryDestination,
-} from '../../../services/deliveryDestinationsApi';
-import {
-  getCanvasMirrorHealth,
-  listCanvasProgramBindings,
-} from '../../../services/canvasIntegrationsApi';
-
-const CANVAS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
-
-const CANVAS_CREDENTIALS_PROJECTION_POLICY = {
-  mode: 'public_badge',
-  allowed_claims: [
-    'achievement',
-    'issuer',
-    'credentialSubject',
-    'credentialStatus',
-    'provenance',
-  ],
-};
-
-function canvasCredentialsDestinationPayload(organizationId) {
-  return {
-    organization_id: organizationId,
-    name: 'Canvas Credentials',
-    description: 'Publish a public Open Badge view to Canvas Credentials after ElevenID issuance.',
-    provider: 'canvas_credentials',
-    mode: 'organization_mirror',
-    setup_actor: 'org_admin',
-    delivery_target: 'canvas_credentials',
-    connector_type: 'canvas_platform',
-    requires_consent: true,
-    claim_projection_policy: CANVAS_CREDENTIALS_PROJECTION_POLICY,
-    setup_requirements: [
-      'Canvas Credentials issuer/API access configured by an organization admin',
-      'Canvas program binding enabled for Canvas mirror delivery',
-    ],
-    capabilities: {
-      holder_wallet: false,
-      org_managed: true,
-      post_issuance_publish: true,
-      status_sync: true,
-      provenance: true,
-    },
-    is_enabled: true,
-  };
-}
+import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
 
 function formatDate(value) {
   if (!value) return 'Not recorded';
@@ -95,74 +44,17 @@ function formatFormat(template = {}) {
 }
 
 function providerLabel(destination = {}) {
-  if (destination.provider === 'canvas_credentials') return 'Canvas Credentials';
   if (destination.mode === 'holder_wallet') return 'Wallet';
   return destination.provider || destination.mode || 'Destination';
 }
 
 function destinationIcon(destination = {}) {
-  if (destination.provider === 'canvas_credentials') return <SyncAltIcon color="primary" />;
   if (destination.mode === 'holder_wallet') return <WalletIcon color="action" />;
   return <OpenInNewIcon color="action" />;
 }
 
-function metadataValue(value) {
-  if (value === true) return 'Enabled';
-  if (value === false) return 'Disabled';
-  return value || 'Not configured';
-}
-
-function healthCount(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0;
-}
-
-function healthChipColor(value) {
-  return healthCount(value) > 0 ? 'warning' : 'default';
-}
-
-function formatTimestamp(value) {
-  if (!value) return 'Not recorded';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
-
-function templateMatchesBinding(templateId, binding = {}) {
-  return (
-    binding.credential_template_id === templateId
-    || binding.metadata?.credential_template_id === templateId
-    || binding.canvas_credentials?.credential_template_id === templateId
-  );
-}
-
-function canvasCredentialsConfig(binding = {}) {
-  return binding.canvas_credentials || binding.metadata?.canvas_credentials || {};
-}
-
-function canvasTokenSource(config = {}) {
-  if (config.api_token_secret_id || config.api_token_secret_ref) return 'managed secret';
-  if (config.api_token || config.api_token_env || config.api_token_file) return 'legacy configuration (unsupported)';
-  return 'not configured';
-}
-
-function DestinationCard({
-  destination,
-  canvasBindings,
-  mirrorHealth,
-  orgCanvasDestination,
-  destinationBusy,
-  onCreateCanvasDestination,
-  onToggleCanvasDestination,
-  canCreateDestination,
-  canEditDestination,
-}) {
-  const isCanvas = destination.provider === 'canvas_credentials' || destination.id === CANVAS_DESTINATION_ID;
+function DestinationCard({ destination }) {
   const destinationEnabled = destination.is_enabled !== false;
-  const configured = !isCanvas || (destinationEnabled && canvasBindings.length > 0);
-  const projectionMode = destination.claim_projection_policy?.mode || destination.metadata?.projection_mode;
-  const alertCount = healthCount(mirrorHealth?.alert_count);
-  const failedPublishCount = healthCount(mirrorHealth?.failed_publish_count);
-  const syncFailureCount = healthCount(mirrorHealth?.lifecycle_sync_failed_count);
-
   return (
     <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }}>
       <Stack spacing={1.5}>
@@ -180,9 +72,9 @@ function DestinationCard({
           </Stack>
           <Chip
             size="small"
-            label={configured && destinationEnabled ? 'Configured' : 'Setup needed'}
-            color={configured ? 'success' : 'warning'}
-            icon={configured ? <CheckCircleIcon /> : <WarningIcon />}
+            label={destinationEnabled ? 'Enabled' : 'Disabled'}
+            color={destinationEnabled ? 'success' : 'default'}
+            icon={destinationEnabled ? <CheckCircleIcon /> : <WarningIcon />}
           />
         </Stack>
 
@@ -192,147 +84,13 @@ function DestinationCard({
           <Chip size="small" label={destination.credential_format || 'Any format'} variant="outlined" />
         </Box>
 
-        {isCanvas ? (
-          <>
-            <Divider />
-            <Stack spacing={1}>
-              <Typography variant="body2">
-                <strong>Projection:</strong> {metadataValue(projectionMode || 'public_badge_provenance')}
-              </Typography>
-              <Typography variant="body2">
-                <strong>Active bindings for this template:</strong> {canvasBindings.length}
-              </Typography>
-              {canvasBindings.map((binding) => (
-                <Box key={binding.id} sx={{ pl: 1, borderLeft: '3px solid', borderColor: 'primary.light' }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {binding.display_name || binding.canvas_scope?.course_id || binding.id}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Canvas scope: {binding.canvas_scope?.course_id || 'course not set'} / {binding.canvas_scope?.quiz_id || binding.canvas_scope?.assignment_id || 'activity not set'}
-                  </Typography>
-                  <Box sx={{ mt: 1, display: 'grid', gap: 0.5, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
-                    <Typography variant="caption">
-                      <strong>Provider:</strong> {metadataValue(canvasCredentialsConfig(binding).provider || 'badgr_api')}
-                    </Typography>
-                    <Typography variant="caption">
-                      <strong>Assertion scope:</strong> {metadataValue(canvasCredentialsConfig(binding).assertion_scope || 'badgeclasses')}
-                    </Typography>
-                    <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>
-                      <strong>Badge class:</strong> {metadataValue(canvasCredentialsConfig(binding).badgeclass_id || canvasCredentialsConfig(binding).canvas_credentials_badgeclass_id)}
-                    </Typography>
-                    <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>
-                      <strong>Issuer:</strong> {metadataValue(canvasCredentialsConfig(binding).issuer_id || canvasCredentialsConfig(binding).canvas_credentials_issuer_id)}
-                    </Typography>
-                    <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>
-                      <strong>API base:</strong> {metadataValue(canvasCredentialsConfig(binding).api_base_url || canvasCredentialsConfig(binding).canvas_credentials_api_base_url)}
-                    </Typography>
-                    <Typography variant="caption">
-                      <strong>Token:</strong> {canvasTokenSource(canvasCredentialsConfig(binding))}
-                    </Typography>
-                  </Box>
-                </Box>
-              ))}
-              {!canvasBindings.length ? (
-                <Typography variant="body2" color="text.secondary">
-                  Configure a Canvas program binding to mirror this badge to Canvas Credentials.
-                </Typography>
-              ) : null}
-              {destinationEnabled ? null : (
-                <Alert severity="warning">
-                  Canvas Credentials is disabled for this organization. Enable the destination before learners can consent to Canvas display.
-                </Alert>
-              )}
-            </Stack>
-            <Divider />
-            <Stack spacing={1} data-testid="credential-template-canvas-health">
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                Mirror health
-              </Typography>
-              {mirrorHealth ? <>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Chip
-                  size="small"
-                  label={`Pending: ${healthCount(mirrorHealth?.pending_publish_count)}`}
-                  color={healthChipColor(mirrorHealth?.pending_publish_count)}
-                  variant="outlined"
-                />
-                <Chip
-                  size="small"
-                  label={`Failed: ${failedPublishCount}`}
-                  color={failedPublishCount > 0 ? 'error' : 'default'}
-                  variant="outlined"
-                />
-                <Chip
-                  size="small"
-                  label={`Delivered: ${healthCount(mirrorHealth?.delivered_count)}`}
-                  color={healthCount(mirrorHealth?.delivered_count) > 0 ? 'success' : 'default'}
-                  variant="outlined"
-                />
-                <Chip
-                  size="small"
-                  label={`Sync failures: ${syncFailureCount}`}
-                  color={syncFailureCount > 0 ? 'error' : 'default'}
-                  variant="outlined"
-                />
-                <Chip
-                  size="small"
-                  label={`Alerts: ${alertCount}`}
-                  color={alertCount > 0 ? 'warning' : 'default'}
-                  variant="outlined"
-                />
-              </Box>
-              <Typography variant="caption" color="text.secondary">
-                Last successful publish: {formatTimestamp(mirrorHealth?.last_successful_publish_at)}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                Last status sync success: {formatTimestamp(mirrorHealth?.last_lifecycle_sync_success_at)}
-              </Typography>
-              {alertCount > 0 ? (
-                <Alert severity={mirrorHealth?.critical_alert_count > 0 ? 'error' : 'warning'}>
-                  Canvas mirror drift needs attention. Use Canvas setup to run the automation cycle or retry failed syncs.
-                </Alert>
-              ) : null}
-              </> : <Typography variant="body2">Delivery observations are unavailable.</Typography>}
-            </Stack>
-            <Box>
-              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                {!orgCanvasDestination && canCreateDestination ? (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={Boolean(destinationBusy)}
-                    onClick={onCreateCanvasDestination}
-                  >
-                    Add org destination
-                  </Button>
-                ) : orgCanvasDestination && canEditDestination ? (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={Boolean(destinationBusy)}
-                    onClick={onToggleCanvasDestination}
-                  >
-                    {orgCanvasDestination.is_enabled === false ? 'Enable destination' : 'Disable destination'}
-                  </Button>
-                ) : null}
-                <Button component={Link} to="/console/org/deploy/canvas" size="small" endIcon={<OpenInNewIcon />}>
-                  Manage Canvas platforms
-                </Button>
-              </Stack>
-            </Box>
-          </>
-        ) : null}
       </Stack>
     </Paper>
   );
 }
 
-function CredentialTemplateDetail({ templateId, organizationId, canViewDestinations, canViewCanvas, canCreateDestination, canEditDestination }) {
-  const mounted = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+function CredentialTemplateDetail({ templateId, organizationId, canViewDestinations }) {
   const [activeTab, setActiveTab] = useState('overview');
-  const [destinationBusy, setDestinationBusy] = useState(false);
-  const [destinationError, setDestinationError] = useState(null);
 
   const {
     data: template,
@@ -346,12 +104,10 @@ function CredentialTemplateDetail({ templateId, organizationId, canViewDestinati
     return result;
   }, [templateId, organizationId]);
   const destinationsVisible = Boolean(template && activeTab === 'destinations' && canViewDestinations);
-  const canvasVisible = destinationsVisible && canViewCanvas;
 
   const {
     data: destinationsData = [],
     error: destinationsError,
-    reload: reloadDestinations,
   } = useAsyncData(
     () => {
       if (!destinationsVisible) return Promise.resolve([]);
@@ -366,82 +122,7 @@ function CredentialTemplateDetail({ templateId, organizationId, canViewDestinati
     [organizationId, destinationsVisible],
   );
 
-  const { data: bindingsData = [], error: bindingsError } = useAsyncData(
-    () => {
-      if (!canvasVisible) return Promise.resolve([]);
-      return listCanvasProgramBindings({ organizationId }).then((result) => {
-        if (!Array.isArray(result) || !result.every((binding) => binding?.organization_id === organizationId)) {
-          throw new Error('Canvas bindings are outside the selected organization.');
-        }
-        return result;
-      });
-    },
-    [organizationId, canvasVisible],
-  );
-
-  const { data: mirrorHealth = null, error: mirrorHealthError } = useAsyncData(
-    () => {
-      if (!canvasVisible) return Promise.resolve(null);
-      return getCanvasMirrorHealth(organizationId).then((result) => {
-        if (result?.organization_id !== organizationId) throw new Error('Canvas delivery observations are outside the selected organization.');
-        return result;
-      });
-    },
-    [organizationId, canvasVisible],
-  );
-
   const destinations = Array.isArray(destinationsData) ? destinationsData : [];
-  const canvasBindings = useMemo(
-    () => (Array.isArray(bindingsData) ? bindingsData.filter((binding) => templateMatchesBinding(templateId, binding)) : []),
-    [bindingsData, templateId],
-  );
-
-  const orgCanvasDestination = destinations.find((destination) => (
-    destination.provider === 'canvas_credentials'
-    && destination.mode === 'organization_mirror'
-    && !destination.is_system
-  ));
-  const systemCanvasDestination = destinations.find((destination) => (
-    destination.id === CANVAS_DESTINATION_ID
-    || (destination.provider === 'canvas_credentials' && destination.mode === 'organization_mirror')
-  ));
-  const canvasDestination = orgCanvasDestination || systemCanvasDestination || null;
-  const orderedDestinations = [
-    ...(canvasDestination ? [canvasDestination] : []),
-    ...destinations.filter((destination) => destination !== canvasDestination),
-  ];
-
-  const createCanvasDestination = async () => {
-    if (!canCreateDestination) return;
-    setDestinationBusy(true);
-    setDestinationError(null);
-    try {
-      await createDeliveryDestination(canvasCredentialsDestinationPayload(organizationId));
-      if (!mounted.current) return;
-      await reloadDestinations();
-    } catch (err) {
-      if (mounted.current) setDestinationError(err);
-    } finally {
-      if (mounted.current) setDestinationBusy(false);
-    }
-  };
-
-  const toggleCanvasDestination = async () => {
-    if (!orgCanvasDestination || !canEditDestination) return;
-    setDestinationBusy(true);
-    setDestinationError(null);
-    try {
-      await updateDeliveryDestination(orgCanvasDestination.id, {
-        is_enabled: orgCanvasDestination.is_enabled === false,
-      });
-      if (!mounted.current) return;
-      await reloadDestinations();
-    } catch (err) {
-      if (mounted.current) setDestinationError(err);
-    } finally {
-      if (mounted.current) setDestinationBusy(false);
-    }
-  };
 
   return (
     <ResourcePage
@@ -509,46 +190,22 @@ function CredentialTemplateDetail({ templateId, organizationId, canViewDestinati
       ) : !canViewDestinations ? <Alert severity="error">You do not have permission to view delivery destinations.</Alert> : (
         <Stack spacing={2}>
           <Alert severity="info">
-            Destinations describe where an issued credential can be claimed or mirrored. Canvas Credentials is an organization-managed destination, not a holder wallet.
+            Destinations describe where an issued credential can be claimed or delivered.
             Configuration does not establish successful delivery or wallet interoperability.
           </Alert>
-          {!canViewCanvas && <Alert severity="info">Canvas binding and delivery observations require integration-connector:view permission.</Alert>}
-          {destinationError ? (
-            <Alert severity="error">
-              {destinationError?.message || String(destinationError)}
-            </Alert>
-          ) : null}
           {destinationsError ? (
             <Alert severity="error">
               {destinationsError?.message || 'Delivery destinations could not be loaded.'}
             </Alert>
           ) : null}
-          {bindingsError ? (
-            <Alert severity="warning">
-              {bindingsError?.message || 'Canvas program bindings could not be loaded.'}
-            </Alert>
-          ) : null}
-          {mirrorHealthError ? (
-            <Alert severity="warning">
-              {mirrorHealthError?.message || 'Canvas mirror health could not be loaded.'}
-            </Alert>
-          ) : null}
           <Stack spacing={2} data-testid="credential-template-destinations">
-            {orderedDestinations.map((destination) => (
+            {destinations.map((destination) => (
               <DestinationCard
                 key={destination.id}
                 destination={destination}
-                canvasBindings={destination.provider === 'canvas_credentials' || destination.id === CANVAS_DESTINATION_ID ? canvasBindings : []}
-                mirrorHealth={destination.provider === 'canvas_credentials' || destination.id === CANVAS_DESTINATION_ID ? mirrorHealth : null}
-                orgCanvasDestination={orgCanvasDestination}
-                destinationBusy={destinationBusy}
-                onCreateCanvasDestination={createCanvasDestination}
-                onToggleCanvasDestination={toggleCanvasDestination}
-                canCreateDestination={canCreateDestination}
-                canEditDestination={canEditDestination}
               />
             ))}
-            {!orderedDestinations.length && !destinationsError ? (
+            {!destinations.length && !destinationsError ? (
               <Paper variant="outlined" sx={{ p: 3, borderRadius: 1, textAlign: 'center' }}>
                 <AccountTreeIcon color="disabled" />
                 <Typography variant="body2" color="text.secondary">
@@ -572,9 +229,6 @@ function CredentialTemplateDetailPage() {
   if (!can('credential-template', 'view')) return <Alert severity="error">You do not have permission to view credential templates.</Alert>;
   const grants = {
     canViewDestinations: can('wallet', 'view'),
-    canViewCanvas: can('integration-connector', 'view'),
-    canCreateDestination: can('integration-connector', 'create'),
-    canEditDestination: can('integration-connector', 'edit'),
   };
   return <CredentialTemplateDetail key={`${activeOrgId}:${templateId}:${Object.values(grants).join(':')}`} organizationId={activeOrgId} templateId={templateId} {...grants} />;
 }

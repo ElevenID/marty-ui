@@ -160,20 +160,6 @@ export function filterCredentialCatalogItems(credentials = [], { searchTerm = ''
   });
 }
 
-export function scopeCredentialCatalogItemsForCanvasLaunch(credentials = [], { credentialTemplateIds = [] } = {}) {
-  const allowedTemplateIds = new Set(
-    (Array.isArray(credentialTemplateIds) ? credentialTemplateIds : [credentialTemplateIds])
-      .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
-      .map((value) => String(value))
-  );
-
-  if (allowedTemplateIds.size === 0) {
-    return credentials;
-  }
-
-  return credentials.filter((credential) => allowedTemplateIds.has(String(credential?.id)));
-}
-
 export function resolveCredentialApplicationPath({
   credentialId,
   applicationTemplateId,
@@ -192,28 +178,6 @@ export function resolveCredentialApplicationPath({
   }
 
   return `/apply/${credentialId}`;
-}
-
-function buildCanvasLtiQuery(canvasLtiContext = null) {
-  if (!canvasLtiContext || !canvasLtiContext.state) {
-    return '';
-  }
-
-  const query = new URLSearchParams({ canvas_lti_state: String(canvasLtiContext.state) });
-  const optionalParams = {
-    canvas_program_binding_id: canvasLtiContext.canvas_program_binding_id,
-    canvas_platform_id: canvasLtiContext.canvas_platform_id,
-    application_template_id: canvasLtiContext.application_template_id,
-    credential_template_id: canvasLtiContext.credential_template_id,
-  };
-
-  for (const [key, value] of Object.entries(optionalParams)) {
-    if (value !== null && value !== undefined && String(value).trim() !== '') {
-      query.set(key, String(value));
-    }
-  }
-
-  return query.toString();
 }
 
 export function buildCredentialApplicationNavigationState(credential, options = {}) {
@@ -235,16 +199,14 @@ export function buildCredentialApplicationNavigationState(credential, options = 
   });
   const navigationQuery = options.isPreview
     ? new URLSearchParams({ organization_id: applicationTemplate.organization_id }).toString()
-    : buildCanvasLtiQuery(options.canvasLtiContext);
+    : '';
   const state = {
     credential: serializableCredential,
   };
   if (applicationTemplate) {
     state.applicationTemplate = applicationTemplate;
   }
-  if (!options.isPreview && options.canvasLtiSession) {
-    state.canvasLtiSession = options.canvasLtiSession;
-  }
+
 
   return {
     path: navigationQuery ? `${basePath}?${navigationQuery}` : basePath,

@@ -1,6 +1,6 @@
 {
   "schema": "marty.beta-release-wrapper-selectors/v1",
-  "wrapper": "scripts/deploy-canvas-oss-beta.ps1",
+  "wrapper": "scripts/deploy-governed-beta-release.ps1",
   "runner": "scripts/deploy-local-beta-release.ps1",
   "beta_origin": "https://beta.elevenidllc.com",
   "selectors": {

@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "status": "destination-foundation-and-extraction-audit",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "ref": "main",
+    "commit": "9e098423b5d98bc1bb50147f6cf1412973256144"
+  },
+  "destination_settings_checkpoint": {
+    "date": "2026-11-15",
+    "timezone": "America/Denver",
+    "repositories": [
+      "platform",
+      "website"
+    ],
+    "ruleset_target": "default-branch",
+    "ruleset_enforcement": "active",
+    "pull_request_required": true,
+    "resolved_review_threads_required": true,
+    "required_approvals": 0,
+    "bypass_actors": [],
+    "branch_deletion_blocked": true,
+    "force_push_blocked": true,
+    "actions_full_commit_sha_required": true,
+    "external_contributor_approval_required": true,
+    "default_workflow_token_permissions": "read-only",
+    "actions_create_or_approve_pull_requests": false
+  },
+  "website_static_import_audit": {
+    "source_repository": "ElevenID/marty-ui",
+    "source_commit": "df6ec6c4bfee803d89c54e9333297f29f378cee3",
+    "observed_files": 79,
+    "scope": "static-source-imports-only",
+    "qualified_export_manifest": false,
+    "remaining_audits": [
+      "assets",
+      "locales",
+      "tests",
+      "packages",
+      "prerender",
+      "docker",
+      "workflows",
+      "provenance"
+    ]
+  },
+  "targets": [
+    {
+      "repository": "platform",
+      "destination": {
+        "repository_id": 1459541945,
+        "visibility": "public",
+        "default_branch": "main",
+        "main_content": "readme-only",
+        "ruleset_id": 27350361,
+        "required_status_checks": []
+      },
+      "responsibility": "installer-deployment-release-lifecycle",
+      "source_candidates": [
+        "install.sh",
+        "manage-ui.sh",
+        "deploy-config/",
+        "deploy/",
+        "k8s/",
+        "openbao/",
+        "SELFHOST_BUNDLE.md",
+        "SELFHOST_OPENBAO.md",
+        "SELFHOST_DEPLOYMENT_CHECKLIST.md"
+      ],
+      "migration": "classify-and-extract",
+      "notes": "Only installer-owned orchestration, deployment contracts, release tooling and operator lifecycle. Do not transfer service implementation or unclassified shared runtime assets."
+    },
+    {
+      "repository": "website",
+      "destination": {
+        "repository_id": 1459542519,
+        "visibility": "public",
+        "default_branch": "main",
+        "main_content": "route-contract-and-validation-foundation",
+        "main_commit": "9136480448f380aa585ded15b075ce955fc684af",
+        "ruleset_id": 27350292,
+        "required_status_checks": [
+          {
+            "context": "Website contracts",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks": true,
+        "do_not_enforce_on_create": false,
+        "foundation_evidence": {
+          "pull_request": "https://github.com/ElevenID/website/pull/1",
+          "published_head": "08823069f4a11b2ddc43dcabc2948189a4ed26fd",
+          "tree": "318e7fd535b9f6243717f826c68bbcb2cd009cbd",
+          "workflow_run_id": 43812040235,
+          "workflow_job_id": 133115635465,
+          "tests_passed": 6,
+          "scope": "route-contract-and-validation-foundation-only"
+        }
+      },
+      "responsibility": "public-marketing-site",
+      "source_candidates": [
+        "contracts/website-source-ownership.json",
+        "contracts/web-surface-routes.json",
+        "ui/src/apps/website/",
+        "ui/src/variants/marketingRoutes.jsx",
+        "ui/src/variants/publicConfig.website.js",
+        "ui/src/data/marketingContent.js",
+        "ui/scripts/*website*",
+        "ui/nginx.website*.conf",
+        "scripts/website_release.py",
+        "scripts/website_provenance.py",
+        "scripts/deploy_website.py"
+      ],
+      "migration": "dependency-closure-required",
+      "notes": "Existing 34-module ownership manifest is the starting set only. Shared React imports, public assets, translations, Vite/prerender, Docker build context, blog dependency, private commerce producer and provenance identities require resolution."
+    },
+    {
+      "repository": "application",
+      "destination": {
+        "created": false
+      },
+      "responsibility": "authenticated-user-application",
+      "source_candidates": [
+        "ui/src/apps/",
+        "ui/src/application/",
+        "ui/src/contexts/",
+        "ui/src/hooks/",
+        "ui/src/components/"
+      ],
+      "migration": "after-website-extraction",
+      "notes": "Do not move broad directories wholesale. Retain only application-owned code after import and route classification."
+    },
+    {
+      "repository": "canvas-integration",
+      "responsibility": "independent-canvas-integration",
+      "source_candidates": [
+        "Provider-specific protocols, credentials, administration, workers and connector-owned storage"
+      ],
+      "migration": "source-split-complete",
+      "notes": "Existing ElevenID repository; source split merged. Public Common Gateway is the sole platform interface; Core/platform retains canonical identity, ownership, evidence, approval, signing and audit. Production adapters, activation and cutover remain separately owned TODOs with unsupported flows disabled. Keep historical provenance, graphics APIs and generic rejection guards with their actual owners; do not move files by Canvas name alone.",
+      "repository_url": "https://github.com/ElevenID/canvas-integration"
+    }
+  ],
+  "constraints": [
+    "preserve-git-history-where-practical",
+    "no-production-cutover-during-extraction",
+    "preserve-openbao-rootless-docker-tls-and-secrets-boundaries",
+    "preserve-original-artifact-provenance-and-signing",
+    "no-private-commerce-source-in-public-repositories",
+    "do-not-change-published-package-identities-incidentally",
+    "all-deployment-images-digest-pinned",
+    "preserve-destination-branch-and-actions-policies",
+    "require-successful-destination-ci-before-setting-status-gates",
+    "commit-and-push-small-validated-batches",
+    "do-not-delete-or-prematurely-rename-marty-ui"
+  ]
+}

@@ -116,11 +116,7 @@ pub(crate) fn render_selected(
                     .replace("${UI_UPSTREAM}", "ui:80")
                     .replace("${GATEWAY_UPSTREAM}", "gateway:8000")
                     .replace("${FLOW_UPSTREAM}", "flow:8011")
-                    .replace("${KEYCLOAK_UPSTREAM}", "keycloak:8080")
-                    // External Canvas is disabled in the installer profile.
-                    // These exact origins cannot authorize a foreign frame site.
-                    .replace("${CANVAS_REAL_PUBLIC_HOST}", authority)
-                    .replace("${CANVAS_SANDBOX_PUBLIC_HOST}", authority);
+                    .replace("${KEYCLOAK_UPSTREAM}", "keycloak:8080");
                 output.push_str(&resolved);
                 output.push('\n');
             }

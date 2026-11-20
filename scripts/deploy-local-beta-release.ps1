@@ -5,15 +5,11 @@ param(
 
     [string]$BetaOrigin = "https://beta.elevenidllc.com",
 
-    [switch]$EnablePortableCanvas,
-
     [switch]$EnableDidcommAuthcrypt,
 
     [switch]$EnablePassportNative,
 
     [switch]$EnablePassportPhysicalProvider,
-
-    [string]$CanvasOrigin = "https://canvas-test.elevenidllc.com",
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
 
@@ -50,7 +46,6 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 }
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-. (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-native-probes.ps1")
@@ -90,9 +85,7 @@ $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.beta.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.dev.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.tunnel.yml"),
-    (Join-Path $script:RepoRoot "docker-compose.profile.waltid.yml"),
-    (Join-Path $script:RepoRoot "docker-compose.profile.canvas-real.yml"),
-    (Join-Path $script:RepoRoot "docker-compose.profile.canvas-sandbox.yml")
+    (Join-Path $script:RepoRoot "docker-compose.profile.waltid.yml")
 )
 $didcommProfiles = @(Get-BetaDidcommProfiles -Enabled ([bool]$EnableDidcommAuthcrypt))
 foreach ($profile in $didcommProfiles) {
@@ -121,7 +114,6 @@ $script:ApplicationServices = @(
     "event-stream",
     "issuance",
     "issuance-native",
-    "canvas-sync-worker",
     "gateway"
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
@@ -670,9 +662,6 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
             runtime_marker_environment = $markerEnvironment
             rollback_environment = $rollbackEnvironment
         }
-        if ($target.service -eq "canvas-sync-worker") {
-            $record["rollback_launch"] = New-BetaWorkerRollbackLaunch -ContainerConfig $inspect.Config
-        }
         $records += $record
     }
     return $records
@@ -754,13 +743,6 @@ if (-not $script:ArtifactDir.StartsWith($artifactPrefix, [System.StringCompariso
 if ($BetaOrigin -cne "https://beta.elevenidllc.com") {
     throw "BetaOrigin must be https://beta.elevenidllc.com for the beta-only release"
 }
-if ($EnablePortableCanvas -and $CanvasOrigin -notmatch '^https://[^/]+$') {
-    throw "CanvasOrigin must be an absolute HTTPS origin without a path"
-}
-if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
-    throw "PilotOrganizationId must be a UUID"
-}
-
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
 if ($OfficialStackRelease) {
     if ($RecorderRevision -notmatch '^[0-9a-f]{40}$') {
@@ -1135,7 +1117,6 @@ Write-Host "Release input: $releaseInput"
 Write-Host "Origin: $BetaOrigin"
 Write-Host "Artifact directory: $script:ArtifactDir"
 Write-Host "Promotion eligible: $promotionEligible"
-Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
 Write-Host "DIDComm authcrypt enabled: $([bool]$EnableDidcommAuthcrypt)"
 Write-Host "Native passport enabled: $([bool]$EnablePassportNative)"
 Write-Host "Physical provider beta mode: $([bool]$EnablePassportPhysicalProvider)"
@@ -1152,7 +1133,6 @@ if ($PlanOnly) {
         promotion_eligible = $promotionEligible
         prepared_local_images = [bool]$UsePreparedLocalImages
         beta_origin = $BetaOrigin
-        portable_canvas_enabled = [bool]$EnablePortableCanvas
         didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
         didcomm_profiles = $didcommProfiles
         didcomm_configuration_validated = $false
@@ -1161,8 +1141,6 @@ if ($PlanOnly) {
         passport_mode = if ($EnablePassportPhysicalProvider) { "physical_provider_blocked" } elseif ($EnablePassportNative) { "simulator" } else { "off" }
         passport_profiles = $passportProfiles
         passport_configuration_validated = $false
-        canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
-        pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
         compose_project = $script:BetaProject
         ui_compose_project = $script:BetaUiProject
         network = $script:BetaNetwork
@@ -1261,7 +1239,7 @@ $runningCanvasBridge = @(& docker ps `
     --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0) { throw "Could not inspect optional Canvas localhost bridge before beta release" }
 if ($runningCanvasBridge.Count -ne 0) {
-    throw "Stop the optional Canvas localhost bridge before beta release; this public-Canvas deployment does not recreate it with issuance"
+    throw "The retired Canvas localhost bridge is still running; resolve it through the separately reviewed deployment migration before retrying this platform release"
 }
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
@@ -1581,7 +1559,6 @@ Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:En
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
     -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
     -PreparedServicesImage $script:PreparedPassportServicesImage
-$canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 $liveMutationStarted = $false
@@ -1653,22 +1630,6 @@ try {
     Invoke-VerificationMigration -Image $verificationMigrationImage `
         -DatabaseUrl $liveDatabaseUrl `
         -LogPath (Join-Path $logsDir "verification-migration-live.log")
-
-    if ($EnablePortableCanvas) {
-        Write-Step "Bind Canvas LTI signing to the seeded issuer DID"
-        $betaHost = ([Uri]$BetaOrigin).DnsSafeHost
-        $canvasLtiIssuerDid = "did:web:${betaHost}:orgs:marty"
-        $env:CANVAS_LTI_EXPERIENCE_BASE_URL = $BetaOrigin
-        $env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"
-        $env:CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID = $PilotOrganizationId
-        $env:CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid
-        $env:CANVAS_PORTABLE_INTEGRATION_ENABLED = "true"
-        $env:CANVAS_PILOT_ORGANIZATION_IDS = $PilotOrganizationId
-        $env:CANVAS_LEGACY_EVENT_INGEST_ENABLED = "false"
-        $env:CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST = $CanvasOrigin
-        $env:CANVAS_ALLOW_PRIVATE_BASE_URLS = "false"
-        $env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"
-    }
 
     Write-Step "Recreate infrastructure writers from release configuration"
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:InfrastructureWriterServices)
@@ -1820,14 +1781,6 @@ $deploymentManifest = [ordered]@{
     issuance_native_marker = $nativeIssuanceMarker
     ui_marker = $uiMarker
     images = $postDeployContainers
-    canvas_portable_configuration = [ordered]@{
-        enabled = [bool]$EnablePortableCanvas
-        canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
-        pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
-        lti_issuer_did = $canvasLtiIssuerDid
-        signing_resolution = if ($EnablePortableCanvas) { "organization-scoped-issuer-did" } else { $null }
-        legacy_event_ingest_enabled = $false
-    }
     deployed_at = (Get-Date).ToUniversalTime().ToString("o")
 }
 $deploymentManifestJson = $deploymentManifest | ConvertTo-Json -Depth 8

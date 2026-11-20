@@ -19,9 +19,8 @@ use marty_issuance_service::{
     },
     internal_application_domain::{
         ApplicationCreate, ApplicationRecord, ApplicationStatus, EvidenceFactRecord,
-        EvidenceFactResponse, EvidenceReconciliationMetrics, EvidenceReconciliationRecord,
-        EvidenceReconciliationResult, ExternalEvidenceApiCheckRequest,
-        ExternalEvidenceApiCheckResponse, IssuanceEventRecord, StaleCanvasEvidenceReceipt,
+        EvidenceFactResponse, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
+        IssuanceEventRecord,
     },
     internal_application_evidence::{
         InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
@@ -30,9 +29,6 @@ use marty_issuance_service::{
     internal_application_offer::{
         InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
         IssuanceOfferWallet,
-    },
-    internal_application_reconciliation::{
-        EvidenceReconciliationError, InternalApplicationReconciler,
     },
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationApprover, InternalApplicationClock,
@@ -169,128 +165,6 @@ async fn external_evidence_route_preserves_shape_lifecycle_and_redacted_transpor
         json!({"detail": "External evidence API request failed"})
     );
     assert!(!body.to_string().contains("secret-token"));
-}
-
-#[tokio::test]
-async fn reconciliation_routes_preserve_tenant_scope_clamps_and_response_shape() {
-    let repository = Arc::new(MemoryRepository::default());
-    repository.seed_application(application(
-        "application-1",
-        "org-123",
-        ApplicationStatus::Pending,
-    ));
-    let result = EvidenceReconciliationResult {
-        organization_id: "org-123".to_owned(),
-        dry_run: true,
-        metrics: EvidenceReconciliationMetrics {
-            scanned_applications: 1,
-            evaluated_policies: 1,
-            policy_permits: 1,
-            stale_receipts: 1,
-            ..EvidenceReconciliationMetrics::default()
-        },
-        records: vec![EvidenceReconciliationRecord {
-            application_id: "application-1".to_owned(),
-            status_before: "pending".to_owned(),
-            status_after: "pending".to_owned(),
-            action: "would_create_or_refresh_issuance_transaction".to_owned(),
-            fact_count: 1,
-            policy_decision: Some(
-                json!({"allowed": true})
-                    .as_object()
-                    .expect("policy")
-                    .clone(),
-            ),
-            issuance_transaction_id: None,
-            errors: Vec::new(),
-        }],
-        stale_receipts: vec![StaleCanvasEvidenceReceipt {
-            receipt_id: "receipt-1".to_owned(),
-            provider_event_id: "event-1".to_owned(),
-            canvas_account_id: Some("account-1".to_owned()),
-            application_id: Some("application-1".to_owned()),
-            status: "evidence_received".to_owned(),
-            reasons: vec!["receipt_without_policy_decision".to_owned()],
-            last_seen_at: "2026-09-19T12:34:56+00:00".to_owned(),
-        }],
-        generated_at: "2026-09-19T12:34:56+00:00".to_owned(),
-    };
-    let reconciler = Arc::new(FixedReconciler {
-        calls: Mutex::new(Vec::new()),
-        result: Ok(result),
-    });
-    let service = service_with_reconciler(repository, reconciler.clone());
-
-    let (status, body) = request(
-        &service,
-        Method::POST,
-        "/internal/applications/evidence/reconcile",
-        Some(json!({
-            "organization_id": "org-123",
-            "application_id": "application-1",
-            "limit": 0,
-            "dry_run": true,
-            "issue_on_permit": false,
-            "unknown": true
-        })),
-        Some("secret"),
-        Some("org-123"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["dry_run"], true);
-    assert_eq!(
-        body["records"][0]["action"],
-        "would_create_or_refresh_issuance_transaction"
-    );
-    assert_eq!(
-        body["stale_receipts"][0]["reasons"],
-        json!(["receipt_without_policy_decision"])
-    );
-
-    let (status, report) = request(
-        &service,
-        Method::GET,
-        "/internal/applications/evidence/reconciliation-report?organization_id=org-123&limit=5000",
-        None,
-        Some("secret"),
-        Some("org-123"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(report["metrics"]["stale_receipts"], 1);
-    assert_eq!(
-        reconciler
-            .calls
-            .lock()
-            .expect("reconciler calls")
-            .as_slice(),
-        [
-            (
-                "org-123".to_owned(),
-                Some("application-1".to_owned()),
-                1,
-                true,
-                false,
-            ),
-            ("org-123".to_owned(), None, 1000, true, true),
-        ]
-    );
-
-    let (status, body) = request(
-        &service,
-        Method::POST,
-        "/internal/applications/evidence/reconcile",
-        Some(json!({
-            "organization_id": "org-123",
-            "application_id": "missing"
-        })),
-        Some("secret"),
-        Some("org-123"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "Application not found"}));
 }
 
 #[derive(Default)]
@@ -496,34 +370,6 @@ struct FixedEvidence {
     result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
 }
 
-type ReconciliationCall = (String, Option<String>, usize, bool, bool);
-
-struct FixedReconciler {
-    calls: Mutex<Vec<ReconciliationCall>>,
-    result: Result<EvidenceReconciliationResult, EvidenceReconciliationError>,
-}
-
-#[async_trait]
-impl InternalApplicationReconciler for FixedReconciler {
-    async fn reconcile(
-        &self,
-        organization_id: &str,
-        application_id: Option<&str>,
-        limit: usize,
-        dry_run: bool,
-        issue_on_permit: bool,
-    ) -> Result<EvidenceReconciliationResult, EvidenceReconciliationError> {
-        self.calls.lock().expect("reconciler calls").push((
-            organization_id.to_owned(),
-            application_id.map(str::to_owned),
-            limit,
-            dry_run,
-            issue_on_permit,
-        ));
-        self.result.clone()
-    }
-}
-
 #[async_trait]
 impl InternalApplicationEvidenceCoordinator for FixedEvidence {
     async fn run_external_check(
@@ -708,13 +554,6 @@ fn service_with_evidence(
     result: Result<ExternalEvidenceApiCheckResponse, InternalApplicationEvidenceError>,
 ) -> InternalApplicationService {
     service(repository, Some("secret")).with_evidence(Arc::new(FixedEvidence { result }))
-}
-
-fn service_with_reconciler(
-    repository: Arc<MemoryRepository>,
-    reconciler: Arc<FixedReconciler>,
-) -> InternalApplicationService {
-    service(repository, Some("secret")).with_reconciler(reconciler)
 }
 
 async fn request(
@@ -1198,7 +1037,7 @@ async fn evidence_and_event_reads_match_the_frozen_typed_projections() {
     assert_eq!(summary["evidence_facts"], facts);
     assert_eq!(summary["policy_source"], "contract");
     assert_eq!(summary["policy_set_id"], "policy-1");
-    assert_eq!(summary["canvas"], json!({"course_id": "course-1"}));
+    assert!(summary.get("canvas").is_none());
     assert_eq!(summary["available_api_checks"][0]["check_id"], "check-1");
     assert_eq!(summary["available_api_checks"][0]["api_method"], "GET");
     assert!(summary.to_string().find("secret-token").is_none());
@@ -1342,11 +1181,6 @@ async fn approval_boundary_preserves_server_identity_validation_and_dependency_e
             InternalApplicationApprovalError::IssuerContextUnavailable,
             StatusCode::SERVICE_UNAVAILABLE,
             "Issuer signing context is unavailable.",
-        ),
-        (
-            InternalApplicationApprovalError::CanvasNotReady,
-            StatusCode::CONFLICT,
-            "Canvas application is not ready for approval",
         ),
         (
             InternalApplicationApprovalError::ConcurrentChange,
@@ -1704,30 +1538,6 @@ async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_t
         json!({"detail": "No issuance offer available for this application"})
     );
 
-    let canvas_not_ready = service_with_offers(
-        repository.clone(),
-        Err(InternalApplicationOfferError::Approval(
-            InternalApplicationApprovalError::CanvasOfferNotReady,
-        )),
-        Ok(offer_response()),
-    );
-    let (status, response) = request(
-        &canvas_not_ready,
-        Method::POST,
-        "/internal/applications/application-approved/issuance-offer",
-        None,
-        Some("secret"),
-        Some("org-123"),
-    )
-    .await;
-    let contract: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/issuance-internal-applications.json"
-    ))
-    .expect("internal Application contract");
-    let expected = &contract["lifecycle"]["canvas_offer_outcomes"]["stale_readiness"];
-    assert_eq!(status.as_u16(), expected["status"].as_u64().unwrap() as u16);
-    assert_eq!(response, json!({"detail": expected["detail"]}));
-
     let missing = service_with_offers(
         repository,
         Ok(offer_response()),
@@ -1817,6 +1627,3 @@ async fn current_evidence_reads_use_authoritative_heads_without_changing_history
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
-
-#[path = "support/canvas_claim_behavior.rs"]
-mod canvas_claim_behavior;

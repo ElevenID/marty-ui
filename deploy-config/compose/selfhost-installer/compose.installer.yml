@@ -90,7 +90,6 @@ services:
     depends_on: *kms-complete
     environment:
       KEYCLOAK_SETUP_STRICT: "true"
-      CANVAS_DEMO_ADMIN_ENABLED: "false"
       MARTY_ORG_ADMIN_EMAIL: operator@localhost
       MARTY_ORG_ADMIN_PASSWORD_FILE: /run/secrets/operator_bootstrap_password
     secrets:
@@ -164,12 +163,6 @@ services:
   issuance-native:
     <<: *installer-runtime
     depends_on: *kms-complete
-  canvas-sync-worker:
-    <<: *installer-runtime
-    depends_on:
-      <<: *kms-complete
-      signing-keys:
-        condition: service_healthy
   applicant:
     <<: *installer-runtime
     group_add: !override ["${MARTY_INSTALLER_APPLICANT_CONTAINER_GID:?set the validated container group}"]

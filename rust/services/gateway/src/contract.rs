@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 467;
+pub const EXPECTED_ROUTE_COUNT: usize = 400;
 const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
@@ -239,6 +239,42 @@ impl GatewayContract {
             })?;
         }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
+        for (path, _) in crate::external_association::paths() {
+            table.add(RouteConfig {
+                name: format!("external-association:{path}"),
+                pattern: path.clone(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(&path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            table.add(RouteConfig {
+                name: format!("application-ownership:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         for path in MDOC_CERTIFICATE_PATHS {
             table.add(RouteConfig {
                 name: format!("signing-keys-native:{path}"),
@@ -656,6 +692,19 @@ impl GatewayContract {
                 json!({"post":crate::external_observation::admin_read_operation(kind)}),
             );
         }
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            let action = path.rsplit('/').next().expect("static ownership action");
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::ownership_operation(action)}),
+            );
+        }
+        for (path, access) in crate::external_association::paths() {
+            paths.insert(
+                path.clone(),
+                json!({"post":crate::external_association::operation(&path,access)}),
+            );
+        }
         json!({
             "openapi": "3.1.0",
             "info": {
@@ -780,6 +829,7 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 
 fn special_service(path: &str) -> Option<&'static str> {
     if path == crate::external_observation::PATH
+        || crate::external_association::is_namespace(path)
         || crate::external_observation::is_admin_namespace(path)
     {
         return Some("issuance");
@@ -811,34 +861,40 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+#[cfg(test)]
+mod association_route_contract_tests {
+    use super::*;
+    #[test]
+    fn every_association_route_preserves_core_service_auth_and_zero_retries() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let paths = crate::external_association::paths();
+        assert_eq!(paths.len(), 19);
+        for (template, _) in paths {
+            let path = template
+                .replace("{organization_id}", "20000000-0000-4000-8000-000000000001")
+                .replace("{resource_id}", "30000000-0000-4000-8000-000000000001");
+            let found = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route_ownership(&path).service, "issuance");
+            assert!(requires_issuance_service_auth(&path));
+            assert!(found.route.auth_required);
+            assert_eq!(found.route.retries, 0);
+            assert_eq!(found.route.upstream_service, "issuance");
+        }
+    }
+}
 const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
     "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
 
-/// Preserve the legacy gateway's service credential boundary for direct
-/// issuance management and wallet routes while leaving browser/webhook Canvas
-/// protocol entry points credential-free.
 #[must_use]
 pub fn requires_issuance_service_auth(path: &str) -> bool {
     (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
         && path != "/v1/issuance/authorize"
         && path != "/v1/passport/webhooks/personalization"
-        && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
-        && !CANVAS_SIGNED_INGRESS.is_match(path)
-}
-
-#[must_use]
-pub fn retired_canvas_state_route(path: &str) -> bool {
-    CANVAS_STATE_ADDRESSED.is_match(path)
-        && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
 }
 
 const SERVICE_PREFIXES: &[(&str, &str)] = &[
     ("/v1/organizations/invitations/validate", "auth"),
     ("/v1/organizations/join/code/validate", "organizations"),
-    (
-        "/v1/issuance/delivery-records/canvas-credentials/provenance",
-        "issuance",
-    ),
     ("/v1/issuance/deferred-credential", "issuance"),
     ("/v1/issuance/didcomm/deliver", "issuance"),
     ("/v1/presentation-policies", "presentation-policies"),
@@ -851,7 +907,6 @@ const SERVICE_PREFIXES: &[(&str, &str)] = &[
     ("/v1/cascade-revocations", "revocation-profiles"),
     ("/v1/revocation-batches", "revocation-profiles"),
     ("/v1/application-templates", "issuance"),
-    ("/v1/integrations/canvas", "issuance"),
     ("/v1/issued-credentials", "issuance"),
     ("/v1/trust-frameworks", "trust-profiles"),
     ("/v1/trust-registry", "trust-profiles"),
@@ -883,33 +938,6 @@ const SERVICE_PREFIXES: &[(&str, &str)] = &[
     ("/v1/auth", "auth"),
     ("/v1/me", "applicant"),
 ];
-
-static CANVAS_PUBLIC: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [
-        r"^/v1/integrations/canvas/lti/jwks/?$",
-        r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
-        r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
-        r"^/v1/integrations/canvas/oauth/callback/?$",
-        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response|claim))?)/?$",
-    ]
-    .into_iter()
-    .map(|pattern| Regex::new(pattern).expect("static Canvas route regex"))
-    .collect()
-});
-
-static CANVAS_SIGNED_INGRESS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^/v1/integrations/canvas/(?:evidence-events|ags/score-events|nrps/membership-events)/?$",
-    )
-    .expect("static Canvas signed ingress regex")
-});
-
-static CANVAS_STATE_ADDRESSED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^/v1/integrations/canvas/lti/experience-sessions/[^/]+(?:/(?:bootstrap|evidence-sync|deep-linking-response))?/?$",
-    )
-    .expect("static retired Canvas state route regex")
-});
 
 static WALLET_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/v1/(?:flows/instances|verify)/[^/]+/(?:request|submit)$")
@@ -1013,7 +1041,6 @@ fn public_route(path: &str) -> bool {
         || DID_WEB_PUBLIC.is_match(path)
         || oid4vci_protocol_route(path)
         || path.starts_with("/v1/flows/siop/submit")
-        || CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         || WALLET_PUBLIC.is_match(path)
         || STATUS_PUBLIC.is_match(path)
 }
@@ -1033,7 +1060,6 @@ fn gateway_owned(path: &str) -> bool {
         || path.starts_with("/v1/vc-api")
         || path == "/v1/notifications/events/push"
         || APPLICANT_EVIDENCE_SUMMARY_COMPOSITION.is_match(path)
-        || retired_canvas_state_route(path)
         || ORGANIZATION_COMPOSITION.is_match(path)
 }
 
@@ -1318,7 +1344,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 42
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1431,7 +1457,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 18
+                + 42
         );
         for operation in [
             "submit_external_observation",
@@ -1657,7 +1683,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 42
         );
         assert_eq!(
             contract
@@ -1671,7 +1697,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 42
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1683,7 +1709,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 42
                 + 16
         );
         assert_eq!(
@@ -1926,21 +1952,6 @@ mod tests {
     }
 
     #[test]
-    fn canvas_claim_routes_only_current_session_to_native_authorization() {
-        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
-        assert_eq!(route_ownership(path).service, "issuance");
-        assert!(!route_ownership(path).requires_authentication);
-        assert!(crate::authorization::skips_tenant_authorization(path));
-        for foreign in [
-            "/v1/integrations/canvas/lti/experience-sessions/other/claim",
-            "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
-        ] {
-            assert!(route_ownership(foreign).requires_authentication);
-            assert!(!crate::authorization::skips_tenant_authorization(foreign));
-        }
-    }
-
-    #[test]
     fn managed_mdoc_certificate_routes_are_exact_authenticated_signing_keys_routes() {
         let contract = GatewayContract::load().unwrap();
         assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
@@ -1993,48 +2004,6 @@ mod tests {
     }
 
     #[test]
-    fn canvas_claim_is_registered_in_actual_public_and_proxy_dispatch_tables() {
-        let contract = GatewayContract::load().unwrap();
-        assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
-        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
-        assert!(!contract.routes.iter().any(|route| route.path == path));
-        for table in [
-            contract.route_table().unwrap(),
-            contract.proxy_route_table().unwrap(),
-        ] {
-            for method in [HttpMethod::Get, HttpMethod::Post] {
-                let matched = route_for(&table, method, path)
-                    .expect("native extension must be registered before authentication dispatch");
-                assert_eq!(matched.route.pattern, path);
-                assert_eq!(
-                    matched.route.upstream_service,
-                    issuance_native::NATIVE_SERVICE
-                );
-                assert!(
-                    !matched.route.auth_required,
-                    "native handler authenticates the Canvas session bearer"
-                );
-                assert!(matched.route.rewrite_path.is_none());
-                for foreign in [
-                    "/v1/integrations/canvas/lti/experience-sessions/foreign/claim",
-                    "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
-                    "/v1/integrations/canvas/lti/experience-sessions/current/claim-other",
-                ] {
-                    assert!(route_for(&table, method, foreign).is_err());
-                }
-            }
-            for method in [
-                HttpMethod::Put,
-                HttpMethod::Patch,
-                HttpMethod::Delete,
-                HttpMethod::Options,
-            ] {
-                assert!(route_for(&table, method, path).is_err());
-            }
-        }
-    }
-
-    #[test]
     fn public_and_management_boundaries_match_legacy_gateway() {
         for path in [
             "/health",
@@ -2042,7 +2011,6 @@ mod tests {
             "/credentials/member-badge",
             "/v1/issuance/token",
             "/v1/flows/instances/flow-1/request",
-            "/v1/integrations/canvas/lti/jwks",
             "/org/org-1/waltid/.well-known/openid-credential-issuer",
             "/orgs/example/did.json",
         ] {
@@ -2157,6 +2125,6 @@ mod observation_administrator_openapi_security_tests {
                 .iter()
                 .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
         }
-        assert_eq!(count, 17);
+        assert_eq!(count, 22);
     }
 }

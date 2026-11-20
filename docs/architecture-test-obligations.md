@@ -11,7 +11,20 @@ Owner: architecture-feedback implementation; see [the tracker](architecture-feed
 
 This is the initial group inventory for A0, the exact obligation record for the first A1 move, and the Canvas A4/A5 qualification split. It is not yet a complete dependency manifest for selecting other CI groups. Workflow triggers remain authoritative.
 
-## Existing groups and ownership constraints
+## Current provider retirement boundary
+
+Canvas provider workers, APIs and parity suites have been removed from the
+platform. The provider rows and old `marty-canvas-acceptance` name in the migration
+inventory below describe historical ownership, not executable current commands
+or required provider lanes. Current generic cross-service, Flow and self-host
+owners are `marty-service-acceptance`, `marty-flow-acceptance` and
+`marty-selfhost-acceptance`; the current workflow and Cargo manifests define their
+actual targets and qualification. Preserve their generic authority, delivery,
+renewal and isolation requirements. The
+[connector boundary](architecture/external-connector-boundary.md) owns provider
+protocol follow-up separately, with production gaps disabled and explicitly deferred.
+
+## Historical group inventory and retained ownership constraints
 
 The coordinated integration-secret restore probe now flushes fixed-label progress
 and per-command preparation timing without changing its eight Cargo invocations.

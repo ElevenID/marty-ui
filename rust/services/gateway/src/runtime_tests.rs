@@ -220,6 +220,7 @@ fn identity(kind: &str) -> Option<GatewayIdentity> {
             "api_key:key-1".into()
         },
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: organization.map(str::to_owned),
@@ -284,6 +285,321 @@ fn body_tenant_is_only_read_for_mutating_json_requests() {
 
 struct RuntimeProvider;
 
+struct ConsentSessionService;
+
+#[async_trait]
+impl marty_auth::AuthSessionService for ConsentSessionService {
+    async fn validate_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<marty_auth::Session>, tonic::Status> {
+        let mut user: marty_auth::AuthenticatedUser = serde_json::from_value(json!({
+            "user_id":"user-1","email":"synthetic@example.test",
+            "organization_id":"20000000-0000-4000-8000-000000000001"
+        }))
+        .unwrap();
+        user.impersonation = match session_id {
+            "own-session" => None,
+            "impersonated-session" => Some(serde_json::from_value(json!({"active":true})).unwrap()),
+            "retained-impersonation" => {
+                Some(serde_json::from_value(json!({"active":false})).unwrap())
+            }
+            _ => return Ok(None),
+        };
+        let mut session = marty_auth::Session::create(marty_auth::SessionSpec {
+            user,
+            ttl_seconds: 3600,
+            now: chrono::Utc::now(),
+            ip_address: None,
+            user_agent: None,
+            id_token: None,
+            refresh_token: None,
+            oidc_claims: None,
+        });
+        session.session_id = session_id.into();
+        Ok(Some(session))
+    }
+    async fn invalidate_session(&self, _: &str) -> Result<bool, tonic::Status> {
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn real_auth_grpc_provenance_survives_gateway_provider_and_consent_admission() {
+    let token = "synthetic-grpc-session-provenance-key-0001";
+    let service =
+        marty_auth::AuthGrpcService::new(Arc::new(ConsentSessionService), Some(token.into()), true)
+            .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(
+                marty_auth::auth_proto::auth_service_server::AuthServiceServer::new(service),
+            )
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = stopped.await;
+                },
+            ),
+    );
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let provider = Arc::new(crate::providers::GrpcIdentityProvider::new(
+        channel.clone(),
+        channel,
+        std::time::Duration::from_secs(5),
+        Some(token.into()),
+    ));
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let mut state = Arc::try_unwrap(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ))
+    .ok()
+    .unwrap();
+    state.identities = provider;
+    let router = gateway_router(Arc::new(state));
+    let org = "20000000-0000-4000-8000-000000000001";
+    let paths=[format!("/v1/organizations/{org}/application-ownerships/application-one/confirm"),
+        format!("/v1/organizations/{org}/external-association-challenges/30000000-0000-4000-8000-000000000001/inspect")];
+    for (session, expected) in [
+        ("impersonated-session", StatusCode::FORBIDDEN),
+        ("retained-impersonation", StatusCode::FORBIDDEN),
+        ("own-session", StatusCode::OK),
+    ] {
+        for path in &paths {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("cookie", format!("sessionId={session}"))
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("x-non-impersonated-session", "true")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{session}: {path}");
+        }
+    }
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn learner_consent_requires_positive_auth_session_provenance_before_forwarding() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    let org = "20000000-0000-4000-8000-000000000001";
+    let resource = "30000000-0000-4000-8000-000000000001";
+    let mut paths = vec![format!(
+        "/v1/organizations/{org}/application-ownerships/application-one/confirm"
+    )];
+    for action in ["confirm", "deny", "relink", "inspect", "receipt"] {
+        paths.push(format!(
+            "/v1/organizations/{org}/external-association-challenges/{resource}/{action}"
+        ));
+    }
+    for action in ["unlink", "receipt"] {
+        paths.push(format!(
+            "/v1/organizations/{org}/external-associations/{resource}/{action}"
+        ));
+    }
+    for session in ["observation-impersonated", "observation-legacy"] {
+        for path in &paths {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("cookie", format!("sessionId={session}"))
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("content-type", "application/json")
+                        .header("x-non-impersonated-session", "true")
+                        .header("x-user-id", "user-1")
+                        .header("idempotency-key", "original-learner-operation")
+                        .body(Body::from(
+                            r#"{"operation_id":"40000000-0000-4000-8000-000000000001"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{session}: {path}"
+            );
+        }
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
+    for path in &paths {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("cookie", "sessionId=observation-session")
+                    .header("origin", "https://beta.elevenidllc.com")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    assert_eq!(recorder.0.lock().unwrap().len(), paths.len());
+}
+
+#[tokio::test]
+async fn association_gateway_separates_machine_and_learner_headers_without_body_or_receipt_cache() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    let producer =
+        "/v1/identity/association-challenges/30000000-0000-4000-8000-000000000001/create";
+    let session="/v1/organizations/20000000-0000-4000-8000-000000000001/external-association-challenges/30000000-0000-4000-8000-000000000001/confirm";
+    let raw = br#"{ "operation_id":"40000000-0000-4000-8000-000000000001" }"#;
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(producer)
+                    .header("x-api-key", "association-key")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-user")
+                    .header("x-user-email", "forged-email")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-api-key-id", "forged-key")
+                    .header("idempotency-key", "original-association-operation")
+                    .body(Body::from(raw.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    {
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for (service, request) in calls.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(
+                request.header("x-api-key-id"),
+                Some("10000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(request.header("x-user-id"), None);
+            assert_eq!(request.header("x-user-email"), None);
+            assert_eq!(request.body.as_deref(), Some(raw.as_slice()));
+        }
+    }
+    let wrong_scope = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(producer)
+                .header("x-api-key", "observation-key")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "original-association-operation")
+                .body(Body::from(raw.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+    let session_on_producer = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(producer)
+                .header("cookie", "sessionId=observation-session")
+                .header("origin", "https://beta.elevenidllc.com")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session_on_producer.status(), StatusCode::UNAUTHORIZED);
+    let key_on_session = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(session)
+                .header("x-api-key", "association-key")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(key_on_session.status(), StatusCode::UNAUTHORIZED);
+    for (path,origin) in [(session,None),(session,Some("https://untrusted.example")),
+        ("/v1/organizations/11111111-1111-1111-1111-111111111111/external-association-challenges/30000000-0000-4000-8000-000000000001/confirm",Some("https://beta.elevenidllc.com"))] {
+        let mut builder=Request::builder().method("POST").uri(path).header("cookie","sessionId=observation-session").header("content-type","application/json");
+        if let Some(origin)=origin {builder=builder.header("origin",origin);}
+        let response=router.clone().oneshot(builder.body(Body::from("{}")).unwrap()).await.unwrap();
+        assert!(!response.status().is_success());assert_eq!(recorder.0.lock().unwrap().len(),2);
+    }
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(session)
+                    .header("cookie", "sessionId=observation-session")
+                    .header("origin", "https://beta.elevenidllc.com")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged")
+                    .header("x-api-key-id", "forged")
+                    .header("idempotency-key", "original-learner-operation")
+                    .body(Body::from(raw.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    for (_, request) in &calls[2..] {
+        assert_eq!(request.header("x-user-id"), Some("user-1"));
+        assert_eq!(request.header("x-api-key-id"), None);
+        assert_eq!(request.body.as_deref(), Some(raw.as_slice()));
+    }
+}
+
 #[async_trait]
 impl GatewayIdentityProvider for RuntimeProvider {
     async fn validate_session(
@@ -291,7 +607,9 @@ impl GatewayIdentityProvider for RuntimeProvider {
         session_id: &str,
     ) -> Result<Option<SessionIdentity>, SecurityError> {
         let organization_id = match session_id {
-            "observation-session" => Some("20000000-0000-4000-8000-000000000001"),
+            "observation-session" | "observation-impersonated" | "observation-legacy" => {
+                Some("20000000-0000-4000-8000-000000000001")
+            }
             "valid" => Some("org-1"),
             "valid-org-2" => Some("org-2"),
             "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
@@ -300,6 +618,11 @@ impl GatewayIdentityProvider for RuntimeProvider {
         };
         Ok(Some(SessionIdentity {
             user_id: "user-1".into(),
+            non_impersonated_session: match session_id {
+                "observation-impersonated" => Some(false),
+                "observation-legacy" => None,
+                _ => Some(true),
+            },
             organization_id: organization_id.map(str::to_owned),
             ..SessionIdentity::default()
         }))
@@ -307,11 +630,13 @@ impl GatewayIdentityProvider for RuntimeProvider {
 
     async fn validate_api_key(&self, key: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
         Ok(match key {
-            "observation-key" | "observation-admin" => Some(ApiKeyIdentity {
+            "observation-key" | "observation-admin" | "association-key" => Some(ApiKeyIdentity {
                 api_key_id: "10000000-0000-4000-8000-000000000001".into(),
                 organization_id: Some("20000000-0000-4000-8000-000000000001".into()),
                 key_prefix: None,
-                scopes: vec![if key == "observation-key" {
+                scopes: vec![if key == "association-key" {
+                    "identity:attest"
+                } else if key == "observation-key" {
                     "evidence:submit"
                 } else {
                     "admin:full"
@@ -593,10 +918,6 @@ impl UpstreamClient for SuccessfulUpstream {
                     .expect("trusted tenant header")
             );
             assert!(body.get("universal_resolver_url").is_none());
-        }
-        if request.path == "/v1/integrations/canvas/lti/jwks" {
-            assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
-            assert_eq!(request.header("x-api-key"), None);
         }
         if request.path == "/internal/applications/app-1/evidence-summary" {
             assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
@@ -2869,11 +3190,11 @@ async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated()
 
 fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
     let mut request = Request::builder()
-        .method(if public { "GET" } else { "POST" })
+        .method("POST")
         .uri(if public {
-            "/v1/integrations/canvas/lti/jwks"
+            "/v1/issuance/nonce"
         } else {
-            "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve?organization_id=org-1"
+            "/v1/issued-credentials/credential-1/revoke?organization_id=org-1"
         })
         .header("content-type", "application/json")
         .header("x-user-id", "forged-user")
@@ -2882,7 +3203,7 @@ fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> R
         .body(if public {
             Body::empty()
         } else {
-            Body::from(r#"{"action":"dismiss","organization_id":"org-1"}"#)
+            Body::from(r#"{"reason":"affiliationChanged"}"#)
         })
         .expect("synthetic gateway request");
     for (name, value) in [
@@ -2913,15 +3234,6 @@ fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> R
 
 #[tokio::test]
 async fn gateway_trusted_actor_session_and_api_key_replace_client_aliases() {
-    // This asserts the real router/proxy boundary, not a persisted SQL actor.
-    let frozen: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/issuance-canvas-operations.json"
-    ))
-    .unwrap();
-    assert_eq!(
-        frozen["behavior"]["actor_priority"],
-        json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"])
-    );
     for (authentication, expected_user, expected_key) in [
         (("cookie", "sessionId=actor-session"), "actor-session", None),
         (
@@ -2940,10 +3252,7 @@ async fn gateway_trusted_actor_session_and_api_key_replace_client_aliases() {
         assert_eq!(calls.len(), 1);
         let (service, forwarded) = &calls[0];
         assert_eq!(service, issuance_native::NATIVE_SERVICE);
-        assert_eq!(
-            forwarded.path,
-            "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve"
-        );
+        assert_eq!(forwarded.path, "/v1/issued-credentials/credential-1/revoke");
         assert_eq!(forwarded.method, HttpMethod::Post);
         assert_eq!(forwarded.header("x-authenticated-user-id"), None);
         assert_eq!(forwarded.header("x-user-id"), Some(expected_user));
@@ -2984,131 +3293,6 @@ async fn internal_service_routes_are_never_publicly_proxied() {
             recorder.0.lock().unwrap().is_empty(),
             "{path} must stop before privileged upstream credential injection"
         );
-    }
-}
-
-#[tokio::test]
-async fn canvas_review_recovery_authenticates_and_authorizes_before_upstream_access() {
-    let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
-    for (authentication, expected) in [
-        (None, StatusCode::UNAUTHORIZED),
-        (
-            Some(("x-api-key", "actor-key-no-scope")),
-            StatusCode::FORBIDDEN,
-        ),
-        (
-            Some(("cookie", "sessionId=actor-denied")),
-            StatusCode::FORBIDDEN,
-        ),
-        (Some(("x-api-key", "actor-key")), StatusCode::OK),
-        (Some(("cookie", "sessionId=actor-session")), StatusCode::OK),
-    ] {
-        let (router, recorder) = actor_test_router();
-        let mut builder = Request::builder()
-            .method("POST")
-            .uri(path)
-            .header("x-user-id", "forged-user")
-            .header("x-authenticated-user-id", "forged-user")
-            .header("x-organization-id", "org-attacker")
-            .header("content-type", "application/json");
-        if let Some((name, value)) = authentication {
-            builder = builder.header(name, value);
-        }
-        let response = router
-            .oneshot(builder.body(Body::from(r#"{"action":"revoke"}"#)).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected, "{authentication:?}");
-        let calls = recorder.0.lock().unwrap();
-        if expected == StatusCode::OK {
-            assert_eq!(calls.len(), 1);
-            let (service, request) = &calls[0];
-            assert_eq!(service, issuance_native::NATIVE_SERVICE);
-            assert_eq!(request.header("x-organization-id"), Some("org-1"));
-            assert_ne!(request.header("x-user-id"), Some("forged-user"));
-            assert_ne!(
-                request.header("x-authenticated-user-id"),
-                Some("forged-user")
-            );
-        } else {
-            assert!(
-                calls.is_empty(),
-                "denial must precede privileged upstream credential injection"
-            );
-        }
-    }
-}
-
-#[tokio::test]
-async fn canvas_public_batches_replace_every_client_tenant_shape_or_fail_closed() {
-    let paths = [
-        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
-        "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
-        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
-    ];
-    for path in paths {
-        for (header, authentication) in [
-            ("cookie", "sessionId=actor-session"),
-            ("x-api-key", "actor-key"),
-        ] {
-            for query in [
-                "",
-                "?organization_id=org-attacker",
-                "?organization_id=org-attacker&organization_id=org-other&limit=7",
-            ] {
-                let (router, recorder) = actor_test_router();
-                let response = router
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri(format!("{path}{query}"))
-                            .header(header, authentication)
-                            .body(Body::empty())
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::OK, "{path}{query}");
-                let calls = recorder.0.lock().unwrap();
-                assert_eq!(calls.len(), 1, "{path}{query}");
-                let (service, forwarded) = &calls[0];
-                assert_eq!(service, issuance_native::NATIVE_SERVICE);
-                assert_eq!(forwarded.path, path);
-                assert_eq!(
-                    forwarded.query.get("organization_id"),
-                    Some(&vec!["org-1".to_owned()]),
-                    "{path}{query}"
-                );
-                assert_eq!(
-                    forwarded.query.get("limit").map(Vec::as_slice),
-                    query
-                        .contains("limit=7")
-                        .then_some(["7".to_owned()].as_slice())
-                );
-            }
-        }
-
-        let (router, recorder) = actor_test_router();
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("{path}?organization_id=org-attacker"))
-                    .header("cookie", "sessionId=actor-no-organization")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"detail":"Trusted organization context is required"})
-        );
-        assert!(recorder.0.lock().unwrap().is_empty());
     }
 }
 
@@ -3280,6 +3464,7 @@ fn scoped_api_key_forwards_only_the_authorized_permission() {
         source: AuthenticationSource::ApiKey,
         user_id: "key-owner".into(),
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: Some("org-1".into()),
@@ -3327,6 +3512,7 @@ fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
         source: AuthenticationSource::Session,
         user_id: "user-1".into(),
         authentication_time_unix: None,
+        non_impersonated_session: None,
         user_email: None,
         user_domain: None,
         session_organization_id: Some("stale-session-org".into()),
@@ -5164,17 +5350,6 @@ async fn proxy_enforces_service_credentials_and_special_rewrites() {
         .expect("response");
     assert_eq!(token.status(), StatusCode::OK);
 
-    let jwks = runtime_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/integrations/canvas/lti/jwks")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(jwks.status(), StatusCode::OK);
-
     let evidence = runtime_router()
         .oneshot(
             Request::builder()
@@ -5214,28 +5389,6 @@ async fn proxy_enforces_service_credentials_and_special_rewrites() {
         .await
         .expect("response");
     assert_eq!(lifecycle.status(), StatusCode::OK);
-
-    let retired = runtime_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/integrations/canvas/lti/experience-sessions/state-1")
-                .header("cookie", "sessionId=valid")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(retired.status(), StatusCode::GONE);
-    let retired: Value = serde_json::from_slice(
-        &to_bytes(retired.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-            .await
-            .expect("body"),
-    )
-    .expect("json");
-    assert_eq!(
-        retired["detail"],
-        "State-addressed Canvas sessions are no longer supported"
-    );
 }
 
 #[tokio::test]
@@ -5459,7 +5612,7 @@ async fn deployment_profile_create_preflights_and_projects_in_rust() {
     let body: Value = serde_json::from_slice(&body).expect("deployment response");
     assert_eq!(body["id"], "deployment-1");
     assert!(body.get("api_key").is_none());
-    assert_eq!(body["canvas_feature_flags"], json!({}));
+    assert!(body.get("canvas_feature_flags").is_none());
 }
 
 #[tokio::test]
@@ -7761,4 +7914,32 @@ async fn public_verification_keeps_anonymous_request_limits_and_ignores_capabili
         calls[1].1.header("x-verification-session"),
         Some("capability-1")
     );
+}
+
+#[tokio::test]
+async fn retired_provider_routes_never_reach_upstream() {
+    for path in [
+        "/v1/integrations/canvas/lti/jwks",
+        "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+        "/v1/integrations/canvas/platforms",
+        "/v1/integrations/canvas/evidence-events",
+        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "/v1/issuance/organizations/org-1/canvas-mirror-health",
+    ] {
+        for method in ["GET", "POST"] {
+            for authenticated in [false, true] {
+                let (router, recorder) = actor_test_router();
+                let mut request = Request::builder().method(method).uri(path);
+                if authenticated {
+                    request = request.header("x-api-key", "actor-key");
+                }
+                let response = router
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                assert!(recorder.0.lock().unwrap().is_empty(), "{method} {path}");
+            }
+        }
+    }
 }

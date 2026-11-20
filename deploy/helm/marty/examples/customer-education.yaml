@@ -24,9 +24,6 @@ persistence:
   postgresSize: 10Gi
   redisSize: 1Gi
   applicantSize: 1Gi
-canvasWorker:
-  # Direct Open Badges issuance has no external LMS prerequisite.
-  enabled: false
 config:
   MARTY_ORG_NAME: Canyon Skills Academy
   MARTY_ORG_ADMIN_FIRST_NAME: Canyon
@@ -38,5 +35,4 @@ config:
   KEYCLOAK_RESET_PASSWORD_ENABLED: 'false'
   CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: 'true'
   CREDENTIAL_LOGIN_CREATE_USERS: 'false'
-  CANVAS_MIRROR_WORKER_ENABLED: 'false'
   MARTY_KMS_BOOTSTRAP_ENABLED: 'true'

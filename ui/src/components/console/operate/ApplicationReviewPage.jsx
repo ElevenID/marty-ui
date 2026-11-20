@@ -252,9 +252,7 @@ function EvidencePolicySection({ summary, onRunCheck, runningCheckId, disabled }
         {summary?.issuance_transaction_id && (
           <Chip label={`Issuance: ${summary.issuance_transaction_id}`} size="small" variant="outlined" />
         )}
-        {summary?.canvas?.canvas_platform_id && (
-          <Chip label={`Canvas platform: ${summary.canvas.canvas_platform_id}`} size="small" variant="outlined" />
-        )}
+
       </Stack>
       {Array.isArray(policy?.errors) && policy.errors.length > 0 && (
         <Alert severity="warning" variant="outlined" sx={{ mb: 2 }}>
@@ -554,7 +552,6 @@ export default function ApplicationReviewPage() {
     : { value: signals.policyValue, color: signals.policyColor };
   const hasEvidencePolicy =
     Boolean(policyDecision) ||
-    Boolean(evidenceSummary?.canvas) ||
     ((evidenceSummary?.available_api_checks || []).length > 0) ||
     ((evidenceSummary?.evidence_facts || []).length > 0);
 

@@ -1,6 +1,7 @@
-"""Source-only controls for the frozen all-service KMS build profile."""
+"""Historical receipt audits, build retirement and current compiler controls."""
 import importlib
 import json
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -19,10 +20,31 @@ launcher = importlib.import_module("run_local_official_native_build")
 lock_guard = importlib.import_module("check_core_localized_lock")
 
 
+REFERENCE_PATH = Path(__file__).resolve().parents[1] / "contracts/scoped-full-build-legacy-reference.json"
+REFERENCE_BYTES = REFERENCE_PATH.read_bytes().replace(b"\r\n", b"\n")
+assert hashlib.sha256(REFERENCE_BYTES).hexdigest() == "c181b530debdf5714c3bf909f6f2227cf1d85bf68235412886d70cb8433d5063"
+LEGACY_REFERENCE = json.loads(REFERENCE_BYTES)
+
+
+def legacy_reference(name):
+    data = dict(LEGACY_REFERENCE["profiles"][name])
+    data["roles"] = tuple(tuple(row) for row in data["roles"])
+    data["packages"] = tuple(data["packages"])
+    data["volumes"] = tuple(data["volumes"])
+    return SimpleNamespace(**data)
+
+
+def legacy_scope(profile):
+    return {"uiRevision": profile.ui_revision, "coreRevision": profile.core_revision,
+            "roles": dict(profile.roles), "packages": profile.packages,
+            "prefix": profile.container_prefix, "owner": profile.owner,
+            "volumes": profile.volumes, "cargoProfile": profile.cargo_profile}
+
+
 class OfficialNativeBuildTests(unittest.TestCase):
     def setUp(self):
-        self.profile = profiles.OFFICIAL_ALL_SERVICES
-        self.scope = build.build_scope(self.profile.name)
+        self.profile = legacy_reference(build.OFFICIAL_PROFILE)
+        self.scope = legacy_scope(self.profile)
         self.freeze = {"productRevision": self.profile.ui_revision,
                        "coreRevision": "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac",
                        "imagesBuilt": False, "releaseQualified": False}
@@ -44,8 +66,6 @@ class OfficialNativeBuildTests(unittest.TestCase):
         expected = (
             ("d02-signing-cas", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
             ("d02-signing-cas-no-transform", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
-            ("canvas-issuer-scoped-jobs", "44040270000f93b7e7499cbec31b3bb3dd7e3df1", "dev", "d05-rust-target-20261026"),
-            (self.profile.name, "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "release", "marty-oid4vc-native-d2de-target-20261028"),
         )
         plan = {"runId": "SOURCE_ONLY", "journalBackend": {"backend": "SOURCE_ONLY"}}
         private = Path("SOURCE_ONLY")
@@ -56,27 +76,28 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 self.assertEqual(scope["cargoProfile"], cargo)
                 self.assertEqual(scope["volumes"], ("ui-canvas-cargo", target))
                 self.assertIs(build.build_journal(plan, private, name), factory.return_value)
-            self.assertEqual(factory.call_count, 4)
+            self.assertEqual(factory.call_count, 2)
             factory.reset_mock()
-            for unsupported in (None, "unreviewed-profile"):
+            for unsupported in (None, "unreviewed-profile", "canvas-issuer-scoped-jobs", *build.OFFICIAL_PROFILES):
                 with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
                     build.build_journal(plan, private, unsupported)
             factory.assert_not_called()
+        for selection in (profiles.reviewed_profile, build.build_scope, build.cargo_arguments):
+            with self.assertRaisesRegex(ValueError, "UNKNOWN_REVIEWED_BUILD_PROFILE"):
+                selection("canvas-issuer-scoped-jobs")
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_REVIEWED_BUILD_PROFILE"):
+            build.build_journal({}, private, "canvas-issuer-scoped-jobs")
 
-    def test_canonical_29_release_outputs_and_kms_proof_are_required(self):
+    def test_legacy_manifest_is_auditable_but_cannot_emit_a_build_recipe(self):
         build.verify_official_inputs(self.freeze, self.seed, self.script, self.scope)
-        recipe = build.render_recipe(self.profile.name)
         self.assertEqual(len(self.scope["roles"]), 29)
-        self.assertIn("sh /build/tool.sh default --offline -j1 --message-format=json", recipe)
-        self.assertIn("CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true", recipe)
-        self.assertIn("/target/release/", recipe)
-        self.assertIn("guard.FORBIDDEN_FEATURES", recipe)
-        self.assertIn("'kms-only' in features", recipe)
-        self.assertIn("compiler-artifacts.jsonl", recipe)
-        self.assertIn("python3 /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml", recipe)
-        for delimiter in ("BOUNDARY", "ARTIFACTS"):
-            code = recipe.split("<<'" + delimiter + "'\n", 1)[1].split("\n" + delimiter, 1)[0]
-            compile(code, delimiter, "exec")
+        for profile in build.OFFICIAL_PROFILES:
+            for action in (profiles.reviewed_profile, build.build_scope, build.cargo_arguments,
+                           build.render_recipe, prepare.selected_sources):
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    action(profile)
+            with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                build.build_journal({}, Path("unused"), profile)
 
     def test_current_build_outputs_cannot_enter_the_frozen_profile(self):
         current = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
@@ -176,99 +197,51 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 raise RuntimeError("probe failed")
         self.assertEqual(helper.VOLUMES, build.VOLUMES)
 
-    def test_verified_target_seed_survives_start_and_terminal_receipt(self):
-        cache_prefix = "targetReuse" if self.profile.name == build.LATEST_OFFICIAL_PROFILE else "targetSeed"
-        # SOURCE-ONLY: typed transport/journal mocks never dispatch Docker.
-        seed_module = importlib.import_module("seed_local_official_native_target")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "output"
-            output.mkdir()
-            cid = "b" * 64
-            image = "sha256:" + "a" * 64
-            run_id = "11111111-1111-4111-8111-111111111111"
-            verified = {"sourceOnly": True, "manifestSha256": "c" * 64,
-                        "entries": 17, "targetVolume": self.profile.volumes[1]}
-            proof = {"fileFsync": True, "parentDirectory": {"supported": True, "synced": True}}
+    def test_retired_profiles_cannot_start_or_finish_through_current_builder(self):
+        helper = mock.Mock()
+        for profile in build.OFFICIAL_PROFILES:
+            for action in (build.start, build.finish):
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    action({}, helper, mock.Mock(), profile)
+        helper.assert_not_called()
+        self.assertEqual(helper.mock_calls, [])
 
-            class Journal:
-                def exclusive(self, name, value):
-                    with (root / name).open("x", encoding="utf-8") as stream:
-                        json.dump(value, stream)
-                    return proof
+    def test_retired_source_preparation_stops_before_any_git_or_export(self):
+        with mock.patch.object(prepare, "git") as reader:
+            for profile in build.OFFICIAL_PROFILES:
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    prepare.selected_sources(profile)
+        reader.assert_not_called()
 
-                def state(self, value):
-                    (root / "build-state.json").write_text(json.dumps(value), encoding="utf-8")
-                    return proof
+    def test_retired_launcher_stops_before_seed_plan_or_resource_reads(self):
+        for profile in build.OFFICIAL_PROFILES:
+            with mock.patch.object(launcher, "source_export", return_value={"buildProfile": profile}), \
+                    mock.patch.object(launcher, "read_exact") as reader, \
+                    mock.patch.object(launcher, "helper_module") as helper:
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    launcher.prepare(Path("unused"), "unused", Path("unused"), "unused", Path("unused"), "unused", "unused")
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    launcher.execute("start", Path("unused"), "unused", "unused")
+                reader.assert_not_called()
+                helper.assert_not_called()
 
-                def read(self, name):
-                    return json.loads((root / name).read_bytes())
-
-            plan = {"buildProfile": self.profile.name, "uiRevision": self.profile.ui_revision,
-                    "coreRevision": self.freeze["coreRevision"], "roleBinaries": dict(self.profile.roles),
-                    "releaseQualified": False, "recordingQualified": False,
-                    "profileSourceSha256": build.sha(Path(profiles.__file__)),
-                    "executionOperatorSha256": build.sha(Path(build.__file__)),
-                    "runId": run_id, "engineId": "SOURCE_ONLY", "builderImage": image,
-                    "containerName": self.profile.container_prefix + run_id,
-                    "sources": {"ui": {"directory": "/owned/ui"}, "core": {"directory": "/owned/core"}},
-                    "outputDirectory": str(output), "recipe": {"path": "/owned/build.sh"},
-                    "buildTool": {"path": "/owned/tool.sh"}, "lockGuard": {"path": "/owned/lock_guard.py"},
-                    cache_prefix + "Receipt": {"path": str(root / "seed.json")}}
-            prepared = root / "prepared.json"
-            prepared.write_text(json.dumps(plan), encoding="utf-8")
-            dispatches = []
-
-            def run(*args):
-                if "info" in args:
-                    return SimpleNamespace(stdout="SOURCE_ONLY")
-                if args[1:3] == ("volume", "inspect"):
-                    return SimpleNamespace(stdout=json.dumps([{"Name": self.profile.volumes[1],
-                        "Labels": {"io.elevenid.demo-audit.owner": "root-local-oid4vc-current-source-20261028"}}]))
-                if args[1:3] == ("image", "inspect"):
-                    return SimpleNamespace(stdout=json.dumps([{"Id": image, "Os": "linux", "Architecture": "amd64"}]))
-                if "run" in args:
-                    before = Journal().read("build-state.json")
-                    self.assertEqual(before["state"], "BUILD_CREATE_INTENT")
-                    self.assertEqual(before[cache_prefix + "Probe"]["outcome"], "READBACK_MATCHED")
-                    self.assertEqual(before[cache_prefix + "Readback"], verified)
-                    dispatches.append(args)
-                    return SimpleNamespace(stdout=cid)
-                if args[1] == "inspect":
-                    mounts = [{"Destination": destination, "Type": "volume", "Name": volume}
-                              for destination, volume in zip(("/cargo", "/target"), self.profile.volumes)]
-                    mounts += [{"Destination": destination, "RW": False} for destination in
-                               ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")]
-                    return SimpleNamespace(stdout=json.dumps([{"Id": cid, "Image": image,
-                        "Config": {"Labels": {"elevenid.run": run_id, "elevenid.owner": self.scope["owner"]}},
-                        "State": {"Status": "exited", "ExitCode": 101, "OOMKilled": False}, "Mounts": mounts}]))
-                self.fail("Unexpected source-test transport operation")
-
-            helper = SimpleNamespace(__file__="SOURCE_ONLY_HELPER", VOLUMES=build.VOLUMES,
-                                     run=run, resources=lambda *args: {"sourceOnly": True})
-            original_sha = build.sha
-            with mock.patch.object(build, "verify", return_value=(root, output)), \
-                    mock.patch.object(build, "build_journal", return_value=Journal()), \
-                    mock.patch.object(build, "sha", side_effect=lambda path:
-                        build.REVIEWED_BUILD_HELPER_SHA256 if str(path) == helper.__file__ else original_sha(path)), \
-                    mock.patch.object(seed_module, "inspect_reuse_target" if cache_prefix == "targetReuse" else "inspect_target", return_value=verified) as readback, \
-                    mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}):
-                running = build.start(build.ref(prepared), helper, lambda args: b"", self.profile.name)
-                self.assertEqual(running["state"], "BUILD_RUNNING")
-                self.assertEqual(running[cache_prefix + "Readback"], verified)
-                self.assertEqual(running[cache_prefix + "Probe"]["outcome"], "READBACK_MATCHED")
-                result = build.finish(build.ref(prepared), helper, lambda args: b"", self.profile.name)
-            self.assertEqual(len(dispatches), 1)
-            readback.assert_called_once_with(Path(plan[cache_prefix + "Receipt"]["path"]))
-            self.assertEqual(result["state"], "BUILD_FAILED_RETAINED")
-            receipt = Journal().read("build-receipt.json")
-            self.assertEqual(receipt[cache_prefix + "Readback"], verified)
-            self.assertEqual(receipt[cache_prefix + "Probe"], running[cache_prefix + "Probe"])
-
-    def test_verified_latest_cache_reuse_survives_start_and_terminal_receipt(self):
-        self.profile = profiles.LATEST_ALL_SERVICES
-        self.scope = build.build_scope(self.profile.name)
-        self.test_verified_target_seed_survives_start_and_terminal_receipt()
+    def test_legacy_reference_is_hash_bound_and_cannot_register_a_build_profile(self):
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_LEGACY_BUILD_REFERENCE"):
+            profiles.legacy_profile_reference("caller-supplied-profile")
+        with tempfile.TemporaryDirectory(prefix="legacy-build-reference-test-") as tmp:
+            root = Path(tmp).resolve()
+            self.assertTrue(root.is_relative_to(Path(tempfile.gettempdir()).resolve()))
+            contract = root / "contracts/scoped-full-build-legacy-reference.json"
+            contract.parent.mkdir()
+            contract.write_bytes(REFERENCE_BYTES)
+            with mock.patch.object(profiles, "__file__", str(root / "operator/scoped_native_profiles.py")):
+                old = profiles.legacy_profile_reference(build.OFFICIAL_PROFILE)
+                self.assertEqual(old.roles, self.profile.roles)
+                with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+                    profiles.reviewed_profile(old.name)
+                contract.write_bytes(b'{"profiles":{}}')
+                with self.assertRaisesRegex(ValueError, "LEGACY_BUILD_REFERENCE_CHANGED"):
+                    profiles.legacy_profile_reference(build.OFFICIAL_PROFILE)
 
     def test_pinned_engine_uuid_and_debug_artifact_directory(self):
         launcher.require_build_identifiers("11111111-1111-4111-8111-111111111111",
@@ -277,7 +250,8 @@ class OfficialNativeBuildTests(unittest.TestCase):
             launcher.require_build_identifiers("11111111-1111-4111-8111-111111111111", "f" * 64)
         self.assertEqual(build.artifact_directory(), "debug")
         self.assertEqual(build.artifact_directory("d02-signing-cas"), "debug")
-        self.assertEqual(build.artifact_directory(self.profile.name), "release")
+        with self.assertRaisesRegex(ValueError, "RETIRED_BUILD_PROFILE"):
+            build.artifact_directory(self.profile.name)
 
     def test_official_profile_requires_explicit_desktop_journal(self):
         for journal in ({"backend": "UBUNTU_PRIVATE_JOURNAL_V1"},
@@ -291,23 +265,24 @@ class OfficialNativeBuildTests(unittest.TestCase):
                         "volumeProof": {"Name": "marty-d02-journal-owned"}}})
 
     def test_compiler_mounts_only_distinct_target_and_read_only_source(self):
+        profile = profiles.D12_PASSPORT_CURRENT
         run_id = "11111111-1111-4111-8111-111111111111"
-        plan = {"buildProfile": self.profile.name, "uiRevision": self.profile.ui_revision,
-                "coreRevision": self.freeze["coreRevision"], "roleBinaries": dict(self.profile.roles),
+        plan = {"buildProfile": profile.name, "uiRevision": profile.ui_revision,
+                "coreRevision": profile.core_revision, "roleBinaries": dict(profile.roles),
                 "releaseQualified": False, "recordingQualified": False,
                 "profileSourceSha256": build.sha(Path(profiles.__file__)),
-                "runId": run_id, "containerName": self.profile.container_prefix + run_id,
+                "runId": run_id, "containerName": profile.container_prefix + run_id,
                 "sources": {"ui": {"directory": "C:/owned/ui"}, "core": {"directory": "C:/owned/core"}},
                 "outputDirectory": "C:/owned/out", "recipe": {"path": "C:/owned/build.sh"},
                 "buildTool": {"path": "C:/owned/tool.sh"},
                 "lockGuard": {"path": "C:/owned/lock_guard.py"},
                 "builderImage": "sha256:" + "a" * 64}
-        args = build.build_arguments(plan, self.profile.name)
+        args = build.build_arguments(plan, profile.name)
         mounts = [args[i + 1] for i, value in enumerate(args) if value == "--mount"]
-        self.assertIn("type=volume,src=" + self.profile.volumes[1] + ",dst=/target", mounts)
+        self.assertIn("type=volume,src=" + profile.volumes[1] + ",dst=/target", mounts)
         self.assertNotIn("type=volume,src=d05-rust-target-20261026,dst=/target", mounts)
         self.assertTrue(all(m.endswith(",readonly") for m in mounts if "/src/ui" in m or "/build/core" in m or "/build.sh" in m or "/build/tool.sh" in m or "/build/lock_guard.py" in m))
-        for field, value in (("--memory", "2g"), ("--memory-swap", "4g"), ("--cpus", "1")):
+        for field, value in (("--memory", "1g"), ("--memory-swap", "4g"), ("--cpus", "1")):
             self.assertEqual(args[args.index(field) + 1], value)
         self.assertEqual(args[args.index("--network") + 1], "none")
 

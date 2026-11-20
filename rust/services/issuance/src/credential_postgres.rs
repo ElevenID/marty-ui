@@ -138,21 +138,6 @@ const REFRESH_PENDING_APPLICATION_OFFER: &str = concat!(
      RETURNING ",
     transaction_columns!()
 );
-const REFRESH_PENDING_CANVAS_APPLICATION_OFFER: &str = concat!(
-    "UPDATE issuance_service.issuance_transactions
-     SET delivery_mode = $3, revocation_profile_id = $4,
-         issuer_profile_id = $5, issuer_mode = $6, issuer_did_override = $7,
-         issuer_algorithm = $8, signing_service_id = $9,
-         credential_template_id = $10, claims = $11,
-         credential_type = $12, credential_payload_format = $13,
-         wallet_configs = $14, selective_disclosure_claims = $15,
-         zk_predicate_claims = $16, validity_days = $17, renewable = $18,
-         renewal_window_days = $19
-     WHERE id = $1 AND organization_id = $2 AND application_id = $20
-       AND status = 'pending'
-     RETURNING ",
-    transaction_columns!()
-);
 // The same fresh-clock gate protects a new signing claim and recovery after a
 // concurrent winner. The caller already holds the transaction and linked session
 // rows, so neither expiry nor token collisions may be checked only before a wait.
@@ -357,7 +342,6 @@ pub(crate) async fn refresh_pending_application_offer<'executor, E>(
     executor: E,
     current: &CredentialTransaction,
     prepared: &CredentialTransaction,
-    refresh_canvas_context: bool,
 ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
 where
     E: Executor<'executor, Database = Postgres>,
@@ -368,45 +352,17 @@ where
     let Some(application_id) = current.application_id.as_deref() else {
         return Ok(None);
     };
-    let query = if refresh_canvas_context {
-        let validity_days = i32::try_from(prepared.validity_days)
-            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
-        let renewal_window_days = i32::try_from(prepared.renewal_window_days)
-            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
-        sqlx::query(REFRESH_PENDING_CANVAS_APPLICATION_OFFER)
-            .bind(&current.id)
-            .bind(&current.organization_id)
-            .bind(&prepared.delivery_mode)
-            .bind(&prepared.revocation_profile_id)
-            .bind(&prepared.issuer_profile_id)
-            .bind(&prepared.issuer_mode)
-            .bind(&prepared.issuer_did)
-            .bind(&prepared.issuer_algorithm)
-            .bind(&prepared.signing_service_id)
-            .bind(&prepared.credential_template_id)
-            .bind(Value::Object(prepared.claims.clone()))
-            .bind(&prepared.credential_type)
-            .bind(&prepared.credential_payload_format)
-            .bind(Value::Array(prepared.wallet_configs.clone()))
-            .bind(json!(prepared.selective_disclosure_claims))
-            .bind(json!(prepared.zk_predicate_claims))
-            .bind(validity_days)
-            .bind(prepared.renewable)
-            .bind(renewal_window_days)
-            .bind(application_id)
-    } else {
-        sqlx::query(REFRESH_PENDING_APPLICATION_OFFER)
-            .bind(&current.id)
-            .bind(&current.organization_id)
-            .bind(&prepared.delivery_mode)
-            .bind(&prepared.revocation_profile_id)
-            .bind(&prepared.issuer_profile_id)
-            .bind(&prepared.issuer_mode)
-            .bind(&prepared.issuer_did)
-            .bind(&prepared.issuer_algorithm)
-            .bind(&prepared.signing_service_id)
-            .bind(application_id)
-    };
+    let query = sqlx::query(REFRESH_PENDING_APPLICATION_OFFER)
+        .bind(&current.id)
+        .bind(&current.organization_id)
+        .bind(&prepared.delivery_mode)
+        .bind(&prepared.revocation_profile_id)
+        .bind(&prepared.issuer_profile_id)
+        .bind(&prepared.issuer_mode)
+        .bind(&prepared.issuer_did)
+        .bind(&prepared.issuer_algorithm)
+        .bind(&prepared.signing_service_id)
+        .bind(application_id);
     query
         .fetch_optional(executor)
         .await
@@ -1341,9 +1297,9 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         sqlx::query(
             "INSERT INTO issuance_service.credential_delivery_records
                  (id, credential_id, transaction_id, organization_id, delivery_target,
-                  delivery_mode, status, canvas_account_id, last_error, metadata,
+                  delivery_mode, status, last_error, metadata,
                   created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, $6, NULL, NULL, $7,
+             VALUES ($1, $2, $3, $4, 'didcomm_v2', $5, $6, NULL, $7,
                      clock_timestamp(), clock_timestamp())",
         )
         .bind(delivery_record_id(&credential.id, "didcomm_v2", None))
@@ -1391,10 +1347,9 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
 }
 
 #[derive(Debug)]
-struct CanvasProjection {
+struct ApplicationProjection {
     application_id: String,
     organization_id: String,
-    candidate_id: Option<String>,
     renewal_source: Option<String>,
 }
 
@@ -1555,7 +1510,7 @@ impl RenewalRepository for PostgresCredentialRepository {
             .transpose()
             .map_err(|_| RenewalRepositoryError::Unavailable)?;
         if let Some(bound) = bound {
-            bind_canvas_renewal_application(&mut database, &bound, source, application_id).await?;
+            bind_renewal_application(&mut database, &bound, source, application_id).await?;
             database
                 .commit()
                 .await
@@ -1579,10 +1534,8 @@ impl RenewalRepository for PostgresCredentialRepository {
     }
 }
 
-/// Only actual Canvas-marked applications need their approved current
-/// transaction moved. Generic applications and absent historical IDs retain
-/// existing behavior. Candidate links and this association commit together.
-async fn bind_canvas_renewal_application(
+/// Advance canonical application authority atomically with renewal reservation.
+async fn bind_renewal_application(
     database: &mut Transaction<'_, Postgres>,
     candidate: &CredentialTransaction,
     source: &RenewalSource,
@@ -1591,6 +1544,9 @@ async fn bind_canvas_renewal_application(
     let Some(application_id) = application_id else {
         return Ok(());
     };
+    if application_id.trim().is_empty() {
+        return Err(RenewalRepositoryError::BindingConflict);
+    }
     let application: Option<Value> = sqlx::query_scalar(
         "SELECT to_jsonb(app) FROM issuance_service.applications app WHERE id=$1 FOR UPDATE",
     )
@@ -1599,13 +1555,10 @@ async fn bind_canvas_renewal_application(
     .await
     .map_err(|_| RenewalRepositoryError::Unavailable)?;
     let Some(application) = application else {
-        return Ok(());
+        return Err(RenewalRepositoryError::BindingConflict);
     };
-    if !application["integration_context"]["canvas"]
-        .as_object()
-        .is_some_and(crate::canvas_issuance_guard::has_canvas_marker)
-    {
-        return Ok(());
+    if !supported_application_delivery_context(&application["integration_context"]) {
+        return Err(RenewalRepositoryError::BindingConflict);
     }
     let source_bound: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials source
@@ -1646,8 +1599,7 @@ async fn bind_canvas_renewal_application(
     if current == Some(candidate.id.as_str()) {
         return Ok(());
     }
-    // Do not clear the source credential or award-candidate claim. Their current
-    // pointers advance only with successful credential finalization.
+    // Advance the credential pointer only with successful finalization.
     let updated = sqlx::query(
         "UPDATE issuance_service.applications SET issuance_transaction_id=$3
          WHERE id=$1 AND organization_id=$2 AND issuance_transaction_id=$4
@@ -1797,7 +1749,7 @@ async fn finalize_credential(
     if credential_exists(database, &transaction.id).await? {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
-    let canvas = prepare_canvas_projection(
+    let application = prepare_application_projection(
         database,
         get::<Option<String>>(&authoritative, "application_id")?.as_deref(),
         &credential.organization_id,
@@ -1810,7 +1762,7 @@ async fn finalize_credential(
     if let Some(notification_id) = notification_id {
         insert_notification_binding(database, transaction, credential, notification_id).await?;
     }
-    apply_canvas_projection(database, canvas.as_ref(), credential).await?;
+    apply_application_projection(database, application.as_ref(), credential).await?;
     let finalized = sqlx::query(
         "UPDATE issuance_service.issuance_transactions
          SET status = 'issued', c_nonce = NULL, issued_at = $3
@@ -2193,20 +2145,23 @@ async fn finish_didcomm_transport_claim(
     Ok(())
 }
 
-async fn prepare_canvas_projection(
+async fn prepare_application_projection(
     database: &mut Transaction<'_, Postgres>,
     application_id: Option<&str>,
     organization_id: &str,
     credential_id: &str,
     transaction_id: &str,
     renewal_source: Option<&str>,
-) -> Result<Option<CanvasProjection>, CredentialIssuanceError> {
+) -> Result<Option<ApplicationProjection>, CredentialIssuanceError> {
     let renewal_source = renewal_source_id(renewal_source);
-    let Some(application_id) = application_id.filter(|value| !value.is_empty()) else {
+    let Some(application_id) = application_id else {
         return Ok(None);
     };
+    if application_id.trim().is_empty() {
+        return Err(CredentialIssuanceError::ApplicationEligibilityDenied);
+    }
     let application = sqlx::query(
-        "SELECT id, organization_id, credential_id, integration_context, issuance_transaction_id
+        "SELECT id, organization_id, credential_id, integration_context, issuance_transaction_id, status
          FROM issuance_service.applications
          WHERE id = $1 AND organization_id = $2 FOR UPDATE",
     )
@@ -2216,12 +2171,19 @@ async fn prepare_canvas_projection(
     .await
     .map_err(repository_error)?;
     let Some(application) = application else {
-        return Ok(None);
+        return Err(CredentialIssuanceError::ApplicationEligibilityDenied);
     };
     let integration = get::<Value>(&application, "integration_context")?;
-    let Some(canvas) = canvas_context(&integration) else {
-        return Ok(None);
-    };
+    if !integration.as_object().is_some_and(|context| {
+        context
+            .keys()
+            .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+    }) || get::<String>(&application, "status")? != "approved"
+        || get::<Option<String>>(&application, "issuance_transaction_id")?.as_deref()
+            != Some(transaction_id)
+    {
+        return Err(CredentialIssuanceError::ApplicationEligibilityDenied);
+    }
     if let Some(source_id) = renewal_source {
         let lineage: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials source
@@ -2247,58 +2209,16 @@ async fn prepare_canvas_projection(
     {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
-    let candidate_id = canvas
-        .get("canvas_award_candidate_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    if let Some(candidate_id) = candidate_id.as_deref() {
-        let candidate = sqlx::query(
-            "SELECT id, application_id, binding_id, platform_id, claimed_credential_id
-             FROM issuance_service.canvas_award_candidates
-             WHERE id = $1 AND organization_id = $2 FOR UPDATE",
-        )
-        .bind(candidate_id)
-        .bind(organization_id)
-        .fetch_optional(&mut **database)
-        .await
-        .map_err(repository_error)?;
-        if let Some(candidate) = candidate {
-            let expected_binding = canvas_string(canvas, "canvas_program_binding_id");
-            let expected_platform = canvas_string(canvas, "canvas_platform_id");
-            let claimed = get::<Option<String>>(&candidate, "claimed_credential_id")?;
-            if get::<Option<String>>(&candidate, "application_id")?.as_deref()
-                != Some(application_id)
-                || (!expected_binding.is_empty()
-                    && get::<String>(&candidate, "binding_id")? != expected_binding)
-                || (!expected_platform.is_empty()
-                    && get::<String>(&candidate, "platform_id")? != expected_platform)
-                || claimed
-                    .as_deref()
-                    .is_some_and(|value| value != credential_id && Some(value) != renewal_source)
-            {
-                return Err(CredentialIssuanceError::RepositoryUnavailable);
-            }
-        } else {
-            return Ok(Some(CanvasProjection {
-                application_id: application_id.to_owned(),
-                organization_id: organization_id.to_owned(),
-                candidate_id: None,
-                renewal_source: renewal_source.map(str::to_owned),
-            }));
-        }
-    }
-    Ok(Some(CanvasProjection {
+    Ok(Some(ApplicationProjection {
         application_id: application_id.to_owned(),
         organization_id: organization_id.to_owned(),
-        candidate_id,
         renewal_source: renewal_source.map(str::to_owned),
     }))
 }
 
-async fn apply_canvas_projection(
+async fn apply_application_projection(
     database: &mut Transaction<'_, Postgres>,
-    projection: Option<&CanvasProjection>,
+    projection: Option<&ApplicationProjection>,
     credential: &IssuedCredential,
 ) -> Result<(), CredentialIssuanceError> {
     let Some(projection) = projection else {
@@ -2320,55 +2240,13 @@ async fn apply_canvas_projection(
     if application.rows_affected() != 1 {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
-    if let Some(candidate_id) = projection.candidate_id.as_deref() {
-        let candidate = sqlx::query(
-            "UPDATE issuance_service.canvas_award_candidates
-             SET state = 'claimed', claimed_credential_id = $3, updated_at = $4
-             WHERE id = $1 AND organization_id = $2
-               AND (claimed_credential_id IS NULL OR claimed_credential_id = $3 OR claimed_credential_id = $5)",
-        )
-        .bind(candidate_id)
-        .bind(&projection.organization_id)
-        .bind(&credential.id)
-        .bind(credential.issued_at)
-        .bind(&projection.renewal_source)
-        .execute(&mut **database)
-        .await
-        .map_err(repository_error)?;
-        if candidate.rows_affected() != 1 {
-            return Err(CredentialIssuanceError::RepositoryUnavailable);
-        }
-    }
     Ok(())
-}
-
-fn canvas_context(integration: &Value) -> Option<&Map<String, Value>> {
-    let canvas = integration.get("canvas")?.as_object()?;
-    let source = canvas_string(canvas, "source").to_ascii_lowercase();
-    [
-        "canvas_platform_id",
-        "canvas_program_binding_id",
-        "canvas_account_id",
-    ]
-    .iter()
-    .any(|name| !canvas_string(canvas, name).is_empty())
-    .then_some(canvas)
-    .or_else(|| source.starts_with("canvas").then_some(canvas))
 }
 
 fn renewal_source_id(value: Option<&str>) -> Option<&str> {
     // Historical ordinary rows can contain blank links. Meaningful identity
     // bytes are not trimmed or otherwise rewritten by this consistency guard.
     value.filter(|id| !id.trim().is_empty())
-}
-
-fn canvas_string(canvas: &Map<String, Value>, name: &str) -> String {
-    canvas
-        .get(name)
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_owned()
 }
 
 fn json_map(row: &PgRow, name: &str) -> Result<Map<String, Value>, CredentialIssuanceError> {
@@ -2408,8 +2286,7 @@ fn repository_error(cause: sqlx::Error) -> CredentialIssuanceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{authorization_transaction_id, canvas_context, renewal_source_id};
-    use serde_json::json;
+    use super::{authorization_transaction_id, renewal_source_id};
 
     #[test]
     fn renewal_lineage_treats_only_absent_or_blank_links_as_absent() {
@@ -2456,10 +2333,32 @@ mod tests {
             assert_eq!(authorization_transaction_id(session), expected);
         }
     }
+}
 
+fn supported_application_delivery_context(context: &Value) -> bool {
+    context.as_object().is_some_and(|context| {
+        context
+            .keys()
+            .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+    })
+}
+#[cfg(test)]
+mod application_context_tests {
+    use super::supported_application_delivery_context;
+    use serde_json::json;
     #[test]
-    fn canvas_projection_requires_a_real_canvas_context() {
-        assert!(canvas_context(&json!({"canvas": {"source": "canvas-lti"}})).is_some());
-        assert!(canvas_context(&json!({"canvas": {"source": "other"}})).is_none());
+    fn only_platform_delivery_context_is_supported() {
+        assert!(supported_application_delivery_context(&json!({})));
+        assert!(supported_application_delivery_context(
+            &json!({"delivery_mode":"wallet_only"})
+        ));
+        for context in [
+            json!(null),
+            json!([]),
+            json!({"canvas":{}}),
+            json!({"provider":{}}),
+        ] {
+            assert!(!supported_application_delivery_context(&context));
+        }
     }
 }

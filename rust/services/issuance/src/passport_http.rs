@@ -34,7 +34,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    canvas_award_candidate::python_canonical_json,
+    canonical_json::python_canonical_json,
     config::IssuanceServiceConfig,
     initiation::normalize_idempotency_key,
     passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},

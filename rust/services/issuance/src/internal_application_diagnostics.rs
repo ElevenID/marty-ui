@@ -15,10 +15,6 @@ const CORRELATION_DOMAIN: &[u8] = b"marty:internal-application-diagnostic:v1:";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InternalApplicationDiagnosticStage {
     ExternalEvidenceTransport,
-    CanvasApprovalReadiness,
-    CanvasApprovalIssuerContext,
-    CanvasOfferReadiness,
-    CanvasOfferIssuerContext,
     OrdinaryIssuerContext,
     WalletCatalogTemplate,
     WalletCatalogConfiguration,
@@ -30,10 +26,6 @@ impl InternalApplicationDiagnosticStage {
     const fn as_str(self) -> &'static str {
         match self {
             Self::ExternalEvidenceTransport => "external_evidence_transport",
-            Self::CanvasApprovalReadiness => "canvas_approval_readiness",
-            Self::CanvasApprovalIssuerContext => "canvas_approval_issuer_context",
-            Self::CanvasOfferReadiness => "canvas_offer_readiness",
-            Self::CanvasOfferIssuerContext => "canvas_offer_issuer_context",
             Self::OrdinaryIssuerContext => "ordinary_issuer_context",
             Self::WalletCatalogTemplate => "wallet_catalog_template",
             Self::WalletCatalogConfiguration => "wallet_catalog_configuration",
@@ -48,10 +40,15 @@ pub(crate) enum InternalApplicationDiagnosticCategory {
     DependencyUnavailable,
     InvalidResponse,
     InvalidConfiguration,
+    #[cfg(test)]
     NotFound,
+    #[cfg(test)]
     RolloutDisabled,
+    #[cfg(test)]
     InvalidStatus,
+    #[cfg(test)]
     NotReady,
+    #[cfg(test)]
     TransactionPlanUnavailable,
     IssuerContextInvalid,
 }
@@ -62,10 +59,15 @@ impl InternalApplicationDiagnosticCategory {
             Self::DependencyUnavailable => "dependency_unavailable",
             Self::InvalidResponse => "invalid_response",
             Self::InvalidConfiguration => "invalid_configuration",
+            #[cfg(test)]
             Self::NotFound => "not_found",
+            #[cfg(test)]
             Self::RolloutDisabled => "rollout_disabled",
+            #[cfg(test)]
             Self::InvalidStatus => "invalid_status",
+            #[cfg(test)]
             Self::NotReady => "not_ready",
+            #[cfg(test)]
             Self::TransactionPlanUnavailable => "transaction_plan_unavailable",
             Self::IssuerContextInvalid => "issuer_context_invalid",
         }
@@ -425,19 +427,19 @@ mod tests {
             warn_external_evidence_failure(application, check);
             for (stage, category) in [
                 (
-                    InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::RolloutDisabled,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::DependencyUnavailable,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::InvalidStatus,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::IssuerContextInvalid,
                 ),
                 (
@@ -481,11 +483,11 @@ mod tests {
             .expect("diagnostic stages")
             .iter()
             .map(|stage| stage.as_str().expect("stage").to_owned())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         let actual_stages = events
             .iter()
             .map(|diagnostic| diagnostic_field(diagnostic, "stage").to_owned())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         assert_eq!(actual_stages, expected_stages);
         assert_eq!(
             events

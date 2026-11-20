@@ -1,11 +1,11 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const runtime=require('./functional-debug-runtime'),reader=require('./d12-current-native-runtime');
-const roles=['flow','gateway','issuance-native',...Array.from({length:19},(_,i)=>'retained-'+i)];
+
 const selected=reader.ROLES,hash='a'.repeat(64),next='b'.repeat(64);
 function fixture(current10=false){
  const selected=current10?reader.CURRENT10.roles:reader.ROLES;
- const roles=current10?[...Object.keys(selected),...Array.from({length:12},(_,i)=>"retained-"+i)]:["flow","gateway","issuance-native",...Array.from({length:19},(_,i)=>"retained-"+i)];
+ const roles=[...reader.CURRENT_RUNTIME_ROLES];
  const before={roles:roles.map((role,i)=>({role,binary:selected[role]||'marty-'+role,project:'elevenid-beta',
   containerId:(i+1).toString(16).padStart(64,'0'),imageId:'sha256:'+hash,
   startedAt:'2026-10-01T00:00:00Z',hostPid:i+1,health:'healthy',
@@ -18,7 +18,7 @@ function fixture(current10=false){
   scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
  return {before,selection};
 }
-function invoke(edit,current10=false){
+function invoke(edit,current10=false,inputEdit,dockerRead){
  const selected=current10?reader.CURRENT10.roles:reader.ROLES;
  const {before,selection}=fixture(current10),oldJson=runtime.boundJson,oldObserve=runtime.observeDocker;
  const runId='00000000-0000-4000-8000-000000000001';
@@ -27,6 +27,7 @@ function invoke(edit,current10=false){
   state:selected[prior.role]?'created':'exited',hostPid:0}))};
  const startAcks={runId,acks:Object.fromEntries(created.roles.map(row=>[row.role,{containerId:row.containerId,
   imageId:row.imageId,startedAt:'2026-10-02T00:00:00Z',hostPid:42}]))};
+ if(inputEdit)inputEdit({before,selection,created,startAcks});
  try{
   runtime.boundJson=ref=>ref.value;
   runtime.observeDocker=prior=>{
@@ -42,11 +43,11 @@ function invoke(edit,current10=false){
   };
   return reader.observe({before:{value:before},selection:{value:selection},created:{value:created},
     startAcks:{value:startAcks},runId,engineId:'engine'},
-    {readDocker:()=>JSON.stringify({ID:'engine'})});
+    {readDocker:dockerRead||(()=>JSON.stringify({ID:'engine'}))});
  }finally{runtime.boundJson=oldJson;runtime.observeDocker=oldObserve;}
 }
-test('current D12 actual reader retains 19 roles and requires three fresh exact binaries',()=>{
- const result=invoke();assert.equal(result.roles.length,22);assert.equal(result.functionalReady,false);
+test('current D12 actual reader retains 18 roles and requires three fresh exact binaries',()=>{
+ const result=invoke();assert.equal(result.roles.length,21);assert.equal(result.functionalReady,false);
  assert.equal(result.roles.filter(x=>x.source===reader.SOURCE).length,3);
 });
 test('same selected container or wrong mounted binary never becomes fresh runtime proof',()=>{
@@ -59,13 +60,27 @@ test('unexpected same-container restart generation or process refuses',()=>{
  assert.throws(()=>invoke((prior,row)=>prior.role==='flow'?{...row,hostPid:43}:row));
 });
 
-test('closed current10 observes native Auth generation and retains twelve unselected roles',()=>{
+test('closed current10 observes native Auth generation and retains eleven unselected roles',()=>{
  const result=invoke(undefined,true);
  assert.equal(result.roles.filter(x=>x.source===reader.CURRENT10.source).length,10);
- assert.equal(result.roles.filter(x=>x.source==='old').length,12);
+ assert.equal(result.roles.filter(x=>x.source==='old').length,11);
  for(const edit of [(p,r)=>p.role==='auth'?{...r,hostPid:43}:r,
                     (p,r)=>p.role==='auth'?{...r,binarySha256:hash}:r,
                     (p,r)=>p.role==='auth'?{...r,containerId:p.containerId}:r]){
   assert.throws(()=>invoke(edit,true));
  }
+});
+
+test('retired, unknown, missing and duplicate cohorts refuse before Docker reads',()=>{
+ for(const change of [c=>c.before.roles[0].role='canvas-sync-worker',c=>c.before.roles[0].role='unknown-role',c=>c.before.roles.pop(),c=>c.before.roles[0].role=c.before.roles[1].role]){
+  let calls=0;assert.throws(()=>invoke(undefined,false,change,()=>{calls++;throw Error('unexpected Docker read');}),/D12_CURRENT_RUNTIME_ROLE_SET_REQUIRED/);assert.equal(calls,0);
+ }
+});
+test('current role identities, acknowledgments and health retain their closed constraints',()=>{
+ for(const change of [c=>c.created.roles.pop(),c=>delete c.startAcks.acks.flow,c=>c.created.roles[1].containerId=c.created.roles[0].containerId])assert.throws(()=>invoke(undefined,false,change));
+ for(const health of [null,undefined,'starting','unhealthy'])assert.throws(()=>invoke((prior,row)=>({...row,health})),/D12_ROLE_HEALTH_NOT_ESTABLISHED/);
+});
+
+test('invalid role admission reports only its fixed code',()=>{
+ assert.throws(()=>invoke(undefined,false,c=>c.before.roles[0].role='PRIVATE_ROLE_CANARY'),error=>error.message.includes('D12_CURRENT_RUNTIME_ROLE_SET_REQUIRED')&&!error.message.includes('PRIVATE_ROLE_CANARY'));
 });

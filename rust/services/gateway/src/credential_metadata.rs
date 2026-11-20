@@ -3,13 +3,9 @@
 use serde_json::{json, Value};
 
 pub const MARTY_BADGE_SLUG: &str = "marty-verified-member-badge";
-pub const CANVAS_BADGE_SLUG: &str = "canvas-interoperability-foundations-badge";
 
 const MARTY_NAME: &str = "Marty Verified Member Badge";
 const MARTY_DESCRIPTION: &str = "Verified membership credential issued by Marty Identity Platform for secure passwordless sign-in.";
-const CANVAS_NAME: &str = "Interoperable Credentials Foundations Badge";
-const CANVAS_DESCRIPTION: &str = "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.";
-const CANVAS_CRITERIA: &str = "Complete the Canvas learning activity and earn the configured passing score on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialMetadataResponse {
@@ -25,13 +21,6 @@ pub fn response(path: &str, base_url: &str) -> Option<CredentialMetadataResponse
         | "/.well-known/vct/credentials/marty-verified-member-badge" => {
             Some(marty_metadata(base_url))
         }
-        "/credentials/canvas-interoperability-foundations-badge"
-        | "/.well-known/vct/credentials/canvas-interoperability-foundations-badge" => {
-            Some(canvas_metadata(base_url))
-        }
-        "/credentials/canvas-interoperability-foundations-badge/criteria" => {
-            Some(canvas_criteria(base_url))
-        }
         _ => None,
     };
     if let Some(json) = json {
@@ -43,7 +32,6 @@ pub fn response(path: &str, base_url: &str) -> Option<CredentialMetadataResponse
     }
     let svg = match path {
         "/credentials/marty-verified-member-badge/image.svg" => Some(MARTY_SVG),
-        "/credentials/canvas-interoperability-foundations-badge/image.svg" => Some(CANVAS_SVG),
         _ => None,
     }?;
     Some(CredentialMetadataResponse {
@@ -102,64 +90,6 @@ fn marty_metadata(base_url: &str) -> Value {
     })
 }
 
-fn canvas_metadata(base_url: &str) -> Value {
-    let base = credential_url(base_url, CANVAS_BADGE_SLUG, "");
-    json!({
-        "vct": base,
-        "name": CANVAS_NAME,
-        "description": CANVAS_DESCRIPTION,
-        "display": [display(base_url, CANVAS_BADGE_SLUG, CANVAS_NAME, CANVAS_DESCRIPTION, "#0B5F7A")],
-        "open_badges": {
-            "version": "3.0",
-            "achievement": {
-                "id": format!("{base}#achievement"),
-                "type": ["Achievement"],
-                "name": CANVAS_NAME,
-                "description": CANVAS_DESCRIPTION,
-                "criteria": {"id": format!("{base}/criteria"), "narrative": CANVAS_CRITERIA},
-                "image": {"id": format!("{base}/image.svg"), "type": "Image", "caption": CANVAS_NAME},
-                "alignment": [
-                    {"targetName": "Open Badges 3.0", "targetDescription": "Portable achievement credential carried as a verifiable credential."},
-                    {"targetName": "Marty Identity Protocol", "targetDescription": "MIP-governed issuance, status-list allocation, and destination projection."}
-                ]
-            }
-        },
-        "claims": [
-            claim("email", "Learner Email", "always"),
-            claim("given_name", "Given Name", "always"),
-            claim("family_name", "Family Name", "always"),
-            claim("achievement", "Achievement", "never"),
-            claim("result", "Canvas Quiz Result", "allowed"),
-            claim("learning_context", "Canvas Learning Context", "allowed"),
-            claim("credentialStatus", "Credential Status", "never")
-        ]
-    })
-}
-
-fn canvas_criteria(base_url: &str) -> Value {
-    json!({
-        "id": credential_url(base_url, CANVAS_BADGE_SLUG, "/criteria"),
-        "type": ["Criteria"],
-        "name": "Interoperable Credentials Foundations criteria",
-        "narrative": CANVAS_CRITERIA
-    })
-}
-
-const CANVAS_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Interoperable Credentials Foundations Badge">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0B5F7A"/>
-      <stop offset="100%" stop-color="#16213E"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="72" fill="url(#g)"/>
-  <circle cx="256" cy="186" r="86" fill="#FFFFFF" opacity=".14"/>
-  <path d="M256 92l112 64v128l-112 64-112-64V156l112-64z" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linejoin="round"/>
-  <path d="M206 260l-34-34-24 24 58 58 120-120-24-24-96 96z" fill="#FFFFFF"/>
-  <text x="256" y="404" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="39" font-weight="800" fill="#FFFFFF">INTEROPERABLE</text>
-  <text x="256" y="446" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#D7F8FF">CREDENTIALS</text>
-</svg>"##;
-
 const MARTY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Marty Verified Member Badge">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -201,6 +131,18 @@ mod tests {
         cache_control: String,
         length: usize,
         sha256: String,
+    }
+
+    #[test]
+    fn retired_provider_badge_assets_are_not_platform_metadata() {
+        for path in [
+            "/credentials/canvas-interoperability-foundations-badge",
+            "/.well-known/vct/credentials/canvas-interoperability-foundations-badge",
+            "/credentials/canvas-interoperability-foundations-badge/criteria",
+            "/credentials/canvas-interoperability-foundations-badge/image.svg",
+        ] {
+            assert!(response(path, "https://issuer.example").is_none(), "{path}");
+        }
     }
 
     #[test]

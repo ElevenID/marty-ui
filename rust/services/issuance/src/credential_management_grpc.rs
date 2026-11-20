@@ -752,7 +752,7 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         | Error::InvalidTransactionState
         | Error::IssuanceInProgress
         | Error::RevocationProfileRequired
-        | Error::CanvasEligibilityDenied => Status::failed_precondition(error.to_string()),
+        | Error::ApplicationEligibilityDenied => Status::failed_precondition(error.to_string()),
         Error::IssuerUnavailable(_)
         | Error::SigningUnavailable(_)
         | Error::LifecycleUnavailable(_) => Status::unavailable(error.to_string()),
@@ -821,9 +821,9 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
         | CredentialManagementError::CannotReinstateRevoked
         | CredentialManagementError::NotSuspended => Status::failed_precondition(error.to_string()),
         CredentialManagementError::RepositoryUnavailable(_)
-        | CredentialManagementError::PublicationUnavailable(_)
-        | CredentialManagementError::CanvasRetryUnavailable(_)
-        | CredentialManagementError::CanvasTextEncoding => Status::internal(error.to_string()),
+        | CredentialManagementError::PublicationUnavailable(_) => {
+            Status::internal(error.to_string())
+        }
     }
 }
 
@@ -954,19 +954,6 @@ mod tests {
             }
             *stored = Some(credential.clone());
             Ok(credential.clone())
-        }
-
-        async fn synchronize_canvas(
-            &self,
-            _credential: &ManagedCredential,
-            action: CredentialLifecycleAction,
-            _reason: Option<&str>,
-        ) -> Result<(), crate::credential_management::CanvasLifecycleSyncError> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .push(format!("canvas:{}", action.as_str()));
-            Ok(())
         }
     }
 
@@ -1393,7 +1380,7 @@ mod tests {
         assert!(response.status_updated_at.ends_with("+00:00"));
         assert_eq!(
             *calls.lock().expect("calls"),
-            ["load", "publish:suspend", "persist", "canvas:suspend"]
+            ["load", "publish:suspend", "persist"]
         );
 
         let event = events.next().await.expect("stream item").expect("event");

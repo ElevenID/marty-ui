@@ -12,14 +12,12 @@ const LAST_ATTEMPT: &str = "last_issuance_attempt_id";
 pub struct ClaimCapabilities {
     pub oid4vci_wallet: bool,
     pub delivery_destination_selection: bool,
-    pub canvas_credentials_mirror: bool,
     pub offer_reuse: &'static str,
 }
 
 pub const CLAIM_CAPABILITIES: ClaimCapabilities = ClaimCapabilities {
     oid4vci_wallet: true,
     delivery_destination_selection: false,
-    canvas_credentials_mirror: false,
     offer_reuse: "pending_until_consumed_or_expired",
 };
 

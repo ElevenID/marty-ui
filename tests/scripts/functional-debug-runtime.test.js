@@ -4,7 +4,7 @@ const {verifyFunctionalRuntime,expectedRuntime,DEBUG_ROLES,RETAINED_ROLES}=requi
 const H=char=>char.repeat(64),R=char=>char.repeat(40),image='sha256:'+H('1');
 function fixture(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'functional-runtime-'));t.after(()=>fs.rmSync(dir,{recursive:true}));
- const roles=['auth','organization','credential-template','trust-profile','applicant','notification','compliance-profile','presentation-policy','deployment-profile','signing-keys','flow','verification','revocation-profile','device-registration','event-stream','issuance','issuance-native','canvas-sync-worker','gateway','passport-callback-signer','passport-beta-bureau','ui-prod'];
+ const roles=['auth','organization','credential-template','trust-profile','applicant','notification','compliance-profile','presentation-policy','deployment-profile','signing-keys','flow','verification','revocation-profile','device-registration','event-stream','issuance','issuance-native','gateway','passport-callback-signer','passport-beta-bureau','ui-prod'];
  const binary=role=>({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;
  const outputs=[...new Set(roles.filter(role=>role!=='ui-prod').map(binary))].map(name=>({name,sha256:H('2')}));
  while(outputs.length<32)outputs.push({name:'marty-extra-'+outputs.length,sha256:H('2')});
@@ -16,10 +16,10 @@ function fixture(t){
  const debugDeployment=write('deployment.json',{scope:'BETA_R32_D03_D05_DEBUG_BINARY_FUNCTIONAL_ONLY',state:'BETA_DEBUG_BINARIES_ACTIVE_FUNCTIONAL_ONLY',releaseQualified:false,productionTouched:false,imageBuilt:false,sourceRevision:R('b'),buildReceiptSha256:debugBuild.sha256,binarySha256:debugHashes,live:{ids:Object.fromEntries(Object.keys(DEBUG_ROLES).map((role,index)=>[role,H((index+4).toString(16))]))}},true);
  const retainedBuilds=Object.fromEntries(Object.entries(RETAINED_ROLES).map(([role,name])=>[role,write(role+'.json',{state:'PASSED',exitCode:0,binary:'/retained/'+name,source:R(role==='flow'?'c':'d'),binarySha256:H(role==='flow'?'a':'b')})]));
  const profile={schema:'marty.functional-mixed-runtime/v1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baselineDeployment:write('base.json',baseline),baselineBuild:write('build.json',build),debugDeployment,debugBuild,retainedBuilds};
- const observe=row=>({role:row.role,project:row.project,service:row.role,imageId:row.imageId,containerId:row.requiredContainerId||H('f'),running:true,status:'running',health:row.role==='canvas-sync-worker'?null:'healthy',binarySha256:row.sha256,executablePath:row.binary?'/usr/local/bin/'+row.binary:null,processExecutableSha256:row.sha256,binaryMounts:row.kind==='DEBUG_PRODUCTION_BINARY'||row.kind==='RETAINED_SOURCE_BOUND_BINARY'?[{type:'bind',source:'/source/'+row.binary,destination:'/usr/local/bin/'+row.binary,writable:false}]:[],hostPid:123,startedAt:'2026-10-26T00:00:00Z'});
+ const observe=row=>({role:row.role,project:row.project,service:row.role,imageId:row.imageId,containerId:row.requiredContainerId||H('f'),running:true,status:'running',health:'healthy',binarySha256:row.sha256,executablePath:row.binary?'/usr/local/bin/'+row.binary:null,processExecutableSha256:row.sha256,binaryMounts:row.kind==='DEBUG_PRODUCTION_BINARY'||row.kind==='RETAINED_SOURCE_BOUND_BINARY'?[{type:'bind',source:'/source/'+row.binary,destination:'/usr/local/bin/'+row.binary,writable:false}]:[],hostPid:123,startedAt:'2026-10-26T00:00:00Z'});
  return {profile,observe,write};
 }
-test('eight executable overrides remain separate from baseline and cannot qualify release',t=>{const {profile,observe}=fixture(t);const result=verifyFunctionalRuntime(profile,{observe});assert.equal(result.roles.length,22);assert.equal(result.roles.filter(row=>row.kind==='DEBUG_PRODUCTION_BINARY').length,6);assert.equal(result.roles.filter(row=>row.kind==='RETAINED_SOURCE_BOUND_BINARY').length,2);assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);assert.equal(result.roles.find(row=>row.role==='flow').source,R('c'));});
+test('eight executable overrides remain separate from baseline and cannot qualify release',t=>{const {profile,observe}=fixture(t);const result=verifyFunctionalRuntime(profile,{observe});assert.equal(result.roles.length,21);assert.equal(result.roles.filter(row=>row.kind==='DEBUG_PRODUCTION_BINARY').length,6);assert.equal(result.roles.filter(row=>row.kind==='RETAINED_SOURCE_BOUND_BINARY').length,2);assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);assert.equal(result.roles.find(row=>row.role==='flow').source,R('c'));});
 for(const mode of ['RELEASE','RECORDING'])test('reject '+mode+' before observing beta',t=>{const {profile}=fixture(t);assert.throws(()=>verifyFunctionalRuntime(profile,{qualification:mode,observe:()=>assert.fail('Must not observe')}),/cannot qualify/)});
 for(const change of ['process','mounted','pidPath','health','tenant','container','image','writableMount'])test('reject actual runtime mismatch '+change,t=>{const {profile,observe}=fixture(t);assert.throws(()=>verifyFunctionalRuntime(profile,{observe:row=>{const actual=observe(row);if(row.role==='gateway'){
  if(change==='process')actual.processExecutableSha256=H('0');if(change==='mounted')actual.binarySha256=H('0');if(change==='pidPath')actual.executablePath='/usr/local/bin/marty-gateway (deleted)';if(change==='health')actual.health='unhealthy';if(change==='tenant')actual.project='elevenid-selfhost';if(change==='container')actual.containerId=H('0');if(change==='image')actual.imageId='sha256:'+H('0');if(change==='writableMount')actual.binaryMounts[0].writable=true;}return actual;}}));});
@@ -86,7 +86,7 @@ function issuanceFixture(t,runtimeUid=0){
 
 test('v2 changes only two issuer sources and pins full other20 actual observations',t=>{
  const f=issuanceFixture(t),bytes=fs.readFileSync(f.profile.baseProfile.path),result=verifyFunctionalRuntime(f.profile,{observe:f.observe});
- assert.equal(result.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(result.roles.length,22);
+ assert.equal(result.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(result.roles.length,21);
  assert.equal(result.roles.filter(row=>row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY').length,2);
  for(const row of result.roles.filter(row=>!['issuance','issuance-native'].includes(row.role))){
   const old=f.before.roles.find(value=>value.role===row.role);
@@ -167,10 +167,10 @@ test('readDocker transport reuses actual per-role PID1, inode, UID and mount ins
   assert.fail('Unexpected engine read');
  };
  const result=verifyFunctionalRuntime(f.profile,{readDocker});
- assert.equal(result.roles.length,22);assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
- assert.equal(calls.filter(a=>a[0]==='ps').length,22);
- assert.equal(calls.filter(a=>a[2]==='readlink'&&a[3]==='/proc/1/exe').length,21);
- assert.equal(calls.filter(a=>a[2]==='sha256sum'&&a[3]==='/proc/1/exe').length,21);
+ assert.equal(result.roles.length,21);assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
+ assert.equal(calls.filter(a=>a[0]==='ps').length,21);
+ assert.equal(calls.filter(a=>a[2]==='readlink'&&a[3]==='/proc/1/exe').length,20);
+ assert.equal(calls.filter(a=>a[2]==='sha256sum'&&a[3]==='/proc/1/exe').length,20);
  assert.equal(result.roles.find(r=>r.role==='gateway').effectiveUid,1000);
  assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:f.observe,readDocker}),/one observation transport/);
  assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:()=>{throw Error('CONTROLLED_PRIVATE_ERROR')}}),e=>e.code==='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED'&&!e.message.includes('PRIVATE'));
@@ -197,7 +197,7 @@ function mountEquivalenceFixture(t){
 test('v2 compares Windows and canonical desktop mounts for base20 and issuer2 without rewriting evidence',t=>{
  const f=mountEquivalenceFixture(t),before=JSON.stringify(f.before),deployed=fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path);
  const result=verifyFunctionalRuntime(f.profile,{observe:f.observe});
- assert.equal(result.roles.length,22);assert.equal(result.roles.filter(row=>row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY').length,2);
+ assert.equal(result.roles.length,21);assert.equal(result.roles.filter(row=>row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY').length,2);
  assert(result.roles.find(row=>row.role==='credential-template').binaryMounts[0].source.startsWith('/run/desktop/mnt/host/c/'));
  assert(result.roles.find(row=>row.role==='issuance').binaryMounts[0].source.startsWith('D:\\'));
  assert.equal(JSON.stringify(f.before),before);assert.deepEqual(fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path),deployed);
@@ -256,7 +256,7 @@ test('maintenance actual-reader producer rebinds only newer generations and pres
  const f=maintenanceFixture(t),prior=fs.readFileSync(f.base.path);
  assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:f.readDocker}),/startedAt/);
  const receipt=f.produce(),profile=f.bind(receipt),result=verifyFunctionalRuntime(profile,{readDocker:f.readDocker});
- assert.equal(receipt.roles.length,22);assert.equal(result.roles.length,22);assert.equal(result.receiptDigests.maintenanceRestart,profile.maintenanceRestart.sha256);
+ assert.equal(receipt.roles.length,21);assert.equal(result.roles.length,21);assert.equal(result.receiptDigests.maintenanceRestart,profile.maintenanceRestart.sha256);
  assert(result.roles.every(row=>row.startedAt==='2026-10-27T16:00:00Z'));assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
  assert.deepEqual(fs.readFileSync(f.base.path),prior);
  assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No supplied rows')}),/actual Docker transport/);
@@ -269,7 +269,7 @@ test('maintenance producer records unrelated container churn while still rejecti
  f.mutateEngine(value=>{engineReads++;value.Containers=149+engineReads;value.ContainersRunning=67+engineReads;});
  const receipt=f.produce();
  assert.deepEqual(receipt.engineCounts,{before:{containers:150,running:68},after:{containers:151,running:69}});
- assert.equal(receipt.roles.length,22);assert.equal(verifyFunctionalRuntime(f.bind(receipt),{readDocker:f.readDocker}).roles.length,22);
+ assert.equal(receipt.roles.length,21);assert.equal(verifyFunctionalRuntime(f.bind(receipt),{readDocker:f.readDocker}).roles.length,21);
  f.mutateActual((actual,row)=>{if(row.role==='gateway')actual.containerId='';});
  assert.throws(f.produce,'Missing managed gateway must fail despite healthy engine counts');
  f.mutateActual((actual,row)=>{if(row.role==='gateway')actual.containerId=H('0');});
@@ -315,7 +315,7 @@ function scopedRowsFixture(t){
 }
 test('shared native overlay changes exactly signing/gateway and preserves actual other20 generations',t=>{
  const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
- const result=applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection);assert.equal(result.length,22);
+ const result=applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection);assert.equal(result.length,21);
  assert.equal(result.filter(row=>row.kind==='SCOPED_NATIVE_FUNCTIONAL_OVERLAY').length,2);
  for(const row of result){const old=x.before.roles.find(item=>item.role===row.role);
   if(x.selection.roles.includes(row.role)){assert.equal(row.source,x.selection.source);assert.equal(row.coreSource,x.selection.coreSource);assert.equal(row.sha256,x.selection.hashes[row.binary]);assert.equal(row.requiredContainerId,x.deployed.roles[row.role].containerId);assert.equal(row.requiredObservation,undefined);}
@@ -419,7 +419,7 @@ function unqualifiedPreimageFixture(t){
 test('failed API gate yields only observed preimage rows; signer successor preserves gateway and other20',t=>{
  const {expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation}=require('./functional-debug-runtime');
  const x=unqualifiedPreimageFixture(t),rows=expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection);
- assert(Array.isArray(rows));assert.equal(rows.length,22);assert.equal(rows.schema,undefined);
+ assert(Array.isArray(rows));assert.equal(rows.length,21);assert.equal(rows.schema,undefined);
  const before={...x.before,roles:rows.map(row=>validateRuntimeObservation(row,x.raw.rows.find(actual=>actual.role===row.role)))};
  const signer=structuredClone(x.deployed.roles['signing-keys']);signer.containerId=crypto.createHash('sha256').update('header-successor:signing-keys').digest('hex');signer.startedAt='2026-10-26T03:00:00Z';signer.hostPid++;
  signer.processExecutableSha256=H('9');signer.mountedBinarySha256=H('9');signer.binaryMount.source+='-successor';
@@ -484,27 +484,8 @@ function dockerObservationFixture(expected,observe){
   assert.fail('Unknown synthetic Docker read');
  };return {readDocker,raw};
 }
-function signedImageFixture(t){
- const f=fixture(t),helper=require('./functional-debug-runtime'),nightly=require('./nightly-functional-runtime');
- const imageRows=[nightly.SERVICES,nightly.UI].map((reference,index)=>({reference,Id:'sha256:'+H(String(index+1)),RepoDigests:[reference],Config:{Labels:{'org.opencontainers.image.revision':nightly.SOURCE,'io.elevenid.selfhost.public-profile':'tester'}}}));
- const ids={},restored=[...nightly.ROLES,'keycloak','nginx-proxy'].map((role,index)=>{
-  const id=(index+1).toString(16).padStart(64,'0');ids[role]=id;
-  return {Id:id,Image:imageRows[role==='ui-prod'?1:0].Id,Config:{Image:role==='ui-prod'?nightly.UI:nightly.SERVICES,Labels:{'com.docker.compose.service':role,'com.docker.compose.project':role==='ui-prod'?'elevenid-beta-ui':'elevenid-beta'}},State:{Running:true,OOMKilled:false,Pid:100+index,StartedAt:'2026-10-26T00:00:00Z'}};
- });
- const lockPath=path.join(path.dirname(f.profile.baselineDeployment.path),'signed-image-lock.json');fs.copyFileSync(path.join(__dirname,'../fixtures/nightly263-images.json'),lockPath);
- const profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,signedImageDeployment:{
-  releaseLock:{path:lockPath,sha256:crypto.createHash('sha256').update(fs.readFileSync(lockPath)).digest('hex')},
-  deployment:f.write('signed-deployment.json',{state:'PHASE2_MIXED_INFRA_STARTED',release:nightly.RELEASE,fullNightlyQualified:false,newCids:ids}),
-  writerRestore:f.write('signed-restore.json',{state:'OPENBAO_NIGHTLY_IMAGE_AND_PLUGIN_RUNNING',fullNightlyQualified:false,keysGenerated:false,writersRemainQuiesced:false,restoredWriters:restored}),
-  phase1Input:f.write('signed-input.json',{release:nightly.RELEASE,betaOnly:true,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341'})}};
- const rows=nightly.authority(profile,helper).rows;
- const observe=row=>({role:row.role,project:row.project,service:row.role,imageId:row.imageId,containerId:row.requiredContainerId,running:true,status:'running',health:row.role==='canvas-sync-worker'?null:'healthy',binarySha256:row.binary?H('2'):null,executablePath:row.binary?'/usr/local/bin/'+row.binary:null,processExecutableSha256:row.binary?H('2'):null,binaryMounts:[],hostPid:row.requiredHostPid,startedAt:row.requiredStartedAt,effectiveUid:row.binary?10001:101,configuredRuntimeUid:row.binary?10001:101});
- const docker=dockerObservationFixture(rows,observe),readDocker=args=>args[0]==='info'?JSON.stringify({ID:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341'}):args[0]==='image'?JSON.stringify([imageRows.find(row=>row.reference===args[2])]):docker.readDocker(args);
- profile.signedImageDeployment.observation=f.write('signed-observation.json',helper.produceSignedImageObservation(profile,{readDocker}));
- return {...f,profile,observe,readDocker};
-}
-function mdocConfigurationFixture(t,signed=false){
- const f=signed?signedImageFixture(t):issuanceFixture(t,10001),helper=require('./functional-debug-runtime'),base=f.write('config-base.json',f.profile);
+function mdocConfigurationFixture(t){
+ const f=issuanceFixture(t,10001),helper=require('./functional-debug-runtime'),base=f.write('config-base.json',f.profile);
  const oldBinding=verifyFunctionalRuntime(f.profile,f.readDocker?{readDocker:f.readDocker}:{observe:f.observe}),expected=expectedRuntime(f.profile),run='11111111-1111-4111-8111-111111111111';
  const files=['mdoc_iaca_issue_gateway_key','mdoc_dsc_issue_gateway_key'].map((name,index)=>{const filename=path.join(path.dirname(base.path),name);fs.writeFileSync(filename,Buffer.alloc(64,index+65));return {name,path:filename,bytes:64,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex')};});
  const operator=f.write('config-operator.json',{sourceOnly:true}),rootProof={root:'/home/canvasrunner/.codex/private/d02-build-journal-'+run,device:1,inode:2,uid:1000,mode:448};
@@ -520,8 +501,7 @@ function mdocConfigurationFixture(t,signed=false){
   const labels={'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role,'com.docker.compose.config-hash':'old','com.docker.compose.project.config_files':'old.yml','com.docker.compose.version':'5.4.0','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':'postgres'};
   const layout=structuredClone(layouts[role]),mounts=layout.Mounts,target='/usr/local/bin/'+beforeRole.binary;
   const binary=beforeRole.binaryMounts.find(m=>m.destination===target);
-  if(signed){assert.equal(binary,undefined);layout.Mounts=mounts.filter(m=>m.Destination!==target);layout.HostConfig.Mounts=layout.HostConfig.Mounts.filter(m=>m.Target!==target);layout.HostConfig.Binds=layout.HostConfig.Binds.filter(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]!==target);}
-  else{assert(binary,'Source fixture binary missing');mounts.find(m=>m.Destination===target).Source=binary.source;
+  {assert(binary,'Source fixture binary missing');mounts.find(m=>m.Destination===target).Source=binary.source;
    const binaryApi=layout.HostConfig.Mounts.find(m=>m.Target===target);
    if(binaryApi)binaryApi.Source=binary.source;
    else{const index=layout.HostConfig.Binds.findIndex(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]===target);assert(index>=0);const mode=layout.HostConfig.Binds[index].match(/^(.*):([^:]+):([^:]+)$/)[3];layout.HostConfig.Binds[index]=binary.source+':'+target+':'+mode;}}
@@ -558,26 +538,19 @@ function mdocConfigurationFixture(t,signed=false){
  return {...f,profile,base,authorityRef,deployedRef,authority,deployed,evidence,known,oldBinding,raw,otherRaw,transport,roles};
 }
 
-test('mdoc configuration successor preserves all22 per-role binary lineage',t=>{
+test('mdoc configuration successor preserves all21 per-role binary lineage',t=>{
  const f=mdocConfigurationFixture(t),helper=require('./functional-debug-runtime');
  const result=helper.produceMdocConfigurationSuccessor(f.base,f.authorityRef,f.deployedRef,{readDocker:f.transport});
- assert.equal(result.binding.roles.length,22);assert.equal(result.binding.releaseQualified,false);assert.equal(result.binding.recordingQualified,false);
+ assert.equal(result.binding.roles.length,21);assert.equal(result.binding.releaseQualified,false);assert.equal(result.binding.recordingQualified,false);
  for(const row of result.binding.roles){const old=f.oldBinding.roles.find(r=>r.role===row.role);for(const key of ['binary','source','coreSource','sha256','kind','imageId'])assert.equal(row[key],old[key]);
   if(!['gateway','signing-keys'].includes(row.role))for(const key of ['containerId','hostPid','startedAt'])assert.equal(row[key],old[key]);}
 });
 
-test('mdoc configuration successor inherits signed-image classification without executable overlays',t=>{
- const f=mdocConfigurationFixture(t,true),helper=require('./functional-debug-runtime');
- const result=helper.produceMdocConfigurationSuccessor(f.base,f.authorityRef,f.deployedRef,{readDocker:f.transport});
- assert.equal(result.binding.mixedSourceStack,false);assert.equal(result.binding.runtimeKind,'SIGNED_NIGHTLY_IMAGES');
- assert.equal(result.binding.roles.length,22);
- for(const row of result.binding.roles){assert.equal(row.kind,'SIGNED_NIGHTLY_IMAGE');assert.deepEqual(row.binaryMounts,[]);const old=f.oldBinding.roles.find(value=>value.role===row.role);for(const key of ['binary','source','coreSource','sha256','kind','imageId'])assert.equal(row[key],old[key]);}
-});
-for(const signed of [false,true])test('mdoc configuration successor rejects base classification tampering '+(signed?'signed':'native'),t=>{
+test('mdoc configuration successor rejects base classification tampering native',t=>{
  for(const field of ['mixedSourceStack','runtimeKind']){
-  const f=mdocConfigurationFixture(t,signed),snapshot=JSON.parse(fs.readFileSync(f.evidence.beforeRuntimeBinding.path));
+  const f=mdocConfigurationFixture(t),snapshot=JSON.parse(fs.readFileSync(f.evidence.beforeRuntimeBinding.path));
   if(field==='mixedSourceStack')snapshot.binding.mixedSourceStack=!snapshot.binding.mixedSourceStack;
-  else if(signed)delete snapshot.binding.runtimeKind;else snapshot.binding.runtimeKind='SIGNED_NIGHTLY_IMAGES';
+  else snapshot.binding.runtimeKind='SIGNED_NIGHTLY_IMAGES';
   f.evidence.beforeRuntimeBinding=f.write('bad-classification-snapshot.json',snapshot);
   f.deployed.configurationEvidence=f.write('bad-classification-evidence.json',f.evidence);
   f.profile.configurationOverlay.deploymentReceipt=f.write('bad-classification-deployed.json',f.deployed);
@@ -634,4 +607,26 @@ for(const fault of ['valid','planned','retirement','weakEtag','sidecar','extraGe
  deployed.configGate.authResult=f.write('config-get.json',auth);
  if(fault==='valid')assert.equal(validateHeaderSuccessorGate(deployed,prior),undefined);
  else assert.throws(()=>validateHeaderSuccessorGate(deployed,prior),error=>{assert(!String(error).includes('sensitive-must-not-print'));assert(!String(error).includes(Buffer.from('sensitive-must-not-print').toString('hex')));return true;});
+});
+
+
+test('current base refuses retired, unknown, missing and duplicate platform roles',t=>{
+ for(const kind of ['retired','unknown','missing','duplicate']){
+  const f=fixture(t),baseline=JSON.parse(fs.readFileSync(f.profile.baselineDeployment.path,'utf8'));
+  if(kind==='retired')baseline.images.push({...baseline.images[0],service:'canvas-sync-worker'});
+  if(kind==='unknown')baseline.images[0].service='foreign-worker';
+  if(kind==='missing')baseline.images.pop();
+  if(kind==='duplicate')baseline.images[0].service=baseline.images[1].service;
+  f.profile.baselineDeployment=f.write(kind+'-baseline.json',baseline);
+  assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:()=>assert.fail('invalid roster reached observer')}));
+ }
+});
+
+test('current base refuses retired worker artifacts and null role health',t=>{
+ const f=fixture(t),build=JSON.parse(fs.readFileSync(f.profile.baselineBuild.path,'utf8'));
+ build.actualBinaryOutputs.at(-1).name='marty-canvas-sync-worker';
+ f.profile.baselineBuild=f.write('retired-build.json',build);
+ assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:()=>assert.fail('retired build reached observer')}),/RETIRED_PROVIDER_BINARY_INVENTORY/);
+ const valid=fixture(t);
+ assert.throws(()=>verifyFunctionalRuntime(valid.profile,{observe:row=>({...valid.observe(row),health:null})}),/health/);
 });

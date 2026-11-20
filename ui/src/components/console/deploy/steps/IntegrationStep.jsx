@@ -28,24 +28,7 @@ const DEFAULT_FEATURE_FLAGS = {
   qr_code: true,
   nfc: false,
   ble: false,
-  enable_canvas_evidence: false,
-  enable_canvas_lti: false,
-  enable_canvas_mirror_publish: false,
-  enable_canvas_mirror_ops: false,
-  enable_canvas_deep_linking: false,
-  enable_canvas_ags: false,
-  enable_canvas_nrps: false,
 };
-
-const CANVAS_FEATURE_FLAGS = [
-  ['enable_canvas_evidence', 'Canvas evidence'],
-  ['enable_canvas_lti', 'Canvas LTI'],
-  ['enable_canvas_mirror_publish', 'Canvas mirror publish'],
-  ['enable_canvas_mirror_ops', 'Canvas mirror ops'],
-  ['enable_canvas_deep_linking', 'LTI Deep Linking'],
-  ['enable_canvas_ags', 'AGS evidence'],
-  ['enable_canvas_nrps', 'NRPS eligibility'],
-];
 
 const IntegrationStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
@@ -179,30 +162,6 @@ const IntegrationStep = ({ data, onChange }) => {
           {t('wizards.deploymentProfile.integrationStep.helpers.ble')}
         </FormHelperText>
       </FormGroup>
-
-      <Typography variant="subtitle2" gutterBottom>
-        Canvas integration gates
-      </Typography>
-      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
-        Bindings that use this deployment profile only enable the selected Canvas modes.
-      </Typography>
-
-      <FormGroup sx={{ mb: 3 }}>
-        {CANVAS_FEATURE_FLAGS.map(([key, label]) => (
-          <FormControlLabel
-            key={key}
-            control={
-              <Checkbox
-                checked={Boolean(featureFlags[key])}
-                onChange={(e) => handleFeatureFlagChange(key, e.target.checked)}
-              />
-            }
-            label={label}
-          />
-        ))}
-      </FormGroup>
-
-      <Divider sx={{ my: 3 }} />
 
       {/* UX Configuration */}
       <Typography variant="subtitle2" gutterBottom>

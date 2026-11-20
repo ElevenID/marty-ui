@@ -21,9 +21,8 @@ use crate::{
         GetOrganizationRequest,
     },
     ApplicantProfile, ApplicantProvisioningStore, ApplicantUpsert, AuthEvent, AuthEventPublisher,
-    AuthenticatedUser, CanvasApplicantProfileProvisioner, CredentialVerificationFlow,
-    CredentialVerificationStarter, OrganizationContext, OrganizationProvisioning, PortError,
-    StartCredentialVerification,
+    AuthenticatedUser, CredentialVerificationFlow, CredentialVerificationStarter,
+    OrganizationContext, OrganizationProvisioning, PortError, StartCredentialVerification,
 };
 
 const APPLICANT_PROFILE_RESPONSE_LIMIT: usize = 64 * 1024;
@@ -372,9 +371,11 @@ impl MmfApplicantProfileProvisioner {
     }
 }
 
-#[async_trait]
-impl CanvasApplicantProfileProvisioner for MmfApplicantProfileProvisioner {
-    async fn ensure_profile(&self, user: &AuthenticatedUser) -> Result<Option<String>, PortError> {
+impl MmfApplicantProfileProvisioner {
+    pub async fn ensure_profile(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<Option<String>, PortError> {
         if user
             .applicant_id
             .as_deref()

@@ -13,7 +13,6 @@ def test_inventory_freezes_native_and_legacy_consumer_ownership():
     assert contract["native_environment"] == "ISSUANCE_NATIVE_SERVICE_URL"
     assert contract["legacy_environment"] == "ISSUANCE_SERVICE_URL"
     assert set(contract["consumers"]) == {
-        "auth",
         "applicant",
         "presentation-policy",
         "flow",
@@ -48,11 +47,10 @@ def test_source_wiring_prefers_native_with_production_legacy_fallback():
     ).read_text()
     flow_http = (ROOT / "rust/services/flow/src/http_providers.rs").read_text()
 
-    assert "issuance_native_service_url" in auth
-    assert (
-        'get("ISSUANCE_NATIVE_SERVICE_URL")\n'
-        '                    .or_else(|| get("ISSUANCE_SERVICE_URL"))'
-    ) in auth
+    # Auth's old issuance dependency existed only for the retired protocol edge.
+    assert "ISSUANCE_NATIVE_SERVICE_URL" not in auth
+    assert "ISSUANCE_SERVICE_URL" not in auth
+    assert "issuance_native_service_url" not in auth
     assert (
         'select_issuance_service_url(\n'
         '        env::var("ISSUANCE_NATIVE_SERVICE_URL").ok(),\n'
@@ -76,23 +74,3 @@ def test_source_wiring_prefers_native_with_production_legacy_fallback():
     )
     assert '"organization_id".into(),' in flow_http
     assert 'format!("v1/passport/applications/{application_id}/{suffix}")' in flow_http
-
-
-def test_canvas_manual_routes_use_gateway_not_direct_native_or_legacy_ports():
-    guide = (ROOT / "docs/CANVAS_LTI_LOGIN_SETUP.md").read_text()
-    assert "dev-issuance-api-key" not in guide
-    assert "localhost:8005/v1/integrations/canvas" not in guide
-    assert (
-        "${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas" in guide
-    )
-    assert (
-        '"${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas/ags'
-        not in guide
-    )
-    disposable = guide.split("Disposable fixture demo values", 1)[1].split("For beta,", 1)[0]
-    beta = guide.rsplit("For beta,", 1)[1]
-    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true" in disposable
-    assert "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true" in disposable
-    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=false" in beta
-    assert "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=false" in beta
-    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true" not in beta

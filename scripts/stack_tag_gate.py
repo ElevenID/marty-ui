@@ -213,7 +213,7 @@ def validate_workflow_runs(
         "path": ".github/workflows/ci.yml",
         "events": ["schedule", "workflow_dispatch"],
     }:
-        raise StackTagGateError("full Canvas qualification policy is invalid")
+        raise StackTagGateError("full platform qualification policy is invalid")
     qualification_runs = [
         run
         for run in runs
@@ -224,7 +224,7 @@ def validate_workflow_runs(
         and run.get("id") != current_run_id
     ]
     if not qualification_runs:
-        raise StackTagGateError("exact-main full Canvas qualification is missing")
+        raise StackTagGateError("exact-main full platform qualification is missing")
     latest_qualification = max(qualification_runs, key=_execution_order)
     if qualification_run_id is not None and (
         type(qualification_run_id) is not int or qualification_run_id <= 0
@@ -232,11 +232,11 @@ def validate_workflow_runs(
         or type(latest_qualification.get("run_attempt")) is not int
         or latest_qualification["run_attempt"] != 1
     ):
-        raise StackTagGateError("full Canvas qualification differs from its admitted original run")
+        raise StackTagGateError("full platform qualification differs from its admitted original run")
     if latest_qualification.get("status") != "completed":
-        raise StackTagGateError("full Canvas qualification is still pending")
+        raise StackTagGateError("full platform qualification is still pending")
     if latest_qualification.get("conclusion") != "success":
-        raise StackTagGateError("full Canvas qualification did not succeed")
+        raise StackTagGateError("full platform qualification did not succeed")
     accepted.append(
         {
             "path": qualification["path"],

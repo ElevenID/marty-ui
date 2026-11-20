@@ -1,2 +1,0 @@
-# tests/.gitignore ignores package locks globally; this reproducible driver must commit its lock.
-!package-lock.json

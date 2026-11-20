@@ -25,33 +25,6 @@ pub const OPTIONAL_SETTINGS: &[&str] = &[
     "DIDCOMM_UNIVERSAL_RESOLVER_URL",
     "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
     "DIDCOMM_ALLOW_PRIVATE_IPS",
-    "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
-    "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
-    "CANVAS_LTI_STATE_TTL_MINUTES",
-    "CANVAS_LTI_JWKS_TTL_MINUTES",
-    "CANVAS_LTI_DEEP_LINKING_ISSUER",
-    "CANVAS_ALLOW_PRIVATE_BASE_URLS",
-    "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
-    "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
-    "CANVAS_CREDENTIALS_PUBLISH_URL",
-    "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-    "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
-    "CANVAS_CREDENTIALS_BASE_URL",
-    "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
-    "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
-    "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
-    "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-    "CANVAS_MIRROR_WORKER_ENABLED",
-    "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
-    "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
-    "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
-    "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
-    "CANVAS_MIRROR_WORKER_RETRY_FAILED",
-    "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
-    "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-    "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-    "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
 ];
 pub const NATIVE_SETTINGS: &[&str] = &[
     "MARTY_RELEASE_VERSION",
@@ -72,27 +45,6 @@ pub const INHERITED_SETTINGS: &[&str] = &[
     "CREDENTIAL_TEMPLATE_SERVICE_URL",
     "REVOCATION_PROFILE_SERVICE_URL",
     "UNIVERSAL_RESOLVER_URL",
-    "CANVAS_LTI_EXPERIENCE_BASE_URL",
-    "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-    "CANVAS_LTI_TOOL_ISSUER_DID",
-    "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-    "CANVAS_PILOT_ORGANIZATION_IDS",
-    "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
-    "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-    "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
-    "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
-    "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
-    "CANVAS_CREDENTIALS_PROVIDER",
-    "CANVAS_CREDENTIALS_API_BASE_URL",
-    "CANVAS_CREDENTIALS_ISSUER_ID",
-    "CANVAS_CREDENTIALS_BADGECLASS_ID",
-    "CANVAS_CREDENTIALS_ASSERTION_SCOPE",
-    "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
-    "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-    "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-    "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
-    "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
 ];
 pub const SECRET_SETTINGS: &[&str] = &[
     "DATABASE_URL",
@@ -102,11 +54,9 @@ pub const SECRET_SETTINGS: &[&str] = &[
     "SIGNING_KEYS_ISSUER_SIGN_KEY",
     "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     "GRPC_SERVICE_TOKEN",
-    "CANVAS_CREDENTIALS_SHARED_SECRET",
 ];
 pub const SHARED_BINDINGS: &[&str] = &[
     "PERSONALIZATION_BUREAU_API_KEY",
-    "CANVAS_CREDENTIALS_API_TOKEN",
     "ISSUER_BASE_URL",
     "ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
@@ -255,7 +205,45 @@ fn secret_name(value: &str) -> bool {
             .all(|label| label.len() <= 63 && component(label) && !label.contains('_'))
 }
 
+fn retired_connector_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    let normalized = name.to_ascii_lowercase().replace('_', "-");
+    upper.starts_with("CANVAS_")
+        || upper.contains("_CANVAS_")
+        || upper.starts_with("ISSUANCE_READINESS_")
+        || upper.starts_with("SIGN_GRANT_MINT_ISSUANCE_READINESS_")
+        || normalized == "canvas"
+        || normalized.starts_with("canvas-")
+        || normalized.contains("-canvas-")
+}
+
+// Inspect declarations only; never resolve/read Secret values. Old connector
+// models must be retired explicitly rather than silently retained or upgraded.
+fn reject_retired_connector(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                require(!retired_connector_name(key))?;
+                if matches!(key.as_str(), "name" | "key") {
+                    if let Some(name) = value.as_str() {
+                        require(!retired_connector_name(name))?;
+                    }
+                }
+                reject_retired_connector(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_retired_connector(value)?;
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 pub fn configuration(values: &Environment) -> Result<Value> {
+    require(!values.keys().any(|name| retired_connector_name(name)))?;
     let mut result = Map::new();
     for &name in OPTIONAL_SETTINGS {
         if let Some(value) = values.get(name) {
@@ -371,6 +359,10 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         &resources[index(resources, "Deployment", "auth")?],
         "auth",
     )?)?;
+    require(
+        !auth.contains_key("ISSUANCE_NATIVE_SERVICE_URL")
+            && !auth.contains_key("ISSUANCE_SERVICE_URL"),
+    )?;
     let applicant = environment(container(
         &resources[index(resources, "Deployment", "applicant")?],
         "applicant",
@@ -384,7 +376,7 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         "flow",
     )?)?;
     if selected {
-        for values in [&auth, &applicant, &policy] {
+        for values in [&applicant, &policy] {
             require(values.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native))?;
             require(!values.contains_key("ISSUANCE_SERVICE_URL"))?;
         }
@@ -397,7 +389,7 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
                 ),
         )?;
     } else {
-        for values in [&auth, &applicant, &policy] {
+        for values in [&applicant, &policy] {
             require(values.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
             require(!values.contains_key("ISSUANCE_SERVICE_URL"))?;
         }
@@ -423,7 +415,7 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
     } else {
         require(!gateway.contains_key("ISSUANCE_NATIVE_SERVICE_URL"))?;
     }
-    let mut allowed = BTreeSet::from(["auth", "applicant", "presentation-policy", "flow"]);
+    let mut allowed = BTreeSet::from(["applicant", "presentation-policy", "flow"]);
     if selected {
         allowed.extend(["gateway", "issuance"]);
     }
@@ -511,8 +503,6 @@ fn native_template(resources: &[Value]) -> Result<()> {
             "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
             "credential",
         ),
-        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
-        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
         ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
     ] {
         expected.insert(
@@ -520,7 +510,6 @@ fn native_template(resources: &[Value]) -> Result<()> {
             json!({"name":name,"value":format!("/run/secrets/issuance-sign-grants/{path}")}),
         );
     }
-    expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
     expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
     for (name, value) in [
         ("SERVICE_NAME", "issuance_native"),
@@ -645,7 +634,7 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, native_issuance: bool) 
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
+                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
         )?;
     } else {
         require(
@@ -879,6 +868,9 @@ pub fn compose(
     values: &Environment,
 ) -> Result<Value> {
     require(selected(values)?)?;
+    for value in resources.iter().chain(template) {
+        reject_retired_connector(value)?;
+    }
     issuance_consumer_bindings(resources, false)?;
     let image = services_image(values.get("MARTY_SERVICES_IMAGE").ok_or(REFUSAL)?)?;
     let configuration = configuration(values)?;
@@ -904,7 +896,7 @@ pub fn compose(
     let mut result = resources.to_vec();
     let legacy_index = index(&result, "Deployment", "issuance")?;
     let gateway_index = index(&result, "Deployment", "gateway")?;
-    for name in ["auth", "applicant", "presentation-policy"] {
+    for name in ["applicant", "presentation-policy"] {
         let consumer_index = index(&result, "Deployment", name)?;
         replace_env(
             container_mut(&mut result[consumer_index], name)?,
@@ -1031,6 +1023,8 @@ pub fn compose(
 /// a snapshot, not a lock against concurrent operator changes or a rollout gate.
 pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result<()> {
     require(!namespace.is_empty() && actual["kind"] == "List" && expected["kind"] == "List")?;
+    reject_retired_connector(actual)?;
+    reject_retired_connector(expected)?;
     let actual = actual["items"].as_array().ok_or(REFUSAL)?;
     let expected = expected["items"].as_array().ok_or(REFUSAL)?;
     issuance_consumer_bindings(actual, true)?;
@@ -1125,7 +1119,6 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                             "ISSUANCE_NATIVE_SERVICE_URL",
                             "SERVICE_NAME",
                             "MARTY_SCHEMA_STARTUP_MODE",
-                            "CANVAS_MIRROR_WORKER_ENABLED",
                         ]
                         .iter(),
                     )

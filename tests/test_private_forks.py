@@ -42,7 +42,7 @@ class PrivateForkAccessTests(unittest.TestCase):
         toolchain = next(i for i, step in enumerate(steps)
                          if step.get("uses", "").startswith("dtolnay/rust-toolchain@"))
         first_catalog_check = next(i for i, step in enumerate(steps)
-                                   if 'test_canvas_worker_compose_render.py' in step.get("run", ""))
+                                   if 'test_selfhost_native_owner_compose.py' in step.get("run", ""))
         self.assertLess(check, toolchain)
         self.assertLess(toolchain, fetch)
         self.assertLess(fetch, first_catalog_check)

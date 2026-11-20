@@ -1,5 +1,5 @@
  'use strict';
-// Closed latest-main profile production from actual maintenance/build transports.
+// Read-only historical maintenance evidence; no current runtime admission.
 // No Docker mutation, SQL, state migration, reverse DDL or automatic retry here.
 const assert=require('node:assert/strict'),crypto=require('node:crypto'),util=require('node:util');
 const runtime=require('./functional-debug-runtime');
@@ -8,7 +8,16 @@ const metadata=require('./native-maintenance-metadata');
 const {LATEST_PROFILE:PROFILE,LATEST_SOURCE:SOURCE,LATEST_ROLES:ROLES,LATEST_BUILD:BUILD,BASE,BEFORE,CORE}=shared;
 const ENGINE='3dbbbe66-1c98-4e0c-b0a6-f927c05e7341';
 const FREEZE='075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1';
-const ALL29=Object.freeze(["marty-applicant", "marty-auth", "marty-canvas-sandbox", "marty-canvas-sync-worker", "marty-compliance-profile", "marty-credential-template", "marty-deployment-profile", "marty-device-registration", "marty-event-stream", "marty-flow", "marty-gateway", "marty-issuance-service", "marty-keyless-grpc-bridge", "marty-notification", "marty-oidf-keyless-edge", "marty-organization", "marty-passport-acceptance-api-key", "marty-passport-beta-bureau", "marty-passport-callback-signer", "marty-passport-callback-signer-supported", "marty-passport-keyless-edge", "marty-passport-provider-ingress", "marty-passport-tls-bootstrap", "marty-presentation-policy", "marty-revocation-profile", "marty-signing-keys", "marty-trust-profile", "marty-verification-service", "marty-verifier-positive-gate"]);
+// Keep the complete original build map as hash-pinned evidence, not a build selector.
+const fs=require('node:fs'),path=require('node:path');
+function historicalBuildBinaries(){
+ const bytes=fs.readFileSync(path.join(__dirname,'../../contracts/scoped-full-build-legacy-reference.json'),'utf8').replace(/\r\n/g,'\n');
+ assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),'c181b530debdf5714c3bf909f6f2227cf1d85bf68235412886d70cb8433d5063','HISTORICAL_BUILD_REFERENCE_CHANGED');
+ const pairs=JSON.parse(bytes).profiles[BUILD].roles;
+ assert(Array.isArray(pairs)&&pairs.length===29&&pairs.every(pair=>Array.isArray(pair)&&pair.length===2&&typeof pair[0]==='string'&&pair[0]===pair[1]),'HISTORICAL_BUILD_MAP_CHANGED');
+ const names=pairs.map(pair=>pair[0]);assert.equal(new Set(names).size,29);return Object.freeze(names);
+}
+const ALL29=historicalBuildBinaries();
 const SOURCE_PINS=Object.freeze({"rust/services/flow/migrations/0001_flow_schema.sql": "5fb16eb5abbac9783dd694f8092fa88f25ba4cff968beb87270e15f8acdbccac", "rust/services/flow/migrations/0002_builtin_flows.sql": "7ea33d3acc142f5ea6650b0e6532702e05476856be15a2502389bd9f755eb95b", "rust/services/flow/migrations/0003_physical_start_intents.sql": "fd86a211a4b799b53827456ac1d5b8887ae3264c26ae889fb7714a1fa62e4edd", "rust/services/issuance/migrations/0009_authenticated_mdoc_status_binding.sql": "b770d6ff59f8dd1e9e95c359d6c4227f3461792822bfae27c07ed6bc151cc719", "rust/services/issuance/migrations/0010_passport_start_idempotency.sql": "05b3aafe03b9aa258c8061db2d9ac1adb35f17f0d513b9995d48ee2ef2305801", "rust/services/issuance/migrations/0011_passport_administrative_cancellation.sql": "9842f5ea39aab254d41cf7bc936411b813b853352a1e2de668594926dd08f682", "rust/services/flow/src/schema_command.rs": "69803c102fb86f9b3002b773c8d166096ff1133859482441a5c1ccfc6ff02504", "rust/services/flow/src/migration.rs": "3f4aafe9ce1c316df51452b556b9fd8a7771f608f1287674b873d995ef176207", "rust/services/issuance/src/migration.rs": "41e32a782380876fca7b71cbdcb2e2e7f273d8705ed5c5625d65e57abf2f779c", "rust/services/flow/src/main.rs": "d232b858cf1dbf9702ff247f9cd2f93185adb0cbb43cb46bed7d845ee3430839", "rust/services/issuance/src/main.rs": "11c9453c1395367478f333bb8a64c056ad9c4bc9d0ef85e2f98c5d222c6ac2b0", "scripts/beta-state-volume-plan.ps1": "a7780de6e578c56cdbd90d580f19236392c270d65fc2c58ce2d191699557b0cf"});
 const HASH=/^[a-f0-9]{64}$/;
 const digest=b=>crypto.createHash('sha256').update(b).digest('hex');
@@ -137,12 +146,17 @@ function loaded(profile){
  assert.equal(readback.releaseQualified,false);assert.equal(readback.recordingQualified,false);functional(readback.binding);assert.equal(readback.binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(readback.binding.mixedSourceStack,true);
  assert.equal(readback.baseProfileSha256,BASE);assert.equal(readback.beforeBindingSha256,BEFORE);assert.equal(readback.selectionSha256,x.selection.sha256);
  assert.equal(readback.profileProduced,false);assert.equal(readback.applyAuthority,false);assert.equal(readback.migrationOutcomeQualified,false);
- const expected=runtime.expectedRuntime(base).map(row=>{const old=before.roles.find(x=>x.role===row.role);assert(old);return {...row,requiredObservation:Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(k=>[k,old[k]]))};});
+ const expected=before.roles.map(row=>{const old=row;return {...row,requiredObservation:Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(k=>[k,old[k]]))};});
  const rows=shared.validateGenerations(expected,before.roles,selection,readback.observedRoles);same(rows,readback.binding.roles,'ACTUAL22_READBACK_ROWS_CHANGED');
  return {rows,outcome,selection,readback,before};
 }
-function expectedLatestRuntime(profile){return loaded(profile).rows;}
-function produceLatestProfile(inputs,{readDocker,readJournal,readMaintenanceJournal}={}){
+function expectedLatestRuntime(){assert.fail('RETIRED_NATIVE_MAINTENANCE_GENERATION');}
+function produceLatestProfile(){assert.fail('RETIRED_NATIVE_MAINTENANCE_GENERATION');}
+function inspectHistoricalProfile(profile){
+ const evidence=loaded(profile);
+ return {schema:'marty.historical-native-maintenance-evidence/v1',historicalOnly:true,runtimeAdmitted:false,evidence};
+}
+function auditHistoricalMaintenance(inputs,{readDocker,readJournal,readMaintenanceJournal}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_READER_REQUIRED');assert.equal(typeof readJournal,'function','ORIGINAL_BUILD_JOURNAL_REQUIRED');assert.equal(typeof readMaintenanceJournal,'function','ORIGINAL_MAINTENANCE_JOURNAL_REQUIRED');
  const profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
   baseProfile:inputs.baseProfile,nativeMaintenance:{beforeBinding:inputs.beforeBinding,selection:inputs.selection,compatibility:inputs.compatibility,outcome:inputs.outcome,readback:inputs.readback}};
@@ -156,12 +170,12 @@ function produceLatestProfile(inputs,{readDocker,readJournal,readMaintenanceJour
  assert.equal(stateReply.ok,true);assert.equal(stateReply.name,'build-state.json');same(stateReply.rootProof,journal.specification.rootProof,'MAINTENANCE_OPERATION_ROOT');
  assert.equal(stateReply.sha256,proof.operationState.sha256);same(stateReply.value,runtime.boundJson(proof.operationState),'ACTUAL_OPERATION_JOURNAL_REQUIRED');
 
- const observed=shared.observeMaintenanceReadback(inputs,{readDocker,readJournal});same(observed,readback,'FRESH_ACTUAL22_MAINTENANCE_READBACK_REQUIRED');
+ const historical=shared.observeHistoricalMaintenanceReadback(inputs,{readDocker,readJournal});assert.equal(historical.historicalOnly,true);assert.equal(historical.runtimeAdmitted,false);const observed=historical.readback;same(observed,readback,'FRESH_ACTUAL22_MAINTENANCE_READBACK_REQUIRED');
  const ids=readDocker(['ps','-aq','--no-trunc']).trim().split(/\s+/).filter(Boolean);
  const before=runtime.boundJson(inputs.beforeBinding);const selection={...runtime.boundJson(inputs.selection),_referenceSha256:inputs.selection.sha256};
  const {helpers}=outcomeDocuments(outcome,selection,before.roles);for(const cid of helpers)assert(!ids.includes(cid),'OWNED_HELPER_CLEANUP_NOT_ACTUAL');
  same(readMaintenanceJournal(journal,'build-receipt.json'),actual,'MAINTENANCE_JOURNAL_CHANGED');
  same(readMaintenanceJournal(journal,'build-state.json'),stateReply,'MAINTENANCE_OPERATION_JOURNAL_CHANGED');
- return profile;
+ return {schema:'marty.historical-native-maintenance-audit/v1',historicalOnly:true,runtimeAdmitted:false,profile};
 }
-module.exports={PROFILE,SOURCE,CORE,ROLES,BUILD,ALL29,FREEZE,SOURCE_PINS,latestSelection,compatibility,stateTransition,quiescence,commandRows,outcomeDocuments,expectedLatestRuntime,produceLatestProfile};
+module.exports={inspectHistoricalProfile,auditHistoricalMaintenance,PROFILE,SOURCE,CORE,ROLES,BUILD,ALL29,FREEZE,SOURCE_PINS,latestSelection,compatibility,stateTransition,quiescence,commandRows,outcomeDocuments,expectedLatestRuntime,produceLatestProfile};

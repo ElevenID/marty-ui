@@ -19,8 +19,8 @@ describe('deliveryDestinationsApi', () => {
 
     const result = await createDeliveryDestination({
       organization_id: ' org-123 ',
-      name: 'Canvas Credentials',
-      provider: 'canvas_credentials',
+      name: 'External publication',
+      provider: 'custom',
       mode: 'organization_mirror',
     })
 

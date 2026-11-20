@@ -52,10 +52,10 @@ def resource_metadata(kind, name, namespace, *, uid=None):
             "resourceVersion": "10"}
 
 
-def rendered_workloads(namespace, values, *, canvas=True):
+def rendered_workloads(namespace, values):
     source = yaml.safe_load((ROOT / "deploy/helm/marty/files/workloads.yaml").read_text())
     result = []
-    for name in sorted(activation.REQUIRED | ({"canvas-sync-worker"} if canvas else set())):
+    for name in sorted(activation.REQUIRED):
         workload = source[name]
         labels = {"app.kubernetes.io/instance": "marty", "app.kubernetes.io/component": name}
         annotations = {"marty.11id.dev/" + key: str(value) for key, value in values["release"].items()}
@@ -186,7 +186,7 @@ def flow(stage_flow, tmp_path, monkeypatch):
                 assert kwargs["env"] == {}
                 if staging.current_snapshot(Path(payload["candidate"])) != staged.candidate:
                     raise bootstrap.BootstrapError("synthetic native generation refused")
-                return bootstrap.encoded({"value": [len(staged.snapshot), 11]})
+                return bootstrap.encoded({"value": [len(staged.snapshot), 9]})
             assert label == "native application Secret validation"
             assert command[-2:] == ["operator", "kubernetes-application-publication"] and kwargs["env"] == {}
             assert payload["namespace"] == self.namespace
@@ -200,7 +200,7 @@ def flow(stage_flow, tmp_path, monkeypatch):
                 patch += [{"op": "add", "path": "/metadata/annotations", "value": {
                     **original["metadata"].get("annotations", {}), activation.ANNOTATION: payload["activationId"]}}]
                 bootstrap.write_new(Path(payload["output"]), bootstrap.encoded(patch))
-                return bootstrap.encoded({"ready": True, "secret": "marty-secrets", "count": 11})
+                return bootstrap.encoded({"ready": True, "secret": "marty-secrets", "count": 9})
             assert payload["operation"] == "verify"
             assert set(payload) == {"operation", "namespace", "current", "candidate", "observed", "result", "activationId"}
             current = json.loads(Path(payload["result"]).read_bytes())
@@ -214,7 +214,7 @@ def flow(stage_flow, tmp_path, monkeypatch):
                 if expected != current:
                     raise bootstrap.BootstrapError("synthetic native publication refused")
                 status = "candidate"
-            return bootstrap.encoded({"ready": True, "secret": "marty-secrets", "count": 11, "state": status})
+            return bootstrap.encoded({"ready": True, "secret": "marty-secrets", "count": 9, "state": status})
 
         def execute(self, pod, command, **kwargs):
             assert pod == "openbao-0" and command == ["bao", "status", "-format=json"]
@@ -358,9 +358,9 @@ def test_activation_cannot_create_an_operation_inside_enrolled_renewal_identity(
 def test_complete_activation_preserves_unrelated_data_verifies_delivery_and_advances_selection(flow, capsys):
     before = deepcopy(flow.secret["data"])
     activation.activate(flow.args)
-    assert flow.secret_patches == 1 and len(flow.deployment_patches) == 6
+    assert flow.secret_patches == 1 and len(flow.deployment_patches) == 5
     assert all(count == 1 for count in flow.deployment_patches.values())
-    assert len(flow.delivered) == 12
+    assert len(flow.delivered) == 9
     assert flow.secret["data"]["DATABASE_SYNC_URL"] == before["DATABASE_SYNC_URL"]
     assert not (flow.args.state_dir / selection.PENDING).exists()
     assert staging.current_snapshot(flow.args.state_dir / "credentials") == flow.staged.snapshot
@@ -503,12 +503,15 @@ def test_stage_snapshot_must_match_selected_current_before_cluster_access(flow):
     assert not flow.argv and flow.secret_patches == 0
 
 
-def test_optional_canvas_worker_is_not_required_but_is_rolled_when_present(flow):
-    removed = {item["metadata"]["uid"] for item in flow.resources
-               if item["metadata"]["name"].startswith("canvas-sync-worker")}
-    flow.resources = [item for item in flow.resources if item["metadata"]["uid"] not in removed]
-    activation.activate(flow.args)
-    assert len(flow.deployment_patches) == 5 and len(flow.delivered) == 11
+def test_retired_worker_cannot_consume_platform_credentials(flow):
+    native = next(item for item in flow.resources if item["kind"] == "Deployment" and item["metadata"]["name"] == "issuance-native")
+    legacy = deepcopy(native)
+    legacy["metadata"].update({"name": "canvas-sync-worker", "uid": "retired-worker-uid"})
+    flow.resources.append(legacy)
+    with pytest.raises(bootstrap.BootstrapError):
+        activation.activate(flow.args)
+    assert flow.secret_patches == 0 and not flow.deployment_patches
+
 
 
 def test_status_only_deployment_version_refresh_is_guarded_and_secret_version_is_unchanged(flow):
@@ -757,7 +760,7 @@ def proof_flow(tmp_path, monkeypatch):
             if world.fail == "timeout":
                 raise subprocess.TimeoutExpired(command, 600, output=b"PRIVATE_TIMEOUT_CANARY")
             return world.reply if world.reply is not None else bootstrap.encoded({
-                "ready": True, "count": 11, "minimumTtlSeconds": activation.MINIMUM_TTL})
+                "ready": True, "count": 9, "minimumTtlSeconds": activation.MINIMUM_TTL})
 
     world.transport = Transport()
     world.context = {"binding": binding, "transport": world.transport, "authority": authority,
@@ -807,8 +810,8 @@ def test_fresh_proof_failure_keeps_bounded_pod_and_never_claims_success(proof_fl
 
 
 @pytest.mark.parametrize("reply", [b'{"ready":true,"count":true,"minimumTtlSeconds":1800}',
-    b'{"ready":true,"count":11,"minimumTtlSeconds":1800,"extra":1}',
-    b'{"ready":true,"count":11,"minimumTtlSeconds":1800,"count":11}',
+    b'{"ready":true,"count":9,"minimumTtlSeconds":1800,"extra":1}',
+    b'{"ready":true,"count":9,"minimumTtlSeconds":1800,"count":9}',
     b'PRIVATE_UNEXPECTED_NATIVE_OUTPUT'])
 def test_fresh_proof_requires_exact_native_success_response(proof_flow, reply):
     proof_flow.reply = reply
@@ -824,7 +827,6 @@ def test_real_chart_consumers_match_activation_bindings(tmp_path):
     values = chart.installation_values()
     values["release"] = {"runtimeSourceSha": "1" * 40, "chartSourceSha": "2" * 40,
                          "tag": "v1.2.3-nightly.20261108.123", "buildRunId": 123, "buildRunAttempt": 1}
-    values["canvasWorker"] = {"enabled": True}
     documents = chart.render(tmp_path, values)
     actual = {item["metadata"]["name"]: item for item in documents if item["kind"] == "Deployment"}
     for name in activation.BINDINGS:
@@ -870,4 +872,4 @@ def test_final_local_state_transitions_share_the_original_activation_deadline(fl
     assert (flow.args.operation_dir / activation.VERIFIED).is_file()
     assert (flow.args.state_dir / selection.PENDING).is_file()
     assert (flow.args.state_dir / selection.SELECTOR).exists() is (phase != "verified-proof")
-    assert flow.secret_patches == 1 and len(flow.deployment_patches) == 6
+    assert flow.secret_patches == 1 and len(flow.deployment_patches) == 5

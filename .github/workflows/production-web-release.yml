@@ -1,6 +1,6 @@
 name: Production website release
 
-run-name: Production web ${{ inputs.mode || 'combined' }} from ${{ github.sha }}
+run-name: Production web ${{ inputs.mode || (github.event_name == 'push' && 'compose' || 'combined') }} from ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -23,6 +23,12 @@ on:
         description: Compose mode only; successful original website producer run
         required: false
         type: string
+      website_repository:
+        description: Compose mode only; owner of the original signed website release
+        type: choice
+        options: [ElevenID/marty-ui, ElevenID/website]
+        default: ElevenID/marty-ui
+        required: false
       website_run_attempt:
         description: Compose mode only; exact website producer attempt
         required: false
@@ -36,11 +42,16 @@ on:
         required: false
         type: string
 
+  push:
+    branches: [main]
+    paths:
+      - .github/release-inputs/website-composition.json
+
 permissions:
   contents: read
 
 concurrency:
-  group: production-web-release-${{ inputs.mode || 'combined' }}
+  group: production-web-release-${{ inputs.mode || (github.event_name == 'push' && 'compose' || 'combined') }}
   cancel-in-progress: false
 
 env:
@@ -48,7 +59,7 @@ env:
 
 jobs:
   release:
-    if: github.repository == 'ElevenID/marty-ui' && inputs.mode != 'compose'
+    if: github.repository == 'ElevenID/marty-ui' && github.event_name == 'workflow_dispatch' && inputs.mode != 'compose'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -297,7 +308,11 @@ jobs:
           retention-days: 90
 
   compose:
-    if: github.repository == 'ElevenID/marty-ui' && inputs.mode == 'compose'
+    if: >-
+      github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'compose') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.ref_protected && !github.event.deleted))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -326,6 +341,16 @@ jobs:
           fi
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Load and validate the protected-main composition manifest
+        id: composition_manifest
+        if: github.event_name == 'push'
+        env:
+          COMPOSITION_PUSH_DELETED: ${{ github.event.deleted }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/web_composition_manifest.py \
+            --manifest .github/release-inputs/website-composition.json >> "$GITHUB_OUTPUT"
       - name: Prepare pinned verification tools and dependencies
         shell: bash
         run: |
@@ -340,22 +365,48 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Authenticate exact original producers and compose their unchanged artifacts
+      - name: Authenticate the selected original website producer
         env:
           GH_TOKEN: ${{ github.token }}
-          WEBSITE_RUN: ${{ inputs.website_run_id }}
-          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt }}
-          APPLICATION_RUN: ${{ inputs.application_run_id }}
-          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt }}
+          WEBSITE_ARTIFACT_READ_TOKEN: ${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}
+          WEBSITE_RUN: ${{ inputs.website_run_id || steps.composition_manifest.outputs.website_run_id }}
+          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt || steps.composition_manifest.outputs.website_run_attempt }}
+          WEBSITE_REPOSITORY: ${{ inputs.website_repository || steps.composition_manifest.outputs.website_repository || 'ElevenID/marty-ui' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$WEBSITE_REPOSITORY" in
+            ElevenID/marty-ui) ;;
+            ElevenID/website)
+              if [ -z "$WEBSITE_ARTIFACT_READ_TOKEN" ]; then
+                echo "::error::Selecting ElevenID/website requires WEBSITE_RELEASE_READ_TOKEN with read access to its Actions artifacts." >&2
+                exit 1
+              fi
+              export GH_TOKEN="$WEBSITE_ARTIFACT_READ_TOKEN"
+              ;;
+            *)
+              echo "::error::Unsupported website producer repository." >&2
+              exit 1
+              ;;
+          esac
+          unset WEBSITE_ARTIFACT_READ_TOKEN
+          gh="$RUNNER_TEMP/web-verifiers/gh"
+          cosign="$RUNNER_TEMP/web-verifiers/cosign"
+          python scripts/web_release_intake.py website --repository "$WEBSITE_REPOSITORY" \
+            --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
+            --gh "$gh" --cosign "$cosign"
+      - name: Authenticate application and backend and compose unchanged artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLICATION_RUN: ${{ inputs.application_run_id || steps.composition_manifest.outputs.application_run_id }}
+          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt || steps.composition_manifest.outputs.application_run_attempt }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           gh="$RUNNER_TEMP/web-verifiers/gh"
           cosign="$RUNNER_TEMP/web-verifiers/cosign"
-          python scripts/web_release_intake.py website --repository ElevenID/marty-ui \
-            --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
-            --gh "$gh" --cosign "$cosign"
           python scripts/web_release_intake.py application --repository ElevenID/marty-ui \
             --run-id "$APPLICATION_RUN" --run-attempt "$APPLICATION_ATTEMPT" --assets "$RUNNER_TEMP/selected-application" \
             --gh "$gh" --cosign "$cosign"

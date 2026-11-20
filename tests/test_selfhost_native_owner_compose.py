@@ -348,7 +348,6 @@ def test_optional_credentials_have_only_the_existing_consumers(rendered_models, 
     for secret, owners in (
         ("passport_tenant_api_keys", {"gateway", "flow", "issuance-native"}),
         ("personalization_bureau_api_key", {"issuance-native"}),
-        ("canvas_credentials_api_token", {"issuance", "issuance-native"}),
     ):
         mounted = {name for name, service in current["services"].items()
                    if any(item["source"] == secret for item in service.get("secrets", []))}
@@ -655,20 +654,12 @@ def test_authorization_settings_are_shared_without_weakening_model_closure(
         GATE["assert_models"](before, after)
 
 
-@pytest.mark.parametrize("setting", sorted(GATE["PUBLICATION_SETTINGS"]))
-@pytest.mark.parametrize("fault", ["shared", "legacy", "native"])
-def test_canvas_credentials_publication_controls_are_shared_and_closed(
-    models, setting, fault
-):
-    before, after = models
-    if fault == "shared":
-        after["x-issuance-application-env"].pop(setting)
-    else:
-        after["services"]["issuance" if fault == "legacy" else "issuance-native"][
-            "environment"
-        ][setting] = "hostile-mismatch"
-    with pytest.raises((AssertionError, KeyError)):
-        GATE["assert_models"](before, after)
+@pytest.mark.parametrize("owner", ["issuance", "issuance-native", "gateway"])
+def test_retired_connector_configuration_cannot_return(rendered_models, owner):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"]["CANVAS_PORTABLE_INTEGRATION_ENABLED"] = "false"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_ci_runs_preservation_gate_unconditionally():

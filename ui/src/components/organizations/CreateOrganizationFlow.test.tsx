@@ -168,7 +168,7 @@ describe('organization creation console handoff', () => {
     expect(getMyPermissions).not.toHaveBeenCalled();
   });
 
-  it('does not let a creation membership override bypass a Canvas applicant-only session', async () => {
+  it('does not let a creation membership override bypass a platform-restricted applicant session', async () => {
     vi.mocked(getMyOrganizations).mockResolvedValue([createdOrganization]);
     function SelectCreatedOrganization() {
       const { setActiveOrgId } = useConsole();
@@ -176,7 +176,7 @@ describe('organization creation console handoff', () => {
     }
     const { user } = renderWithRouter(
       <AuthContext.Provider value={{
-        ...applicantAuth, user: { ...applicantAuth.user, roles: ['canvas_lti_learner'] },
+        ...applicantAuth, user: { ...applicantAuth.user, organization_access_restricted: true },
       } as any}>
         <ConsoleProvider>
           <ContextProbe />

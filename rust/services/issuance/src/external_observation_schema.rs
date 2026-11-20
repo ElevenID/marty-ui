@@ -12,6 +12,11 @@ pub const LOCK_MIGRATION_SQL: &str =
     include_str!("../migrations/0015_external_observation_runtime_locks.sql");
 pub const CATALOG_QUERY: &str = include_str!("../schema/external_observation_catalog_query.sql");
 const CATALOG: &str = include_str!("../schema/external_observation_catalog.json");
+// Registered0017 adds incoming foreign-key triggers to canonical bindings.
+// Keep the original owner catalog valid for14/15 databases and pin the exact
+// extended catalog when the association owner migration has been installed.
+const ASSOCIATION_CATALOG: &str =
+    include_str!("../schema/external_observation_with_association_catalog.json");
 
 pub async fn validate(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
     sqlx::query("SET LOCAL search_path=pg_catalog")
@@ -40,8 +45,15 @@ pub async fn validate(connection: &mut PgConnection) -> Result<(), sqlx::Error> 
             ));
         }
     }
-    let expected: Value = serde_json::from_str(CATALOG)
-        .map_err(|_| sqlx::Error::Protocol("Invalid embedded observation schema catalog".into()))?;
+    let associations_installed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM issuance_service.rust_schema_migrations WHERE version='0017_external_associations')",
+    ).fetch_one(&mut *connection).await?;
+    let expected: Value = serde_json::from_str(if associations_installed {
+        ASSOCIATION_CATALOG
+    } else {
+        CATALOG
+    })
+    .map_err(|_| sqlx::Error::Protocol("Invalid embedded observation schema catalog".into()))?;
     let actual: Value = sqlx::query_scalar(CATALOG_QUERY)
         .fetch_one(connection)
         .await?;

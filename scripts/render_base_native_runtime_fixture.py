@@ -30,8 +30,6 @@ INPUT_KEYS = frozenset(
         "UI_BASE_URL",
         "ISSUANCE_OFFER_TTL_MINUTES",
         "TOKEN_RATE_LIMIT",
-        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-        "CANVAS_PILOT_ORGANIZATION_IDS",
     }
 )
 SPEC_KEYS = frozenset(
@@ -115,7 +113,7 @@ def validate_spec(spec):
     grpc_token = Path(spec["grpc_tls_token_file"])
     assert grpc_token.is_absolute() and grpc_token.is_file()
     assert grpc_token.parent.resolve() == Path(spec["policy_directory"]).resolve()
-    assert spec["grpc_tls_key_name"].startswith("canvas_grpc_tls_")
+    assert spec["grpc_tls_key_name"].startswith("platform_grpc_tls_")
     assert spec["peer_origin"] != spec["legacy_origin"]
     directory = Path(spec["policy_directory"])
     ca = Path(spec["ca_file"])

@@ -1,5 +1,6 @@
 use marty_deployment_catalog::Catalog;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,6 +12,25 @@ fn matches_frozen_python_cli_cases() {
         .unwrap();
     let source = root.join("contracts/deployment-catalog-cli-behavior.json");
     let corpus: Value = serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+    let legacy_path = "contracts/deployment-catalog-cli-legacy-reference.json";
+    assert_eq!(corpus["legacy_reference"]["path"], legacy_path);
+    let legacy_text = std::fs::read_to_string(root.join(legacy_path))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let expected_legacy_sha256 = "94d6f75b8f11ac598a23b573e1360952992b1c85744b7758af0603cfa6211b4c";
+    assert_eq!(corpus["legacy_reference"]["sha256"], expected_legacy_sha256);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(legacy_text.as_bytes())),
+        expected_legacy_sha256
+    );
+    let legacy: Value = serde_json::from_str(&legacy_text).unwrap();
+    let cases = corpus["cases"].as_array().unwrap();
+    let legacy_cases = legacy["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 34);
+    assert_eq!(legacy_cases.len(), 34);
+    for (case, original) in cases.iter().zip(legacy_cases) {
+        assert_eq!(case["args"], original["args"]);
+    }
     let root_display = root.to_string_lossy();
     let root_display = root_display.strip_prefix(r"\\?\").unwrap_or(&root_display);
     for case in corpus["cases"].as_array().unwrap() {

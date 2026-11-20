@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    canvas_published_database::PublishedDatabase,
+    platform_test_database::PublishedDatabase,
     selfhost_runtime_sidecar::{
         LogExpectation, OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase,
         MANAGEMENT_KEY, ORGANIZATION, TRANSACTION_ID,
@@ -94,7 +94,7 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
         .env("MARTY_SELFHOST_PARENT_SCOPE", &sentinel)
         .env("MARTY_SELFHOST_CHILD_CASE", case.key())
         .env("MARTY_SELFHOST_LOADER_CHILD", "1")
-        .env("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+        .env("MARTY_PLATFORM_SCHEMA_TEST", "1")
         .env("MARTY_SELFHOST_CHILD_SENTINEL", &sentinel);
     for key in [
         "PATH",
@@ -105,11 +105,11 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
     ] {
         command.env(key, std::env::var_os(key).ok_or(ERROR)?);
     }
-    // The outer Canvas runner selected this exact oracle digest after its
+    // The outer platform runner selected this exact PostgreSQL digest after its
     // mirror-first pull. Preserve that choice across the deliberately cleared
-    // child environment; PublishedDatabase validates it against the oracle.
-    if let Some(image) = std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
-        command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);
+    // child environment; PublishedDatabase validates it against the fixed pin.
+    if let Some(image) = std::env::var_os("MARTY_PLATFORM_TEST_POSTGRES_IMAGE") {
+        command.env("MARTY_PLATFORM_TEST_POSTGRES_IMAGE", image);
     }
     // Disable automatic parent cleanup before the child can create anything.
     // Only verified resource absence restores automatic scratch removal.
@@ -401,7 +401,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .execute(&admin)
         .await
         .map_err(|_| ERROR)?;
-    sqlx::query("CREATE DATABASE marty WITH TEMPLATE canvas_published_schema_test OWNER marty")
+    sqlx::query("CREATE DATABASE marty WITH TEMPLATE platform_schema_test OWNER marty")
         .execute(&admin)
         .await
         .map_err(|_| ERROR)?;
@@ -412,10 +412,11 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
         .connect(url.as_str())
         .await
         .map_err(|_| ERROR)?;
-    // A database cloned from the frozen oracle template retains the oracle's
+    // A database cloned from the current platform template retains the oracle's
     // object ownership. Production self-host databases are owned by the
     // service role, which must be able to apply additive startup migrations.
-    // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
+    // Transfer only service tables/sequences and the three exact routines
+    // replaced by migration 0013: REASSIGN OWNED also targets PostgreSQL
     // system objects owned by the bootstrap superuser and is therefore refused.
     record_database_stage("transfer-ownership");
     sqlx::query(
@@ -437,6 +438,9 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
                owned_object.relname
              );
            END LOOP;
+           ALTER FUNCTION issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text) OWNER TO marty;
+           ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty;
+           ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_authorization() OWNER TO marty;
          END
          $ownership$",
     )
@@ -444,7 +448,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     .await
     .map_err(|_| "Packaged selfhost qualification failed: database:transfer-ownership")?;
     record_database_stage("inspect-ownership");
-    let ownership: (bool, bool, bool) = sqlx::query_as(
+    let ownership: (bool, bool, bool, bool) = sqlx::query_as(
         "SELECT
            (SELECT pg_get_userbyid(datdba) = 'marty'
               FROM pg_database WHERE datname = current_database()),
@@ -455,13 +459,18 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
              JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
              WHERE namespace.nspname = 'issuance_service'
                AND object.relkind IN ('r', 'p', 'S')
-               AND pg_get_userbyid(object.relowner) <> 'marty')",
+               AND pg_get_userbyid(object.relowner) <> 'marty'),
+           (SELECT count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')
+              FROM pg_proc WHERE oid IN (
+                'issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text)'::regprocedure,
+                'issuance_service.guard_explicit_jwt_vc_transaction()'::regprocedure,
+                'issuance_service.guard_explicit_jwt_vc_authorization()'::regprocedure))",
     )
     .fetch_one(&pool)
     .await
     .map_err(|_| "Packaged selfhost qualification failed: database:inspect-ownership")?;
     record_database_stage("verify-ownership");
-    if ownership != (true, true, true) {
+    if ownership != (true, true, true, true) {
         return Err("Packaged selfhost qualification failed: database:ownership".into());
     }
     record_database_stage("grant");
@@ -490,9 +499,11 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
-    // The frozen published-schema template predates the Rust OID4VCI and
-    // explicit-profile migrations. Prepare this disposable clone once, then
-    // exercise the packaged service with its production `validate` setting.
+    // The current platform template already contains these native migrations.
+    // Reapply them as the restricted owner of this disposable clone, including
+    // the three exact profile routines transferred above. The template and
+    // other schemas retain their original owners. The packaged service still
+    // starts with its production `validate` setting.
     marty_issuance_service::migration::migrate(&check)
         .await
         .map_err(|_| "Packaged selfhost qualification failed: database:migrate-oid4vci")?;
@@ -584,23 +595,10 @@ fn write_synthetic_secrets(
             "synthetic-credential-grant-token",
         ),
         (
-            "sign_grant_mint_issuance_canvas_token",
-            "synthetic-canvas-grant-token",
-        ),
-        (
-            "sign_grant_mint_issuance_readiness_token",
-            "synthetic-readiness-grant-token",
-        ),
-        (
             "sign_grant_mint_issuance_passport_token",
             "synthetic-passport-grant-token",
         ),
         ("token_hmac_key", HMAC),
-        (
-            "canvas_credentials_shared_secret",
-            "synthetic-selfhost-canvas-shared-secret",
-        ),
-        ("canvas_credentials_api_token", ""),
         ("passport_tenant_api_keys", ""),
         ("personalization_bureau_api_key", ""),
         ("grpc_service_token", SERVICE_TOKEN),
@@ -733,7 +731,7 @@ pub(super) struct Preflight {
 pub(super) fn preflight() -> Result<Preflight, String> {
     require(std::env::consts::OS == "linux")?;
     super::selfhost_runtime_sidecar::require_closed_child()?;
-    let repo = super::canvas_published_database::repository_root();
+    let repo = super::platform_test_database::repository_root();
     let image = PublicImage::inspect(
         std::env::var("MARTY_SELFHOST_TEST_IMAGE").map_err(|_| ERROR)?,
         &std::env::var("MARTY_SELFHOST_TEST_REVISION").map_err(|_| ERROR)?,
@@ -850,6 +848,13 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(
+            actual,
+            super::super::selfhost_runtime_sidecar::ISSUANCE_SECRET_MOUNTS
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        assert_eq!(
             KMS_CA_CERT.lines().next(),
             Some("-----BEGIN CERTIFICATE-----")
         );
@@ -877,11 +882,7 @@ mod tests {
         ] {
             let directory = tempfile::tempdir().unwrap();
             let log_values = write_synthetic_secrets(directory.path(), case, KMS_CA_CERT).unwrap();
-            for name in [
-                "canvas_credentials_api_token",
-                "passport_tenant_api_keys",
-                "personalization_bureau_api_key",
-            ] {
+            for name in ["passport_tenant_api_keys", "personalization_bureau_api_key"] {
                 assert_eq!(std::fs::read(directory.path().join(name)).unwrap(), b"");
             }
             assert!(log_values.iter().all(|value| !value.is_empty()));

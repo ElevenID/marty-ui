@@ -1389,7 +1389,6 @@ fn assert_actual_installer_layers(
         ("trust-profile", "organization"),
         ("auth", "applicant"),
         ("auth", "event-stream"),
-        ("canvas-sync-worker", "signing-keys"),
     ] {
         assert_eq!(
             services[dependent]["depends_on"][dependency]["condition"], "service_healthy",
@@ -1659,10 +1658,7 @@ fn assert_actual_installer_layers(
             );
         }
     }
-    assert_eq!(
-        restarted["canvas-sync-worker"]["depends_on"]["signing-keys"]["condition"],
-        "service_healthy"
-    );
+    assert!(restarted.get("canvas-sync-worker").is_none());
     #[cfg(feature = "installer-development")]
     if let Some((_, image)) = development {
         println!("\nUNSIGNED_SIGNING_IMAGE_PARSED={image}");

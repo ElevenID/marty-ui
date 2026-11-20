@@ -80,16 +80,16 @@ def test_flow_selfhost_additions_require_closed_interpolation():
     additions = selfhost["rendered_additions"](
         selfhost["NATIVE_ADDITIVE"],
         {
-            "CANVAS_MIRROR_WORKER_ENABLED": "true",
-            "CANVAS_MIRROR_WORKER_BATCH_LIMIT": "7",
+            "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+            "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "synthetic-provider-profile",
         },
     )
-    assert additions["CANVAS_MIRROR_WORKER_ENABLED"] == "true"
-    assert additions["CANVAS_MIRROR_WORKER_BATCH_LIMIT"] == "7"
-    assert additions["CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS"] == "300"
+    assert additions["PASSPORT_NATIVE_HTTP_ENABLED"] == "true"
+    assert additions["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == "synthetic-provider-profile"
+    assert additions["PASSPORT_KMS_CALLBACKS_ENABLED"] == "false"
     with pytest.raises(AssertionError, match="Unsupported closed interpolation"):
         selfhost["rendered_additions"](
-            {"CANVAS_MIRROR_WORKER_ENABLED": "unreviewed"}, {}
+            {"PASSPORT_NATIVE_HTTP_ENABLED": "unreviewed"}, {}
         )
 
 
@@ -179,7 +179,7 @@ def test_actual_loader_factory_and_mandatory_gate_are_registered():
     assert '.join("scripts/load-secrets-env.sh")' in source
     assert ".env_clear()" in source
     assert "GrpcIssuanceProvider::new" not in source
-    script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    script = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     assert (

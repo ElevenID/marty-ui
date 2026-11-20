@@ -1,4 +1,15 @@
-# Flow published-schema acceptance owner
+# Flow acceptance owner
+
+Current Flow acceptance belongs to `marty-flow-acceptance`. Its runner is
+`scripts/ci/run-flow-acceptance-contracts.sh`, with an exact sixteen-case
+inventory and current platform database ownership. The selfhost acceptance
+owner runs separately with its own exact seventeen-case inventory.
+
+The following records the historical extraction only. Its provider-composite
+runner, diagnostics and case counts are retired and do not qualify current
+platform execution or a production rollout.
+
+## Historical extraction evidence
 
 The six outer Flow/admission cases and three nested public-startup cases moved
 from `marty-canvas-acceptance` to the dedicated `marty-flow-acceptance` test

@@ -96,6 +96,11 @@ false
 {{- define "marty.validateCustomerConfiguration" -}}
 {{- $root := .root -}}
 {{- $cfg := .config -}}
+{{- range $key, $_ := $cfg -}}
+{{- if regexMatch "(?i)(^CANVAS_|^KEYCLOAK_SEED_CANVAS_|^ISSUANCE_(CANVAS|READINESS)_|^SIGN_GRANT_MINT_ISSUANCE_(CANVAS|READINESS))" $key -}}
+{{- fail (printf "config.%s is retired connector configuration; configure the independent connector through its own deployment, never Marty Helm values or existingSecrets" $key) -}}
+{{- end -}}
+{{- end -}}
 {{- if ne $root.Values.organization.id (lower $root.Values.organization.id) -}}
 {{- fail "organization.id must use the lowercase canonical UUID spelling so all services select the same tenant; inspect retained tenant records before changing an existing installation" -}}
 {{- end -}}
@@ -168,7 +173,6 @@ false
 {{- $_ := set $cfg "PUBLIC_API_URL" $origin -}}
 {{- $_ := set $cfg "UI_BASE_URL" $origin -}}
 {{- $_ := set $cfg "ISSUER_BASE_URL" $origin -}}
-{{- $_ := set $cfg "CANVAS_OAUTH_COMPLETION_REDIRECT_URL" (printf "%s/console/org/deploy/canvas" $origin) -}}
 {{- $_ := set $cfg "KC_HOSTNAME" $origin -}}
 {{- $_ := set $cfg "CORS_ORIGINS" $origin -}}
 {{- $_ := set $cfg "MARTY_ISSUER_BASE_URL" $origin -}}

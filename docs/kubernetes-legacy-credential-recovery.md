@@ -1,3 +1,16 @@
+> Current-source status: unavailable. The native legacy inspection, target,
+> predecessor, staging and qualification commands now refuse before credential,
+> file or network access. The original initializer hash is preserved; current
+> source does not requalify the old provider-bearing cohort. The description below
+> is historical recovery evidence, not current operational instructions.
+>
+> TODO (platform recovery owner): use the retained exact source-bound recovery
+> operator and original private evidence for an existing job. A replacement
+> provider-neutral recovery workflow requires separate source/identity/custody,
+> journal, replay and runtime qualification. Do not relabel old evidence, delete
+> its private inputs or weaken guards to make it current. Original native
+> implementation and safety tests remain in Git at `658228a4`.
+
 # Retained Kubernetes development credential recovery
 
 ## Problem and scope
@@ -433,7 +446,11 @@ The reload inventory is exactly these existing Deployments: `auth`,
 `organization`, `credential-template`, `gateway`, `verification`, `notification`,
 `compliance-profile`, `presentation-policy`, `deployment-profile`, `flow`,
 `revocation-profile`, `event-stream`, `issuance-native`, `signing-keys`,
-`canvas-sync-worker` and `keycloak`. Original authenticated image references,
+and `keycloak`. This is the fifteen-workload inventory in
+[`reload_kubernetes_legacy_workloads.py`](../scripts/reload_kubernetes_legacy_workloads.py).
+The external connector is not a platform reload consumer; do not recreate its
+retired Deployment or signing origins. Historical provider receipts remain
+provenance, not a current workload list. Original authenticated image references,
 Helm ownership, release annotations, Deployment UIDs/resource versions and full
 Pod templates are admitted before the first restart. Only a unique annotation
 under each Pod template changes. OpenBao, PostgreSQL, Redis, unrelated workloads,

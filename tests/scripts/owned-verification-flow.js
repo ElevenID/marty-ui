@@ -19,11 +19,11 @@ function ownedVerificationFlow({organizationId,runId,privateDirectory,api}){
     &&fs.lstatSync(privateDirectory).isDirectory()&&!fs.lstatSync(privateDirectory).isSymbolicLink(),
   'OWNED_FLOW_PRIVATE_DIRECTORY_INVALID');
   check(typeof api==='function','OWNED_FLOW_API_REQUIRED');
-  const reference=`canvas-engineering-${runId}-${randomUUID()}`;
-  const journal=path.join(privateDirectory,`canvas-verification-${runId}.json`);
+  const reference=`platform-engineering-${runId}-${randomUUID()}`;
+  const journal=path.join(privateDirectory,`platform-verification-${runId}.json`);
   const read=(route,options)=>api(options?.method||'GET',route);
   const owned=id=>({id,organizationId,externalReference:reference});
-  let state={scope:'OWNED_CANVAS_VERIFICATION_FLOW',organizationId,reference,runId,
+  let state={scope:'OWNED_PLATFORM_VERIFICATION_FLOW',organizationId,reference,runId,
     createIntent:false,instanceId:null,postResponseLost:false,retirementConfirmed:false,
     state:'PREPARED'};
   function save(exclusive=false){const file=exclusive?journal:journal+'.next';

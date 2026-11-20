@@ -69,7 +69,7 @@ fn mappings() -> Result<Vec<Mapping>> {
             key,
         });
     }
-    if found.len() != 11 {
+    if found.len() != 9 {
         return Err(REFUSAL);
     }
     found.sort_by(|left, right| left.input.cmp(&right.input));
@@ -319,7 +319,7 @@ fn transition(
     current: &Inputs,
     candidate: &Inputs,
 ) -> Result<(Value, Value)> {
-    if current.keys().ne(candidate.keys()) || current.len() != 11 {
+    if current.keys().ne(candidate.keys()) || current.len() != 9 {
         return Err(REFUSAL);
     }
     let mut replacements = BTreeSet::new();
@@ -486,7 +486,7 @@ pub fn operation(context: &Value) -> Result<Value> {
     }
     let current_before = snapshot(current)?;
     let candidate_before = snapshot(candidate)?;
-    if generation::verify_application(current, candidate)?.1 != 11 {
+    if generation::verify_application(current, candidate)?.1 != 9 {
         return Err(REFUSAL);
     }
     let original_bytes = read_owned(observed, MAX_OBJECT, &[0o600])?.0;
@@ -498,7 +498,7 @@ pub fn operation(context: &Value) -> Result<Value> {
         &token_inputs(&current_before)?,
         &token_inputs(&candidate_before)?,
     )?;
-    let mut response = json!({"ready":true,"secret":DESTINATION,"count":11});
+    let mut response = json!({"ready":true,"secret":DESTINATION,"count":9});
     let prepared = match &request {
         Request::Prepare { output, .. } => {
             owned_directory(output.parent().ok_or(REFUSAL)?)?;
@@ -629,7 +629,7 @@ mod tests {
         let response = operation(&request).unwrap();
         assert_eq!(
             response,
-            json!({"ready":true,"secret":DESTINATION,"count":11})
+            json!({"ready":true,"secret":DESTINATION,"count":9})
         );
         assert!(!response.to_string().contains("PRIVATE_"));
         let patch = root.path().join("patch.json");
@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn metadata_has_exact_restricted_mapping_and_no_initial_authority() {
         let metadata = activation_metadata();
-        assert_eq!(metadata["inputs"].as_array().unwrap().len(), 11);
+        assert_eq!(metadata["inputs"].as_array().unwrap().len(), 9);
         assert_eq!(metadata["minimumTtlSeconds"], 1800);
         let text = metadata.to_string();
         assert!(!text.contains("OPENBAO_BOOTSTRAP_TOKEN"));
@@ -712,12 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn patch_guards_object_identity_and_changes_only_eleven_data_keys_and_marker() {
+    fn patch_guards_object_identity_and_changes_only_nine_data_keys_and_marker() {
         let (observed, current, candidate) = fixture();
         let (patch, expected) =
             transition(&observed, "marty-test", ID, &current, &candidate).unwrap();
         let operations = patch.as_array().unwrap();
-        assert_eq!(operations.len(), 14);
+        assert_eq!(operations.len(), 12);
         assert_eq!(
             operations[0],
             json!({"op":"test","path":"/metadata/uid","value":observed["metadata"]["uid"]})
@@ -727,7 +727,7 @@ mod tests {
             json!({"op":"test","path":"/metadata/resourceVersion","value":"88"})
         );
         assert_eq!(
-            operations[2..13]
+            operations[2..11]
                 .iter()
                 .map(|op| op["path"].as_str().unwrap().strip_prefix("/data/").unwrap())
                 .collect::<BTreeSet<_>>(),
@@ -751,6 +751,20 @@ mod tests {
             ID
         );
         assert_eq!(observed["metadata"]["resourceVersion"], "88");
+    }
+
+    #[test]
+    fn retired_signing_inputs_cannot_expand_the_current_activation() {
+        let (observed, mut current, mut candidate) = fixture();
+        for name in [
+            "SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN",
+            "SIGN_GRANT_MINT_ISSUANCE_READINESS_TOKEN",
+        ] {
+            current.insert(name.into(), "synthetic-old-retired-token".into());
+            candidate.insert(name.into(), "synthetic-new-retired-token".into());
+        }
+        assert_eq!(current.len(), 11);
+        assert!(transition(&observed, "marty-test", ID, &current, &candidate).is_err());
     }
 
     #[test]

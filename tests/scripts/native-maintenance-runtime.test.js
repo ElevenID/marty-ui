@@ -3,6 +3,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const runtime=require('./functional-debug-runtime'),shared=require('./passport-maintenance-runtime'),latest=require('./native-maintenance-runtime');
 const metadata=require('./native-maintenance-metadata'),fs=require('node:fs'),path=require('node:path');
+const currentAdmission=runtime.expectedRuntime;
 const hash=s=>crypto.createHash('sha256').update(s).digest('hex');
 function generations(){
  const names='auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau gateway signing-keys passport-callback-signer canvas-sandbox ui-prod'.split(' ');
@@ -38,7 +39,7 @@ function fixture(t){
  t.mock.method(runtime,'boundBytes',ref=>buffers.get(ref.sha256)||Buffer.from('SYNTHETIC_SOURCE_OR_BACKUP_ONLY'));
  t.mock.method(runtime,'verifyBoundFile',()=>123);
  t.mock.method(runtime,'verifyCommandOutput',()=>0);
- t.mock.method(runtime,'expectedRuntime',()=>f.expected);
+ t.mock.method(runtime,'expectedRuntime',()=>assert.fail('historical audit invoked current runtime admission'));
  t.mock.method(runtime,'observeDocker',row=>f.observed.find(x=>x.role===row.role));
  const baseProfile={path:'/synthetic/base',sha256:shared.BASE},beforeBinding={path:'/synthetic/before',sha256:shared.BEFORE};docs.set(shared.BASE,{});docs.set(shared.BEFORE,{roles:f.before});
  const proof=()=>add({synthetic:true});const freeze={path:'/synthetic/freeze',sha256:latest.FREEZE};docs.set(latest.FREEZE,{productRevision:latest.SOURCE,coreRevision:latest.CORE,imagesBuilt:false,releaseQualified:false});
@@ -49,7 +50,7 @@ function fixture(t){
  for(const k of ['originalCargoLock','localizedCargoLock','localizedLockProof','lockedLocalizedMetadata','coreFeatureResolution','productionFeatureTree','canonicalCompilerLog','coreCompilerArtifacts'])receipt[k]=proof();
  f.selection.canonicalBuildReceipt=add(receipt);const selection=add(f.selection),buildReply={ok:true,name:'build-receipt.json',rootProof:spec.rootProof,sha256:f.selection.canonicalBuildReceipt.sha256,value:receipt};
  const readDocker=args=>args[0]==='ps'?f.before.map(x=>x.containerId).join('\n'): '3dbbbe66-1c98-4e0c-b0a6-f927c05e7341';
- const readJournal=()=>buildReply,inputs={baseProfile,beforeBinding,selection};const rb=shared.observeMaintenanceReadback(inputs,{readDocker,readJournal});const readback=add(rb);
+ const readJournal=()=>buildReply,inputs={baseProfile,beforeBinding,selection};const rb=shared.observeHistoricalMaintenanceReadback(inputs,{readDocker,readJournal}).readback;const readback=add(rb);
  const plan=add({beforeBinding,scope:'ELF_LOADER_UID_COMPATIBILITY_ONLY',buildReceiptAuthoritativeSha256:f.selection.canonicalBuildReceipt.sha256});
  const compatibility={plan,result:add({schema:1,state:'ELF_LOADER_UID_COMPATIBILITY_PASS',planSha256:plan.sha256,candidateServiceEntrypointExecuted:false,signingOrApi:false,runtimeDeployed:false,rows:Object.entries(latest.ROLES).map(([role,binary])=>({binary,imageId:f.before.find(x=>x.role===role).imageId,sha256:f.selection.binaries[role].sha256,containerId:hash('compat'+role),uid:10001,gid:10001,exitCode:0,candidateReadableExecutable:true,loaderListSucceeded:true,ownedContainerRemoved:true}))})};
  const runId='22222222-2222-4222-8222-222222222222';const intent=add({runId,selectionSha256:selection.sha256,baseProfileSha256:shared.BASE,beforeBindingSha256:shared.BEFORE});
@@ -97,8 +98,13 @@ function fixture(t){
  const readMaintenanceJournal=(_j,name)=>({ok:true,name,rootProof:spec.rootProof,sha256:name==='build-receipt.json'?inputs.outcome.sha256:name==='build-state.json'?metadataProof.operationState.sha256:intent.sha256,value:name==='build-receipt.json'?outcome:name==='build-state.json'?operationState:docs.get(intent.sha256)});
  return {...f,docs,buffers,inputs,outcome,commands,state,cleanup,backup,sourceRefs,q,metadataBefore,metadataAfter,metadataProof,operationState,sqlRows,readback:rb,selectionRef:selection,readDocker,readJournal,readMaintenanceJournal};
 }
-test('full synthetic actual-reader composition requires authoritative outcome and fresh22',t=>{
- const f=fixture(t),profile=latest.produceLatestProfile(f.inputs,f);assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(latest.expectedLatestRuntime(profile).length,22);
+test('historical audit retains original evidence without current runtime admission',t=>{
+ const f=fixture(t),report=latest.auditHistoricalMaintenance(f.inputs,f);
+ assert.equal(report.historicalOnly,true);assert.equal(report.runtimeAdmitted,false);
+ const inspected=latest.inspectHistoricalProfile(report.profile);
+ assert.equal(inspected.historicalOnly,true);assert.equal(inspected.runtimeAdmitted,false);
+ assert.equal(inspected.evidence.rows.length,22);
+ assert.throws(()=>currentAdmission(report.profile),/RETIRED_PROVIDER_RUNTIME_PROFILE/);
 });
 for(const [name,mutate]of Object.entries({
  'raw state bytes despite success flags':f=>f.state.afterMigration.file.sha256=hash('changed-private-store'),
@@ -114,13 +120,13 @@ for(const [name,mutate]of Object.entries({
  'altered schema source':f=>Object.values(f.sourceRefs)[0].sha256=hash('foreign-source'),
  'helper still registered':f=>f.cleanup.containerIds.push(f.state.helperContainerId),
  'non-durable intent':f=>f.outcome.intentDurability.parentDirectory.synced=false,
-}))test('qualified outcome rejects '+name,t=>{const f=fixture(t);mutate(f);assert.throws(()=>latest.produceLatestProfile(f.inputs,f));});
-test('a local receipt without original maintenance transport is not authority',()=>{assert.throws(()=>latest.produceLatestProfile({},{}),/ACTUAL_DOCKER_READER_REQUIRED/);});
-test('fresh-reader mismatch cannot be replaced by stored passing rows',t=>{const f=fixture(t);const real=f.readMaintenanceJournal;f.readMaintenanceJournal=(j,n)=>n==='build-receipt.json'?{...real(j,n),sha256:hash('local-only')}:real(j,n);assert.throws(()=>latest.produceLatestProfile(f.inputs,f));});
+}))test('qualified outcome rejects '+name,t=>{const f=fixture(t);mutate(f);assert.throws(()=>latest.auditHistoricalMaintenance(f.inputs,f));});
+test('a local receipt without original maintenance transport is not authority',()=>{assert.throws(()=>latest.auditHistoricalMaintenance({},{}),/ACTUAL_DOCKER_READER_REQUIRED/);});
+test('fresh-reader mismatch cannot be replaced by stored passing rows',t=>{const f=fixture(t);const real=f.readMaintenanceJournal;f.readMaintenanceJournal=(j,n)=>n==='build-receipt.json'?{...real(j,n),sha256:hash('local-only')}:real(j,n);assert.throws(()=>latest.auditHistoricalMaintenance(f.inputs,f));});
 
 test('fresh actual rows must match stored readback even when both independently validate',t=>{
  const f=fixture(t);runtime.observeDocker.mock.mockImplementation(row=>({...f.observed.find(x=>x.role===row.role),hostPid:3}));
- assert.throws(()=>latest.produceLatestProfile(f.inputs,f),/FRESH_ACTUAL22_MAINTENANCE_READBACK_REQUIRED/);
+ assert.throws(()=>latest.auditHistoricalMaintenance(f.inputs,f),/FRESH_ACTUAL22_MAINTENANCE_READBACK_REQUIRED/);
 });
 
 test('streamed private backup verification retains exact digest without assertion byte dumps',t=>{
@@ -166,8 +172,8 @@ for(const [name,mutate]of Object.entries({
  'missing CLI journal receipt':f=>f.operationState.operations.splice(4,1),
  'wrong executor source':f=>f.operationState.executorSource={path:'/foreign',sha256:'0'.repeat(64)},
  'catalog before native migration':f=>f.metadataAfter.projection.ledgers.issuance.pop(),
-}))test('journal-bound metadata refuses '+name,t=>{const f=fixture(t);mutate(f);assert.throws(()=>latest.produceLatestProfile(f.inputs,f));});
-test('stored operation history cannot replace actual journal read',t=>{const f=fixture(t),read=f.readMaintenanceJournal;f.readMaintenanceJournal=(j,n)=>n==='build-state.json'?{...read(j,n),sha256:'0'.repeat(64)}:read(j,n);assert.throws(()=>latest.produceLatestProfile(f.inputs,f),/assert|actual|expected/i);});
+}))test('journal-bound metadata refuses '+name,t=>{const f=fixture(t);mutate(f);assert.throws(()=>latest.auditHistoricalMaintenance(f.inputs,f));});
+test('stored operation history cannot replace actual journal read',t=>{const f=fixture(t),read=f.readMaintenanceJournal;f.readMaintenanceJournal=(j,n)=>n==='build-state.json'?{...read(j,n),sha256:'0'.repeat(64)}:read(j,n);assert.throws(()=>latest.auditHistoricalMaintenance(f.inputs,f),/assert|actual|expected/i);});
 
 test('application schema verification follows both migrations and final ACL grants',()=>{
  const order=metadata.DATABASE_ORDER.map(x=>x[0]);
@@ -179,4 +185,24 @@ test('real empty successful CLI output is hash-bound without weakening JSON or b
  t.after(()=>{fs.unlinkSync(file);fs.rmdirSync(dir);});fs.writeFileSync(file,Buffer.alloc(0));const reference={path:file,sha256:hash(Buffer.alloc(0))};
  assert.equal(runtime.verifyCommandOutput(reference),0);assert.throws(()=>runtime.boundJson(reference));assert.throws(()=>runtime.verifyBoundFile(reference));
  fs.writeFileSync(file,'changed');assert.throws(()=>runtime.verifyCommandOutput(reference));
+});
+
+test('current maintenance admission and producer refuse before any supplied readers',()=>{
+ const never=new Proxy({}, {get:()=>assert.fail('retired current producer accessed input')});
+ assert.throws(()=>latest.produceLatestProfile(never,never),/RETIRED_NATIVE_MAINTENANCE_GENERATION/);
+ assert.throws(()=>latest.expectedLatestRuntime(never),/RETIRED_NATIVE_MAINTENANCE_GENERATION/);
+ assert.throws(()=>shared.observeMaintenanceReadback(never,never),/RETIRED_MAINTENANCE_READBACK_GENERATION/);
+ for(const value of [false,null,{}])assert.throws(()=>runtime.expectedRuntime({schema:'marty.functional-mixed-runtime/v2',nativeMaintenance:value,resourceRecreation:{}}),/RETIRED_PROVIDER_RUNTIME_PROFILE/);
+});
+
+test('historical archive packages independently, accepts checkout CRLF and rejects changed evidence',t=>{
+ const dir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'historical-maintenance-package-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true}));
+ fs.mkdirSync(path.join(dir,'tests/scripts'),{recursive:true});fs.mkdirSync(path.join(dir,'contracts'));
+ for(const name of ['native-maintenance-runtime','passport-maintenance-runtime','native-maintenance-metadata','functional-debug-runtime','platform-runtime-roles'])fs.copyFileSync(path.join(__dirname,name+'.js'),path.join(dir,'tests/scripts',name+'.js'));
+ const archive=path.join(dir,'contracts/scoped-full-build-legacy-reference.json');
+ const original=fs.readFileSync(path.join(__dirname,'../../contracts/scoped-full-build-legacy-reference.json'),'utf8').replace(/\r\n/g,'\n');
+ const run=()=>require('node:child_process').spawnSync(process.execPath,['-e',"const assert=require('node:assert/strict'),m=require('./tests/scripts/native-maintenance-runtime');assert.equal(m.ALL29.length,29);assert(Object.isFrozen(m.ALL29));assert.throws(()=>m.produceLatestProfile(),/RETIRED_NATIVE_MAINTENANCE_GENERATION/);"],{cwd:dir,encoding:'utf8'});
+ for(const bytes of [original,original.replace(/\n/g,'\r\n')]){fs.writeFileSync(archive,bytes);const r=run();assert.equal(r.status,0,r.stderr);}
+ fs.writeFileSync(archive,original+' ');const rejected=run();assert.notEqual(rejected.status,0);assert.match(rejected.stderr,/HISTORICAL_BUILD_REFERENCE_CHANGED/);
 });

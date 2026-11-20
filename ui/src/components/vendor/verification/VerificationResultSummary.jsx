@@ -11,7 +11,6 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
-import LinkIcon from '@mui/icons-material/Link';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 import { hasAsciiControlCharacters } from '../../../utils/hasAsciiControlCharacters.js';
 
@@ -218,19 +217,6 @@ export function extractVerificationSummary(session = {}) {
     claims.badge_image,
     claims.logo_url,
   );
-  const canvasProvenance = asObject(firstPresent(
-    claims.canvas_provenance,
-    claims.canvas_mirror,
-    firstPath(claims, ['provenance.canvas', 'provenance.canvas_credentials']),
-    firstPath(result, ['canvas_provenance', 'canvas_mirror']),
-  ));
-  const canvasCredentialId = firstPresent(
-    canvasProvenance.external_credential_id,
-    canvasProvenance.canvas_credential_id,
-    claims.canvas_credential_id,
-    claims.canvasCredentialsId,
-  );
-
   const explicitDecision = firstPresent(
     decisionPassed(result.decision),
     decisionPassed(rawResult.decision),
@@ -291,9 +277,6 @@ export function extractVerificationSummary(session = {}) {
     trustValidated,
     revocationChecked,
     signatureValid,
-    canvasCredentialId,
-    canvasAccount: firstPresent(canvasProvenance.canvas_account_id, claims.canvas_account_id),
-    canvasDeliveryId: firstPresent(canvasProvenance.delivery_record_id, claims.canvas_delivery_id),
     claims,
     claimsSatisfied: asArray(result.claims_satisfied || rawResult.claims_satisfied),
     claimsMissing: asArray(result.claims_missing || rawResult.claims_missing),
@@ -368,7 +351,6 @@ function ClaimList({ claims, claimsSatisfied, claimsMissing }) {
 
 function VerificationResultSummary({ session }) {
   const summary = extractVerificationSummary(session);
-  const hasCanvasMirror = Boolean(summary.canvasCredentialId || summary.canvasAccount || summary.canvasDeliveryId);
   const issuerTrusted = summary.passed
     && allCredentialChecks(asArray(session?.credential_results), 'trust_check_passed') === true
     ? 'true' : undefined;
@@ -470,39 +452,7 @@ function VerificationResultSummary({ session }) {
           </Box>
         ) : null}
 
-        {hasCanvasMirror ? (
-          <>
-            <Divider />
-            <Box data-testid="verification-canvas-mirror-result">
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
-                <LinkIcon color="primary" fontSize="small" />
-                <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                  Canvas Credentials mirror
-                </Typography>
-              </Stack>
-              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' } }}>
-                <Box>
-                  <Typography variant="caption" color="text.secondary">Canvas credential</Typography>
-                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                    {summary.canvasCredentialId || 'Not referenced'}
-                  </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary">Canvas account</Typography>
-                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                    {summary.canvasAccount || 'Not referenced'}
-                  </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary">Delivery record</Typography>
-                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                    {summary.canvasDeliveryId || 'Not referenced'}
-                  </Typography>
-                </Box>
-              </Box>
-            </Box>
-          </>
-        ) : null}
+
       </Stack>
     </Paper>
   );

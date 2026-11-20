@@ -9,7 +9,7 @@ import sys
 
 
 def cache_key(root: Path, lane: str, arch: str) -> str:
-    if lane not in {"canvas", "worker", "flow", "selfhost"} or arch not in {"x86_64", "aarch64"}:
+    if lane not in {"flow", "selfhost"} or arch not in {"x86_64", "aarch64"}:
         raise ValueError("unsupported offline compiler scope")
     builders = re.findall(r"^FROM (rust:1\.95-bookworm@sha256:[0-9a-f]{64}) AS rust-service-base$",
                           (root / "services/Dockerfile").read_text(), re.MULTILINE)

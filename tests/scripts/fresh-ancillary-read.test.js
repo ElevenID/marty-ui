@@ -3,21 +3,21 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {freshExactAncillaryRead}=require('./functional-debug-runtime');
 const hex=n=>n.toString(16).padStart(64,'0');
 function fixture(){
- const allRunningRoles={};for(let i=1;i<=26;i++)allRunningRoles['role-'+i]={id:hex(i)};
+ const allRunningRoles={};for(let i=1;i<=25;i++)allRunningRoles['role-'+i]={id:hex(i)};
  allRunningRoles.keycloak={id:hex(27)};
  const authority={cap:{allRunningRoles},kc:{newCid:hex(28)},ui:{newCid:hex(29)}};
- const ids=[...Array.from({length:26},(_,i)=>hex(i+1)),hex(28),hex(29)];
+ const ids=[...Array.from({length:25},(_,i)=>hex(i+1)),hex(28),hex(29)];
  let generation=1,batches=0,other=0;
  const read=args=>{
   if(args[0]==='inspect'){
-   assert.equal(args.length,29,'exact 28-row Docker batch');batches++;
+   assert.equal(args.length,28,'exact 27-row Docker batch');batches++;
    return JSON.stringify(ids.map(Id=>({Id,State:{Pid:generation}})));
   }
   other++;return 'actual-other-command';
  };
  return {authority,ids,read,get batches(){return batches;},get other(){return other;},next(){generation++;}};
 }
-test('exact full-CID 28-row snapshot is served only within one guard',()=>{
+test('exact full-CID 27-row snapshot is served only within one guard',()=>{
  const f=fixture(),read=freshExactAncillaryRead(f.read,f.authority);
  assert.equal(read(['ps','-q']),'actual-other-command');
  assert.equal(JSON.parse(read(['inspect',f.ids[0]]))[0].Id,f.ids[0]);
@@ -34,7 +34,7 @@ for(const kind of ['missing','duplicate','foreign','recreatedKeycloak'])test(kin
   if(kind==='missing')rows.pop();
   if(kind==='duplicate')rows[1]={Id:rows[0].Id};
   if(kind==='foreign')rows[1]={Id:hex(900)};
-  if(kind==='recreatedKeycloak')rows[26]={Id:hex(27)};
+  if(kind==='recreatedKeycloak')rows[25]={Id:hex(27)};
   return JSON.stringify(rows);
  };
  assert.throws(()=>freshExactAncillaryRead(read,f.authority)(['inspect',f.ids[0]]),/RESOURCE_BATCH_/);

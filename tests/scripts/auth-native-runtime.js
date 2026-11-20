@@ -1,4 +1,5 @@
 'use strict';
+const {PLATFORM_RUNTIME_ROLES,assertPlatformRuntimeRoles}=require('./platform-runtime-roles');
 // Exact Auth executable successor over the signed nightly functional binding.
 const assert=require('node:assert/strict');
 const HASH=/^[a-f0-9]{64}$/;
@@ -7,7 +8,7 @@ function expected(profile,{boundJson,verifyBoundFile,expectedRuntime,comparableB
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  assert.deepEqual(Object.keys(profile).sort(),['authNativeOverlay','baseProfile','recordingQualified','releaseQualified','schema','scope']);
  const base=boundJson(profile.baseProfile);assert(base.signedImageDeployment&&!base.authNativeOverlay,'Signed nightly predecessor required');
- const prior=expectedRuntime(base);assert.equal(prior.length,22);
+ const prior=expectedRuntime(base);assertPlatformRuntimeRoles(prior.map(row=>row.role));assert.equal(prior.length,PLATFORM_RUNTIME_ROLES.length);
  const old=prior.find(row=>row.role==='auth');assert(old&&old.kind==='SIGNED_NIGHTLY_IMAGE');
  const v=profile.authNativeOverlay;
  assert.deepEqual(Object.keys(v).sort(),['baseline','binary','createIntent','created','input','operator','result','stopReceipt'].sort());

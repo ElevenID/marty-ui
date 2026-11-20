@@ -15,18 +15,7 @@ from recover_unchanged_beta_cutover import docker, inspect, wait_healthy
 
 CALLBACK = {'passport-callback-signer', 'passport-beta-bureau'}
 NETWORK = 'elevenid-beta-passport-callback-signing'
-CANVAS = {
-    'CANVAS_LTI_EXPERIENCE_BASE_URL': 'https://beta.elevenidllc.com',
-    'CANVAS_OAUTH_COMPLETION_REDIRECT_URL': 'https://beta.elevenidllc.com/console/org/deploy/canvas',
-    'CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID': '00000000-0000-0000-0000-000000000001',
-    'CANVAS_LTI_TOOL_ISSUER_DID': 'did:web:beta.elevenidllc.com:orgs:marty',
-    'CANVAS_PORTABLE_INTEGRATION_ENABLED': 'true',
-    'CANVAS_PILOT_ORGANIZATION_IDS': '00000000-0000-0000-0000-000000000001',
-    'CANVAS_LEGACY_EVENT_INGEST_ENABLED': 'false',
-    'CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST': 'https://canvas-test.elevenidllc.com',
-    'CANVAS_ALLOW_PRIVATE_BASE_URLS': 'false',
-    'CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS': 'false',
-}
+
 
 
 def require(value, message):
@@ -87,7 +76,18 @@ def validate_network(network, allowed, *, complete=False):
     require(not complete or members == set(allowed), 'Incomplete callback network membership')
 
 
+def reject_retired_configuration(env):
+    require(not any(name.startswith(("CANVAS_", "ISSUANCE_CANVAS_"))
+                    or name in {"SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN",
+                                "KEYCLOAK_SEED_CANVAS_ADMIN_USER"} for name in env),
+            'Retired connector configuration cannot be replayed by Marty')
+
+
 def prepare(root, artifacts, runtime_root, source, images, prior, observe, failure_proof):
+    reject_retired_configuration(os.environ)
+    require(not any(role.replace('_', '-').startswith('canvas-')
+                    or '-canvas-' in role.replace('_', '-') for role in images),
+            'Retired connector role cannot be replayed by Marty')
     require(failure_proof is not None and failure_proof.is_file(), 'Reviewed failed-rollout proof is required')
     failure = json.loads(failure_proof.read_text(encoding='utf-8-sig'))
     require(failure.get('scope') == 'ACTUAL_R31_POST_MIGRATION_CALLBACK_STARTUP_FAILURE'
@@ -107,6 +107,8 @@ def prepare(root, artifacts, runtime_root, source, images, prior, observe, failu
             'Original failed rollout receipt changed')
     current = {role: observe(role) for role in set(images) | {'keycloak'}}
     validate_phase(current, prior, images)
+    for container in current.values():
+        reject_retired_configuration(environment(container))
     failed = {row['service']: row for row in failure['observedContainers']}
     require(all(current[role]['Id'] == failed[role]['id']
                 and current[role]['Image'] == failed[role]['image']
@@ -117,13 +119,8 @@ def prepare(root, artifacts, runtime_root, source, images, prior, observe, failu
     require(before_env.get('BAO_TOKEN_FILE') == '/bao/passport-callback/token'
             and not any(key in before_env for key in ('BAO_TOKEN', 'OPENBAO_SERVICE_TOKEN', 'OPENBAO_SERVICE_TOKEN_FILE')),
             'Prepared callback signer must retain only its scoped file credential')
-    old_native = environment(current['issuance-native'])
-    # Compare selected preserved runtime contract, never infer broader authority.
-    for key, value in CANVAS.items():
-        if key in old_native:
-            require(old_native[key] == value, 'Retained Canvas configuration differs: ' + key)
     components = {row['component']: row['revision'] for row in source['component_revisions']}
-    env = dict(os.environ, **CANVAS, MARTY_NETWORK_NAME='elevenid-beta-network',
+    env = dict(os.environ, MARTY_NETWORK_NAME='elevenid-beta-network',
                MARTY_RUNTIME_CONFIG_ROOT=str(runtime_root), MARTY_SERVICES_IMAGE=images['passport-callback-signer'],
                MARTY_RELEASE_VERSION=source['release_version'], MARTY_UI_SHA=source['marty_ui_sha'],
                ELEVENID_STACK_VERSION=(root / 'VERSION').read_text().strip(),
@@ -147,6 +144,11 @@ def prepare(root, artifacts, runtime_root, source, images, prior, observe, failu
         return json.loads(result.stdout)
 
     before = render(command)
+    for role, service in before['services'].items():
+        require(not (role.replace('_', '-').startswith('canvas-')
+                     or '-canvas-' in role.replace('_', '-')),
+                'Retired connector role cannot be replayed by Marty')
+        reject_retired_configuration(service.get('environment', {}))
     image_env = dict(item.split('=', 1) for item in json.loads(
         docker('image', 'inspect', signer['Image']))[0]['Config']['Env'])
     rendered_signer = before['services']['passport-callback-signer']

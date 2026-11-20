@@ -176,7 +176,7 @@ describe('MyIdentityPage', () => {
     expect(within(linked).getByText('Active')).toBeInTheDocument();
     expect(within(linked).getByText('Credential ID: credential-1')).toBeInTheDocument();
     expect(within(linked).getByText('Credential ID: credential-2')).toBeInTheDocument();
-    expect(within(dialog).getByText('Membership course')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Membership course')).not.toBeInTheDocument();
     const original = within(linked).getByText('Credential ID: credential-1').parentElement!;
     await user.click(within(original).getByRole('button', { name: 'View MembershipCredential details' }));
     expect(await screen.findByRole('dialog', { name: 'Credential Details' })).toHaveTextContent('credential-1');
@@ -299,7 +299,7 @@ describe('MyIdentityPage', () => {
       const linked = within(dialog).getByRole('region', { name: 'Issued credentials' });
       expect(within(linked).getByText('Revoked')).toBeInTheDocument();
       expect(within(linked).queryByText('Active')).not.toBeInTheDocument();
-      expect(within(dialog).getByText('Retained course context')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Retained course context')).not.toBeInTheDocument();
     }
     await user.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -375,41 +375,6 @@ describe('MyIdentityPage', () => {
     expectIdentityLayoutStyles()
   })
 
-  it('shows Canvas course source context in application details', async () => {
-    mockGetMyApplications.mockResolvedValue({
-      items: [
-        {
-          id: 'app-canvas-1',
-          credential_display_name: 'Interoperable Credentials Foundations Badge',
-          credential_template_id: 'cfg-canvas-badge',
-          status: 'SUBMITTED',
-          submitted_at: '2026-05-18T00:00:00.000Z',
-          updated_at: '2026-05-18T00:05:00.000Z',
-          integration_context: {
-            delivery_mode: 'wallet_plus_canvas_mirror',
-            canvas: {
-              canvas_course_name: 'ElevenID LTI Test Course',
-              canvas_assignment_name: 'Interoperable Credentials Quiz',
-              canvas_account_id: 'canvas-real-account-1',
-              canvas_program_binding_id: 'binding-1',
-            },
-          },
-        },
-      ],
-    })
-
-    const { user } = render(<MyIdentityPage />)
-
-    await screen.findByText('Interoperable Credentials Foundations Badge')
-    await user.click(screen.getByRole('button', { name: 'Details' }))
-
-    expect(await screen.findByTestId('identity-canvas-source')).toBeInTheDocument()
-    expect(screen.getByText('ElevenID LTI Test Course')).toBeInTheDocument()
-    expect(screen.getByText('Interoperable Credentials Quiz')).toBeInTheDocument()
-    expect(screen.getByText('canvas-real-account-1')).toBeInTheDocument()
-    expect(screen.getByText('Delivery: wallet plus canvas mirror')).toBeInTheDocument()
-    expectIdentityLayoutStyles()
-  })
 
   it('shows issuer-owned waiting state for an approved blocked application', async () => {
     mockGetMyApplications.mockResolvedValue({
@@ -469,25 +434,25 @@ describe('MyIdentityPage', () => {
     expect(screen.queryByText('No credentials yet')).not.toBeInTheDocument()
   })
 
-  it('shows Canvas Credentials mirror delivery in credential details', async () => {
+  it('shows canonical credential details without embedded provider administration', async () => {
     mockGetMyApplications.mockResolvedValue({ items: [] })
     mockGetMyCredentials.mockResolvedValue({
       items: [
         {
           id: 'cred-1',
           credential_display_name: 'Interoperable Credentials Foundations Badge',
-          credential_template_id: 'cfg-canvas-badge',
+          credential_template_id: 'cfg-interoperability-badge',
           issuer_did: 'did:web:beta.elevenidllc.com:orgs:marty',
-          badge_image_url: 'https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg',
+          badge_image_url: 'https://beta.elevenidllc.com/credentials/interoperability-foundations-badge/image.svg',
           status: 'ACTIVE',
           issued_at: '2026-05-18T00:00:00.000Z',
           updated_at: '2026-05-18T00:05:00.000Z',
           deliveries: [
             {
               id: 'delivery-1',
-              delivery_target: 'canvas_credentials',
+              delivery_target: 'external_api',
               status: 'delivered',
-              external_credential_id: 'canvas-cred-1',
+              external_credential_id: 'external-cred-1',
             },
           ],
         },
@@ -504,14 +469,7 @@ describe('MyIdentityPage', () => {
     expect(screen.getByText('did:web:beta.elevenidllc.com:orgs:marty')).toBeInTheDocument()
     expect(screen.getAllByRole('img', { name: /interoperable credentials foundations badge/i }).length).toBeGreaterThan(0)
     expect(screen.getByText('Claim: Claimed')).toBeInTheDocument()
-    expect(screen.getByTestId('identity-canvas-delivery')).toBeInTheDocument()
-    expect(screen.getByText('Canvas Credentials display')).toBeInTheDocument()
-    expect(screen.getByText('Delivered')).toBeInTheDocument()
-    expect(screen.getByText(/canvas-cred-1/)).toBeInTheDocument()
-    expect(screen.getByText('Mirror linked').closest('.MuiStack-root')).toHaveStyle({
-      alignItems: 'center',
-      flexWrap: 'wrap',
-    })
+    expect(screen.queryByTestId('identity-canvas-delivery')).not.toBeInTheDocument()
     expectIdentityLayoutStyles()
   })
 

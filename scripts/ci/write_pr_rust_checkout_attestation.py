@@ -90,7 +90,7 @@ def build_attestation(
     require(env.get("GITHUB_EVENT_NAME") == "pull_request", "not a pull_request run")
     require(env.get("GITHUB_JOB") == JOB_ID, "unexpected job identity")
     lane = env.get("MARTY_RUST_ATTESTATION_LANE")
-    require(lane in ("canvas", "contracts"), "unexpected Rust lane")
+    require(lane in ("flow", "contracts"), "unexpected Rust lane")
     require(env.get("GITHUB_WORKFLOW") == "CI", "unexpected workflow name")
 
     repository = env.get("GITHUB_REPOSITORY")

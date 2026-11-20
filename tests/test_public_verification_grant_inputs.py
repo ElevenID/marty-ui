@@ -13,14 +13,14 @@ from scripts import public_demo_grant_probe as probe
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_demo_verifier_adds_only_its_origin_to_the_unchanged_bootstrap_inventory():
+def test_demo_verifier_adds_only_its_origin_to_the_current_bootstrap_inventory():
     initializer = (ROOT / "docker/openbao-init.sh").read_text(encoding="utf-8")
     legacy = (
         re.search(r"^grant_origins='([^']+)'$", initializer, re.MULTILINE)
         .group(1)
         .split()
     )
-    assert len(legacy) == 7 and "flow-demo-holder" not in legacy
+    assert len(legacy) == 5 and "flow-demo-holder" not in legacy
     assert probe.ORIGINS == (*legacy, "flow-demo-holder")
     lines = (probe.INPUTS / "verify-with-demo-holder.hcl").read_text().splitlines()
     rule = re.compile(

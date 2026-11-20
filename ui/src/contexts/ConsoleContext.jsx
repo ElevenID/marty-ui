@@ -160,8 +160,7 @@ function mergePreferredFallbackMembership(fetchedMemberships, fallbackMembership
 export function ConsoleProvider({ children }) {
   const { user, isAuthenticated, isLoading: authLoading } = useContext(AuthContext);
   const principalId = user?.user_id || user?.sub || user?.id || null;
-  const applicantOnly = Array.isArray(user?.roles) && user.roles.includes('canvas_lti_learner')
-    && !user?.capabilities?.['org:view'];
+  const applicantOnly = user?.organization_access_restricted === true;
   // An anonymous auth check has no account state to clear. Keep public resources
   // mounted while it settles; known identities still reset across auth loading.
   const sessionLoading = Boolean(principalId || isAuthenticated) && authLoading;
@@ -228,15 +227,13 @@ function ConsoleSessionProvider({ children }) {
     () => getConsoleEligibleOrganizations(user?.organizations),
     [user?.organizations]
   );
-  const isCanvasApplicantOnlyUser = useMemo(
-    () => Array.isArray(user?.roles)
-      && user.roles.includes('canvas_lti_learner')
-      && !user?.capabilities?.['org:view'],
-    [user?.roles, user?.capabilities]
+  const isApplicantOnlyUser = useMemo(
+    () => user?.organization_access_restricted === true,
+    [user?.organization_access_restricted]
   );
   const isOrgBootstrapRequired = useMemo(
-    () => !isCanvasApplicantOnlyUser && userNeedsOrgBootstrap(user, fallbackMemberships),
-    [fallbackMemberships, isCanvasApplicantOnlyUser, user]
+    () => !isApplicantOnlyUser && userNeedsOrgBootstrap(user, fallbackMemberships),
+    [fallbackMemberships, isApplicantOnlyUser, user]
   );
 
   const transitionTo = useCallback((destination, options = {}) => {
@@ -304,7 +301,7 @@ function ConsoleSessionProvider({ children }) {
       const localStoredOrgId = window.localStorage.getItem('activeOrgId');
       const preferredOrgId = localStoredOrgId || prefs?.last_active_org_id || null;
       const fetchedMemberships = getConsoleEligibleOrganizations(orgs);
-      const resolvedMemberships = !isCanvasApplicantOnlyUser
+      const resolvedMemberships = !isApplicantOnlyUser
         ? mergePreferredFallbackMembership(fetchedMemberships, currentFallbacks, preferredOrgId)
         : [];
       setMemberships(resolvedMemberships);
@@ -355,7 +352,7 @@ function ConsoleSessionProvider({ children }) {
     sessionReady,
     operationIsCurrent,
     fallbackMemberships,
-    isCanvasApplicantOnlyUser,
+    isApplicantOnlyUser,
   ]);
 
   /**
@@ -413,7 +410,7 @@ function ConsoleSessionProvider({ children }) {
     assertSession();
     const current = selection.current;
     if (orgId === current.activeOrgId) return;
-    const membershipsForSelection = isCanvasApplicantOnlyUser
+    const membershipsForSelection = isApplicantOnlyUser
       ? []
       : Array.isArray(membershipOverride)
         ? getConsoleEligibleOrganizations(membershipOverride)
@@ -472,7 +469,7 @@ function ConsoleSessionProvider({ children }) {
     // Reject obsolete callers too: setup/join flows may navigate after awaiting us.
     if (!operationIsCurrent(generation) || currentLocation.current !== originLocation) throw obsoleteConsoleOperation();
     if (nextSelection.destination && options.navigate !== false) transitionTo(nextSelection.destination);
-  }, [assertSession, operationIsCurrent, isCanvasApplicantOnlyUser, transitionTo]);
+  }, [assertSession, operationIsCurrent, isApplicantOnlyUser, transitionTo]);
 
   /**
    * Clear active org (triggers setup flow)
@@ -539,7 +536,7 @@ function ConsoleSessionProvider({ children }) {
     try {
       const orgs = await getMyOrganizations();
       if (!applies()) throw obsoleteConsoleOperation();
-      const resolvedMemberships = !isCanvasApplicantOnlyUser && Array.isArray(orgs)
+      const resolvedMemberships = !isApplicantOnlyUser && Array.isArray(orgs)
         ? getConsoleEligibleOrganizations(orgs)
         : [];
       selection.current = { ...selection.current, memberships: resolvedMemberships };
@@ -565,7 +562,7 @@ function ConsoleSessionProvider({ children }) {
     } finally {
       if (applies()) setIsLoading(false);
     }
-  }, [assertSession, operationIsCurrent, clearActiveOrg, isCanvasApplicantOnlyUser]);
+  }, [assertSession, operationIsCurrent, clearActiveOrg, isApplicantOnlyUser]);
 
   /**
    * Computed: Is org console available?

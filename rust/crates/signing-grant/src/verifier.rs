@@ -12,7 +12,7 @@ use crate::{
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
 
-const ORIGINS: [SigningOrigin; 8] = SigningOrigin::ALL;
+const ORIGINS: [SigningOrigin; 6] = SigningOrigin::ALL;
 
 #[derive(Clone)]
 pub struct GrantVerifier {

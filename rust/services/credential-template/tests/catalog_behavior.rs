@@ -87,7 +87,7 @@ fn rust_catalog_preserves_every_intended_system_entry_and_capability() {
     let wallets = system_wallet_catalog(now);
     let destinations = system_delivery_destination_catalog(now);
     assert_eq!(wallets.len(), 10);
-    assert_eq!(destinations.len(), 4);
+    assert_eq!(destinations.len(), 2);
     assert_eq!(
         wallets
             .iter()

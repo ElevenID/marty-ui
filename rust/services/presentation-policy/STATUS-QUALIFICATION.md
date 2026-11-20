@@ -14,3 +14,14 @@ python tests/fixtures/status_https_probe.py
 The probe uses an unusable proxy setting in the Cargo child only. It verifies real HTTPS for valid/revoked signed JWTs and rejects default private access, redirects, content/type bounds, expired/bad signatures, a wrong CA and a hostname mismatch. It checks exact request counts and closes the owned server; generated private keys are never recorded in source or reports. Do not run against an existing installation.
 
 This is transport/codec evidence. Complete native presentation acceptance, mdoc CWT status and identifier-list handling, qualified product artifacts and unchanged official verifier reruns are separate requirements. Test-only registration or loopback trust does not establish production issuer or registrar authority.
+
+## Current dependency candidate
+
+Production manifests, the standalone feature probe, both lockfiles and the KMS
+custody guard agree on Core `955d51730ae4b3f1dda2e6cea99903c1ba27c51d` from
+`ElevenID/marty-core#443`. Cargo resolution retains every registry package
+version and checksum from the accepted-main merge. The source pin remains a
+review candidate while Core #443 is unmerged: protected Core integration, a
+repin to the accepted checkpoint and the consumer's required checks must precede
+normal integration of these status changes. Local verifier and transport tests
+do not establish official-suite or deployed-product acceptance.

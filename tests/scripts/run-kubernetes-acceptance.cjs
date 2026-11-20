@@ -264,9 +264,9 @@ async function main(argv) {
   const { chromium } = fromTests('@playwright/test');
   const AuthHelpers = storageState ? null
     : require(path.join(cfg.repo, 'tests/utils/test-helpers.js')).AuthHelpers;
-  const helpers = require(path.join(cfg.repo, 'tests/scripts/run-canvas-oss-standard-contract.js'));
+  const helpers = require(path.join(cfg.repo, 'tests/scripts/platform-credential-verification.js'));
   const { requireSignedCredentialBinding } = require(
-    path.join(cfg.repo, 'tests/scripts/canvas-credential-identity.js'));
+    path.join(cfg.repo, 'tests/scripts/platform-credential-identity.js'));
   // AuthHelpers may print a page body on failure. Keep credential-bearing helper
   // diagnostics out of the operator transcript; only explicit public receipts
   // below are emitted.

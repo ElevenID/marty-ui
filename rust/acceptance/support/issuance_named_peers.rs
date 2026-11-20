@@ -1,4 +1,4 @@
-//! Flow/Canvas acceptance renewal through the packaged binary. Only named control-plane/signing
+//! Shared platform acceptance renewal through the packaged binary. Only named control-plane/signing
 //! peers are synthetic; admission, Core assembly/encryption and delivery are real.
 use std::{
     collections::BTreeMap,
@@ -49,7 +49,6 @@ pub(super) const ENVELOPE_KEY: &str =
 pub(super) const ISSUER_SIGN_KEY: &str = "synthetic-issuance-issuer-sign-key-32-chars";
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 pub(super) const CLIENT_KEY: &str = "synthetic-base-gateway-client-key";
-pub(super) const CANVAS_CLIENT_KEY: &str = "synthetic-base-canvas-client-key";
 pub(super) const FOREIGN_CLIENT_KEY: &str = "synthetic-base-foreign-client-key";
 
 #[derive(Clone)]
@@ -61,7 +60,7 @@ pub(super) struct RemoteIssuerSigner {
     verifying_key: VerifyingKey,
 }
 
-pub(super) fn canvas_openbao_client(ca_file: &std::path::Path) -> reqwest::Client {
+pub(super) fn disposable_openbao_client(ca_file: &std::path::Path) -> reqwest::Client {
     let pem = std::fs::read(ca_file).expect("disposable OpenBao public CA");
     let certificate = reqwest::Certificate::from_pem(&pem).expect("OpenBao CA certificate");
     reqwest::Client::builder()
@@ -78,8 +77,8 @@ impl RemoteIssuerSigner {
         ca_file: &std::path::Path,
     ) -> Self {
         assert!(base_url.starts_with("https://127.0.0.1:"));
-        let client = canvas_openbao_client(ca_file);
-        let key_name = format!("canvas_issuer_{}", uuid::Uuid::new_v4().simple());
+        let client = disposable_openbao_client(ca_file);
+        let key_name = format!("acceptance_issuer_{}", uuid::Uuid::new_v4().simple());
         client
             .post(format!("{base_url}/v1/transit/keys/{key_name}"))
             .header("X-Vault-Token", root_token)
@@ -113,7 +112,7 @@ impl RemoteIssuerSigner {
         let public_bytes: [u8; 32] = STANDARD.decode(public_key).unwrap().try_into().unwrap();
         let verifying_key = VerifyingKey::from_bytes(&public_bytes).unwrap();
 
-        let policy_name = format!("canvas-issuer-{}", uuid::Uuid::new_v4().simple());
+        let policy_name = format!("acceptance-issuer-{}", uuid::Uuid::new_v4().simple());
         client
             .put(format!("{base_url}/v1/sys/policies/acl/{policy_name}"))
             .header("X-Vault-Token", root_token)
@@ -277,19 +276,12 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             let request: organization::ValidateApiKeyRequest = decode_request(&bytes);
             assert!(matches!(
                 request.api_key.as_str(),
-                CLIENT_KEY
-                    | CANVAS_CLIENT_KEY
-                    | FOREIGN_CLIENT_KEY
-                    | "synthetic-invalid-client-key"
+                CLIENT_KEY | FOREIGN_CLIENT_KEY | "synthetic-invalid-client-key"
             ));
             grpc_response(organization::ValidateApiKeyResponse {
-                valid: matches!(
-                    request.api_key.as_str(),
-                    CLIENT_KEY | CANVAS_CLIENT_KEY | FOREIGN_CLIENT_KEY
-                ),
+                valid: matches!(request.api_key.as_str(), CLIENT_KEY | FOREIGN_CLIENT_KEY),
                 api_key_id: "synthetic-base-client".into(),
                 organization_id: match request.api_key.as_str() {
-                    CANVAS_CLIENT_KEY => "org-review",
                     FOREIGN_CLIENT_KEY => "foreign-organization",
                     _ => ORGANIZATION,
                 }

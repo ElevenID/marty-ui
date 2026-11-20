@@ -9,7 +9,7 @@ import ssl
 import sys
 import threading
 
-from test_canvas_lti_https import create_loopback_certificate
+from loopback_https_fixture import create_loopback_certificate
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_CAPTURE_BYTES = 4 * MAX_BODY_BYTES

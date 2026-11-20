@@ -6,8 +6,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use http_body_util::BodyExt;
 use marty_issuance_service::{
     credential_management::{
-        CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialLifecycleAuditRecord,
-        CredentialLifecycleEvent, CredentialLifecycleEventSink, CredentialManagementPortError,
+        CredentialLifecycleAction, CredentialLifecycleAuditRecord, CredentialLifecycleEvent,
+        CredentialLifecycleEventSink, CredentialManagementPortError,
         CredentialManagementRepository, CredentialManagementService, CredentialStatusPublisher,
         ManagedCredential, ManagedCredentialStatus,
     },
@@ -169,15 +169,6 @@ impl CredentialManagementRepository for Harness {
         source.revocation_reason = credential.revocation_reason.clone();
         self.audits.lock().unwrap().push(audit.clone());
         Ok(credential.clone())
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        _credential: &ManagedCredential,
-        _action: CredentialLifecycleAction,
-        _reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        Ok(())
     }
 }
 

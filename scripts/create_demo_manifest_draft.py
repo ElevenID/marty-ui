@@ -13,7 +13,8 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2026.08.0"
+# Unbound next-edition draft only; VERSION and the public release index are unchanged.
+VERSION = "2026.08.1"
 MIP_VERSION = "0.5.0"
 POSTER_URL = f"/images/demos/{VERSION}/portfolio-draft.svg"
 POSTER_PATH = ROOT / "ui" / "public" / POSTER_URL.lstrip("/")
@@ -56,25 +57,6 @@ PRESENTATION = {
         "Renew, suspend, reinstate, and revoke while verification follows current status.",
         ["Holder", "Issuer", "Verifier"],
         ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
-    ),
-    "canvas-learning-achievement": (
-        "Portable Learning Achievement with Canvas",
-        "Turn authoritative evidence from stock Canvas into a learner-claimed Open Badge.",
-        ["Holder", "Issuer", "Administrator"],
-        [
-            "lti-1.3",
-            "openid4vci-1.0",
-            "openid4vp-1.0",
-            "dcql-1.0",
-            "sd-jwt-vc",
-            "open-badges-3.0",
-        ],
-    ),
-    "external-evidence-to-credential": (
-        "External Evidence to Credential",
-        "Normalize external evidence, evaluate policy, and issue only after governed review.",
-        ["Holder", "Issuer", "Administrator"],
-        ["openid4vci-1.0", "sd-jwt-vc"],
     ),
     "offline-facility-verification": (
         "Offline Facility Verification",
@@ -403,7 +385,7 @@ def build_manifest() -> dict[str, object]:
     return {
         "schema_version": 2,
         "stack_version": VERSION,
-        "release_name": "Rust Platform Completion",
+        "release_name": "Platform Connector Boundary",
         "mip_version": MIP_VERSION,
         "publication_state": "DRAFT",
         "coverage_state": "PARTIAL",
@@ -441,16 +423,16 @@ def build_manifest() -> dict[str, object]:
             "artifacts": [],
         },
         "release_differences": {
-            "previous_stack_version": "2026.07.0",
+            "previous_stack_version": "2026.08.0",
             "ux": [
-                "Adds a twelve-scenario release catalog, including gateway-only external admissions and beta passport simulator evidence, without removing historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
+                "Retires the provider-specific demonstration from the platform catalog while retaining generic credential journeys and historical wallet demonstrations. The proposed digital passport D-13 requires its own pinned MIP 0.6 beta release."
             ],
             "services": [
                 "Qualifies the Rust-native platform through explicit happy and denial paths."
             ],
             "wallets": ["Requires fresh wallet evidence under MIP 0.5."],
             "integrations": [
-                "Retains stock Canvas and external-evidence portability coverage while adding the Northstar public-gateway integration."
+                "External connectors submit evidence through the public Common Gateway. Provider administration and provider-specific demonstrations belong to the independently deployed connector."
             ],
             "operations": [
                 "Defers all release identity and digest binding until the aggregate beta deployment exists."
@@ -461,9 +443,12 @@ def build_manifest() -> dict[str, object]:
 
 
 def main() -> int:
-    OUTPUT_PATH.write_text(
-        json.dumps(build_manifest(), indent=2) + "\n", encoding="utf-8"
-    )
+    contents = json.dumps(build_manifest(), indent=2) + "\n"
+    if OUTPUT_PATH.exists():
+        if OUTPUT_PATH.read_text(encoding="utf-8") != contents:
+            raise ValueError("Refusing to overwrite an existing demo edition; choose a new draft version")
+    else:
+        OUTPUT_PATH.write_text(contents, encoding="utf-8")
     print(OUTPUT_PATH)
     return 0
 

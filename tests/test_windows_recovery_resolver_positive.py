@@ -18,7 +18,7 @@ from selfhost_windows_staging_recovery import RECOVERY_PHASES, failed_current_re
 @pytest.mark.parametrize('commit_owner',['replay','finish','resume','proof-failure','guard-failure',
                                       'namespace-race','pending-race','empty-pending'])
 def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault,commit_owner,
-                                                                       cap_reconciled=False):
+                                                                       cap_reconciled=False, retire_helpers=False):
     if failed_fault and commit_owner!='replay':pytest.skip('Replay integrity covered independently')
     with fixture(monkeypatch) as (root,phase,tx,outcome,path,cfg):
         model=selection.decode(Path(cfg['compose_file']).read_bytes())
@@ -33,6 +33,9 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
         attempt=root/('windows-renewal-'+'e'*32);attempt.mkdir()
         layers=selection.renewal.dependency_layers(model,roles,selection.renewal.owned_roles(model,roles))
         staged=selection._stage_configuration(cfg,'new',record,attempt,layers)
+        # Match the real expired-recovery producer's control namespace.
+        staged['native'].update(renewed='/control/windows-renewal-'+'e'*32+'/generation',
+                                token_file='/control/recovery-session-'+'e'*32+'/token')
         admission=None
         if operator_successor:
             binary=root/'operator'/'marty-deploy-linux-amd64';binary.parent.mkdir();binary.write_bytes(b'PUBLIC_NEW_OPERATOR')
@@ -97,6 +100,16 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
             receipts=partial_from_complete(receipts)
             receipts.update(cap_receipts({n:selection.digest(b) for n,b in receipts.items()},
                 staged,'e'*32,selection.digest(selection.packed(stage)),record['data_sha256']))
+            if retire_helpers:
+                import selfhost_windows_recovery_leaf_caps as caps
+                from test_windows_recovery_leaf_caps import item
+                monkeypatch.setattr(selection.renewal,'windows_mount_path_equal',lambda a,b:a==b)
+                helper_rows=[item(staged,'e'*32),item(staged,'e'*32,True)]
+                proof=selection.decode(receipts[caps.PREFIX+'intent.json'])
+                proof['failed_helper']=caps.helper_proof(helper_rows[0],staged,'e'*32,reconciled=False)
+                receipts[caps.PREFIX+'intent.json']=selection.packed(proof)
+                receipts[caps.PREFIX+'helper.json']=selection.packed(
+                    caps.helper_proof(helper_rows[1],staged,'e'*32,reconciled=True))
         for name,body in receipts.items():(attempt/name).write_bytes(body)
         with ExitStack() as held:
             values,snapshots=selection._inputs(staged,held)
@@ -148,6 +161,22 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
             guard.write_bytes(selection.packed(stage))
             failed_guard.write_bytes((failed/'intent.json').read_bytes())
             phase['active']=candidate
+            if retire_helpers:
+                from subprocess import CompletedProcess
+                removed=[]
+                context=SimpleNamespace(check=lambda **kwargs:list(helper_rows),retained_ca_readers=None)
+                docker=SimpleNamespace(prefix=['PUBLIC_DOCKER'],containers=lambda:list(helper_rows))
+                monkeypatch.setattr(selection.renewal,'Docker',lambda *args:docker)
+                monkeypatch.setattr(selection,'_inspect',lambda *args,**kwargs:{'context':context,'docker':docker})
+                def remove_helper(args,**kwargs):
+                    assert args[:2]==['PUBLIC_DOCKER','rm'] and len(args)==3
+                    helper_rows[:]=[row for row in helper_rows if row['Id']!=args[-1]]
+                    removed.append(args[-1])
+                    return CompletedProcess(args,0,(args[-1]+'\n').encode(),b'')
+                monkeypatch.setattr(selection.renewal,'run_owned_mutation',remove_helper)
+                # An activated but unsealed candidate is not enough authority.
+                with pytest.raises(ValueError):caps.retire_selected_helpers(path,journal,attempt,operator_successor=option)
+                assert removed==[]
             if commit_owner=='guard-failure':
                 failed_guard.write_bytes(b'PUBLIC_CHANGED_GUARD')
                 with pytest.raises(ValueError):finisher.finish(path,journal,attempt,operator_successor=option)
@@ -208,6 +237,12 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
             assert result['result']=='selected-guarded' and result['guards_retained']
             assert finisher.finish(path,journal,attempt,operator_successor=option)==result
             assert guard.is_file() and failed_guard.is_file() and not (journal/recovery.PENDING).exists()
+            if retire_helpers:
+                retired=caps.retire_selected_helpers(path,journal,attempt,operator_successor=option)
+                assert retired['helpers']==2 and retired['guards_retained']
+                assert removed==['d'*64,'f'*64] and not helper_rows
+                caps.require_closed_retirements(cfg)
+                assert guard.is_file() and failed_guard.is_file()
             if commit_owner=='finish':
                 prove=selection._prove
                 def fail_final_proof(*args,**kwargs):raise ValueError('PUBLIC_FINAL_PROOF_REFUSAL')
@@ -322,3 +357,9 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
 def test_cap_reconciled_history_survives_selection_and_ordinary_renewal(monkeypatch,operator_successor,commit_owner):
     test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(
         monkeypatch,operator_successor,None,commit_owner,cap_reconciled=True)
+
+
+@pytest.mark.parametrize('operator_successor',[False,True])
+def test_sealed_selection_retires_only_two_stopped_helpers_before_finalization(monkeypatch,operator_successor):
+    test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(
+        monkeypatch,operator_successor,None,'finish',cap_reconciled=True,retire_helpers=True)

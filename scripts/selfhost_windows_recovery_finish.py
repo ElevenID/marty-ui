@@ -110,8 +110,12 @@ def finish(config_path, source_dir, output_dir, *, operator_successor=None):
             initial=recovery.seed(prospective,expected,current_model,marker,stack)
             values,snapshots=selection._inputs(ordinary,stack)
             require(snapshots==selection.decode(initial['000001.intent.json'])['inputs'])
+            reader_options={}
+            if renewal.namespace_entry_exists(root/'cap-reconciliation.intent.json'):
+                from selfhost_windows_recovery_leaf_caps import retained_ca_readers
+                reader_options['retained_ca_readers']=retained_ca_readers(previous,root,stage_raw,stack)
             require(selection._prove(ordinary,'new',values,stack,
-                expected_data=records[len(records)]['data_sha256'])==records[len(records)]['data_sha256'])
+                expected_data=records[len(records)]['data_sha256'],**reader_options)==records[len(records)]['data_sha256'])
             if recovery.INTENT not in raw:selection._append(source,raw,recovery.INTENT,marker,stack)
             target=Path(marker['target_dir'])
             if not renewal.namespace_entry_exists(target):target.mkdir()
@@ -173,6 +177,8 @@ def finalize(config_path, source_dir, output_dir, *, operator_successor=None):
             require(selection.digest(cfg_raw)==intents[1]['config_file_sha256'])
             cfg=selection.decode(cfg_raw)
             require(selection.config_digest(cfg)==intents[1]['config_sha256'])
+            from selfhost_windows_recovery_leaf_caps import require_closed_retirements
+            require_closed_retirements(cfg)
             stage_raw=stack.enter_context(renewal.hold_private_input(root/'intent.json'))
             stage=selection.decode(stage_raw)
             staged=selection.decode(stack.enter_context(renewal.hold_private_input(root/'config.private.json')))

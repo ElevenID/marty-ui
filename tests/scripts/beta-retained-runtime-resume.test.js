@@ -8,13 +8,13 @@ const INFRA='188e9c3d93b18d9d6c266ff6c1459234a8c8019f4a8f775df5339228320dcbe9';
 const hex=n=>n.toString(16).padStart(64,'0');
 const ref=(path,sha256)=>({path,sha256});
 function fixture(){
- const names=['postgres','redis','openbao','keycloak',...Array.from({length:21},(_,i)=>'service-'+i),'ui-prod','docs','nginx-proxy'];
+ const names=['postgres','redis','openbao','keycloak',...require('./platform-runtime-roles').PLATFORM_RUNTIME_ROLES.filter(role=>role!=='ui-prod'),'ui-prod','docs','nginx-proxy'];
  const start=names.map((role,i)=>({role,cid:hex(i+1)}));
  const baseRef=ref('base',hex(901)),planRef=ref('plan',PLAN),sourceRef=ref('source',SOURCE),afterRef=ref('after','a84e079e4aac883e9f6afbe19c8d742d444deef70fd52c8c508d6ec1361dcb03');
  const protectedRows=Array.from({length:47},(_,i)=>({cid:hex(i+100),role:i===46?'northstar-admissions':'protected-'+i}));
  const base={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baseProfile:baseRef};
  const phases=['infrastructure','keycloak','clients','edge'];
- const groups=[names.slice(0,3),names.slice(3,4),names.slice(4,25),names.slice(25)];
+ const groups=[names.slice(0,3),names.slice(3,4),names.slice(4,24),names.slice(24)];
  const phaseResults=phases.map((_,i)=>ref('phase'+i,i===0?'22d2487cbecdaf6d3cda8057484fb0e9da5a487e7fb5400dce61beba55debf0f':hex(i+700)));
  const receipts=phases.map((phase,i)=>({state:'BETA_RETAINED_PHASE_COMPLETE',phase,planSha256:PLAN,
   sourceSha256:i===0?INFRA:SOURCE,production32Off:true,alreadyOffBeta14Off:true,northstarOff:true,demoQualified:false,
@@ -27,15 +27,15 @@ function fixture(){
  const before=Object.fromEntries([...start,...protectedRows].map(row=>[row.cid,{}]));
  const profile={...base,baseProfile:baseRef,runtimeResume:{plan:planRef,source:sourceRef,phaseResults}};
  const values={base,plan,after:before,...Object.fromEntries(receipts.map((r,i)=>['phase'+i,r]))};
- const context={boundJson:r=>values[r.path],verifyBoundFile:()=>{},expectedRuntime:()=>start.slice(0,22).map(row=>({
+ const context={boundJson:r=>values[r.path],verifyBoundFile:()=>{},expectedRuntime:()=>start.filter(row=>require('./platform-runtime-roles').PLATFORM_RUNTIME_ROLES.includes(row.role)).map(row=>({
   role:row.role,requiredContainerId:row.cid,requiredStartedAt:'2026-11-01T20:00:00Z',requiredHostPid:100,
   requiredObservation:{startedAt:'2026-11-01T20:00:00Z',hostPid:100}}))};
  return {profile,context,receipts,plan,before,start,protectedRows};
 }
-test('reviewed retained beta phases advance only the selected 22 generations',()=>{
+test('reviewed retained beta phases advance only the selected 21 platform generations',()=>{
  const f=fixture(),result=authority(f.profile,f.context);
- assert.equal(result.rows.length,22);assert.equal(result.rows[0].requiredHostPid,300);
- assert.equal(result.rows[0].requiredContainerId,f.start[0].cid);
+ assert.equal(result.rows.length,21);assert.equal(result.rows[0].requiredHostPid,304);
+ assert.equal(result.rows[0].requiredContainerId,f.start[4].cid);
  assert.equal(result.rows[0].requiredObservation.startedAt,'2026-11-01T23:00:00Z');
  const read=args=>{
   if(args[0]==='info')return JSON.stringify({ID:result.engineId});
@@ -58,6 +58,6 @@ test('missing phase, changed source, phase order and stale generation are refuse
  f.profile.runtimeResume.phaseResults[0].sha256='22d2487cbecdaf6d3cda8057484fb0e9da5a487e7fb5400dce61beba55debf0f';
  f.profile.runtimeResume.source.sha256=hex(99);
  assert.throws(()=>authority(f.profile,f.context));
- f.profile.runtimeResume.source.sha256=SOURCE;f.receipts[1].started[0].startedAt='2026-11-01T19:00:00Z';
+ f.profile.runtimeResume.source.sha256=SOURCE;f.receipts[2].started[0].startedAt='2026-11-01T19:00:00Z';
  assert.throws(()=>authority(f.profile,f.context),/generation must be newer/);
 });

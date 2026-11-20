@@ -66,8 +66,8 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     // broad legacy keys and audit readers do not gain a new write boundary.
     // External evidence admission is a separate, purpose-specific grant.
     // Neither broad legacy scopes nor admin:full may substitute for it.
-    if required_permission == "evidence:submit" {
-        return scopes.contains("evidence:submit");
+    if matches!(required_permission, "evidence:submit" | "identity:attest") {
+        return scopes.contains(required_permission);
     }
     if required_permission == "audit:ingest" {
         return scopes.contains("audit:write");
@@ -306,6 +306,23 @@ mod gateway_actor_tests {
 #[cfg(test)]
 mod external_evidence_scope_tests {
     use super::api_key_allowed;
+    #[test]
+    fn identity_attestation_scope_is_exact_and_cannot_submit_evidence_or_issue() {
+        assert!(api_key_allowed(
+            "identity:attest",
+            &["identity:attest".into()]
+        ));
+        for scope in ["evidence:submit", "identity:*", "admin:full", "*"] {
+            assert!(!api_key_allowed("identity:attest", &[scope.into()]));
+        }
+        for permission in [
+            "evidence:submit",
+            "issuance:initiate",
+            "application:approve",
+        ] {
+            assert!(!api_key_allowed(permission, &["identity:attest".into()]));
+        }
+    }
 
     #[test]
     fn external_evidence_submission_requires_the_exact_dedicated_scope() {

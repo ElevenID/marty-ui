@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST_SERVICES = {
     "applicant": "marty-applicant",
     "auth": "marty-auth",
-    "canvas_sync_worker": "marty-canvas-sync-worker",
     "compliance_profile": "marty-compliance-profile",
     "credential_template": "marty-credential-template",
     "deployment_profile": "marty-deployment-profile",
@@ -39,7 +38,7 @@ UNROUTED_RUST_BINARIES = {
     "marty-installer-organization-api-key",
 }
 PROFILE_RUST_BINARIES = {
-    "marty-canvas-sandbox", "marty-passport-keyless-edge",
+    "marty-passport-keyless-edge",
     "marty-passport-tls-bootstrap", "marty-keyless-grpc-bridge",
     "marty-acme-http01",
 }

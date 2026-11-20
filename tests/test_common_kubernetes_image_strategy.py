@@ -163,17 +163,18 @@ def test_registry_builder_rejects_catalog_failure_before_docker(tmp_path, failur
     assert not calls.exists()
 
 
-def test_kubernetes_worker_uses_catalog_native_per_service_image():
+def test_kubernetes_platform_service_uses_catalog_native_per_service_image():
     catalog = CatalogView.load(REPO_ROOT)
-    worker = "canvas-sync-worker"
+    worker = "notification"
     assert worker in catalog.services_for_group("app")
     assert catalog.service_field(worker, "k8s_deployment") == worker
     assert catalog.service_field(worker, "image_name") == worker
     assert catalog.service_field(worker, "dockerfile") == "services/Dockerfile"
-    assert catalog.service_field(worker, "service_name_env") == "canvas_sync_worker"
+    assert catalog.service_field(worker, "service_name_env") == "notification"
     block = k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")[worker]
     assert f"image: ${{OCIR_REGISTRY}}/marty-ui/{worker}:${{IMAGE_TAG}}" in block
-    assert 'command: ["/usr/local/bin/marty-canvas-sync-worker"]' in block
+    assert "canvas-sync-worker" not in catalog.services_for_group("app")
+    assert "canvas-sync-worker" not in k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")
     assert "image: ${MARTY_ISSUANCE_IMAGE}" not in block
     assert "/marty-ui/issuance:${IMAGE_TAG}" not in block
 

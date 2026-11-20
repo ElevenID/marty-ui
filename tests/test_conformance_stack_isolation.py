@@ -586,15 +586,21 @@ def test_didcomm_authcrypt_policy_is_mounted_only_into_native_issuance() -> None
 
 
 def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
-    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
-    issuance = isolation.split("  issuance:\n", 1)[1].split(
-        "  canvas-sync-worker:\n", 1
-    )[0]
+    class ComposeOverlayLoader(yaml.SafeLoader):
+        pass
 
-    assert '"host.docker.internal:host-gateway"' in issuance
-    assert "DIDCOMM_TLS_CA_FILE:" in issuance
-    assert 'DIDCOMM_ALLOW_PRIVATE_IPS: "true"' in issuance
-    assert "didcomm-conformance-root-ca.pem:ro" in issuance
+    # Reset tags on other fields in this overlay do not affect these assertions.
+    ComposeOverlayLoader.add_constructor("!reset", lambda loader, node: None)
+    overlay = yaml.load(
+        (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8"),
+        Loader=ComposeOverlayLoader,
+    )
+    issuance = overlay["services"]["issuance"]
+    ca_path = "/run/secrets/didcomm-conformance-root-ca.pem"
+    assert "host.docker.internal:host-gateway" in issuance["extra_hosts"]
+    assert issuance["environment"]["DIDCOMM_TLS_CA_FILE"] == ca_path
+    assert issuance["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "true"
+    assert any(mount.endswith(f":{ca_path}:ro") for mount in issuance["volumes"])
     for production_file in (
         "docker-compose.base.yml",
         "docker-compose.selfhost.prod.yml",

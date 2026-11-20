@@ -124,3 +124,73 @@ def test_actual_production_entrypoint_scoped_file_contract(tmp_path, preserve, f
             assert b'inline or shared OpenBao credentials are forbidden' in logs
     finally:
         subprocess.run(['docker', 'rm', '--force', name], capture_output=True, check=True)
+
+
+@pytest.mark.parametrize('setting', ['CANVAS_PORTABLE_INTEGRATION_ENABLED',
+    'CANVAS_NEW_SETTING', 'ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE',
+    'SIGN_GRANT_MINT_ISSUANCE_CANVAS_TOKEN', 'KEYCLOAK_SEED_CANVAS_ADMIN_USER'])
+@pytest.mark.parametrize('value', ['', 'false', 'true'])
+def test_simulator_rejects_retired_host_configuration_before_observation(monkeypatch, setting, value):
+    monkeypatch.setenv(setting, value)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Retired input reached runtime observation')
+    with pytest.raises(RuntimeError, match='Retired connector configuration'):
+        MODULE.prepare(None, None, None, None, {}, None, forbidden, None)
+
+
+@pytest.mark.parametrize('role', ['canvas-sync-worker', 'canvas_sync_worker'])
+def test_simulator_rejects_retired_role_before_proof_or_observation(role):
+    with pytest.raises(RuntimeError, match='Retired connector role'):
+        MODULE.prepare(None, None, None, None, {role: 'image'}, None, None, None)
+
+
+@pytest.mark.parametrize('stage', ['runtime', 'compose'])
+@pytest.mark.parametrize('value', ['', 'false'])
+def test_simulator_rejects_retired_runtime_or_env_file_before_overlay(tmp_path, monkeypatch, stage, value):
+    import hashlib
+
+    current, prior, images = phase()
+    for container in current.values():
+        container['Config'] = {'Env': []}
+    root = tmp_path / 'source'
+    root.mkdir()
+    (root / 'VERSION').write_text('2026.08.0')
+    compose = root / 'compose.json'
+    compose.write_text('{}')
+    env_file = tmp_path / 'private.env'
+    env_file.write_text('UNRELATED=synthetic')
+    signer = current['passport-callback-signer']
+    signer['Config'] = {'Env': ['BAO_TOKEN_FILE=/bao/passport-callback/token'], 'Labels': {
+        'com.docker.compose.project.config_files': str(compose),
+        'com.docker.compose.project.environment_file': str(env_file),
+    }}
+    receipt = tmp_path / 'failed.json'
+    receipt.write_text('{}')
+    current['keycloak']['Image'] = 'keycloak-image'
+    source = {'marty_ui_sha': 'a' * 40, 'release_version': 'synthetic',
+              'component_revisions': [{'component': 'marty-ui', 'revision': 'b' * 40}]}
+    failure = dict(scope='ACTUAL_R31_POST_MIGRATION_CALLBACK_STARTUP_FAILURE',
+        sourceId=source['marty_ui_sha'], sourceRevision='b' * 40, operatorExitCode=1,
+        betaDeployed=False, backupPhase='maintenance_quiesced', backupFilesHashVerified=7,
+        actualError='inline or shared OpenBao credentials are forbidden', proofHashes={},
+        immutableFailedRolloutReceipt=str(receipt),
+        failedRolloutReceiptSha256=hashlib.sha256(receipt.read_bytes()).hexdigest(),
+        observedContainers=[{'service': role, 'id': row['Id'], 'image': row.get('Image')}
+                            for role, row in current.items()])
+    proof = tmp_path / 'proof.json'
+    proof.write_text(json.dumps(failure))
+    if stage == 'runtime':
+        current['app-0']['Config']['Env'] = ['CANVAS_PORTABLE_INTEGRATION_ENABLED=' + value]
+    rendered = {'services': {'passport-callback-signer': {'environment': {
+        'CANVAS_CREDENTIALS_API_TOKEN_FILE': value}}}}
+    monkeypatch.setattr(MODULE.subprocess, 'run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args, 0, json.dumps(rendered).encode()))
+    def forbidden(*args, **kwargs):
+        pytest.fail('Retired configuration reached image/runtime mutation preparation')
+    monkeypatch.setattr(MODULE, 'docker', forbidden)
+    artifacts = tmp_path / 'artifacts'
+    artifacts.mkdir()
+    with pytest.raises(RuntimeError, match='Retired connector configuration'):
+        MODULE.prepare(root, artifacts, tmp_path / 'runtime', source, images, prior,
+                       lambda role: current[role], proof)
+    assert list(artifacts.iterdir()) == []

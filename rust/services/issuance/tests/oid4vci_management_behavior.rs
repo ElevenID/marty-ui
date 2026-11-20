@@ -11,8 +11,8 @@ use axum::{
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     credential_management::{
-        CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialLifecycleAuditRecord,
-        CredentialLifecycleEvent, CredentialLifecycleEventSink, CredentialManagementPortError,
+        CredentialLifecycleAction, CredentialLifecycleAuditRecord, CredentialLifecycleEvent,
+        CredentialLifecycleEventSink, CredentialManagementPortError,
         CredentialManagementRepository, CredentialManagementService, CredentialStatusPublisher,
         ManagedCredential, ManagedCredentialStatus,
     },
@@ -159,15 +159,6 @@ impl CredentialManagementRepository for UnusedLifecycleRepository {
         _audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
         Err(CredentialManagementPortError("unused".to_owned()))
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        _credential: &ManagedCredential,
-        _action: CredentialLifecycleAction,
-        _reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        Err(CredentialManagementPortError("unused".to_owned()).into())
     }
 }
 
@@ -686,7 +677,6 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
 
 struct RevocationLifecycleRepository {
     order: Arc<Mutex<Vec<&'static str>>>,
-    reasons: Arc<Mutex<Vec<String>>>,
     credential: ManagedCredential,
 }
 
@@ -708,20 +698,6 @@ impl CredentialManagementRepository for RevocationLifecycleRepository {
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
         self.order.lock().unwrap().push("credential:persist");
         Ok(credential.clone())
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        _credential: &ManagedCredential,
-        _action: CredentialLifecycleAction,
-        reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        self.order.lock().unwrap().push("canvas:sync");
-        self.reasons
-            .lock()
-            .unwrap()
-            .push(format!("canvas:{}", reason.unwrap_or("<none>")));
-        Ok(())
     }
 }
 
@@ -797,7 +773,6 @@ fn revocation_app_with_credential(
     let lifecycle = CredentialManagementService::new(
         Arc::new(RevocationLifecycleRepository {
             order: order.clone(),
-            reasons: reasons.clone(),
             credential: ManagedCredential {
                 id: "credential-a".to_owned(),
                 transaction_id: "tx-a".to_owned(),
@@ -914,7 +889,6 @@ async fn revocation_orders_canonical_and_local_credential_before_transaction_com
             "credential:get",
             "canonical:publish",
             "credential:persist",
-            "canvas:sync",
             "event:emit",
             "transaction:save"
         ]
@@ -948,7 +922,6 @@ async fn revocation_rechecks_a_credential_finalized_during_the_transaction_fence
             "credential:get",
             "canonical:publish",
             "credential:persist",
-            "canvas:sync",
             "event:emit",
         ]
     );
@@ -1016,11 +989,7 @@ async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
     assert_eq!(body["revocation_reason"], "original reason");
     assert_eq!(
         *reasons.lock().unwrap(),
-        vec![
-            "canonical:original reason",
-            "canvas:original reason",
-            "transaction:original reason"
-        ]
+        vec!["canonical:original reason", "transaction:original reason"]
     );
     assert_eq!(
         *order.lock().unwrap(),
@@ -1029,7 +998,6 @@ async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
             "credential-binding:get",
             "credential:get",
             "canonical:publish",
-            "canvas:sync",
             "transaction:save"
         ]
     );

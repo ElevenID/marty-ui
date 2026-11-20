@@ -9,7 +9,6 @@ import {
   loadExistingCredentialApplications,
   mapCredentialTemplateToCatalogItem,
   resolveCredentialApplicationPath,
-  scopeCredentialCatalogItemsForCanvasLaunch,
 } from './credentialCatalog';
 
 describe('credentialCatalog helpers', () => {
@@ -138,20 +137,7 @@ describe('credentialCatalog helpers', () => {
     ]);
   });
 
-  it('scopes catalog items to Canvas launch credential templates when present', () => {
-    const credentials = [
-      { id: 'cfg-1', name: 'Canvas Credential' },
-      { id: 'cfg-2', name: 'General Credential' },
-    ];
 
-    expect(scopeCredentialCatalogItemsForCanvasLaunch(credentials, {
-      credentialTemplateIds: ['cfg-1'],
-    })).toEqual([
-      { id: 'cfg-1', name: 'Canvas Credential' },
-    ]);
-
-    expect(scopeCredentialCatalogItemsForCanvasLaunch(credentials)).toEqual(credentials);
-  });
 
   it('builds serializable navigation payloads', () => {
     const payload = buildCredentialApplicationNavigationState({
@@ -200,34 +186,7 @@ describe('credentialCatalog helpers', () => {
     });
   });
 
-  it('preserves Canvas launch context when navigating from the scoped catalog', () => {
-    const payload = buildCredentialApplicationNavigationState({
-      id: 'cfg-1',
-      name: 'Canvas Credential',
-      icon: () => null,
-    }, {
-      currentPathname: '/console/applicant/catalog',
-      canvasLtiContext: {
-        state: 'state-1',
-        canvas_program_binding_id: 'binding-1',
-        canvas_platform_id: 'platform-1',
-        application_template_id: 'app-tpl-1',
-        credential_template_id: 'cfg-1',
-      },
-      canvasLtiSession: { state: 'state-1' },
-    });
 
-    expect(payload).toEqual({
-      path: '/console/applicant/apply/cfg-1?canvas_lti_state=state-1&canvas_program_binding_id=binding-1&canvas_platform_id=platform-1&application_template_id=app-tpl-1&credential_template_id=cfg-1',
-      state: {
-        credential: {
-          id: 'cfg-1',
-          name: 'Canvas Credential',
-        },
-        canvasLtiSession: { state: 'state-1' },
-      },
-    });
-  });
 
   it('resolves direct application paths for console and preview contexts', () => {
     expect(resolveCredentialApplicationPath({

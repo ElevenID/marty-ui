@@ -576,6 +576,26 @@ pub fn operation(context: &Value) -> Result<Value> {
     }
 }
 
+#[cfg(test)]
+mod current_inventory_tests {
+    use super::*;
+
+    #[test]
+    fn application_generation_inventory_has_only_the_retained_platform_inputs() {
+        let (required, runtime, tokens) = application_inventory();
+        assert_eq!(required.len(), 51);
+        assert_eq!(runtime.len(), 9);
+        assert_eq!(tokens.len(), 32);
+        assert!(runtime.is_subset(&tokens));
+        assert!(tokens.is_subset(&required));
+        assert!(!required
+            .iter()
+            .any(|name| name.contains("canvas") || name.contains("readiness")));
+        assert!(!runtime.contains("openbao_bootstrap_token"));
+        assert!(!runtime.contains("openbao_service_token"));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -677,9 +697,9 @@ mod tests {
         let replacements = private_test_directory(root.path(), "inputs");
         let output = private_test_directory(root.path(), "candidate");
         let (required, runtime, tokens) = application_inventory();
-        assert_eq!(required.len(), 53);
-        assert_eq!(runtime.len(), 11);
-        assert_eq!(tokens.len(), 34);
+        assert_eq!(required.len(), 51);
+        assert_eq!(runtime.len(), 9);
+        assert_eq!(tokens.len(), 32);
         for (index, name) in required.iter().enumerate() {
             let (value, mode) = if tokens.contains(name) {
                 (format!("synthetic-active-token-{name}"), 0o600)
@@ -819,7 +839,7 @@ mod tests {
                 "candidate": fixture.output.to_str().unwrap(),
             }))
             .unwrap(),
-            json!([before.len(), 11])
+            json!([before.len(), 9])
         );
         assert!(verify(&fixture.current, &fixture.output, false, false).is_err());
         assert!(
@@ -903,7 +923,7 @@ mod tests {
         fs::remove_file(fixture.output.join("unexpected_file")).unwrap();
         assert_eq!(
             verify_application(&fixture.current, &fixture.output).unwrap(),
-            (before.len(), 11),
+            (before.len(), 9),
         );
         assert_eq!(snapshot(&fixture.current), before);
         assert_eq!(snapshot(&fixture.output), candidate);
@@ -1155,7 +1175,7 @@ mod tests {
         put(&fixture.current, first, &before[first].0, before[first].1);
         assert_eq!(
             verify_application(&fixture.current, &fixture.output).unwrap(),
-            (before.len(), 11),
+            (before.len(), 9),
         );
         assert_eq!(snapshot(&fixture.current), before);
     }

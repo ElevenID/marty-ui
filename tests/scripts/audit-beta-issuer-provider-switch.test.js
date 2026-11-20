@@ -534,19 +534,19 @@ test('restoration permits only the exact newly-created non-exportable key record
 
 test('D02 admin retirement reuses actual server denial and private custody before reporting closure',async t=>{
  const {retireProviderAdminSession}=require('./audit-beta-issuer-provider-switch');
- const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+ const {createPlatformCaptureCustody}=require('./platform-session-custody');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'d02-session-source-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const cookies=[{name:'session',value:'SOURCE_ONLY_COOKIE'}];let logout=false;
  const context={cookies:async()=>cookies,request:{post:async(url,opts)=>{assert.equal(url,'https://beta.elevenidllc.com/v1/auth/logout');assert.equal(opts.maxRedirects,0);logout=true;return {status:()=>302};},get:async(url,opts)=>{assert(logout);assert.equal(opts.headers.Cookie,'session=SOURCE_ONLY_COOKIE');return {status:()=>200,json:async()=>({authenticated:false,user:null})};}}};
- const proof=await retireProviderAdminSession(context,createCanvasCaptureCustody('d02-source-11111111',root));
+ const proof=await retireProviderAdminSession(context,createPlatformCaptureCustody('d02-source-11111111',root));
  assert.equal(proof.authenticatedSessionCreated,true);assert.equal(proof.oldCookieAuthenticated,false);assert.equal(proof.privateCookieRetired,true);assert.equal(JSON.parse(fs.readFileSync(path.join(root,'d02-source-11111111.custody.json'))).state,'RETIRED');assert(!fs.existsSync(path.join(root,'d02-source-11111111-betaAdminSession.json')));
 });
 test('D02 context close or unsuccessful old-cookie denial cannot fabricate session retirement',async t=>{
  const {retireProviderAdminSession}=require('./audit-beta-issuer-provider-switch');
- const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+ const {createPlatformCaptureCustody}=require('./platform-session-custody');
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'d02-session-denied-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const context={cookies:async()=>[{name:'session',value:'SOURCE_ONLY_COOKIE'}],request:{post:async()=>({status:()=>302}),get:async()=>({status:()=>200,json:async()=>({authenticated:true,user:{id:'SOURCE_ONLY'}})})}};
- await assert.rejects(retireProviderAdminSession(context,createCanvasCaptureCustody('d02-source-22222222',root)));assert(fs.existsSync(path.join(root,'d02-source-22222222-betaAdminSession.json')));assert.equal(JSON.parse(fs.readFileSync(path.join(root,'d02-source-22222222.custody.json'))).state,'OPEN');
+ await assert.rejects(retireProviderAdminSession(context,createPlatformCaptureCustody('d02-source-22222222',root)));assert(fs.existsSync(path.join(root,'d02-source-22222222-betaAdminSession.json')));assert.equal(JSON.parse(fs.readFileSync(path.join(root,'d02-source-22222222.custody.json'))).state,'OPEN');
  const absent=await retireProviderAdminSession({cookies:async()=>[]},{retire:()=>true});assert.equal(absent.authenticatedSessionCreated,false);assert.equal(absent.oldCookieAuthenticated,null);
 });
 

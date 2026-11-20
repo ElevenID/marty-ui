@@ -9,7 +9,7 @@ const {GRANT}=require('./beta-membership-support-contract');
 const {closeControlSession}=require('./verify-beta-credential-login');
 const {acquireWalletSession}=require('./demo-wallet-session');
 const {createDemoLiveEvidence,applyLocalNativeReadiness}=require('./demo-live-evidence');
-const {createCanvasCaptureCustody,retireCanvasBetaSession}=require('./run-canvas-oss-standard-contract');
+const {createPlatformCaptureCustody,retirePlatformSession}=require('./platform-session-custody');
 const {requireJson}=require('./beta-demo-resource-helpers');
 const digest=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 async function main(env=process.env){
@@ -33,14 +33,14 @@ async function main(env=process.env){
  const contexts=[],holders=[],flows=[];
  async function context(kind){const c=await browser.newContext();const row={context:c,kind,retired:false};
   contexts.push(row);if(kind==='beta'){
-   row.custody=createCanvasCaptureCustody(`${report.runId}-beta-${contexts.length}`,privateDirectory);
+   row.custody=createPlatformCaptureCustody(`${report.runId}-beta-${contexts.length}`,privateDirectory);
    await c.addInitScript(()=>Object.defineProperty(globalThis,'DigitalCredential',{value:undefined,configurable:false}));
   }return row;}
  async function page(row){const p=await row.context.newPage();evidence.bindPage(p);return p;}
  async function retire(row){if(row.retired)return;
   const current=await support.authMe(row.context,settings.origin);
   if((await row.context.cookies(settings.origin)).length){
-   row.retirement=await retireCanvasBetaSession(row.context,row.custody);
+   row.retirement=await retirePlatformSession(row.context,row.custody);
   }else {assert.equal(current.authenticated,false,'Authenticated session lost custody');row.retirement={neverAuthenticated:true};}
   row.custody.retire();row.retired=true;
  }

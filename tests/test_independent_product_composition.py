@@ -92,7 +92,7 @@ def test_actual_source_server_dag_loses_only_console_and_tunnel_dependencies(
     result = MODULE.server_composition(base, package("marty-server", "2.3.4"))
     assert base == original
     assert set(result["services"]) == set(base["services"]) - MODULE.REMOVED_SERVICES
-    assert len(result["services"]) == 28
+    assert len(result["services"]) == 27
     assert (
         result["services"]["edge"]["environment"]["SELFHOST_CONSOLE_ENABLED"] == "false"
     )
@@ -120,7 +120,7 @@ def test_actual_source_server_dag_loses_only_console_and_tunnel_dependencies(
             )
             assert service["environment"]["MARTY_RELEASE_VERSION"] == "2.3.4"
             assert service["environment"]["MARTY_UI_SHA"] == "a" * 40
-    assert "canvas-sync-worker" in result["services"]
+    assert "canvas-sync-worker" not in result["services"]
     assert "google_analytics_measurement_id" not in result["secrets"]
     assert "google_site_verification" not in result["secrets"]
     assert "cloudflare_tunnel_token" not in result["secrets"]
@@ -442,3 +442,12 @@ def test_archive_never_overwrites_outputs_or_archives_itself(tmp_path):
         MODULE.PLAN["write_archive"](bundle, output)
     with pytest.raises(ValueError, match="outside the bundle"):
         MODULE.PLAN["write_archive"](bundle, bundle / "self.tar.gz")
+
+
+@pytest.mark.parametrize("worker", ["canvas-sync-worker", "canvas_sync_worker"])
+def test_server_rejects_retired_worker_without_mutating_input(worker):
+    base = {"services": {name: {} for name in ("edge", "gateway", "auth", "keycloak", "flow", worker)}}
+    original = copy.deepcopy(base)
+    with pytest.raises(ValueError, match="retired provider worker"):
+        MODULE.server_composition(base, package("marty-server"))
+    assert base == original

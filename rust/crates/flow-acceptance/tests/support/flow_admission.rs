@@ -350,7 +350,11 @@ pub(super) async fn run(database_url: &str) {
         "../../../../../contracts/issuance-initiation.json"
     ))
     .unwrap();
-    let vector = &contract["idempotency"]["vector"];
+    let wallet_vector: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/issuance-initiation-wallet-vector.json"
+    ))
+    .unwrap();
+    let vector = &wallet_vector;
     let body = &vector["request"];
     let key = vector["key"].as_str().unwrap();
     assert_eq!(

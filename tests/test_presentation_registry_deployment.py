@@ -7,7 +7,7 @@ import unittest
 
 import yaml
 
-from scripts.test_canvas_worker_compose_render import render
+from scripts.compose_config_model import render
 
 ROOT = Path(__file__).resolve().parents[1]
 

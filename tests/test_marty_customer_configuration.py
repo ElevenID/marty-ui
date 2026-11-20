@@ -212,7 +212,6 @@ def test_advanced_endpoints_and_retained_issuer_identity_remain_customizable(tmp
     values = installation_values()
     values["config"] = {
         "ISSUER_BASE_URL": "https://issuer.canyon-skills.example:9443",
-        "CANVAS_OAUTH_COMPLETION_REDIRECT_URL": "https://learning.canyon-skills.example/complete",
         "MARTY_ISSUER_DID": "did:web:previous.canyon-skills.example:orgs:academy",
         "OID4VP_ISSUER_DID": "did:web:previous.canyon-skills.example:orgs:academy",
         "CREDENTIAL_LOGIN_ISSUER_DID": "did:web:previous.canyon-skills.example:orgs:academy",

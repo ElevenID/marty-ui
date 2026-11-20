@@ -386,6 +386,20 @@ describe('DemoPages', () => {
     expect(screen.getByText(/Video sha256:/)).toHaveTextContent(`Video sha256:${'e'.repeat(64)}`);
   });
 
+  it.each([['canvas-learning-achievement','D-07'],['external-evidence-to-credential','D-08']])('settles retired route %s without rendering its media', async (slug,demo_id) => {
+    mockLoadManifest.mockResolvedValue({
+      ...manifest,
+      scenarios: [{ ...scenarios[0], slug, demo_id }],
+    });
+    renderWithRouter(
+      <Routes><Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} /></Routes>,
+      { initialEntries: [`/demos/2026.07.0/${slug}`] },
+    );
+    expect(await screen.findByText(/This scenario is not part of ElevenID LLC/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /YouTube/ })).not.toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
+  });
+
   it('redirects latest scenario links only to an approved ElevenID LLC release', async () => {
     mockLoadIndex.mockResolvedValue({ ...index, latest_approved_stack_version: '2026.07.0' });
 

@@ -18,17 +18,14 @@ use crate::{
         derive_applicant_identifier, ApplicationApproval, ApplicationCreate,
         ApplicationDomainError, ApplicationEvidenceSummaryResponse, ApplicationRecord,
         ApplicationRejection, ApplicationStatus, EvidenceFactRecord, EvidenceFactResponse,
-        EvidenceReconciliationRequest, EvidenceReconciliationResult, EvidenceSubmission,
-        ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse, IssuanceEventRecord,
+        EvidenceSubmission, ExternalEvidenceApiCheckRequest, ExternalEvidenceApiCheckResponse,
+        IssuanceEventRecord,
     },
     internal_application_evidence::{
         InternalApplicationEvidenceCoordinator, InternalApplicationEvidenceError,
     },
     internal_application_offer::{
         InternalApplicationOfferCoordinator, InternalApplicationOfferError, IssuanceOfferResponse,
-    },
-    internal_application_reconciliation::{
-        EvidenceReconciliationError, InternalApplicationReconciler,
     },
     internal_external_evidence::find_external_api_requirement,
     management_security::ManagementSecurity,
@@ -45,6 +42,8 @@ pub enum InternalApplicationRepositoryError {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum InternalApplicationApprovalError {
+    #[error("Application integration context is unsupported")]
+    UnsupportedIntegrationContext,
     #[error("Application approval is temporarily unavailable")]
     Unavailable,
     #[error("Credential Template validation is unavailable.")]
@@ -63,10 +62,6 @@ pub enum InternalApplicationApprovalError {
     RevocationProfileInactive,
     #[error("Issuer signing context is unavailable.")]
     IssuerContextUnavailable,
-    #[error("Canvas application is not ready for approval")]
-    CanvasNotReady,
-    #[error("Canvas application is not ready for issuance")]
-    CanvasOfferNotReady,
     #[error("Application lifecycle changed during approval")]
     ConcurrentChange,
 }
@@ -179,7 +174,6 @@ pub struct InternalApplicationService {
     approver: Option<Arc<dyn InternalApplicationApprover>>,
     offers: Option<Arc<dyn InternalApplicationOfferCoordinator>>,
     evidence: Option<Arc<dyn InternalApplicationEvidenceCoordinator>>,
-    reconciler: Option<Arc<dyn InternalApplicationReconciler>>,
     security: ManagementSecurity,
 }
 
@@ -191,7 +185,6 @@ impl std::fmt::Debug for InternalApplicationService {
             .field("approval_configured", &self.approver.is_some())
             .field("offers_configured", &self.offers.is_some())
             .field("evidence_configured", &self.evidence.is_some())
-            .field("reconciliation_configured", &self.reconciler.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -211,7 +204,6 @@ impl InternalApplicationService {
             approver: None,
             offers: None,
             evidence: None,
-            reconciler: None,
             security: ManagementSecurity::new(management_api_key),
         }
     }
@@ -234,12 +226,6 @@ impl InternalApplicationService {
         evidence: Arc<dyn InternalApplicationEvidenceCoordinator>,
     ) -> Self {
         self.evidence = Some(evidence);
-        self
-    }
-
-    #[must_use]
-    pub fn with_reconciler(mut self, reconciler: Arc<dyn InternalApplicationReconciler>) -> Self {
-        self.reconciler = Some(reconciler);
         self
     }
 
@@ -400,7 +386,6 @@ impl InternalApplicationService {
         let policy_set_id = policy_decision
             .as_ref()
             .and_then(|policy| string_member(policy, "policy_set_id"));
-        let canvas = object_member(&application.integration_context, "canvas");
         Ok(ApplicationEvidenceSummaryResponse {
             application_id: application.id,
             organization_id: application.organization_id,
@@ -410,7 +395,6 @@ impl InternalApplicationService {
             policy_source,
             policy_set_id,
             issuance_transaction_id: application.issuance_transaction_id,
-            canvas,
             available_api_checks: template
                 .as_ref()
                 .map(available_external_api_checks)
@@ -604,57 +588,6 @@ impl InternalApplicationService {
             .map_err(Into::into)
     }
 
-    /// Only a validated, expiring Canvas session can construct this authority.
-    /// Reload canonical state; neither the browser nor an applicant-store copy
-    /// selects the application, tenant, subject, or template.
-    pub(crate) async fn canvas_claim(
-        &self,
-        authority: &crate::canvas_lti_claim::CanvasClaimAuthority,
-        generate: bool,
-    ) -> Result<crate::canvas_lti_claim::CanvasClaimResponse, InternalApplicationServiceError> {
-        let application = self
-            .load_managed(authority.application_id(), authority.organization_id())
-            .await?;
-        if !authority.matches(&application) {
-            return Err(InternalApplicationServiceError::ApplicationNotFound);
-        }
-        let mut response = crate::canvas_lti_claim::CanvasClaimResponse {
-            id: application.id.clone(),
-            organization_id: application.organization_id.clone(),
-            claim_state: "BLOCKED",
-            offer: None,
-        };
-        if application
-            .credential_id
-            .as_deref()
-            .is_some_and(|id| !id.trim().is_empty())
-        {
-            response.claim_state = "CLAIMED";
-        } else if generate {
-            let offer = self.generate_offer_for_application(&application).await?;
-            response.claim_state = "OFFER_READY";
-            response.offer = Some(offer);
-        } else if application.status == ApplicationStatus::Approved {
-            match self.get_offer_for_application(&application).await {
-                Ok(offer) => {
-                    response.claim_state = if offer.status == "expired" {
-                        "EXPIRED"
-                    } else {
-                        "OFFER_READY"
-                    };
-                    response.offer = Some(offer);
-                }
-                Err(InternalApplicationServiceError::Offer(
-                    InternalApplicationOfferError::MissingTransactionBinding,
-                )) => {
-                    response.claim_state = "READY";
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(response)
-    }
-
     pub async fn run_external_evidence_api_check(
         &self,
         api_key: Option<&str>,
@@ -690,68 +623,6 @@ impl InternalApplicationService {
                 crate::internal_application_evidence::InternalApplicationEvidenceRepositoryError::Unavailable,
             ))?
             .run_external_check(application, template, requirement, request)
-            .await
-            .map_err(Into::into)
-    }
-
-    pub async fn reconcile_evidence(
-        &self,
-        api_key: Option<&str>,
-        trusted_organization: Option<&str>,
-        request: EvidenceReconciliationRequest,
-    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
-        self.security.authorize(api_key)?;
-        let trusted_organization = required_organization(trusted_organization)?;
-        let organization_id = request.organization_id.trim();
-        self.security
-            .require_organization(Some(trusted_organization), organization_id, true)?;
-        if let Some(application_id) = request
-            .application_id
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            self.load_managed(application_id, trusted_organization)
-                .await?;
-        }
-        self.reconciler
-            .as_ref()
-            .ok_or(EvidenceReconciliationError::Repository(
-                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
-            ))?
-            .reconcile(
-                organization_id,
-                request.application_id.as_deref().filter(|value| !value.is_empty()),
-                reconciliation_limit(request.limit),
-                request.dry_run,
-                request.issue_on_permit,
-            )
-            .await
-            .map_err(Into::into)
-    }
-
-    pub async fn evidence_reconciliation_report(
-        &self,
-        api_key: Option<&str>,
-        trusted_organization: Option<&str>,
-        organization_id: &str,
-        limit: i64,
-    ) -> Result<EvidenceReconciliationResult, InternalApplicationServiceError> {
-        self.security.authorize(api_key)?;
-        let organization_id = organization_id.trim();
-        self.security
-            .require_organization(trusted_organization, organization_id, true)?;
-        self.reconciler
-            .as_ref()
-            .ok_or(EvidenceReconciliationError::Repository(
-                crate::internal_application_reconciliation::EvidenceReconciliationRepositoryError::Unavailable,
-            ))?
-            .reconcile(
-                organization_id,
-                None,
-                reconciliation_limit(limit),
-                true,
-                true,
-            )
             .await
             .map_err(Into::into)
     }
@@ -857,8 +728,6 @@ pub enum InternalApplicationServiceError {
     #[error(transparent)]
     Evidence(#[from] InternalApplicationEvidenceError),
     #[error(transparent)]
-    Reconciliation(#[from] EvidenceReconciliationError),
-    #[error(transparent)]
     Domain(#[from] ApplicationDomainError),
     #[error("Invalid application status")]
     InvalidStatus,
@@ -900,10 +769,6 @@ fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadErr
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or(TransactionReadError::TrustedOrganizationRequired)
-}
-
-fn reconciliation_limit(limit: i64) -> usize {
-    limit.clamp(1, 1000) as usize
 }
 
 #[cfg(test)]

@@ -210,14 +210,6 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
         | "ORGANIZATION_CREATION_ENABLED"
         | "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER"
         | "CREDENTIAL_LOGIN_CREATE_USERS"
-        | "CANVAS_PORTABLE_INTEGRATION_ENABLED"
-        | "CANVAS_MIRROR_WORKER_ENABLED"
-        | "CANVAS_ALLOW_PRIVATE_BASE_URLS"
-        | "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS"
-        | "CANVAS_CREDENTIALS_RECIPIENT_HASHED"
-        | "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS"
-        | "CANVAS_MIRROR_WORKER_RETRY_FAILED"
-        | "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP"
         | "DID_PUBLIC_FALLBACK_ENABLED"
         | "PASSPORT_NATIVE_HTTP_ENABLED"
         | "PASSPORT_NATIVE_GATEWAY_ENABLED"
@@ -234,31 +226,9 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
         "ISSUANCE_OFFER_TTL_MINUTES" | "ISSUANCE_AUTH_SESSION_TTL_MINUTES" => {
             number(value, key, 1, 525_600)
         }
-        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS" => number(value, key, 1, 20),
-        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS"
-        | "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS"
-        | "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS"
-        | "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS"
-        | "CANVAS_SYNC_WORKER_LEASE_SECONDS"
-        | "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS"
-        | "CANVAS_SYNC_WORKER_POLL_SECONDS" => number(value, key, 1, 86_400),
-        "CANVAS_MIRROR_WORKER_BATCH_LIMIT"
-        | "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS"
-        | "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS"
-        | "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE"
-        | "CANVAS_BACKGROUND_ROSTER_MAX_SIZE"
-        | "CANVAS_SYNC_WORKER_BATCH_SIZE"
-        | "CANVAS_SYNC_SCHEDULE_LIMIT"
-        | "CANVAS_OAUTH_REVOCATION_BATCH_SIZE" => number(value, key, 1, 1_000_000),
-        "UI_ADDITIONAL_BASE_URLS"
-        | "CANVAS_PRIVATE_ORIGIN_ALLOWLIST"
-        | "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST"
-        | "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST" => list(value, key, |s| {
+        "UI_ADDITIONAL_BASE_URLS" => list(value, key, |s| {
             https(s, true) && PublicOrigin::parse(s).is_ok()
         }),
-        "CANVAS_PILOT_ORGANIZATION_IDS" | "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS" => {
-            list(value, key, identifier)
-        }
         "ALLOWED_REDIRECT_URIS" => list(value, key, |s| https(s, false)),
         "DID_WEB_ALLOWED_HOSTS" => list(value, key, hostname),
         "KEYCLOAK_SMTP_HOST" | "KEYCLOAK_PASSKEY_RP_ID" => {
@@ -278,44 +248,20 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
         }
         "CREDENTIAL_LOGIN_POLICY_ID"
         | "CREDENTIAL_LOGIN_TRUST_PROFILE_ID"
-        | "CANVAS_MIRROR_WORKER_ORGANIZATION_ID"
-        | "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID"
         | "MARTY_DEFAULT_REVOCATION_PROFILE_ID" => {
             string_value(value, key, 128, |s| s.is_empty() || identifier(s))
         }
-        "CANVAS_CREDENTIALS_API_BASE_URL"
-        | "CANVAS_CREDENTIALS_PUBLISH_URL"
-        | "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
-        | "CANVAS_LTI_EXPERIENCE_BASE_URL"
-        | "CANVAS_OAUTH_COMPLETION_REDIRECT_URL"
-        | "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL"
-        | "CANVAS_MIRROR_ALERT_WEBHOOK_URL"
-        | "UNIVERSAL_RESOLVER_URL"
-        | "PERSONALIZATION_BUREAU_URL" => {
+        "UNIVERSAL_RESOLVER_URL" | "PERSONALIZATION_BUREAU_URL" => {
             string_value(value, key, 2048, |s| s.is_empty() || https(s, false))
         }
-        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE" | "MIP_CREDENTIAL_STATUS_URL_TEMPLATE" => {
+        "MIP_CREDENTIAL_STATUS_URL_TEMPLATE" => {
             string_value(value, key, 2048, |s| s.is_empty() || https(s, false))
         }
-        "CANVAS_CREDENTIALS_ISSUER_ID"
-        | "CANVAS_CREDENTIALS_BADGECLASS_ID"
-        | "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" => string_value(value, key, 128, |s| {
+        "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" => string_value(value, key, 128, |s| {
             s.bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
         }),
-        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE" => scalar(value, key, 2048),
-        "CANVAS_LTI_TOOL_ISSUER_DID" | "CANVAS_LTI_TOOL_ACTIVE_KID" => {
-            string_value(value, key, 2048, |s| {
-                s.is_empty() || (s.starts_with("did:") && !s.contains(' '))
-            })
-        }
         "COOKIE_SAMESITE" => choice(value, key, &["lax", "strict", "none"]),
-        "CANVAS_CREDENTIALS_PROVIDER" => choice(
-            value,
-            key,
-            &["bridge", "badgr_api", "canvas_credentials_api"],
-        ),
-        "CANVAS_CREDENTIALS_ASSERTION_SCOPE" => choice(value, key, &["badgeclasses", "issuers"]),
         "LOG_LEVEL" => choice(value, key, &["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]),
         "COMPLIANCE_PROFILE_RUST_LOG"
         | "DEPLOYMENT_PROFILE_RUST_LOG"
@@ -350,7 +296,6 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
                     })
             })
         }
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS" => public_jwks(value),
         "APPLICATION_TEMPLATE_MIGRATION_MAP" => {
             let map = value
                 .as_object()
@@ -363,8 +308,7 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
             )?;
             serde_json::to_string(value).map_err(|_| REFUSED.into())
         }
-        "CANVAS_LEGACY_EVENT_INGEST_ENABLED"
-        | "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
+        "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
         | "DIDCOMM_ALLOW_PRIVATE_IPS"
         | "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED" => {
             if value == &Value::Bool(false) {
@@ -411,58 +355,6 @@ fn hostname(value: &str) -> bool {
         })
 }
 
-fn public_jwks(value: &Value) -> Result<String> {
-    let object = value.as_object().ok_or(REFUSED)?;
-    require(object.len() == 1)?;
-    let keys = object
-        .get("keys")
-        .and_then(Value::as_array)
-        .ok_or(REFUSED)?;
-    require(!keys.is_empty() && keys.len() <= 16)?;
-    let mut kids = BTreeSet::new();
-    for key in keys {
-        let key = key.as_object().ok_or(REFUSED)?;
-        require(
-            key.keys()
-                .all(|k| ["kty", "alg", "kid", "use", "n", "e"].contains(&k.as_str()))
-                && key.get("kty") == Some(&Value::String("RSA".into()))
-                && key.get("alg") == Some(&Value::String("RS256".into()))
-                && key.get("use").is_none_or(|v| v == "sig"),
-        )?;
-        let kid = scalar(
-            key.get("kid").ok_or(REFUSED)?,
-            "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-            2048,
-        )?;
-        require(!kid.is_empty() && kids.insert(kid))?;
-        for name in ["n", "e"] {
-            let value = key.get(name).and_then(Value::as_str).ok_or(REFUSED)?;
-            require(
-                !value.is_empty()
-                    && value.len() <= 2048
-                    && value
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)),
-            )?;
-            use base64::Engine as _;
-            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(value)
-                .map_err(|_| REFUSED)?;
-            require(
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes) == value
-                    && if name == "n" {
-                        (256..=1024).contains(&bytes.len())
-                            && bytes.first().is_some_and(|b| *b >= 128)
-                            && bytes.last().is_some_and(|b| b & 1 == 1)
-                    } else {
-                        bytes == [1, 0, 1] || bytes == [3]
-                    },
-            )?;
-        }
-    }
-    serde_json::to_string(value).map_err(|_| REFUSED.into())
-}
-
 fn defaults() -> BTreeMap<String, String> {
     let mut values: BTreeMap<String, String> = [
         ("KEYCLOAK_USER_REGISTRATION_ENABLED", "true"),
@@ -477,30 +369,14 @@ fn defaults() -> BTreeMap<String, String> {
         ("KEYCLOAK_SMTP_SSL", "false"),
         ("KEYCLOAK_SMTP_STARTTLS", "true"),
         ("ORGANIZATION_CREATION_ENABLED", "false"),
-        ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
-        ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
-        ("CANVAS_MIRROR_WORKER_ENABLED", "false"),
-        ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "false"),
-        ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "false"),
         ("DID_PUBLIC_FALLBACK_ENABLED", "false"),
         ("DIDCOMM_ALLOW_PRIVATE_ENDPOINTS", "false"),
-        ("CANVAS_CREDENTIALS_PROVIDER", "bridge"),
-        ("CANVAS_CREDENTIALS_API_BASE_URL", "https://api.badgr.io"),
-        ("CANVAS_CREDENTIALS_ASSERTION_SCOPE", "badgeclasses"),
-        ("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS", "600"),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v.into()))
     .collect();
     for key in [
         "UI_ADDITIONAL_BASE_URLS",
-        "CANVAS_CREDENTIALS_PUBLISH_URL",
-        "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
-        "CANVAS_CREDENTIALS_ISSUER_ID",
-        "CANVAS_CREDENTIALS_BADGECLASS_ID",
-        "CANVAS_PILOT_ORGANIZATION_IDS",
-        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
-        "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
         "UNIVERSAL_RESOLVER_URL",
         "DID_WEB_ALLOWED_HOSTS",
         "SMTP_HOST",
@@ -509,8 +385,6 @@ fn defaults() -> BTreeMap<String, String> {
         "PASSPORT_TENANT_API_KEYS_FILE",
         "PERSONALIZATION_BUREAU_API_KEY",
         "PERSONALIZATION_BUREAU_API_KEY_FILE",
-        "CANVAS_CREDENTIALS_API_TOKEN",
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE",
     ] {
         values.insert(key.into(), String::new());
     }
@@ -593,55 +467,6 @@ impl Configuration {
                 "public DID fallback requires an explicit did:web hostname allowlist".to_owned()
             })?;
         }
-        if on("CANVAS_ALLOW_PRIVATE_BASE_URLS") {
-            require(!text("CANVAS_PRIVATE_ORIGIN_ALLOWLIST").is_empty()).map_err(|_| {
-                "private Canvas origins require an explicit exact-origin allowlist".to_owned()
-            })?;
-        }
-        if on("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS") {
-            return Err("HTTP localhost Canvas providers are a development exception, not a production installer setting".into());
-        }
-        if on("CANVAS_PORTABLE_INTEGRATION_ENABLED") {
-            for key in [
-                "CANVAS_LTI_EXPERIENCE_BASE_URL",
-                "CANVAS_PILOT_ORGANIZATION_IDS",
-                "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-                "CANVAS_LTI_TOOL_ISSUER_DID",
-                "CANVAS_LTI_TOOL_ACTIVE_KID",
-                "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-                "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-            ] {
-                require(!text(key).is_empty())
-                    .map_err(|_| invalid(key, "a configured value for portable Canvas"))?;
-            }
-            require(
-                matches!(
-                    text("CANVAS_CREDENTIALS_PROVIDER"),
-                    "badgr_api" | "canvas_credentials_api"
-                ) && text("CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS") == "600",
-            )?;
-            let did = text("CANVAS_LTI_TOOL_ISSUER_DID");
-            let active = text("CANVAS_LTI_TOOL_ACTIVE_KID");
-            let jwks = self
-                .values
-                .get("CANVAS_LTI_TOOL_PUBLIC_JWKS")
-                .ok_or(REFUSED)?;
-            require(
-                active.starts_with(&format!("{did}#"))
-                    && jwks["keys"]
-                        .as_array()
-                        .is_some_and(|keys| keys.iter().any(|key| key["kid"] == active)),
-            )?;
-        }
-        if on("CANVAS_MIRROR_WORKER_ENABLED") {
-            require(!text("CANVAS_MIRROR_WORKER_ORGANIZATION_ID").is_empty()
-                && supplied("canvas_credentials_api_token")
-                && matches!(text("CANVAS_CREDENTIALS_PROVIDER"), "badgr_api" | "canvas_credentials_api")
-                && !text("CANVAS_CREDENTIALS_API_BASE_URL").is_empty()
-                && !text("CANVAS_CREDENTIALS_ISSUER_ID").is_empty()
-                && (text("CANVAS_CREDENTIALS_ASSERTION_SCOPE") != "badgeclasses" || !text("CANVAS_CREDENTIALS_BADGECLASS_ID").is_empty()))
-                .map_err(|_| "Canvas mirror requires an organization, imported API token and a real, fully identified Credentials API provider".to_owned())?;
-        }
         let passport = on("PASSPORT_NATIVE_HTTP_ENABLED");
         let internal = on("PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED");
         require(!(internal && supplied("passport_tenant_api_keys"))).map_err(|_| {
@@ -671,10 +496,6 @@ impl Configuration {
                 .map_err(|_| "Passport bureau submission requires its HTTPS provider URL, imported API key and any required KMS callback profile".to_owned())?;
         }
         for (key, name) in [
-            (
-                "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-                "canvas_credentials_api_token",
-            ),
             ("PASSPORT_TENANT_API_KEYS_FILE", "passport_tenant_api_keys"),
             (
                 "PERSONALIZATION_BUREAU_API_KEY_FILE",

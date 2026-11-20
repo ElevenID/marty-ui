@@ -14,6 +14,8 @@ axum.workspace = true
 axum-server.workspace = true
 futures-util.workspace = true
 marty-issuance-service = { path = "../../services/issuance" }
+marty-organization = { path = "../../services/organization" }
+marty-credential-template = { path = "../../services/credential-template" }
 marty-selfhost-bundle = { path = "../selfhost-bundle" }
 rcgen.workspace = true
 rustls.workspace = true

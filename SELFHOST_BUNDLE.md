@@ -233,27 +233,23 @@ docker compose --env-file .env.selfhost.production.local logs -f edge gateway ke
 docker compose --env-file .env.selfhost.production.local down
 ```
 
-## No-Canvas composition preview
+## External connector boundary
 
-`docker-compose.selfhost.no-canvas.yml` is an opt-in overlay for testing a
-deployment without the Canvas worker. The default bundle still starts that
-worker, preserving existing Canvas installations on upgrade. To inspect the
-overlay against an extracted bundle, layer it explicitly:
+The current platform composition excludes the Canvas worker, provider routes,
+provider credentials and administration UI. The old
+`docker-compose.selfhost.no-canvas.yml` preview overlay is retired; it is not an
+installation input. Do not add a Canvas profile or worker to this bundle.
 
-```bash
-docker compose --env-file .env.selfhost.production.local \
-  -f docker-compose.yml -f docker-compose.selfhost.no-canvas.yml \
-  config --hash canvas-sync-worker
-```
+Provider integration belongs to the independently deployed
+[Canvas connector](https://github.com/ElevenID/canvas-integration), which reaches
+the platform only through the public Common Gateway. See the
+[ownership and authority boundary](docs/architecture/external-connector-boundary.md).
+Core retains canonical identity, ownership, evidence, approval and signing.
 
-Compose should report the worker as disabled. This is a configuration preview,
-not a qualified no-Canvas product: the overlay removes the Canvas shared secret
-from the two issuance services and forces Canvas features off, but issuance
-still carries Canvas code and migration dependencies. Do not use the overlay
-for an existing Canvas installation, or combine it with `--profile canvas` to
-enable Canvas; use the default bundle for that installation. Production use and
-a default switch require a pre-up migration check, no-Canvas startup/business
-evidence, and a rehearsed upgrade/rollback.
+Source retirement does not qualify a published bundle, upgrade existing data,
+stop old workloads or authorize a production cutover. Existing installations
+need separately reviewed migration, backup and rollback plans. Unsupported
+connector flows remain disabled with owned TODOs.
 
 ## Notes
 

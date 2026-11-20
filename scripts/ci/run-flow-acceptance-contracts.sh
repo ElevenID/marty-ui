@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# PR-only Flow test-source owner; the protected merge group uses full Canvas.
+# PR-only Flow test-source owner; the protected merge group uses full platform.
 set -euo pipefail
-[[ $# == 0 && "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]] || exit 2
+[[ $# == 0 && "${MARTY_PLATFORM_FULL_QUALIFICATION:-0}" == 0 ]] || exit 2
 artifacts="${RUNNER_TEMP:?}/rust-test-artifacts.json"
 [[ -s "$artifacts" ]] || exit 1
 find_artifact() {
@@ -29,16 +29,11 @@ bash "$(dirname "${BASH_SOURCE[0]}")/list-flow-acceptance-cases.sh" "$flow_execu
 
 # The Flow target's shared fixture insists on these locally present images,
 # starts exact-owned disposable containers and verifies their cleanup.
-mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' \
-  ../contracts/canvas-worker-consumer-range-oracle.json)
-[[ ${#images[@]} == 2 ]] || exit 1
-for image in "${images[@]}"; do
-  [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
-done
-MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \
-  "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "${images[0]}")"
-export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
-docker pull "${images[1]}"
+postgres_image=$(jq -er '.postgres' ../contracts/platform-test-database.json)
+[[ "$postgres_image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
+MARTY_PLATFORM_TEST_POSTGRES_IMAGE="$(bash \
+  "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "$postgres_image")"
+export MARTY_PLATFORM_TEST_POSTGRES_IMAGE
 # The shared Redis fixture intentionally resolves a local tag to an immutable
 # image ID; seed that exact tag from the reviewed digest rather than Docker Hub.
 redis_image="$(bash "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" \
@@ -47,9 +42,9 @@ docker tag "$redis_image" redis:7-alpine
 
 log=$(mktemp "${RUNNER_TEMP}/flow-acceptance.XXXXXX")
 trap 'rm -f -- "$log"' EXIT
-MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1 \
+MARTY_PLATFORM_SCHEMA_TEST=1 \
 MARTY_ISSUANCE_TEST_BINARY="$issuance_binary" \
   python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
     --name flow_acceptance --owner flow-pr -- \
     "$flow_executable" --nocapture --test-threads=4 2>&1 | tee "$log"
-grep -Eq '^test result: ok\. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$log"
+grep -Eq '^test result: ok\. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$log"

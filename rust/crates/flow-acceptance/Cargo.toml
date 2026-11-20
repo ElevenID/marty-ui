@@ -26,7 +26,9 @@ marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-flow = { path = "../../services/flow" }
 marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
-marty-oid4vci = { workspace = true, features = ["lti"] }
+marty-organization = { path = "../../services/organization" }
+marty-credential-template = { path = "../../services/credential-template" }
+marty-oid4vci = { workspace = true, features = ["issuer", "jwt_vc_json", "mso_mdoc", "sd_jwt"] }
 marty-presentation-policy = { path = "../../services/presentation-policy" }
 marty-release-evidence = { path = "../release-evidence" }
 marty-signing-grant = { path = "../signing-grant" }

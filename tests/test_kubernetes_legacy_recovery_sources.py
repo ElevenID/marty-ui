@@ -156,6 +156,7 @@ def test_packaged_source_imports_without_checkout_fallback_or_private_inputs(tmp
         destination = root / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(sources.ROOT / name, destination)
+        destination.chmod(0o644)  # Match packaged source custody, including on DrvFS.
     env = {"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
     for entrypoint in ("inspect_kubernetes_legacy_credentials.py", "recover_kubernetes_legacy_credentials.py"):
         result = subprocess.run([sys.executable, "-B", str(root / "scripts" / entrypoint), "--help"],

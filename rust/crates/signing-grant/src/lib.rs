@@ -35,20 +35,16 @@ pub enum SigningOrigin {
     FlowWalletRequest,
     FlowDemoHolder,
     IssuanceCredential,
-    IssuanceCanvas,
-    IssuanceReadiness,
     IssuancePassport,
 }
 
 impl SigningOrigin {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 6] = [
         Self::GatewayService,
         Self::GatewayIssuerDid,
         Self::FlowWalletRequest,
         Self::FlowDemoHolder,
         Self::IssuanceCredential,
-        Self::IssuanceCanvas,
-        Self::IssuanceReadiness,
         Self::IssuancePassport,
     ];
 
@@ -59,8 +55,6 @@ impl SigningOrigin {
             Self::FlowWalletRequest => "marty-sign-grant-flow-wallet-v1",
             Self::FlowDemoHolder => "marty-sign-grant-flow-demo-holder-v1",
             Self::IssuanceCredential => "marty-sign-grant-issuance-credential-v1",
-            Self::IssuanceCanvas => "marty-sign-grant-issuance-canvas-v1",
-            Self::IssuanceReadiness => "marty-sign-grant-issuance-readiness-v1",
             Self::IssuancePassport => "marty-sign-grant-issuance-passport-v1",
         }
     }
@@ -119,19 +113,6 @@ impl SigningOrigin {
                 (issuer_did_route_shape(claims)
                     && matches!(claims.key_purpose.as_str(), "vc_jwt_issuer" | "mdoc_dsc"))
                     || didcomm::authorizes_route_shape(claims)
-            }
-            Self::IssuanceCanvas => {
-                issuer_did_route_shape(claims)
-                    && claims.key_purpose == "lti_tool_signing"
-                    && claims.algorithm == "RS256"
-            }
-            Self::IssuanceReadiness => {
-                issuer_did_route_shape(claims)
-                    && claims.key_purpose == "vc_jwt_issuer"
-                    && matches!(
-                        claims.algorithm.as_str(),
-                        "ES256" | "ES384" | "RS256" | "EdDSA"
-                    )
             }
             Self::IssuancePassport => {
                 issuer_did_route_shape(claims)
@@ -366,8 +347,6 @@ pub fn bound_input(
             .nonce
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || (claims.origin == SigningOrigin::IssuanceReadiness
-            && !readiness_challenge_matches_operation(binding))
     {
         return Err(GrantError::Malformed);
     }
@@ -407,17 +386,6 @@ pub fn payload_digest(payload: &[u8]) -> String {
 
 fn bounded(value: &str, max_bytes: usize) -> bool {
     !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
-}
-
-fn readiness_challenge_matches_operation(binding: &GrantBinding<'_>) -> bool {
-    binding
-        .payload
-        .strip_prefix(b"marty-canvas-readiness-v1\0")
-        .and_then(|rest| rest.strip_prefix(binding.organization_id.as_bytes()))
-        .and_then(|rest| rest.strip_prefix(b"\0"))
-        .is_some_and(|nonce| {
-            nonce.len() == 32 && binding.operation_id == URL_SAFE_NO_PAD.encode(nonce)
-        })
 }
 
 #[cfg(test)]
@@ -467,8 +435,6 @@ mod tests {
         for origin in [
             SigningOrigin::FlowWalletRequest,
             SigningOrigin::IssuanceCredential,
-            SigningOrigin::IssuanceCanvas,
-            SigningOrigin::IssuanceReadiness,
             SigningOrigin::IssuancePassport,
         ] {
             assert!(!origin.authorizes_route_shape(&claims), "{origin:?}");
@@ -608,8 +574,6 @@ mod tests {
             SigningOrigin::FlowWalletRequest,
             SigningOrigin::FlowDemoHolder,
             SigningOrigin::IssuanceCredential,
-            SigningOrigin::IssuanceCanvas,
-            SigningOrigin::IssuanceReadiness,
             SigningOrigin::IssuancePassport,
         ] {
             let mut claims = sample_claims();
@@ -624,13 +588,6 @@ mod tests {
                 SigningOrigin::FlowDemoHolder => {
                     claims.key_purpose = "demo_holder_binding".into();
                 }
-                SigningOrigin::IssuanceCanvas => {
-                    claims.key_purpose = "lti_tool_signing".into();
-                    claims.algorithm = "RS256".into();
-                }
-                SigningOrigin::IssuanceReadiness => {
-                    claims.key_purpose = "vc_jwt_issuer".into();
-                }
                 SigningOrigin::IssuancePassport => {
                     claims.key_purpose = "x509_doc_signer".into();
                 }
@@ -638,16 +595,7 @@ mod tests {
                 SigningOrigin::GatewayService => unreachable!("not an issuer-DID origin"),
                 SigningOrigin::GatewayIssuerDid => unreachable!("CSR-only origin"),
             }
-            let payload = if origin == SigningOrigin::IssuanceReadiness {
-                let mut challenge = b"marty-canvas-readiness-v1\0".to_vec();
-                challenge.extend_from_slice(claims.organization_id.as_bytes());
-                challenge.push(0);
-                challenge.extend_from_slice(&[42; 32]);
-                claims.operation_id = URL_SAFE_NO_PAD.encode([42; 32]);
-                challenge
-            } else {
-                b"exact.payload".to_vec()
-            };
+            let payload = b"exact.payload".to_vec();
             claims.payload_sha256_b64 = payload_digest(&payload);
             let binding = GrantBinding {
                 origin,
@@ -750,12 +698,10 @@ mod tests {
     }
 
     #[test]
-    fn issuance_tokens_cannot_cross_credential_canvas_readiness_or_passport_purposes() {
+    fn issuance_tokens_cannot_cross_credential_or_passport_purposes() {
         for (origin, allowed_purpose, algorithm) in [
             (SigningOrigin::IssuanceCredential, "vc_jwt_issuer", "ES256"),
             (SigningOrigin::IssuanceCredential, "mdoc_dsc", "ES256"),
-            (SigningOrigin::IssuanceCanvas, "lti_tool_signing", "RS256"),
-            (SigningOrigin::IssuanceReadiness, "vc_jwt_issuer", "ES256"),
             (SigningOrigin::IssuancePassport, "x509_doc_signer", "ES256"),
         ] {
             let mut claims = sample_claims();
@@ -765,16 +711,7 @@ mod tests {
             claims.issuer_did = Some("did:web:issuer.example".into());
             claims.key_purpose = allowed_purpose.into();
             claims.algorithm = algorithm.into();
-            let payload = if origin == SigningOrigin::IssuanceReadiness {
-                let mut challenge = b"marty-canvas-readiness-v1\0".to_vec();
-                challenge.extend_from_slice(claims.organization_id.as_bytes());
-                challenge.push(0);
-                challenge.extend_from_slice(&[42; 32]);
-                claims.operation_id = URL_SAFE_NO_PAD.encode([42; 32]);
-                challenge
-            } else {
-                b"exact.payload".to_vec()
-            };
+            let payload = b"exact.payload".to_vec();
             claims.payload_sha256_b64 = payload_digest(&payload);
             let binding = GrantBinding {
                 origin,
@@ -809,18 +746,7 @@ mod tests {
                     assert_eq!(result, Err(GrantError::Malformed));
                 }
             }
-            if origin == SigningOrigin::IssuanceCanvas {
-                let mut elevated = claims.clone();
-                elevated.algorithm = "ES256".into();
-                assert_eq!(
-                    bound_input(&elevated, &binding, 1_700_000_001),
-                    Err(GrantError::Malformed)
-                );
-            }
-            if matches!(
-                origin,
-                SigningOrigin::IssuancePassport | SigningOrigin::IssuanceReadiness
-            ) {
+            if origin == SigningOrigin::IssuancePassport {
                 for supported in ["ES256", "ES384", "RS256", "EdDSA"] {
                     let mut supported_claims = claims.clone();
                     supported_claims.algorithm = supported.into();
@@ -848,60 +774,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn readiness_token_only_signs_the_tenant_bound_fresh_challenge() {
-        let mut claims = sample_claims();
-        claims.origin = SigningOrigin::IssuanceReadiness;
-        claims.route = "/internal/compat/issuer-dids/sign".into();
-        claims.service_id = None;
-        claims.issuer_did = Some("did:web:issuer.example".into());
-        claims.key_purpose = "vc_jwt_issuer".into();
-        claims.operation_id = URL_SAFE_NO_PAD.encode([7; 32]);
-        let mut payload = b"marty-canvas-readiness-v1\0".to_vec();
-        payload.extend_from_slice(claims.organization_id.as_bytes());
-        payload.push(0);
-        payload.extend_from_slice(&[7; 32]);
-        fn binding<'a>(claims: &'a GrantClaims, payload: &'a [u8]) -> GrantBinding<'a> {
-            GrantBinding {
-                origin: claims.origin,
-                operation_id: &claims.operation_id,
-                organization_id: &claims.organization_id,
-                route: &claims.route,
-                service_id: None,
-                issuer_did: claims.issuer_did.as_deref(),
-                key_reference: claims.key_reference.as_deref(),
-                key_purpose: &claims.key_purpose,
-                algorithm: &claims.algorithm,
-                payload,
-            }
-        }
-        claims.payload_sha256_b64 = payload_digest(&payload);
-        assert!(bound_input(&claims, &binding(&claims, &payload), 1_700_000_001).is_ok());
-        for mutation in [0, 26, payload.len() - 1] {
-            let mut invalid = payload.clone();
-            invalid[mutation] ^= 1;
-            let mut altered_claims = claims.clone();
-            altered_claims.payload_sha256_b64 = payload_digest(&invalid);
-            assert_eq!(
-                bound_input(
-                    &altered_claims,
-                    &binding(&altered_claims, &invalid),
-                    1_700_000_001
-                ),
-                Err(GrantError::Malformed)
-            );
-        }
-        let mut arbitrary_claims = claims.clone();
-        arbitrary_claims.payload_sha256_b64 = payload_digest(b"arbitrary signing bytes");
-        assert_eq!(
-            bound_input(
-                &arbitrary_claims,
-                &binding(&arbitrary_claims, b"arbitrary signing bytes"),
-                1_700_000_001
-            ),
-            Err(GrantError::Malformed)
-        );
     }
 }

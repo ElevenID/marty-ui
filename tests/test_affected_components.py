@@ -261,9 +261,16 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
     assert jobs["test-website"]["needs"] == ["changes", "release-preflight"]
     assert jobs["test-website"]["if"] == "needs.changes.outputs.website == 'true'"
     commands = "\n".join(step.get("run", "") for step in jobs["test-website"]["steps"])
-    for command in ("bun run test:website", "bun run build:website", "bun run build:application",
-                    "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website"):
+    for command in ("bun run test:website", "bun run test:application", "bun run build:website", "bun run build:application",
+                    "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website",
+                    'node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"'):
         assert command in commands
+    closure = next(step for step in jobs["test-website"]["steps"]
+                   if "application-source-closure.mjs --report" in step.get("run", ""))
+    assert "if" not in closure and "continue-on-error" not in closure
+    package_scripts = json.loads((ROOT / "ui/package.json").read_text())["scripts"]
+    for test in ("scripts/application-config.test.mjs", "scripts/application-source-closure.test.mjs"):
+        assert test in package_scripts["test:application"]
     guard = next(step for step in jobs["ci-gate"]["steps"] if "CI_PLAN" in step.get("env", {}))
     assert guard["env"]["CI_NEEDS_JSON"] == "${{ toJSON(needs) }}"
     assert "continue-on-error" not in guard and "if" not in guard

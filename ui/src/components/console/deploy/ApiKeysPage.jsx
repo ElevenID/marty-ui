@@ -130,17 +130,22 @@ const API_KEY_SCOPES = [
   {
     id: 'integrations:read',
     label: 'Read integrations',
-    description: 'Read Canvas platforms, bindings, readiness, synchronization jobs, and reviews.',
+    description: 'Read platform integration resources.',
   },
   {
     id: 'integrations:write',
     label: 'Manage integrations',
-    description: 'Configure, authorize, activate, retry, and archive Canvas integrations.',
+    description: 'Manage platform integration resources and delivery destinations.',
   },
   {
     id: 'evidence:submit',
     label: 'Submit external evidence',
     description: 'Submit unsigned, source-bound observations for core validation. Does not approve applications or issue credentials.',
+  },
+  {
+    id: 'identity:attest',
+    label: 'Attest external accounts',
+    description: 'Organization keys only. Requires an independently approved source and explicit learner consent. Does not submit evidence, approve applications, or issue credentials.',
   },
 ];
 

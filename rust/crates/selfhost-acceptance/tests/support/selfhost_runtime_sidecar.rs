@@ -14,25 +14,23 @@ use uuid::Uuid;
 
 use super::{
     bounded_fixture_command,
-    canvas_published_database::{docker, inspect, PublishedDatabase},
+    platform_test_database::{docker, inspect, PublishedDatabase},
     selfhost_prepared::PreparedCompose,
 };
 
 const ERROR: &str = "Owned selfhost service boundary refused";
 const SOCKET: &str = "unix:///var/run/docker.sock";
 pub(super) const PENDING_OPERATION: &str = ".pending-operation-v1";
-const ISSUANCE_SECRET_MOUNTS: [&str; 16] = [
+pub(super) const ISSUANCE_SECRET_MOUNTS: [&str; 14] = [
     "marty_db_password",
     "issuance_api_key",
     "signing_keys_issuer_sign_key",
     "signing_keys_integration_secret_key",
-    "didcomm_issuance_openbao_token",
     "sign_grant_mint_issuance_credential_token",
-    "sign_grant_mint_issuance_canvas_token",
-    "sign_grant_mint_issuance_readiness_token",
     "sign_grant_mint_issuance_passport_token",
     "token_hmac_key",
-    "canvas_credentials_shared_secret",
+    "passport_tenant_api_keys",
+    "personalization_bureau_api_key",
     "grpc_service_token",
     "workload_identity_ca_cert",
     "issuance_workload_server_cert",
@@ -875,7 +873,7 @@ impl<'a> OwnedNative<'a> {
         // Retry only a delayed marker, never a leak, malformed UTF-8 or CLI failure.
         // Reads and sleeps share one budget; the command runner separately bounds shutdown.
         wait_for_log_boundary(secrets, expected, Duration::from_secs(5), |remaining| {
-            let output = super::canvas_published_database::docker_output_with_timeout(
+            let output = super::platform_test_database::docker_output_with_timeout(
                 &["logs", id],
                 remaining,
                 1024 * 1024,

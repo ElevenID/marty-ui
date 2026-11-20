@@ -9,6 +9,7 @@ import AuthCallback from '../../components/AuthCallback';
 import AuthUnavailable from '../../components/AuthUnavailable';
 import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
+import AssociationConsentPage from '../../components/identity/AssociationConsentPage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
@@ -50,7 +51,6 @@ import {
   ApiKeysPage,
   DidIdentitiesPage,
   DidIdentityDetailPage,
-  CanvasIntegrationsPage,
   DeliveryDestinationsPage,
   LanesDevicesPage,
   DeploymentProfileWizard,
@@ -166,6 +166,7 @@ function ConsoleRoutes() {
   return (
     <Routes>
       <Route path="/console" element={<ConsoleEntryRoute />} />
+      <Route path="/console/identity/associations/:organizationId/:challengeId" element={<AssociationConsentPage />} />
       <Route path="/console/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/login" element={<LoginPage fallbackRedirectTo="/console" />} />
       <Route path="/console/auth/callback" element={<AuthCallback />} />
@@ -181,7 +182,7 @@ function ConsoleRoutes() {
         <Route index element={<ConsoleDashboard />} />
         <Route path="design" element={<Navigate to="/console/org/templates/credentials" replace />} />
         <Route path="govern" element={<Navigate to="/console/org/trust/profiles" replace />} />
-        <Route path="connect" element={<Navigate to="/console/org/deploy/canvas" replace />} />
+        <Route path="connect" element={<Navigate to="/console/org/deploy" replace />} />
         <Route path="setup-wizard" element={<Navigate to="/console/org" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="trust" element={<TrustPage />} />
@@ -217,7 +218,6 @@ function ConsoleRoutes() {
         <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
         <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
         <Route path="deploy/issuer-identity/inspect" element={<DidIdentityDetailPage />} />
-        <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
         <Route path="connect/delivery-destinations" element={<DeliveryDestinationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
         <Route path="operator" element={<Navigate to="/console/org/operator/key-management" replace />} />

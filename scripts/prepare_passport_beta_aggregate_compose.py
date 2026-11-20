@@ -54,15 +54,14 @@ SIGNED_APPLICATIONS = frozenset({
     "auth", "organization", "credential-template", "trust-profile", "applicant",
     "notification", "compliance-profile", "presentation-policy", "deployment-profile",
     "signing-keys", "flow", "verification", "revocation-profile",
-    "device-registration", "event-stream", "issuance-native", "canvas-sync-worker",
-    "gateway", "passport-callback-signer", "passport-beta-bureau", "canvas-sandbox",
+    "device-registration", "event-stream", "issuance-native",
+    "gateway", "passport-callback-signer", "passport-beta-bureau",
 })
 # Gateway binds only the beta host loopback port in this render. Start it with
 # Rust applications so private Flow routes can be proved while the public edge
 # remains stopped.
 INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "waltid-nginx"})
 NEW_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
-OPTIONAL_LOCALHOST_BRIDGE = "issuance-canvas-localhost-bridge"
 TRANSITION_SQL_FILES = {
     "transition_sql_sha256": "passport-beta-rust-owner-transition.sql",
     "rust_owner_verify_sql_sha256": "passport-beta-rust-owner-verify.sql",
@@ -103,8 +102,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILES = (
     "docker-compose.base.yml", "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml", "docker-compose.profile.tunnel.yml",
-    "docker-compose.profile.waltid.yml", "docker-compose.profile.canvas-real.yml",
-    "docker-compose.profile.canvas-sandbox.yml",
+    "docker-compose.profile.waltid.yml",
     "docker-compose.profile.passport-native-beta.yml",
     "docker-compose.profile.passport-premigrated-beta.yml",
 )
@@ -157,10 +155,6 @@ def image_override(handoff: dict[str, Any]) -> str:
         rows.extend((f"  {name}:", "    image: ${MARTY_SERVICES_IMAGE}",
                      "    environment:",
                      f"      SERVICE_NAME: {name.replace('-', '_')}"))
-        if name == "canvas-sandbox":
-            rows.extend(("    build: !reset null",
-                         "    entrypoint: [/usr/local/bin/marty-canvas-sandbox]",
-                         "    command: []"))
         if name == "issuance-native":
             rows.extend(("      ENVIRONMENT: beta",
                          "      GRPC_INSECURE_ALLOWED: 'true'"))
@@ -173,7 +167,6 @@ def image_override(handoff: dict[str, Any]) -> str:
                  "      ENVIRONMENT: beta",
                  "      GRPC_INSECURE_ALLOWED: 'true'",
                  "      MARTY_SCHEMA_STARTUP_MODE: validate",
-                 "      CANVAS_MIRROR_WORKER_ENABLED: 'false'",
                  "  issuance-migrations:",
                  "    image: ${MARTY_SERVICES_IMAGE}", "    build: !reset null",
                  "    entrypoint: [/usr/local/bin/marty-issuance-service]",

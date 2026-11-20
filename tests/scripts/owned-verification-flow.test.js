@@ -6,7 +6,7 @@ const org='11111111-1111-4111-8111-111111111111';
 const runId='22222222-2222-4222-8222-222222222222';
 const id='33333333-3333-4333-8333-333333333333';
 function fixture(t,{foreign=false,missing=false,initialStatus='PENDING'}={}){
-  const privateDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-owned-flow-'));
+  const privateDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'platform-owned-flow-'));
   t.after(()=>fs.rmSync(privateDirectory,{recursive:true,force:true}));
   let flow,postCount=0,status=initialStatus;
   const api=async(method,route)=>{
