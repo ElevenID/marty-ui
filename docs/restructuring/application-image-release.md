@@ -100,6 +100,49 @@ and composition intake remain unchanged. The current composition schema
 explicitly rejects the new package image even though its original producer is
 recognized for independent application publication.
 
+### Intake an original published artifact
+
+Use the separate intake entry to select one completed original run, attempt and
+source. The destination must not already exist; its parent directory must exist.
+
+```sh
+python3 scripts/application_release_intake.py \
+  --run-id EXACT_ORIGINAL_RUN --run-attempt EXACT_ORIGINAL_ATTEMPT \
+  --source-sha EXACT_ORIGINAL_SOURCE_SHA \
+  --assets /absolute/private/new-application-release \
+  --gh /absolute/pinned/gh --cosign /absolute/pinned/cosign
+```
+
+The fixed public producer is `ElevenID/marty-ui`. Only its successful
+protected-main `workflow_dispatch` attempt and
+`application-release-RUN-ATTEMPT` artifact are eligible. CI candidates, failed
+publication diagnostics and the legacy `web-application` artifact cannot replace
+that selection. `GH_TOKEN` is the default Actions read credential;
+`--github-token-env GITHUB_TOKEN` explicitly selects the other supported variable.
+Only the selected token reaches the fixed GitHub Actions GETs. Public image and
+receipt verification use the existing independent verifier without private
+registry credentials.
+
+Intake checks the original Actions archive's byte length and SHA-256, a closed
+14-file roster, per-file and total expansion bounds, ordinary file modes and
+consistent ZIP records and CRCs. All files remain inert, including the nested
+source archive. The retained build plan must equal the signed receipt's plan;
+the full v4 source report must match the hash in the signed v5 profile report.
+The existing application verifier authenticates the receipt, all bound evidence,
+and immutable image against the exact original producer. Intake compares every
+staged original again before publishing the destination with Linux
+`renameat2(RENAME_NOREPLACE)`. A destination created concurrently cannot be
+replaced, including an empty directory. Unsupported kernels or filesystems fail
+closed; there is no weaker rename fallback. Failures remove the owned staging
+directory and do not publish a partial result. This intake is qualified on
+Linux; it does not establish Windows support.
+
+This entry preserves all original producer files. It does not change the legacy
+application intake or composition contract and does not qualify backend/API
+compatibility, OIDC, host promotion or rollback. Its first real acceptance still
+requires the actual 14-file signed publication artifact; local inert fixtures
+and CI candidate archives cannot establish that acceptance.
+
 ## CI and acceptance
 
 CI freezes the application build plan before the existing dependency bootstrap.
