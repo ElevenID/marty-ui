@@ -107,7 +107,7 @@ jobs:
     needs: [changes, release-preflight]
     if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: ui
@@ -119,12 +119,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Configure the digest-preserving Docker Hub mirror
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: "1.4.4"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
+      - name: Qualify application from a fresh locked dependency install
+        run: node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"
+      - name: Build and probe the isolated application runtime
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container
+      - name: Audit the committed application dependency profile
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/ci/audit-application-dependencies.py
+      - name: Qualify the application package without website dependencies
+        run: node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"
+      - name: Build and probe the application profile runtime
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container
       - name: Bootstrap released UI dependencies
         shell: bash
         run: |
@@ -134,6 +148,8 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
           bun x --no-install puppeteer browsers install
+      - name: Qualify application browser startup and WASM recovery
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome
       - name: Test website routing and all surface boundary guards
         run: |
           bun run test:website
@@ -146,14 +162,46 @@ jobs:
         run: |
           bun run build:application
           bun run build:selfhost
-      - name: Build application with audited website inputs absent
-        run: node scripts/application-source-closure.mjs --report "$RUNNER_TEMP/application-source-closure.json"
       - name: Upload application source boundary report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: application-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/application-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application runtime report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-runtime.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application dependency profile report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-profile-source-closure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-profile-source-closure.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application profile runtime report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-profile-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/application-profile-runtime.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload application browser startup reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/application-browser-runtime.json
+            ${{ runner.temp }}/application-browser-startup.json
           if-no-files-found: ignore
           retention-days: 14
 
