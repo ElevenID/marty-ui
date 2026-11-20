@@ -34,7 +34,7 @@ use marty_issuance_service::{
         InitiationDidcommDelivery, InitiationDidcommDeliveryError,
         InitiationDidcommDeliveryReceipt, InitiationOfferProjector, InitiationOfferResponse,
     },
-    proof_nonce::ProofNonceRepository,
+    proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     token_exchange::TokenExchangeRepository,
     token_postgres::PostgresTokenExchangeRepository,
     verification_prerequisite_client::FlowPrerequisiteClient,
@@ -685,15 +685,13 @@ pub(super) async fn qualify(
     authorize_offer(&tokens, &first, "first-native-handoff-token").await;
     authorize_offer(&tokens, &second, "second-native-handoff-token").await;
     let nonces = Arc::new(PostgresProofNonceRepository::new(pool.clone()));
-    for nonce in [
-        "before-completion",
-        "wrong-holder",
-        "first-a",
-        "first-b",
-        "second-expired",
-    ] {
-        assert!(nonces.save_proof_nonce(nonce, 300).await.unwrap());
-    }
+    let nonce_service = ProofNonceService::new(nonces.clone(), Arc::new(SecureProofNonceGenerator));
+    let before_completion_nonce = nonce_service.issue().await.unwrap().c_nonce;
+    let wrong_holder_nonce = nonce_service.issue().await.unwrap().c_nonce;
+    let first_a_nonce = nonce_service.issue().await.unwrap().c_nonce;
+    let first_b_nonce = nonce_service.issue().await.unwrap().c_nonce;
+    let second_expired_nonce = nonce_service.issue().await.unwrap().c_nonce;
+    assert_ne!(first_a_nonce, first_b_nonce);
     let signer_calls = Arc::new(AtomicUsize::new(0));
     let kms_ca = reqwest::Certificate::from_pem(
         &std::fs::read(
@@ -765,7 +763,7 @@ pub(super) async fn qualify(
     let endpoint = format!("{ISSUER_BASE}/oid4vci/credential");
     let before = credential
         .issue(
-            &proof_request("before-completion", &holder_key()),
+            &proof_request(&before_completion_nonce, &holder_key()),
             Some("Bearer first-native-handoff-token"),
             None,
             &endpoint,
@@ -810,7 +808,7 @@ pub(super) async fn qualify(
     }
     let wrong = credential
         .issue(
-            &proof_request("wrong-holder", &SigningKey::from_bytes(&[83; 32])),
+            &proof_request(&wrong_holder_nonce, &SigningKey::from_bytes(&[83; 32])),
             Some("Bearer first-native-handoff-token"),
             None,
             &endpoint,
@@ -842,9 +840,9 @@ pub(super) async fn qualify(
         .await
         .unwrap();
     let mut attempts = Vec::new();
-    for nonce in ["first-a", "first-b"] {
+    for nonce in [first_a_nonce, first_b_nonce] {
         let service = credential.clone();
-        let request = proof_request(nonce, &holder_key());
+        let request = proof_request(&nonce, &holder_key());
         let endpoint = endpoint.clone();
         attempts.push(tokio::spawn(async move {
             service
@@ -951,7 +949,7 @@ pub(super) async fn qualify(
         .await
         .unwrap();
     let service = credential.clone();
-    let request = proof_request("second-expired", &holder_key());
+    let request = proof_request(&second_expired_nonce, &holder_key());
     let endpoint_copy = endpoint.clone();
     let mut late = tokio::spawn(async move {
         service
