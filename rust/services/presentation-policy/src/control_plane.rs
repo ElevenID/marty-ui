@@ -613,7 +613,7 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
     }
 }
 
-fn evaluate_issuer_document(
+pub(crate) fn evaluate_issuer_document(
     document: &Value,
     issuer_id: &str,
     format: DetectedCredentialFormat,

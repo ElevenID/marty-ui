@@ -70,10 +70,12 @@ impl PresentationTrustResolver for Trust {
         id: Uuid,
         organization_id: Uuid,
     ) -> Result<ResolvedVerificationPolicy, PresentationVerificationError> {
-        Ok(ResolvedVerificationPolicy { id, organization_id, revision: "explicit-test-policy".into(), cedar_policies: r#"
+        Ok(ResolvedVerificationPolicy { id, organization_id, revision: "explicit-test-policy".into(), cedar_policies: (r#"
             permit(principal, action == MIP::Action::"credentials:verify", resource);
             forbid(principal, action == MIP::Action::"credentials:verify", resource) when { context.algorithm == "RS256" };
-        "#.into() })
+        "#.to_owned() + if self.profile_document.as_ref().and_then(|v| v.get("deny_revoked_for_test")) == Some(&json!(true)) { r#"
+forbid(principal, action == MIP::Action::"credentials:verify", resource) when { context.is_revoked };
+"# } else { "" }) })
     }
 
     async fn load_profile(
@@ -130,7 +132,7 @@ impl CredentialStatusResolver for Status {
     }
 }
 
-fn policy() -> PresentationPolicy {
+pub(crate) fn policy() -> PresentationPolicy {
     let now = chrono::DateTime::from_timestamp(1_787_240_000, 0).unwrap();
     PresentationPolicy {
         prerequisite_evidence_profile: None,
@@ -985,6 +987,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
             profiled_jwt_vc: None,
             presentation_only: false,
             sd_jwt_dcql: None,
+            external_status_fixture_transport: None,
             resolved_issuer_key: Some(crate::ResolvedIssuerKey {
                 issuer_id: fixture["issuer"].as_str().unwrap().into(),
                 public_jwk: key.clone(),
@@ -1025,6 +1028,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: json!(token),
         nonce: None,
@@ -1060,6 +1064,7 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
+        external_status_fixture_transport: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["token"].clone(),
         nonce: None,
@@ -1103,6 +1108,7 @@ async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format: DetectedCredentialFormat::OpenbadgeV3,
             token: fixture["token"].clone(),
             nonce: None,
@@ -2951,6 +2957,79 @@ mod bounded_sd_jwt_query_evidence {
             (fixture, owners)
         }
 
+        // External observations are injected only at the native-kernel test
+        // seam; the signed credential and both owner responses remain real.
+        struct ExternalStatusKernel {
+            value: Option<bool>,
+            expires: bool,
+        }
+
+        #[async_trait]
+        impl CredentialVerificationKernel for ExternalStatusKernel {
+            async fn verify(
+                &self,
+                context: &CredentialVerificationContext,
+            ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+                let mut evidence = RustCredentialKernel.verify(context).await?;
+                assert!(evidence.verified);
+                let now = evidence.issued_at_epoch_seconds.unwrap() + 60;
+                let observation = CredentialStatusEvidence {
+                    checked_at_epoch_seconds: Some(now),
+                    not_revoked: self.value,
+                    credential_status: Some("test-external-observation".into()),
+                    warnings: Vec::new(),
+                };
+                evidence.status = observation.clone();
+                evidence.native_external_status = Some(observation);
+                evidence.external_status_valid_until_epoch_seconds =
+                    Some(if self.expires { now } else { now + 300 });
+                Ok(evidence)
+            }
+        }
+
+        #[tokio::test]
+        async fn managed_prerequisite_cannot_erase_declared_external_status() {
+            for (value, expires) in [(Some(false), false), (None, false), (Some(true), true)] {
+                let (mut fixture, owners) = fixture(Mode::Valid, 0);
+                let now = fixture.now;
+                fixture.orchestrator = VerifiedFactsOrchestrator::with_clock(
+                    Arc::new(ExternalStatusKernel { value, expires }),
+                    owners.clone(),
+                    owners.clone(),
+                    Arc::new(move || now),
+                )
+                .unwrap();
+                assert!(
+                    matches!(fixture.orchestrator.verify_material(&fixture.policy, &fixture.request).await,
+                    Err(PresentationVerificationError::Failed(reason))
+                    if reason == "PRESENTATION_POLICY.EXTERNAL_STATUS_NOT_VALID")
+                );
+                assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
+            }
+            let (mut fixture, owners) = fixture(Mode::Revoked, 0);
+            let now = fixture.now;
+            fixture.orchestrator = VerifiedFactsOrchestrator::with_clock(
+                Arc::new(ExternalStatusKernel {
+                    value: Some(true),
+                    expires: false,
+                }),
+                owners.clone(),
+                owners.clone(),
+                Arc::new(move || now),
+            )
+            .unwrap();
+            let material = fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &fixture.request)
+                .await
+                .unwrap();
+            assert_eq!(
+                material.policy_facts()["credentials"][0]["not_revoked"],
+                false
+            );
+            assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
+        }
+
         #[tokio::test]
         async fn managed_prerequisites_still_reject_absent_subject_identity() {
             let (fixture, owners) = fixture(Mode::Valid, 0);
@@ -4649,6 +4728,7 @@ mod real_mdoc_dcql_projection {
                 id,
                 organization_id,
                 document: json!({
+                    "status": "ACTIVE",
                     "allowed_algorithms": ["ES256"],
                     "trust_sources": [{"source_type":"PINNED_ISSUER", "certificate_pem":self.certificate}],
                 }),
@@ -4942,6 +5022,127 @@ mod real_mdoc_dcql_projection {
                     .any(|result| result["signature_valid"] == true),
                 "{mutation}"
             );
+        }
+    }
+}
+
+#[tokio::test]
+async fn external_status_does_not_bypass_managed_revocation_or_hide_uncertainty() {
+    let fixture = fixture();
+    let vector = &fixture["valid_data_integrity"];
+    let observation = |value, name: &str| CredentialStatusEvidence {
+        checked_at_epoch_seconds: Some(1_787_240_300),
+        not_revoked: value,
+        credential_status: Some(name.into()),
+        warnings: Vec::new(),
+    };
+    let cases = [
+        (
+            observation(None, "UNKNOWN"),
+            observation(Some(true), "active"),
+            false,
+            false,
+        ),
+        (
+            observation(Some(true), "VALID"),
+            observation(Some(false), "revoked"),
+            false,
+            false,
+        ),
+        (
+            observation(Some(true), "VALID"),
+            observation(Some(false), "suspended"),
+            false,
+            false,
+        ),
+        (
+            observation(Some(false), "REVOKED"),
+            observation(Some(true), "active"),
+            false,
+            false,
+        ),
+        (
+            observation(None, "UNKNOWN"),
+            observation(Some(true), "active"),
+            false,
+            true,
+        ),
+        (
+            observation(Some(true), "VALID"),
+            CredentialStatusEvidence::default(),
+            true,
+            false,
+        ),
+        (
+            observation(Some(true), "VALID"),
+            observation(Some(false), "revoked"),
+            false,
+            true,
+        ),
+    ];
+    for (external, managed, expected_valid, expires) in cases {
+        let mut evidence: CredentialVerificationEvidence =
+            serde_json::from_value(vector["kernel_evidence"].clone()).unwrap();
+        evidence.status = external.clone();
+        evidence.native_external_status = Some(external);
+        evidence.external_status_valid_until_epoch_seconds = Some(if expires {
+            1_787_240_300
+        } else {
+            1_787_240_600
+        });
+        let status = Arc::new(Status {
+            evidence: managed,
+            calls: Mutex::new(Vec::new()),
+        });
+        let orchestrator = VerifiedFactsOrchestrator::with_clock(
+            Arc::new(Kernel {
+                evidence: Mutex::new(evidence),
+                calls: Mutex::new(Vec::new()),
+            }),
+            Arc::new(Trust {
+                template_vct: None,
+                evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
+                fail_load: false,
+                profile_organization_id: None,
+                profile_document: Some(json!({"verification_policy_set_id": Uuid::from_u128(90), "deny_revoked_for_test": true})),
+                loads: Mutex::new(Vec::new()),
+            }),
+            status.clone(),
+            Arc::new(|| 1_787_240_300),
+        )
+        .unwrap();
+        let request = crate::EvaluatePresentationRequest {
+            vp_token: vector["vp_token"].clone(),
+            trust_profile_id: Some(POLICY_PROFILE_ID.to_string()),
+            nonce: Some("nonce-1".into()),
+            audience: Some("verifier-1".into()),
+            context: serde_json::Map::new(),
+            oid4vp_transport: None,
+            trusted_internal_context: false,
+        };
+        let mut selected_policy = policy();
+        selected_policy.freshness = None;
+        let facts = orchestrator
+            .verify(&selected_policy, &request)
+            .await
+            .unwrap();
+        assert_eq!(
+            status.calls.lock().unwrap().len(),
+            1,
+            "managed lookup must run"
+        );
+        assert_eq!(
+            facts["credentials"][0]["not_revoked"] == json!(true),
+            expected_valid
+        );
+        if facts["credentials"][0]["not_revoked"] == json!(false) {
+            assert_eq!(
+                facts["credentials"][0]["external_authorization"]["allowed"], false,
+                "linked Cedar must observe the same combined revocation"
+            );
+        }
+        if status.evidence.not_revoked == Some(false) {
+            assert_eq!(facts["credentials"][0]["not_revoked"], false);
         }
     }
 }

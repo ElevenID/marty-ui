@@ -190,6 +190,19 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let response = request.send().await.map_err(|_| {
             SecurityError::ProviderUnavailable("resource-owner service unavailable".into())
         })?;
+        // Wallet owner lookup uses the native membership-protected read route.
+        // Its explicit denial is terminal: never fall back to caller tenant
+        // selectors or expose the upstream response as an outage diagnostic.
+        if response.status() == reqwest::StatusCode::FORBIDDEN
+            && service == "credential-templates"
+            && path
+                .strip_prefix("/v1/wallet-registry/")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+        {
+            return Err(SecurityError::Authorization(
+                "Resource access denied".into(),
+            ));
+        }
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -773,6 +786,14 @@ mod tests {
                 StatusCode::OK,
                 Json(json!({"id": "wr-spruce-001", "is_system": true, "is_override": false})),
             ),
+            "/v1/wallet-registry/denied" | "/non-wallet-denied" => (
+                StatusCode::FORBIDDEN,
+                Json(json!({"detail":"foreign-owner-private-data"})),
+            ),
+            "/v1/wallet-registry/outage" => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"detail":"private-outage-data"})),
+            ),
             "/v1/wallet-registry/tenant-wallet" => (
                 StatusCode::OK,
                 Json(
@@ -1003,6 +1024,54 @@ mod tests {
                 .await
                 .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn wallet_owner_denial_is_typed_without_relaxing_other_owner_failures() {
+        let origin = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("credential-templates".into(), origin.clone()),
+                ("trust-profiles".into(), origin),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        let context = ResourceOwnerContext::default();
+        let denied = provider
+            .resolve_organization(
+                "credential-templates",
+                "/v1/wallet-registry/denied",
+                &context,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(denied, SecurityError::Authorization(ref message) if message == "Resource access denied")
+        );
+        for (service, path) in [
+            ("trust-profiles", "/v1/wallet-registry/denied"),
+            ("credential-templates", "/non-wallet-denied"),
+            ("credential-templates", "/v1/wallet-registry/outage"),
+        ] {
+            assert!(matches!(
+                provider.resolve_organization(service, path, &context).await,
+                Err(SecurityError::ProviderUnavailable(_))
+            ));
+        }
+        assert!(matches!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    "/v1/wallet-registry/malformed",
+                    &context
+                )
+                .await,
+            Err(SecurityError::InvalidAuthenticationResult)
+        ));
     }
 
     #[tokio::test]
