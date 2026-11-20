@@ -420,31 +420,41 @@ async function defaultBrowserWorker({ origin, runtimeContext, contextManifestSha
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-application-browser-'));
   const output = path.join(temporary, 'browser.json');
   let cleaned = false;
+  let processEvidence;
+  let workerReport;
+  const readReport = () => {
+    const raw = read(temporary, 'browser.json');
+    require(raw.record.bytes <= 1024 * 1024, 'Application browser report exceeds its bound');
+    return JSON.parse(raw.bytes.toString('utf8'));
+  };
   try {
-    const processEvidence = await runApplicationBrowserProcess({ timeoutMs,
+    processEvidence = await runApplicationBrowserProcess({ timeoutMs,
       argv: [process.execPath, BROWSER_WORKER, '--worker', '--origin', origin, '--context', runtimeContext,
         '--manifest-sha256', contextManifestSha256, '--temporary-root', temporary, '--report', output, '--channel', channel] });
     cleaned = true;
-    const raw = read(temporary, 'browser.json');
-    require(raw.record.bytes <= 1024 * 1024, 'Application browser report exceeds its bound');
-    const browser = JSON.parse(raw.bytes.toString('utf8'));
+    workerReport = readReport();
     assert.deepEqual(BROWSER_DRIVER_INPUTS.map((name) => read(ROOT, name).record), drivers, 'Browser diagnostic tool source changed');
-    return { report: browser, process_evidence: processEvidence, driver_inputs: drivers };
+    return { report: workerReport, process_evidence: processEvidence, driver_inputs: drivers };
   } catch (error) {
     cleaned ||= error.cleanupComplete === true;
+    processEvidence ||= error.processEvidence;
     if (cleaned) {
       try {
-        const failure = JSON.parse(read(temporary, 'browser.json').bytes.toString('utf8'));
-        const phase = failure.failure?.phase;
-        if (failure.status === 'failed' && typeof phase === 'string' && /^[a-z0-9:/?=%&_-]{1,128}$/i.test(phase)) {
+        workerReport ||= readReport();
+        const phase = workerReport.failure?.phase;
+        if (workerReport.status === 'failed' && typeof phase === 'string' && /^[a-z0-9:/?=%&_-]{1,128}$/i.test(phase)) {
           error.message += ` (worker stage: ${phase})`;
-          const detail = failure.failure?.message;
+          const detail = workerReport.failure?.message;
           if (typeof detail === 'string' && detail.length <= 1000) {
             error.message += `: ${detail.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800)}`;
           }
         }
       } catch { /* A missing failure diagnostic cannot hide the process failure. */ }
     } else error.message += `; retained owned diagnostic directory: ${temporary}`;
+    // Preserve bounded diagnostics for a failed artifact after the outer
+    // runtime cleanup. They never become a successful qualification.
+    error.browserDiagnostics = { report: workerReport, process_evidence: processEvidence, driver_inputs: drivers,
+      retained_directory: cleaned ? null : temporary };
     throw error;
   } finally {
     // CleanupPending deliberately leaves the directory with its surviving
@@ -511,6 +521,53 @@ async function verifyBrowserResult(browser, { origin, root, manifest, contextSha
   bindObservedResources(browser.negative_control, true);
 }
 
+function failureMessages(error) {
+  const pending = [error];
+  const messages = [];
+  let inspected = 0;
+  while (pending.length && messages.length < 8 && inspected++ < 16) {
+    const item = pending.shift();
+    if (item instanceof AggregateError && item.errors.length) pending.unshift(...item.errors.slice(0, 8));
+    else messages.push(String(item?.message || item).replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000));
+  }
+  return messages;
+}
+
+function failedBrowserReport({ error, phase, fixture, manifest, contextSha, contextUnchanged, origin,
+  imageId, containerId, cleanup, evidence, diagnostics }) {
+  const observation = evidence?.report || diagnostics?.report;
+  const processEvidence = evidence?.process_evidence || diagnostics?.process_evidence;
+  let validProcess = false;
+  try {
+    validProcess = processEvidence?.schema === 'marty.application-browser-process/v1'
+      && ['passed', 'failed', 'cleanup-pending'].includes(processEvidence.status)
+      && typeof processEvidence.descendants_reaped === 'boolean'
+      && processEvidence.guardian?.path === 'scripts/installer_startup_process.py'
+      && processEvidence.guardian.sha256 === read(ROOT, 'scripts/installer_startup_process.py').record.sha256;
+  } catch { /* Changed or missing diagnostic source proves no process cleanup. */ }
+  const identified = observation?.schema === 'marty.application-browser-startup/v1'
+    && observation.context_sha256 === contextSha && observation.source_commit === manifest.source_commit
+    && observation.effective_source_sha === manifest.effective_source_sha && observation.origin === origin;
+  return {
+    schema: 'marty.application-browser-startup/v1', status: 'failed', fixture: fixture || observation?.fixture === true,
+    context_sha256: contextSha, source_commit: manifest.source_commit,
+    effective_source_sha: manifest.effective_source_sha, exact_committed_source: manifest.exact_committed_source,
+    origin, context_unchanged: contextUnchanged,
+    qualification: { browser_startup_observed: false, sdk_wasm_initialized_in_browser: false,
+      host_deployment_tested: false, oidc_journey_tested: false, published: false, activated: false },
+    cleanup: { ...Object.fromEntries(['browser_closed', 'chromium_exited', 'contexts_closed', 'profile_removed']
+      .map((key) => [key, Boolean(identified && observation.cleanup?.[key] === true)])),
+    worker_descendants_reaped: Boolean(validProcess && processEvidence.descendants_reaped) },
+    process_evidence: validProcess ? processEvidence : null,
+    diagnostic_tool_inputs: evidence?.driver_inputs || diagnostics?.driver_inputs || [],
+    retained_diagnostic_directory: diagnostics?.retained_directory || null,
+    runtime: { schema: 'marty.application-runtime-container/v1', context_sha256: contextSha,
+      image_id: imageId || null, container_id: containerId || null,
+      endpoint: origin ? { host: '127.0.0.1', port: Number(new URL(origin).port) } : null, cleanup: { ...cleanup } },
+    failure: { phase, messages: failureMessages(error) },
+  };
+}
+
 // A substituted runner is only for protocol fixtures; it can never issue a
 // report claiming that a real Docker image or container was qualified.
 export async function checkApplicationRuntimeContainer({ context, reportPath, browserStartup = false,
@@ -543,6 +600,11 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
   let failure;
   let result;
   let browserEvidence;
+  let browserDiagnostics;
+  let origin = null;
+  let phase = 'image-build';
+  let failurePhase;
+  let contextUnchanged = false;
   const cleanup = { container_removed: false, image_removed: false };
   try {
     buildAttempted = true;
@@ -553,6 +615,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
     require(image[0].Config?.Labels?.['io.elevenid.application-runtime.scope'] === 'diagnostic'
       && image[0].Config.Labels['io.elevenid.application-runtime.context-sha256'] === contextSha, 'Runtime image diagnostic labels differ');
     imageId = image[0].Id;
+    phase = 'runtime-startup';
     runAttempted = true;
     containerId = (await command(['run', '--detach', '--rm', '--name', name,
       '--label', `io.elevenid.application-runtime.owner=${suffix}`,
@@ -569,7 +632,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       && /^[1-9][0-9]{0,4}$/.test(bindings['80/tcp'][0].HostPort), 'Runtime container is not published exclusively on loopback');
     const port = Number(bindings['80/tcp'][0].HostPort);
     require(port <= 65535, 'Invalid runtime loopback port');
-    const origin = `http://127.0.0.1:${port}`;
+    origin = `http://127.0.0.1:${port}`;
     const expected = new Map(manifest.output_inventory.files.map((item) => [item.path,
       expectedDefaultRuntimeBytes(item.path, read(root, `html/${item.path}`).bytes)]));
     const readinessDeadline = Date.now() + 20_000;
@@ -580,6 +643,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
+    phase = 'runtime-resources';
     await command(['exec', containerId, 'nginx', '-t']);
     const paths = manifest.output_inventory.files.map((item) => `/usr/share/nginx/html/${item.path}`);
     require(paths.join('\0').length < 120_000, 'Runtime readability command exceeds its argument bound');
@@ -604,8 +668,10 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
     }
     require(served.find((item) => item.path === manifest.sdk_wasm)?.content_type === 'application/wasm', 'SDK WASM MIME was not observed');
     if (browserStartup) {
+      phase = 'browser-worker';
       browserEvidence = await browserWorker({ origin, runtimeContext: root, contextManifestSha256: contextSha,
         channel: browserChannel, timeoutMs: remaining(120_000) });
+      phase = 'browser-evidence';
       require(browserEvidence?.process_evidence?.status === 'passed' && browserEvidence.process_evidence.descendants_reaped === true,
         'Application browser did not prove complete worker descendant cleanup');
       assert.deepEqual(browserEvidence.driver_inputs, BROWSER_DRIVER_INPUTS.map((name) => read(ROOT, name).record),
@@ -615,6 +681,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       'Application browser used a different process guardian');
       await verifyBrowserResult(browserEvidence.report, { origin, root, manifest, contextSha, channel: browserChannel });
     }
+    phase = 'context-revalidation';
     require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha, 'Runtime checker changed its closed context');
     const qualificationFixture = fixture || Boolean(browserEvidence?.report.fixture);
     result = {
@@ -631,7 +698,11 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
         browser_startup_observed: browserStartup && !qualificationFixture, host_deployment_tested: false, oidc_journey_tested: false,
         published: false, activated: false }, cleanup,
     };
-  } catch (error) { failure = error; }
+  } catch (error) {
+    failure = error;
+    failurePhase = phase;
+    browserDiagnostics = error.browserDiagnostics;
+  }
   finally {
     const cleanupErrors = [];
     try {
@@ -661,10 +732,39 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
     try {
       require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha,
         'Runtime check or cleanup changed its closed context');
+      contextUnchanged = true;
     } catch (error) { cleanupErrors.push(error); }
-    if (cleanupErrors.length) failure = new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], 'Runtime check or cleanup failed');
+    if (cleanupErrors.length) {
+      failurePhase ||= 'runtime-cleanup';
+      failure = new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], 'Runtime check or cleanup failed');
+    }
   }
-  if (failure) throw failure;
+  if (failure) {
+    // Browser failures must survive the always-upload CI step, but a failed
+    // artifact cannot assert any successful qualification. Publish only after
+    // both independent runtime cleanup attempts and context revalidation.
+    if (browserStartup) {
+      try {
+        const browser = failedBrowserReport({ error: failure, phase: failurePhase, fixture, manifest, contextSha,
+          contextUnchanged, origin, imageId, containerId, cleanup, evidence: browserEvidence, diagnostics: browserDiagnostics });
+        const bytes = Buffer.from(`${JSON.stringify(browser, null, 2)}\n`);
+        writeFileSync(browserReport, bytes, { flag: 'wx', mode: 0o600 });
+        const failedRuntime = { schema: 'marty.application-runtime-container/v1', status: 'failed', fixture: browser.fixture,
+          context_sha256: contextSha, source_commit: manifest.source_commit,
+          effective_source_sha: manifest.effective_source_sha, exact_committed_source: manifest.exact_committed_source,
+          base_image: APPLICATION_RUNTIME_BASE_IMAGE, image_id: imageId || null, container_id: containerId || null,
+          endpoint: browser.runtime.endpoint, context_unchanged: contextUnchanged,
+          qualification: { context_prepared: false, container_image_built: false, container_resources_checked: false,
+            browser_startup_observed: false, host_deployment_tested: false, oidc_journey_tested: false,
+            published: false, activated: false }, cleanup: { ...cleanup }, failure: browser.failure,
+          browser_startup: { report_path: browserReport, bytes: bytes.length, sha256: digest(bytes), schema: browser.schema,
+            status: 'failed', sdk_wasm_initialized_in_browser: false,
+            worker_descendants_reaped: browser.cleanup.worker_descendants_reaped } };
+        writeFileSync(report, `${JSON.stringify(failedRuntime, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+      } catch (error) { throw new AggregateError([failure, error], 'Runtime failed and could not preserve its browser diagnostics'); }
+    }
+    throw failure;
+  }
   require(cleanup.container_removed && cleanup.image_removed, 'Runtime cleanup was incomplete');
   if (browserStartup) {
     const observation = browserEvidence.report;

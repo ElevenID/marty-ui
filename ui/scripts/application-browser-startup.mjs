@@ -5,7 +5,6 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPLICATION_RESOURCE_MIME_TYPES } from './application-public-assets.mjs';
-import { expectedDefaultRuntimeBytes, validateApplicationRuntimeContext } from './application-runtime-context.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const MAX_REQUESTS = 512;
@@ -340,6 +339,10 @@ export async function qualifyApplicationBrowserStartup({ origin, runtimeContext,
   { driverLoader = loadBrowserDriver } = {}) {
   validateApplicationBrowserOrigin(origin);
   const temporary = ordinaryDirectory(temporaryRoot);
+  // The runtime CLI imports this module's result validator while its own
+  // top-level await is pending. Load its helpers only in the separate worker
+  // qualification path so result validation cannot create an evaluation cycle.
+  const { expectedDefaultRuntimeBytes, validateApplicationRuntimeContext } = await import('./application-runtime-context.mjs');
   const verified = validateApplicationRuntimeContext(runtimeContext);
   require(verified.manifest_sha256 === contextManifestSha256, 'Browser context differs from its owning runtime check');
   require(!temporary.startsWith(`${verified.root}${path.sep}`) && temporary !== verified.root, 'Browser state must be outside the closed runtime context');

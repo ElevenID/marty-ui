@@ -75,6 +75,15 @@ does not resolve Puppeteer. The browser uses the existing hosted `chrome` channe
 with its ordinary sandbox; neither `--no-sandbox` nor a privileged helper is
 introduced. The report records the actual Puppeteer, Node and browser versions.
 
+The worker loads the runtime-context helpers only inside its explicit
+qualification function. Its observation validators do not import the runtime
+entrypoint during module evaluation. This matters when the standalone runtime
+CLI loads those validators while awaiting the completed browser gate: a static
+import back to that still-evaluating CLI would deadlock module evaluation.
+Independent-process CLI fixtures cover this path, including completion,
+cleanup and failed diagnostics; ordinary in-process unit imports cannot expose
+that lifecycle failure.
+
 Puppeteer starts Chromium in a separate Linux process session. Killing only the
 Node worker's process group would leave a gap if launch failed or the worker
 died before returning a browser object. The thin
@@ -134,16 +143,28 @@ subsequently bootstrapped checkout.
 
 ## Evidence and remaining gates
 
-The browser worker's report remains in a private temporary directory until
-worker descendants, browser contexts/profile, container and image cleanup have
-completed. The runtime checker independently validates its routes, source,
+Successful browser evidence remains private until worker descendants, browser
+contexts/profile, container and image cleanup have completed. The runtime
+checker independently validates its routes, source,
 context, exact served origin, SDK/resource identities and diagnostic-tool input
 hashes before publishing the separate browser report. The runtime version 1
 report adds an optional extension binding that report's exact byte count and
 SHA-256. The browser report records the runtime image/context identities and
 cleanup alongside its observed routes and negative control.
-Cleanly reaped failures expose only a bounded worker stage and diagnostic in
-the command error; they cannot publish a passing report.
+
+After valid browser-mode setup, handled failures produce two explicitly failed
+diagnostic reports after both independent runtime cleanup attempts and context
+revalidation. Every qualification flag is false. The reports retain the original
+context/source identity, bounded failure stage and messages, observed cleanup
+results and whether the context remained unchanged. A verified process-owner
+result can prove descendant cleanup even when the worker failed; missing or
+unverified ownership never implies cleanup. Unresolved browser state remains in
+its owned temporary directory. The runtime failure report binds the browser
+diagnostic bytes and hash, and the command still exits unsuccessfully.
+
+Invalid preflight inputs do not create reports. Static-only failure behavior
+remains unchanged. These failed artifacts make the always-run CI upload useful
+without allowing a failed browser run to acquire passing qualification.
 
 Injected Docker, browser-worker or browser-driver fixtures are labeled
 `fixture-passed`; none can set actual browser or SDK execution flags. Actual

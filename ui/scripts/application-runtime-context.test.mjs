@@ -327,6 +327,120 @@ function browserOptions(input) {
     browserReportPath: path.join(input.temporary, 'browser-startup.json'), browserChannel: 'chrome' };
 }
 
+function failedBrowserReports(options) {
+  const runtime = JSON.parse(readFileSync(options.reportPath));
+  const bytes = readFileSync(options.browserReportPath);
+  const browser = JSON.parse(bytes);
+  for (const report of [runtime, browser]) {
+    assert.equal(report.status, 'failed');
+    assert.equal(report.fixture, true);
+    assert.ok(Object.values(report.qualification).every((value) => value === false));
+    assert.ok(report.failure.messages.length > 0);
+  }
+  assert.equal(runtime.browser_startup.status, 'failed');
+  assert.equal(runtime.browser_startup.bytes, bytes.length);
+  assert.equal(runtime.browser_startup.sha256, digest(bytes));
+  assert.equal(runtime.browser_startup.sdk_wasm_initialized_in_browser, false);
+  assert.deepEqual(browser.runtime.cleanup, runtime.cleanup);
+  for (const filename of [options.reportPath, options.browserReportPath]) assert.equal(lstatSync(filename).mode & 0o777, 0o600);
+  return { runtime, browser };
+}
+
+async function runtimeCliFixture(t, input, protocol, { browserFailure = false } = {}) {
+  const options = browserOptions(input);
+  let browserCalled = false;
+  const control = createServer(async (request, response) => {
+    try {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      const { kind, args } = JSON.parse(body);
+      let result;
+      if (kind === 'docker') {
+        assert.equal(args[0], '--host');
+        result = await protocol.docker(args.slice(2));
+      } else {
+        assert.equal(kind, 'browser');
+        browserCalled = true;
+        assert.deepEqual(protocol.states(), { imageExists: true, containerExists: true });
+        assert.equal(existsSync(options.reportPath), false);
+        assert.equal(existsSync(options.browserReportPath), false);
+        const get = (flag) => args[args.indexOf(flag) + 1];
+        const evidence = browserFixtureEvidence(input, { origin: get('--origin') });
+        assert.equal(get('--context'), input.destination);
+        assert.equal(get('--manifest-sha256'), evidence.report.context_sha256);
+        if (browserFailure) {
+          evidence.report.status = 'failed';
+          evidence.report.failure = { phase: 'positive:/login', message: 'Synthetic CLI browser failure' };
+          evidence.process_evidence.status = 'failed';
+        }
+        result = { ...evidence, report_path: get('--report'), code: browserFailure ? 1 : 0 };
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(result));
+    } catch (error) {
+      response.writeHead(500, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: error.message }));
+    }
+  });
+  await new Promise((resolve) => control.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => { control.closeAllConnections(); control.close(resolve); }));
+  const bin = path.join(input.temporary, 'bin');
+  const endpoint = `http://127.0.0.1:${control.address().port}`;
+  for (const [name, kind] of [['docker', 'docker'], ['python3', 'browser']]) {
+    // Executable protocol fixtures let an independent Node process exercise
+    // the real CLI's ESM graph. Browser evidence remains explicitly synthetic.
+    const script = `#!${process.execPath}\n(async()=>{const response=await fetch(${JSON.stringify(endpoint)},{method:'POST',body:JSON.stringify({kind:${JSON.stringify(kind)},args:process.argv.slice(2)})});const result=await response.json();if(!response.ok)throw new Error(result.error);`
+      + (kind === 'browser'
+        ? "require('node:fs').writeFileSync(result.report_path,JSON.stringify(result.report),{flag:'wx',mode:0o600});process.stdout.write(JSON.stringify(result.process_evidence),()=>process.exit(result.code));"
+        : "process.stdout.write(result.stdout,()=>process.stderr.write(result.stderr,()=>process.exit(result.code)));")
+      + "})().catch(error=>{console.error(error.message);process.exitCode=1});\n";
+    write(bin, name, script, 0o755);
+  }
+  const run = () => execFileAsync(process.execPath, [path.join(ROOT, 'ui/scripts/application-runtime-context.mjs'),
+    '--context', options.context, '--report', options.reportPath, '--check-container', '--browser-startup',
+    '--browser-report', options.browserReportPath, '--browser-channel', 'chrome'],
+  { cwd: ROOT, env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}` }, timeout: 20_000, maxBuffer: 64 * 1024 });
+  return { options, run, browserCalled: () => browserCalled };
+}
+
+test('the independent runtime CLI completes its browser validator import and publishes fixture evidence', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input);
+  const cli = await runtimeCliFixture(t, input, protocol);
+  const result = await cli.run();
+  assert.equal(cli.browserCalled(), true);
+  assert.doesNotMatch(result.stderr, /unsettled top-level await/);
+  assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+  for (const filename of [cli.options.reportPath, cli.options.browserReportPath]) {
+    const report = JSON.parse(readFileSync(filename));
+    assert.equal(report.status, 'fixture-passed');
+    assert.equal(report.fixture, true);
+    assert.equal(report.qualification.browser_startup_observed, false);
+  }
+});
+
+test('the independent runtime CLI preserves failed browser diagnostics after both runtime cleanup attempts', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input);
+  const cli = await runtimeCliFixture(t, input, protocol, { browserFailure: true });
+  await assert.rejects(cli.run(), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /Synthetic CLI browser failure/);
+    assert.doesNotMatch(error.stderr, /unsettled top-level await/);
+    return true;
+  });
+  assert.equal(cli.browserCalled(), true);
+  assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+  const { runtime, browser } = failedBrowserReports(cli.options);
+  assert.deepEqual(runtime.cleanup, { container_removed: true, image_removed: true });
+  assert.equal(browser.context_unchanged, true);
+  assert.equal(browser.failure.phase, 'browser-worker');
+  assert.match(browser.failure.messages.join(' '), /Synthetic CLI browser failure/);
+  assert.equal(browser.process_evidence.status, 'failed');
+  assert.equal(browser.cleanup.worker_descendants_reaped, true);
+  assert.equal(browser.retained_diagnostic_directory, null);
+});
+
 test('browser integration observes the live owned endpoint and publishes both bound reports only after cleanup', async (t) => {
   const input = fixture(t);
   const protocol = await dockerFixture(t, input);
@@ -389,8 +503,10 @@ for (const [label, alter] of [
       return evidence;
     } }));
     assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
-    assert.equal(existsSync(options.reportPath), false);
-    assert.equal(existsSync(options.browserReportPath), false);
+    const { browser } = failedBrowserReports(options);
+    assert.equal(browser.context_unchanged, true);
+    assert.equal(browser.failure.phase, 'browser-evidence');
+    if (['descendant cleanup', 'guardian'].includes(label)) assert.equal(browser.cleanup.worker_descendants_reaped, false);
   });
 }
 
@@ -408,18 +524,24 @@ test('a throwing browser worker cannot hide a changed context or prevent contain
     return true;
   });
   assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
-  assert.equal(existsSync(options.browserReportPath), false);
+  const { browser } = failedBrowserReports(options);
+  assert.equal(browser.context_unchanged, false);
+  assert.equal(browser.cleanup.worker_descendants_reaped, false);
+  assert.match(browser.failure.messages.join(' '), /Synthetic browser failure/);
+  assert.match(browser.failure.messages.join(' '), /changed, missing, or extra files/);
 });
 
-test('a successful browser fixture cannot publish before failed runtime cleanup', async (t) => {
+test('a successful browser fixture produces only failed diagnostics when runtime cleanup fails', async (t) => {
   const input = fixture(t);
   const protocol = await dockerFixture(t, input, { cleanupFails: true });
   const options = browserOptions(input);
   await assert.rejects(checkApplicationRuntimeContainer(options,
     { ...protocol, browserWorker: async (request) => browserFixtureEvidence(input, request) }));
   assert.equal(protocol.states().imageExists, false);
-  assert.equal(existsSync(options.reportPath), false);
-  assert.equal(existsSync(options.browserReportPath), false);
+  const { runtime, browser } = failedBrowserReports(options);
+  assert.deepEqual(runtime.cleanup, { container_removed: false, image_removed: true });
+  assert.equal(browser.failure.phase, 'runtime-cleanup');
+  assert.equal(browser.cleanup.worker_descendants_reaped, true);
 });
 
 test('browser startup rejects incomplete or unsafe option combinations before Docker', async (t) => {
