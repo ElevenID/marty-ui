@@ -18,11 +18,19 @@ This is transport/codec evidence. Complete native presentation acceptance, mdoc 
 ## Accepted Core dependency
 
 Production manifests, the standalone feature probe, both lockfiles and the KMS
-custody guard agree on accepted Core `e3f0384b4cad0db4ca2738a4aeac97308ddd5231`.
-`ElevenID/marty-core#443` merged through the normal protected queue on
-2026-11-20. Its tree `fcf4d6a1b24265f26b25067862757100a4aff60c` exactly matches
-the reviewed Core candidate. Both lockfiles preserve registry package versions
-and checksums, and the selected Core feature sets remain unchanged. The consumer's
-required checks and normal protected integration remain its acceptance gates.
-Local verifier and transport tests do not establish official-suite or
-deployed-product acceptance.
+custody guard agree on accepted Core `64601c9513850e3eb60b00f6aa893cae8d9e4b0d`.
+`ElevenID/marty-core#445` merged through the normal protected queue on
+2026-11-20. Its tree `eb4c1c179bfdf2c993278c6d8e2cac4a14f0f668` exactly matches
+the reviewed Core candidate and retains the authenticated status work accepted
+in `ElevenID/marty-core#443`.
+
+Core consumes accepted SD-JWT fork `ba5a9a154ae530ddcfcc5b52adf3da71e91b1929`
+from `ElevenID/sd-jwt-rust#47`. The additive Core digest-selection APIs retain
+SHA-256 in existing entrypoints. This source pin does not change product
+profiles, request shapes, admitted algorithms or opaque external-signing
+boundaries. Both lockfiles preserve registry package versions and checksums,
+and the selected Core feature sets remain unchanged.
+
+The consumer's required checks and normal protected integration remain its
+acceptance gates. Local verifier and transport tests do not establish
+official-suite or deployed-product acceptance.
