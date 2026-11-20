@@ -90,6 +90,7 @@ impl SigningHarness {
                 transaction: CredentialTransaction {
                     jwt_vc_profile: None,
                     jwt_vc_signing_timing: None,
+                    issuance_intent: None,
 
                     id: inputs["transaction_id"].as_str().unwrap().to_owned(),
                     organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),

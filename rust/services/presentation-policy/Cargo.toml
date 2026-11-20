@@ -9,6 +9,12 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# Public CRL decoding only; do not inherit the workspace certificate builder.
+x509-cert = { version = "=0.2.5", default-features = false }
+der.workspace = true
+time = "=0.3.55"
+isomdl.workspace = true
+coset.workspace = true
 marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity"] }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
@@ -18,11 +24,15 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 hex.workspace = true
+flate2.workspace = true
+ring.workspace = true
+ssi-jwk.workspace = true
+ssi-jws.workspace = true
 marty-crypto.workspace = true
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-oid4vci = { workspace = true, features = ["verifier", "sd_jwt"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
-marty-verification.workspace = true
+marty-verification = { workspace = true, features = ["mdoc-status-verification"] }
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true
@@ -46,10 +56,13 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-credential-template = { path = "../credential-template" }
+marty-issuance-service = { path = "../issuance" }
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-flow = { path = "../flow" }
 mmf-push.workspace = true
 marty-service-runtime = { path = "../../crates/service-runtime", features = ["https"] }
-isomdl.workspace = true
 ed25519-dalek.workspace = true
 p256 = { workspace = true, features = ["ecdsa"] }
 serde_json.workspace = true

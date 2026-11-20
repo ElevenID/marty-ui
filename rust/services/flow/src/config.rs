@@ -75,6 +75,7 @@ pub struct FlowServiceConfig {
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub passport_native_flow_enabled: bool,
     pub service_token: Option<String>,
+    pub issuance_prerequisite_service_token: Option<String>,
     pub webhook_secret: Option<String>,
     pub application_event_hmac_key: Option<String>,
     pub application_event_max_age_seconds: u32,
@@ -200,6 +201,10 @@ impl fmt::Debug for FlowServiceConfig {
                 &self.passport_native_flow_enabled,
             )
             .field("service_token", &redacted(&self.service_token))
+            .field(
+                "issuance_prerequisite_service_token",
+                &redacted(&self.issuance_prerequisite_service_token),
+            )
             .field("webhook_secret", &redacted(&self.webhook_secret))
             .field(
                 "application_event_hmac_key",
@@ -243,6 +248,7 @@ impl FlowServiceConfig {
             &mut values,
             &[
                 "GRPC_SERVICE_TOKEN",
+                "FLOW_ISSUANCE_SERVICE_TOKEN",
                 "FLOW_WEBHOOK_SECRET",
                 "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
@@ -489,6 +495,21 @@ impl FlowServiceConfig {
         };
 
         let service_token = optional_secret(&values, "GRPC_SERVICE_TOKEN", environment)?;
+        // An absent optional owner credential disables these routes in every
+        // environment; it never falls back to a broadly shared service token.
+        let issuance_prerequisite_service_token =
+            optional_secret(&values, "FLOW_ISSUANCE_SERVICE_TOKEN", Environment::Test)?;
+        if issuance_prerequisite_service_token
+            .as_ref()
+            .is_some_and(|token| {
+                service_token.as_ref() == Some(token)
+                    || token.trim() != token
+                    || !token.is_ascii()
+                    || token.chars().any(char::is_control)
+            })
+        {
+            return Err(invalid("FLOW_ISSUANCE_SERVICE_TOKEN"));
+        }
         let webhook_secret = optional_secret(&values, "FLOW_WEBHOOK_SECRET", environment)?;
         let application_event_hmac_key =
             optional_secret(&values, "FLOW_APPLICATION_EVENT_HMAC_KEY", environment)?;
@@ -512,6 +533,22 @@ impl FlowServiceConfig {
         let sign_grant_mint_token_file =
             value(&values, "FLOW_SIGN_GRANT_MINT_TOKEN_FILE").map(PathBuf::from);
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        if issuance_prerequisite_service_token
+            .as_ref()
+            .is_some_and(|token| {
+                [
+                    &webhook_secret,
+                    &application_event_hmac_key,
+                    &signing_keys_api_key,
+                    &issuer_sign_key,
+                    &issuance_api_key,
+                ]
+                .into_iter()
+                .any(|other| other.as_ref() == Some(token))
+            })
+        {
+            return Err(invalid("FLOW_ISSUANCE_SERVICE_TOKEN"));
+        }
         if issuer_sign_key.as_ref().is_some_and(|key| {
             signing_keys_api_key.as_ref() == Some(key)
                 || issuance_api_key.as_ref() == Some(key)
@@ -605,6 +642,9 @@ impl FlowServiceConfig {
                 return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
             }
         }
+        if issuance_prerequisite_service_token.is_some() && managed_authority_https.is_none() {
+            return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+        }
         Ok(Self {
             managed_authority_https,
             public_verification,
@@ -653,6 +693,7 @@ impl FlowServiceConfig {
             passport_tenant_keys,
             passport_native_flow_enabled,
             service_token,
+            issuance_prerequisite_service_token,
             webhook_secret,
             application_event_hmac_key,
             application_event_max_age_seconds,

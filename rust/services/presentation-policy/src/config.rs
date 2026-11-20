@@ -28,6 +28,7 @@ pub use marty_service_runtime::WorkloadTlsFiles as WorkloadServerTlsFiles;
 pub struct PresentationPolicyServiceConfig {
     pub did_resolution_base_urls: Vec<String>,
     pub did_web_allowed_hosts: Vec<String>,
+    pub external_status_fixture_transport: Option<crate::ExternalStatusFixtureTransport>,
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -211,7 +212,9 @@ impl PresentationPolicyServiceConfig {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
             .collect();
+        let external_status_fixture_transport = status_fixture_transport(&values, environment)?;
         Ok(Self {
+            external_status_fixture_transport,
             did_resolution_base_urls,
             did_web_allowed_hosts,
             environment,
@@ -249,6 +252,30 @@ impl PresentationPolicyServiceConfig {
     #[must_use]
     pub const fn service_authentication_required(&self) -> bool {
         self.environment.is_deployed()
+    }
+}
+
+fn status_fixture_transport(
+    values: &BTreeMap<String, String>,
+    environment: RuntimeEnvironment,
+) -> Result<Option<crate::ExternalStatusFixtureTransport>, PresentationPolicyConfigError> {
+    match (
+        value(values, "PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN"),
+        value(values, "PRESENTATION_POLICY_STATUS_FIXTURE_CA_FILE"),
+    ) {
+        (None, None) => Ok(None),
+        (Some(origin), Some(path)) if !environment.is_deployed() => {
+            use std::io::Read;
+            let mut pem = Vec::new();
+            fs::File::open(path)
+                .and_then(|file| file.take(256 * 1024 + 1).read_to_end(&mut pem))
+                .map_err(|_| invalid("PRESENTATION_POLICY_STATUS_FIXTURE_CA_FILE"))?;
+            Ok(Some(
+                crate::ExternalStatusFixtureTransport::new(origin, pem)
+                    .map_err(|_| invalid("PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN"))?,
+            ))
+        }
+        _ => Err(invalid("PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN")),
     }
 }
 
@@ -401,4 +428,46 @@ fn load_secret(
 
 fn invalid(name: &'static str) -> PresentationPolicyConfigError {
     PresentationPolicyConfigError::Invalid { name }
+}
+
+#[cfg(test)]
+mod fixture_transport_config_tests {
+    use super::*;
+
+    #[test]
+    fn fixture_exception_is_absent_by_default_and_requires_a_pair() {
+        let origin = "PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN";
+        let ca = "PRESENTATION_POLICY_STATUS_FIXTURE_CA_FILE";
+        assert!(
+            status_fixture_transport(&BTreeMap::new(), RuntimeEnvironment::Development)
+                .unwrap()
+                .is_none()
+        );
+        for values in [
+            BTreeMap::from([(origin.into(), "https://localhost:8443".into())]),
+            BTreeMap::from([(ca.into(), "/not-read.pem".into())]),
+        ] {
+            assert!(matches!(
+                status_fixture_transport(&values, RuntimeEnvironment::Test),
+                Err(PresentationPolicyConfigError::Invalid {
+                    name: "PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN"
+                })
+            ));
+        }
+        let values = BTreeMap::from([
+            (origin.into(), "https://localhost:8443".into()),
+            (ca.into(), "/not-read.pem".into()),
+        ]);
+        for environment in [RuntimeEnvironment::Beta, RuntimeEnvironment::Production] {
+            assert!(
+                matches!(
+                    status_fixture_transport(&values, environment),
+                    Err(PresentationPolicyConfigError::Invalid {
+                        name: "PRESENTATION_POLICY_STATUS_FIXTURE_ORIGIN"
+                    })
+                ),
+                "deployed modes must reject before reading a CA file"
+            );
+        }
+    }
 }

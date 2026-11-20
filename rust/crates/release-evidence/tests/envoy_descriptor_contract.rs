@@ -89,9 +89,11 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // FlowResultResponse canonical_evidence_digest string field 8; typed
     // PolicyRevision message fields 13/8/15 and its content_digest string.
     // ValidateSessionResponse optional non_impersonated_session bool field 5.
+    // Credential-template verification_prerequisite_json string fields 29/25/35
+    // and IssuanceResponse verification_prerequisite_json string field 10.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "afd7ea3fe89f0941717f9aff2d244b4460e67641dedad20f321dd59f2e6efd79"
+        "962922ab9e30679ba715b7973c880ec034763fa6e6dd565de272fb93a3809034"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -198,6 +200,7 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 "credential_offer_labels",
                 "pre_auth_code",
                 "expires_at",
+                "verification_prerequisite_json",
             ],
         ),
     ] {

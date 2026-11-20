@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -171,6 +172,7 @@ impl DefaultInternalApplicationEvidenceCoordinator {
                 .map(Value::Object),
             None => None,
         };
+        let requirements = evidence_policy_requirements(&template.evidence_requirements)?;
         let facts = facts.iter().map(fact_policy_json).collect::<Vec<_>>();
         let request = json!({
             "app": {
@@ -182,7 +184,7 @@ impl DefaultInternalApplicationEvidenceCoordinator {
                 "approval_policy_set_id": template.approval_policy_set_id,
             },
             "binding": null,
-            "requirements": template.evidence_requirements,
+            "requirements": requirements,
             "facts": facts,
             "policy_set": policy_set,
         });
@@ -198,6 +200,58 @@ impl DefaultInternalApplicationEvidenceCoordinator {
             .and_then(|value| value.as_object().cloned())
             .ok_or(InternalApplicationEvidenceError::Policy)
     }
+}
+
+fn evidence_policy_requirements(
+    requirements: &[Value],
+) -> Result<Vec<Value>, InternalApplicationEvidenceError> {
+    requirements
+        .iter()
+        .cloned()
+        .map(|mut requirement| {
+            if let Some(fields) = requirement.as_object_mut() {
+                if let Some(evidence_id) = fields.remove("evidence_id") {
+                    if fields
+                        .get("requirement_id")
+                        .is_some_and(|requirement_id| requirement_id != &evidence_id)
+                    {
+                        return Err(InternalApplicationEvidenceError::Policy);
+                    }
+                    fields.insert("requirement_id".to_owned(), evidence_id);
+                }
+                // These fields belong to the service's check execution or display,
+                // not Core's evidence-policy requirement schema.
+                for field in [
+                    "description",
+                    "api",
+                    "expected_response",
+                    "response_mapping",
+                ] {
+                    fields.remove(field);
+                }
+                // ApplicationEvidenceRequirement serializes absent Option values
+                // as null. Preserve every non-null constraint, including ones Core
+                // does not support, so its closed schema still rejects them.
+                for field in [
+                    "accepted_formats",
+                    "max_file_size_bytes",
+                    "provider",
+                    "fact_type",
+                    "scope",
+                    "pass_rule",
+                    "verification_method",
+                    "freshness",
+                    "manual_fallback",
+                    "auto_issue_on_permit",
+                ] {
+                    if fields.get(field).is_some_and(Value::is_null) {
+                        fields.remove(field);
+                    }
+                }
+            }
+            Ok(requirement)
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -231,6 +285,14 @@ impl InternalApplicationEvidenceCoordinator for DefaultInternalApplicationEviden
             }
         };
         let mut evidence_fact = check.evidence_fact;
+        evidence_fact.requirement_id = Some(check_id.clone());
+        let logical_identity = serde_json::to_vec(&(
+            "marty.application-evidence-requirement/v1",
+            &check_id,
+            &evidence_fact.logical_key,
+        ))
+        .map_err(|_| InternalApplicationEvidenceError::Policy)?;
+        evidence_fact.logical_key = format!("{:x}", Sha256::digest(logical_identity));
         let mut facts = self.repository.list_facts(&application.id).await?;
         if let Some(previous) = facts
             .iter()
@@ -633,6 +695,7 @@ mod tests {
         outcome: EvidenceCommitOutcome,
         write: Mutex<Option<EvidenceTransitionWrite>>,
         conflict_events: Mutex<Vec<IssuanceEventRecord>>,
+        facts: Mutex<Vec<EvidenceFactRecord>>,
     }
 
     #[async_trait]
@@ -641,16 +704,35 @@ mod tests {
             &self,
             _application_id: &str,
         ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationEvidenceRepositoryError> {
-            Ok(Vec::new())
+            Ok(self.facts.lock().expect("facts lock").clone())
         }
 
         async fn approval_policy_set(
             &self,
-            _organization_id: &str,
-            _policy_set_id: &str,
+            organization_id: &str,
+            policy_set_id: &str,
         ) -> Result<Option<Map<String, Value>>, InternalApplicationEvidenceRepositoryError>
         {
-            Ok(None)
+            if organization_id != "org-passport" || policy_set_id != "reviewed-passport-approval" {
+                return Ok(None);
+            }
+            Ok(json!({
+                "id": policy_set_id,
+                "status": "ACTIVE",
+                "policy_type": "APPROVAL_RULES",
+                "cedar_policies": r#"permit (
+                    principal == MIP::ServiceAccount::"platform-evidence-policy",
+                    action == MIP::Action::"applications:approve",
+                    resource == MIP::Application::"application-1"
+                ) when {
+                    context.evidence_verification_status == "VERIFIED" &&
+                    context.evidence_scope_matched &&
+                    context.all_required_evidence_satisfied &&
+                    context.required_evidence_count > 0
+                };"#,
+            })
+            .as_object()
+            .cloned())
         }
 
         async fn commit_transition(
@@ -658,6 +740,12 @@ mod tests {
             write: &EvidenceTransitionWrite,
         ) -> Result<EvidenceCommitOutcome, InternalApplicationEvidenceRepositoryError> {
             *self.write.lock().expect("write lock") = Some(write.clone());
+            if self.outcome == EvidenceCommitOutcome::Committed {
+                self.facts
+                    .lock()
+                    .expect("facts lock")
+                    .push(write.evidence_fact.clone());
+            }
             Ok(self.outcome)
         }
 
@@ -686,6 +774,7 @@ mod tests {
             Ok(CredentialTransaction {
                 jwt_vc_profile: None,
                 jwt_vc_signing_timing: None,
+                issuance_intent: None,
 
                 id: "transaction-1".to_owned(),
                 organization_id: application.organization_id.clone(),
@@ -759,6 +848,7 @@ mod tests {
             "organization_id": "org-passport",
             "name": "Passport application",
             "credential_template_id": "credential-template-1",
+            "approval_policy_set_id": "reviewed-passport-approval",
             "evidence_requirements": [requirement()]
         }))
         .expect("template request");
@@ -838,11 +928,180 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verified_external_evidence_without_selected_policy_cannot_approve() {
+        let repository = Arc::new(MemoryEvidenceRepository {
+            outcome: EvidenceCommitOutcome::Committed,
+            write: Mutex::new(None),
+            conflict_events: Mutex::new(Vec::new()),
+            facts: Mutex::new(Vec::new()),
+        });
+        let (application, mut template) = application_and_template();
+        template.approval_policy_set_id = None;
+        let response = coordinator(repository.clone())
+            .run_external_check(
+                application,
+                template,
+                requirement().as_object().expect("requirement").clone(),
+                ExternalEvidenceApiCheckRequest {
+                    inputs: Map::new(),
+                    issue_on_permit: true,
+                },
+            )
+            .await
+            .expect("denied evidence is retained");
+        assert_eq!(response.policy_decision["allowed"], false);
+        assert_eq!(response.application_status, "pending");
+        assert!(response.issuance_transaction_id.is_none());
+        let write = repository.write.lock().expect("write lock");
+        assert!(write
+            .as_ref()
+            .expect("evidence write")
+            .transaction
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn requirement_projection_preserves_core_rejection_of_unrecognized_constraints() {
+        for (field, value) in [
+            ("unknown_constraint", Value::Null),
+            ("requirement_id", json!("different-check")),
+            ("freshness", json!({"max_age_seconds": 1})),
+            ("manual_fallback", json!(false)),
+            ("accepted_formats", json!(["application/pdf"])),
+            ("max_file_size_bytes", json!(1024)),
+            ("auto_issue_on_permit", json!("true")),
+            ("scope", json!([])),
+        ] {
+            let repository = Arc::new(MemoryEvidenceRepository {
+                outcome: EvidenceCommitOutcome::Committed,
+                write: Mutex::new(None),
+                conflict_events: Mutex::new(Vec::new()),
+                facts: Mutex::new(Vec::new()),
+            });
+            let (application, mut template) = application_and_template();
+            template.evidence_requirements[0][field] = value;
+            let selected_requirement = template.evidence_requirements[0]
+                .as_object()
+                .expect("requirement")
+                .clone();
+            assert_eq!(
+                coordinator(repository.clone())
+                    .run_external_check(
+                        application,
+                        template,
+                        selected_requirement,
+                        ExternalEvidenceApiCheckRequest {
+                            inputs: Map::new(),
+                            issue_on_permit: true,
+                        },
+                    )
+                    .await,
+                Err(InternalApplicationEvidenceError::Policy),
+                "{field}"
+            );
+            assert!(repository.write.lock().expect("write lock").is_none());
+        }
+    }
+
+    #[test]
+    fn projected_identity_and_constraints_remain_exact_and_bound_to_the_fact() {
+        let (application, template) = application_and_template();
+        let requirements = evidence_policy_requirements(&template.evidence_requirements)
+            .expect("canonical projection");
+        assert_eq!(requirements[0]["requirement_id"], "passport-check");
+        for field in ["pass_rule", "scope", "provider", "verification_method"] {
+            assert_eq!(
+                requirements[0][field],
+                template.evidence_requirements[0][field]
+            );
+        }
+        let request = json!({
+            "app": {"id":application.id,"organization_id":application.organization_id,"status":"pending"},
+            "requirements": requirements,
+            "facts": [{
+                "id":"fact-one","logical_key":"one","provider":"passport_verifier",
+                "fact_type":"passport.document_verified","subject_id":"learner-one",
+                "requirement_id":"different-check",
+                "scope":{"document_type":"passport","issuing_country":"US"},
+                "assertion":{"passive_auth_valid":true,"face_match_score":0.91,"document_not_expired":true},
+                "verification":{"status":"VERIFIED","method":"EXTERNAL_API_RESPONSE"},
+                "source":{},"observed_at":"2026-11-16T00:00:00Z","created_at":"2026-11-16T00:00:00Z"
+            }]
+        });
+        let evaluate = |request: &Value| -> Value {
+            serde_json::from_str(
+                &marty_verification::evidence_policy::evaluate_application_evidence_policy_json(
+                    &request.to_string(),
+                )
+                .expect("valid Core policy request"),
+            )
+            .expect("Core policy decision")
+        };
+        assert_eq!(
+            evaluate(&request)["context"]["satisfied_requirement_count"],
+            0
+        );
+        let mut matching = request;
+        matching["facts"][0]["requirement_id"] = json!("passport-check");
+        assert_eq!(
+            evaluate(&matching)["context"]["satisfied_requirement_count"],
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_requirements_keep_independent_evidence_heads() {
+        let repository = Arc::new(MemoryEvidenceRepository {
+            outcome: EvidenceCommitOutcome::Committed,
+            write: Mutex::new(None),
+            conflict_events: Mutex::new(Vec::new()),
+            facts: Mutex::new(Vec::new()),
+        });
+        let (mut application, mut template) = application_and_template();
+        let mut second = template.evidence_requirements[0].clone();
+        second["evidence_id"] = json!("second-passport-check");
+        template.evidence_requirements.push(second);
+        for index in 0..2 {
+            let response = coordinator(repository.clone())
+                .run_external_check(
+                    application,
+                    template.clone(),
+                    template.evidence_requirements[index]
+                        .as_object()
+                        .expect("requirement")
+                        .clone(),
+                    ExternalEvidenceApiCheckRequest {
+                        inputs: Map::new(),
+                        issue_on_permit: true,
+                    },
+                )
+                .await
+                .expect("bounded evidence transition");
+            assert_eq!(response.policy_decision["allowed"], index == 1);
+            assert_eq!(response.issuance_transaction_id.is_some(), index == 1);
+            application = repository
+                .write
+                .lock()
+                .expect("write lock")
+                .as_ref()
+                .expect("evidence write")
+                .application
+                .clone();
+        }
+        let facts = repository.facts.lock().expect("facts lock");
+        assert_eq!(facts.len(), 2);
+        assert_ne!(facts[0].logical_key, facts[1].logical_key);
+        assert_ne!(facts[0].requirement_id, facts[1].requirement_id);
+        assert!(facts.iter().all(|fact| fact.superseded_fact_id.is_none()));
+    }
+
+    #[tokio::test]
     async fn permit_builds_one_atomic_fact_policy_transaction_and_audit_write_set() {
         let repository = Arc::new(MemoryEvidenceRepository {
             outcome: EvidenceCommitOutcome::Committed,
             write: Mutex::new(None),
             conflict_events: Mutex::new(Vec::new()),
+            facts: Mutex::new(Vec::new()),
         });
         let (application, template) = application_and_template();
         let response = coordinator(repository.clone())
@@ -871,6 +1130,10 @@ mod tests {
             .expect("atomic write");
         assert_eq!(write.application.status, ApplicationStatus::Approved);
         assert_eq!(
+            write.evidence_fact.requirement_id.as_deref(),
+            Some("passport-check")
+        );
+        assert_eq!(
             write
                 .transaction
                 .as_ref()
@@ -897,6 +1160,7 @@ mod tests {
             outcome: EvidenceCommitOutcome::ConcurrentChange,
             write: Mutex::new(None),
             conflict_events: Mutex::new(Vec::new()),
+            facts: Mutex::new(Vec::new()),
         });
         let (application, template) = application_and_template();
         assert_eq!(

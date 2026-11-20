@@ -25,6 +25,7 @@ const POLICY_FIELDS: &[&str] = &[
     "holder_binding",
     "issuer_constraints",
     "freshness",
+    "prerequisite_evidence_profile",
 ];
 const RESPONSE_FIELDS: &[&str] = &[
     "id",
@@ -49,6 +50,8 @@ const RESPONSE_FIELDS: &[&str] = &[
     "credential_ranking_strategy",
     "credential_ranking_weights",
     "version",
+    "policy_revision",
+    "prerequisite_evidence_profile",
     "created_at",
     "updated_at",
 ];
@@ -71,6 +74,14 @@ pub fn canonicalize_request(
     validate_optional_string(&value, "purpose", 2000)?;
     validate_optional_string(&value, "trust_profile_id", 255)?;
     validate_optional_string(&value, "compliance_profile_id", 255)?;
+    if value
+        .get("prerequisite_evidence_profile")
+        .is_some_and(|profile| {
+            !profile.is_null() && profile.as_str() != Some("managed_sd_jwt_dcql_v1")
+        })
+    {
+        return Err(PresentationPolicyContractError);
+    }
     if let Some(display) = value.get_mut("display_metadata") {
         if !display.is_null() {
             *display = canonical_display(display.take(), false)?;
@@ -279,6 +290,27 @@ fn project_one(value: Value) -> Result<Value, PresentationPolicyContractError> {
         .and_then(Value::as_u64)
         .ok_or(PresentationPolicyContractError)?;
     if version == 0 {
+        return Err(PresentationPolicyContractError);
+    }
+    if let Some(revision) = value.get("policy_revision") {
+        let revision: marty_oid4vp_contract::FrozenPolicyIdentity =
+            serde_json::from_value(revision.clone())
+                .map_err(|_| PresentationPolicyContractError)?;
+        revision
+            .validate()
+            .map_err(|_| PresentationPolicyContractError)?;
+        if value.get("id").and_then(Value::as_str) != Some(revision.id.as_str())
+            || u64::from(revision.version) != version
+        {
+            return Err(PresentationPolicyContractError);
+        }
+    }
+    if value
+        .get("prerequisite_evidence_profile")
+        .is_some_and(|profile| !profile.is_null())
+        && (value["prerequisite_evidence_profile"].as_str() != Some("managed_sd_jwt_dcql_v1")
+            || !value.contains_key("policy_revision"))
+    {
         return Err(PresentationPolicyContractError);
     }
     remove_known_nulls(&mut value);
@@ -1074,6 +1106,40 @@ mod tests {
         invalid_requests: Vec<Value>,
         internal_response: Value,
         expected_public_response: Value,
+    }
+
+    #[test]
+    fn managed_prerequisite_profile_and_frozen_revision_survive_public_contract() {
+        use serde_json::json;
+        let fixture: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-presentation-policy-behavior.json"
+        ))
+        .unwrap();
+        let mut request = fixture.create_input;
+        request["prerequisite_evidence_profile"] = json!("managed_sd_jwt_dcql_v1");
+        let canonical =
+            canonicalize_request(&serde_json::to_vec(&request).unwrap(), false, true).unwrap();
+        assert_eq!(
+            canonical["prerequisite_evidence_profile"],
+            "managed_sd_jwt_dcql_v1"
+        );
+        request["prerequisite_evidence_profile"] = json!("unbounded_profile");
+        assert!(canonicalize_request(&serde_json::to_vec(&request).unwrap(), false, true).is_err());
+        let mut response = fixture.internal_response;
+        response["prerequisite_evidence_profile"] = json!("managed_sd_jwt_dcql_v1");
+        response["policy_revision"] = json!({
+            "id": response["id"], "version": response["version"],
+            "content_digest": format!("sha256:{}", "a".repeat(64)),
+        });
+        let projected = project_response(response.clone()).unwrap();
+        assert_eq!(projected["policy_revision"], response["policy_revision"]);
+        for field in ["id", "version", "content_digest"] {
+            let mut invalid = response.clone();
+            invalid["policy_revision"][field] = json!("substitution");
+            assert!(project_response(invalid).is_err());
+        }
+        response.as_object_mut().unwrap().remove("policy_revision");
+        assert!(project_response(response).is_err());
     }
 
     #[test]

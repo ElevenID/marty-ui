@@ -214,6 +214,80 @@ impl PassportNativeConfig {
 pub use marty_service_runtime::WorkloadTlsFiles as IssuanceWorkloadServerTlsFiles;
 
 #[derive(Clone, Eq, PartialEq)]
+pub struct FlowPrerequisiteOwnerConfig {
+    pub origin: String,
+    pub ca_file: String,
+    pub service_token: String,
+}
+
+impl std::fmt::Debug for FlowPrerequisiteOwnerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowPrerequisiteOwnerConfig")
+            .field("origin", &self.origin)
+            .field("ca_file", &self.ca_file)
+            .finish_non_exhaustive()
+    }
+}
+
+impl FlowPrerequisiteOwnerConfig {
+    fn from_values(
+        values: &BTreeMap<String, String>,
+        other_tokens: &[Option<&str>],
+    ) -> Result<Option<Self>, MmfError> {
+        let invalid = || {
+            MmfError::new(ErrorCode::Configuration,
+            "Flow prerequisite owner requires one HTTPS origin, explicit CA file and a distinct service token of at least 32 bytes")
+        };
+        let names = [
+            "FLOW_PREREQUISITE_OWNER_URL",
+            "FLOW_PREREQUISITE_OWNER_CA_FILE",
+            "FLOW_ISSUANCE_SERVICE_TOKEN",
+            "FLOW_ISSUANCE_SERVICE_TOKEN_FILE",
+        ];
+        if !names.iter().any(|name| values.contains_key(*name)) {
+            return Ok(None);
+        }
+        if values.contains_key("FLOW_ISSUANCE_SERVICE_TOKEN")
+            && values.contains_key("FLOW_ISSUANCE_SERVICE_TOKEN_FILE")
+        {
+            return Err(invalid());
+        }
+        let service_token =
+            secret_value(values, "FLOW_ISSUANCE_SERVICE_TOKEN")?.ok_or_else(invalid)?;
+        let origin = values
+            .get("FLOW_PREREQUISITE_OWNER_URL")
+            .ok_or_else(invalid)?;
+        let url = url::Url::parse(origin).map_err(|_| invalid())?;
+        let ca_file = values
+            .get("FLOW_PREREQUISITE_OWNER_CA_FILE")
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(invalid)?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || url.path() != "/"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !(32..=8192).contains(&service_token.len())
+            || service_token.trim() != service_token
+            || has_placeholder_prefix(&service_token)
+            || other_tokens
+                .iter()
+                .flatten()
+                .any(|token| *token == service_token)
+        {
+            return Err(invalid());
+        }
+        Ok(Some(Self {
+            origin: origin.clone(),
+            ca_file: ca_file.clone(),
+            service_token,
+        }))
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -244,6 +318,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_sign_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
+    pub flow_prerequisite_owner: Option<FlowPrerequisiteOwnerConfig>,
     pub organization_grpc_target: String,
     pub credential_template_grpc_target: String,
     pub revocation_profile_grpc_target: String,
@@ -337,6 +412,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 "internal_service_token_configured",
                 &self.internal_service_token.is_some(),
             )
+            .field("flow_prerequisite_owner", &self.flow_prerequisite_owner)
             .field("organization_grpc_target", &self.organization_grpc_target)
             .field(
                 "credential_template_grpc_target",
@@ -729,6 +805,16 @@ impl IssuanceServiceConfig {
         let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        let flow_prerequisite_owner = FlowPrerequisiteOwnerConfig::from_values(
+            &values,
+            &[
+                internal_service_token.as_deref(),
+                issuance_api_key.as_deref(),
+                signing_keys_internal_api_key.as_deref(),
+                integration_secret_api_key.as_deref(),
+                issuer_sign_key.as_deref(),
+            ],
+        )?;
         if issuer_sign_key
             .as_ref()
             .is_some_and(|key| internal_service_token.as_ref() == Some(key))
@@ -845,6 +931,7 @@ impl IssuanceServiceConfig {
             issuer_sign_key,
             revocation_profile_service_url,
             internal_service_token,
+            flow_prerequisite_owner,
             organization_grpc_target,
             credential_template_grpc_target,
             revocation_profile_grpc_target,
@@ -1343,7 +1430,76 @@ fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Resul
 mod tests {
     use mmf_core::ErrorCode;
 
-    use super::{validate_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig};
+    use super::{
+        validate_grpc_service_token, FlowPrerequisiteOwnerConfig, IssuanceServiceConfig,
+        PassportNativeConfig,
+    };
+
+    #[test]
+    fn prerequisite_owner_configuration_is_all_or_none_and_does_not_reuse_service_authority() {
+        use std::collections::BTreeMap;
+        let valid = || {
+            BTreeMap::from([
+                (
+                    "FLOW_PREREQUISITE_OWNER_URL".into(),
+                    "https://flow-owner.example:9443".into(),
+                ),
+                (
+                    "FLOW_PREREQUISITE_OWNER_CA_FILE".into(),
+                    "/operator/flow-owner-ca.pem".into(),
+                ),
+                (
+                    "FLOW_ISSUANCE_SERVICE_TOKEN".into(),
+                    "dedicated-flow-issuance-capability-1234567890".into(),
+                ),
+            ])
+        };
+        assert_eq!(
+            FlowPrerequisiteOwnerConfig::from_values(&BTreeMap::new(), &[]).unwrap(),
+            None
+        );
+        assert!(FlowPrerequisiteOwnerConfig::from_values(&valid(), &[])
+            .unwrap()
+            .is_some());
+        for field in [
+            "FLOW_PREREQUISITE_OWNER_URL",
+            "FLOW_PREREQUISITE_OWNER_CA_FILE",
+            "FLOW_ISSUANCE_SERVICE_TOKEN",
+        ] {
+            let mut values = valid();
+            values.remove(field);
+            assert!(FlowPrerequisiteOwnerConfig::from_values(&values, &[]).is_err());
+        }
+        for origin in [
+            "http://flow-owner.example",
+            "https://caller@flow-owner.example",
+            "https://flow-owner.example/path",
+            "https://flow-owner.example?tenant=other",
+            "https://flow-owner.example/#fragment",
+        ] {
+            let mut values = valid();
+            values.insert("FLOW_PREREQUISITE_OWNER_URL".into(), origin.into());
+            assert!(FlowPrerequisiteOwnerConfig::from_values(&values, &[]).is_err());
+        }
+        let values = valid();
+        assert!(FlowPrerequisiteOwnerConfig::from_values(
+            &values,
+            &[values
+                .get("FLOW_ISSUANCE_SERVICE_TOKEN")
+                .map(String::as_str)]
+        )
+        .is_err());
+        let mut both = valid();
+        both.insert(
+            "FLOW_ISSUANCE_SERVICE_TOKEN_FILE".into(),
+            "/not/read".into(),
+        );
+        assert!(FlowPrerequisiteOwnerConfig::from_values(&both, &[]).is_err());
+        let config = FlowPrerequisiteOwnerConfig::from_values(&valid(), &[])
+            .unwrap()
+            .unwrap();
+        assert!(!format!("{config:?}").contains(&config.service_token));
+    }
 
     #[test]
     fn production_passport_refuses_beta_simulator_without_qualifying_an_external_provider() {

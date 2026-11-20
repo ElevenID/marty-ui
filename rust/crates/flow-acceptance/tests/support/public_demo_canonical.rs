@@ -592,6 +592,7 @@ pub async fn run(
             "examples":[{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult","description":"Signed fictional age20.",
                 "profile":{"credential_template_id":"demo-age","issuer_did":ISSUER,"vct":VCT},"credential":specimen}]}}).to_string(),index==3).unwrap();
         let app = flow_read_router(FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(
                     Some(super::public_gateway::WORKLOAD.into()),

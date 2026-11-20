@@ -8,12 +8,14 @@ to the policy service's decision and fences finalization against a changed
 session. It extends the signing-authorization work in
 [atomic-signing-authorization.md](atomic-signing-authorization.md).
 
-The change does not authorize prerequisite-based issuance. The selected
+The request binding alone does not authorize prerequisite-based issuance. The selected
 SD-JWT/DCQL continuation now produces native query, subject and holder-key
 evidence, described in [SD-JWT prerequisite evidence](sd-jwt-prerequisite-evidence.md).
-The full OID4VP evidence contract still needs authoritative trust/status/replay
-outcomes and an issuance-owned continuation bound to one tenant, template and
-dataset.
+[Managed evidence V2](managed-oid4vp-evidence-v2.md) composes authenticated
+trust/status observations and Flow's durable receipt. The
+[verification-before-issuance profile](verification-before-issuance.md) binds
+that evidence to the immutable tenant, principal, holder, template, Policy and
+dataset selection and consumes its continuation under the signing claim.
 
 ## Authoritative policy identity
 

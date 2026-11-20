@@ -6,6 +6,7 @@ const MIGRATION_VERSIONS: &[&str] = &[
     "rust_credential_template_0002",
     "rust_credential_template_0003",
     "rust_credential_template_0004",
+    "rust_credential_template_0005",
 ];
 const ADVISORY_LOCK_ID: i64 = 718_431_214;
 
@@ -60,6 +61,11 @@ pub async fn migrate_credential_template_schema(
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0004_explicit_jwt_vc_profile.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0005_verification_prerequisite.sql"
     ))
     .execute(&mut *transaction)
     .await?;
@@ -348,6 +354,7 @@ async fn validate_connection(
         ("credential_templates", "zk_predicate_claims"),
         ("credential_templates", "credential_payload_format"),
         ("credential_templates", "jwt_vc_profile"),
+        ("credential_templates", "verification_prerequisite"),
         ("credential_templates", "wallet_configs"),
         ("credential_templates", "compliance_profile"),
         ("credential_templates", "compliance_profile_id"),
@@ -462,6 +469,71 @@ async fn validate_connection(
     {
         return Err(incompatible("explicit JWT-VC check changed"));
     }
+    validate_verification_prerequisite_schema(connection).await?;
+    Ok(())
+}
+
+async fn validate_verification_prerequisite_schema(
+    connection: &mut PgConnection,
+) -> Result<(), CredentialTemplateMigrationError> {
+    let source = include_str!("../migrations/0005_verification_prerequisite.sql");
+    let predicate = source
+        .split_once("AS $prerequisite_check$")
+        .and_then(|(_, rest)| rest.split_once("$prerequisite_check$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| incompatible("prerequisite predicate source is invalid"))?;
+    let readiness = source
+        .split_once("AS $prerequisite_readiness$")
+        .and_then(|(_, rest)| rest.split_once("$prerequisite_readiness$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| incompatible("prerequisite readiness source is invalid"))?;
+    let valid: bool = sqlx::query_scalar("SELECT
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='credential_template_service'
+            AND table_name='credential_templates' AND column_name='verification_prerequisite'
+            AND udt_name='jsonb' AND is_nullable='YES' AND column_default IS NULL)
+        AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='credential_template_service'
+            AND table_name='credential_templates' AND column_name='status' AND character_maximum_length >= 24)
+        AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+            WHERE p.oid=to_regprocedure('credential_template_service.template_verification_prerequisite_valid(jsonb,text,text,text,jsonb,jsonb,jsonb,text,jsonb,integer)')
+                AND p.proargnames=ARRAY['verification_prerequisite','credential_payload_format','status','issuance_protocol','supported_formats','wallet_configs','validity_rules','application_template_id','jwt_vc_profile','version']::text[]
+                AND p.proargmodes IS NULL AND p.pronargdefaults=0 AND p.provariadic=0
+                AND p.prosrc=$1 AND p.prorettype='boolean'::regtype AND p.provolatile='i' AND NOT p.proisstrict
+                AND NOT p.prosecdef AND p.proconfig IS NULL AND p.prokind='f' AND l.lanname='plpgsql')
+        AND EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_depend d
+            ON d.classid='pg_constraint'::regclass AND d.objid=c.oid
+            WHERE c.conrelid=to_regclass('credential_template_service.credential_templates')
+                AND c.conname='ck_template_verification_prerequisite' AND c.contype='c' AND c.convalidated
+                AND d.refclassid='pg_proc'::regclass
+                AND d.refobjid=to_regprocedure('credential_template_service.template_verification_prerequisite_valid(jsonb,text,text,text,jsonb,jsonb,jsonb,text,jsonb,integer)'))
+        AND EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass('credential_template_service.credential_templates')
+                AND t.tgname='guard_verification_prerequisite_readiness' AND t.tgenabled='O' AND t.tgtype=23
+                AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgattr::text='' AND t.tgnargs=0
+                AND p.oid=to_regprocedure('credential_template_service.guard_verification_prerequisite_readiness()')
+                AND p.pronargs=0 AND p.proargmodes IS NULL AND p.pronargdefaults=0 AND p.provariadic=0
+                AND p.prosrc=$2 AND p.prorettype='trigger'::regtype AND p.provolatile='v' AND NOT p.proisstrict
+                AND NOT p.prosecdef AND p.proconfig IS NULL AND p.prokind='f' AND l.lanname='plpgsql')")
+        .bind(predicate).bind(readiness).fetch_one(&mut *connection).await?;
+    if !valid {
+        return Err(incompatible(
+            "verification prerequisite boundary is missing or changed",
+        ));
+    }
+    let actual_call: String = sqlx::query_scalar(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid=to_regclass('credential_template_service.credential_templates')
+            AND conname='ck_template_verification_prerequisite'",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    let expected_call = source
+        .split_once("ADD CONSTRAINT ck_template_verification_prerequisite ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .map(|(call, _)| call)
+        .ok_or_else(|| incompatible("prerequisite check source is invalid"))?;
+    if normalize_profile_check_call(&actual_call) != normalize_profile_check_call(expected_call) {
+        return Err(incompatible("verification prerequisite check changed"));
+    }
     Ok(())
 }
 
@@ -474,6 +546,7 @@ fn normalize_profile_check_call(value: &str) -> String {
     value
         .replace("::text", "")
         .replace("::jsonb", "")
+        .replace("::integer", "")
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
         .collect()

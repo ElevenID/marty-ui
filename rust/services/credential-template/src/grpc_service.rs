@@ -117,6 +117,11 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
                     &input.jwt_vc_profile_json,
                 )
                 .map_err(|_| Status::invalid_argument("jwt_vc_profile_json"))?,
+                verification_prerequisite:
+                    marty_oid4vp_contract::issuance_prerequisite::parse_optional_policy_json(
+                        &input.verification_prerequisite_json,
+                    )
+                    .map_err(|_| Status::invalid_argument("verification_prerequisite_json"))?,
                 issuance_protocol: optional_text(input.issuance_protocol),
                 now: Utc::now(),
             })
@@ -242,6 +247,22 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
                 ));
             },
             issuance_protocol: masked_text(mask, "issuance_protocol", input.issuance_protocol),
+            verification_prerequisite: if mask.is_empty()
+                || mask
+                    .iter()
+                    .any(|field| field == "verification_prerequisite")
+            {
+                marty_oid4vp_contract::issuance_prerequisite::parse_optional_policy_json(
+                    &input.verification_prerequisite_json,
+                )
+                .map_err(|_| Status::invalid_argument("verification_prerequisite_json"))?
+            } else if input.verification_prerequisite_json.is_empty() {
+                None
+            } else {
+                return Err(Status::invalid_argument(
+                    "verification_prerequisite must be in update_mask",
+                ));
+            },
         };
         let template = self
             .application
@@ -416,6 +437,13 @@ fn template_message(template: &CredentialTemplate) -> Result<TemplateResponse, S
             .unwrap_or_default(),
         wallet_configs_json: serde_json::to_string(&template.wallet_configs)
             .map_err(|_| Status::internal("CREDENTIAL_TEMPLATE.SERIALIZATION_FAILED"))?,
+        verification_prerequisite_json: template
+            .verification_prerequisite
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| Status::internal("CREDENTIAL_TEMPLATE.SERIALIZATION_FAILED"))?
+            .unwrap_or_default(),
         issuer_algorithm: template.issuer_algorithm.clone().unwrap_or_default(),
         revocation_profile_id: template.revocation_profile_id.clone().unwrap_or_default(),
         issuer_did: template.issuer_did.clone().unwrap_or_default(),

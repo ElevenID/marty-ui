@@ -196,6 +196,7 @@ pub async fn prepare_wallet_verifier_request(
     now: DateTime<Utc>,
 ) -> Result<PreparedWalletVerifierRequest, WalletVerifierRequestError> {
     let invalid = || WalletVerifierRequestError::Unavailable;
+    crate::issuance_prerequisite::bound_intent(&instance).map_err(|_| invalid())?;
     // Sample-bound public sessions are server specimen journeys. Managed
     // authority must not turn them into an external-wallet request channel.
     crate::public_verification_session::require_wallet_session(&instance).map_err(|_| invalid())?;
@@ -694,6 +695,7 @@ mod tests {
         let signer = Arc::new(FixtureSigner::from_owned_fixture());
         let token = uuid::Uuid::new_v4().to_string();
         let app = crate::flow_read_router(crate::FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
             )),
@@ -896,6 +898,7 @@ mod tests {
         let signer = Arc::new(FixtureSigner::from_owned_fixture());
         let token = uuid::Uuid::new_v4().to_string();
         let app = crate::flow_wallet_authority_router(crate::FlowHttpState {
+            issuance_prerequisite_authenticator: None,
             service_authenticator: Some(Arc::new(
                 mmf_security::ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
             )),

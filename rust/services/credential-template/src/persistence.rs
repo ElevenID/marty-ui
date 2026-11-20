@@ -287,6 +287,8 @@ pub struct CredentialTemplate {
     pub supported_formats: Vec<CredentialFormat>,
     pub credential_payload_format: String,
     pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    pub verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     pub wallet_configs: Vec<WalletConfig>,
     pub compliance_profile: Option<Value>,
     pub compliance_profile_id: Option<String>,
@@ -303,6 +305,7 @@ pub struct CredentialTemplate {
 
 impl CredentialTemplate {
     pub fn validate_jwt_vc_profile(&self) -> Result<(), CredentialTemplateError> {
+        self.validate_verification_prerequisite()?;
         let direct = self.credential_payload_format == marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT;
         match &self.jwt_vc_profile {
             Some(policy) if direct
@@ -325,11 +328,37 @@ impl CredentialTemplate {
     }
 
     pub fn storage_status(&self) -> String {
-        if self.jwt_vc_profile.is_some() {
+        if self.verification_prerequisite.is_some() {
+            format!("prerequisite1_{}", self.status.as_str())
+        } else if self.jwt_vc_profile.is_some() {
             format!("jose1_{}", self.status.as_str())
         } else {
             self.status.as_str().to_owned()
         }
+    }
+    pub fn validate_verification_prerequisite(&self) -> Result<(), CredentialTemplateError> {
+        let Some(policy) = &self.verification_prerequisite else {
+            return Ok(());
+        };
+        policy.validate().map_err(|_| {
+            CredentialTemplateError::InvalidConfiguration(
+                "invalid verification prerequisite policy".into(),
+            )
+        })?;
+        if self.credential_payload_format != "SD_JWT_VC"
+            || self.supported_formats != [CredentialFormat::SdJwtVc]
+            || self.issuance_protocol != "OID4VCI_PRE_AUTH"
+            || self.jwt_vc_profile.is_some()
+            || self.application_template_id.is_some()
+            || !self.wallet_configs.is_empty()
+            || self.validity_rules.renewable
+            || self.version <= 0
+        {
+            return Err(CredentialTemplateError::InvalidConfiguration(
+                "verification prerequisite requires one SD-JWT format, the pre-authorized wallet route, no application or wallet variants, and renewal disabled".into()
+            ));
+        }
+        Ok(())
     }
     pub fn validate_definition(&self) -> Result<(), CredentialTemplateError> {
         validate_credential_type(&self.credential_type)?;

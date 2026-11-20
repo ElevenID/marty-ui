@@ -3,6 +3,17 @@ import { server } from '@test/mocks/server';
 import { http, HttpResponse } from 'msw';
 import { buildCredentialTemplatePatch as build, updateCredentialTemplate, buildCredentialTemplatePayload, normalizeCredentialTemplateValidityRules } from '../presentationPolicyApi';
 describe('sparse credential template update', () => {
+  it('preserves the exact saved verification prerequisite on creation and sparse edits', () => {
+    const verification_prerequisite = {
+      profile: 'managed_sd_jwt_dcql_same_holder_v1',
+      flow_definition_id: 'verification-flow', flow_definition_version: 2,
+      policy: { id: 'policy-1', version: 3, content_digest: `sha256:${'a'.repeat(64)}` },
+      verifier_issuer_did: 'did:web:verifier.example', ttl_seconds: 300,
+    };
+    expect(build({ organization_id: 'org', verification_prerequisite })).toEqual({ verification_prerequisite });
+    expect(buildCredentialTemplatePayload({ issuer_did: 'did:web:issuer.example', compliance_profile_id: 'profile-1', verification_prerequisite }).verification_prerequisite).toEqual(verification_prerequisite);
+    expect(build({ organization_id: 'org', name: 'Renamed' })).not.toHaveProperty('verification_prerequisite');
+  });
   it('sends a sparse body through the exported update adapter', async () => {
     let received;
     let scope;

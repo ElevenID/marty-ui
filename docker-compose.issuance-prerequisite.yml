@@ -1,0 +1,34 @@
+# Opt-in overlay after docker-compose.base.yml and docker-compose.beta.yml.
+# Uses the existing non-exportable Flow TLS identity and workload CA; no ports
+# are published. Both native Issuance aliases need the same owner capability.
+services:
+  flow:
+    environment:
+      FLOW_ISSUANCE_SERVICE_TOKEN_FILE: /run/secrets/flow_issuance_service_token
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/secrets/flow_workload_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: ${FLOW_SERVER_TLS_KMS_ADDR:?FLOW_SERVER_TLS_KMS_ADDR must be set}
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: ${FLOW_SERVER_TLS_KMS_KEY_NAME:?FLOW_SERVER_TLS_KMS_KEY_NAME must be set}
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:?FLOW_SERVER_TLS_KMS_KEY_VERSION must be set}
+    secrets:
+      - flow_issuance_service_token
+
+  issuance:
+    environment: &issuance-prerequisite-client
+      FLOW_PREREQUISITE_OWNER_URL: https://flow:8443
+      FLOW_PREREQUISITE_OWNER_CA_FILE: /run/secrets/workload_identity_ca_cert
+      FLOW_ISSUANCE_SERVICE_TOKEN_FILE: /run/secrets/flow_issuance_service_token
+    secrets:
+      - flow_issuance_service_token
+
+  issuance-native:
+    environment: *issuance-prerequisite-client
+    secrets:
+      - flow_issuance_service_token
+
+secrets:
+  flow_issuance_service_token:
+    file: ${FLOW_ISSUANCE_SERVICE_TOKEN_FILE:?provide a dedicated Flow issuance service token file}

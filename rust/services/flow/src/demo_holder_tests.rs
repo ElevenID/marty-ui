@@ -813,6 +813,7 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         .await
         .unwrap();
     let router = crate::flow_read_router(crate::FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: Some(Arc::new(
             mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
         )),

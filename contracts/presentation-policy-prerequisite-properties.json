@@ -1,0 +1,36 @@
+{
+  "prerequisite_evidence_profile": {
+    "description": "Opt in to canonical evidence for a managed, holder-bound SD-JWT/DCQL verification. Activation validates the governed owner configuration.",
+    "enum": [
+      "managed_sd_jwt_dcql_v1"
+    ],
+    "type": "string"
+  },
+  "policy_revision": {
+    "description": "Read-only canonical policy identity to freeze into an issuance verification prerequisite.",
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "id",
+      "version",
+      "content_digest"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      },
+      "version": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4294967295
+      },
+      "content_digest": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    },
+    "readOnly": true
+  }
+}

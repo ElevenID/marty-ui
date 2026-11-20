@@ -33,7 +33,9 @@ const NONCE_TTL_SECONDS: u64 = 900;
 /// Only the workload request owner is exposed on the optional managed HTTPS
 /// listener. It does not expose public Flow administration or callback routes.
 pub fn flow_wallet_authority_router(state: FlowHttpState) -> Router {
-    wallet_verifier_owner_routes().with_state(state)
+    wallet_verifier_owner_routes()
+        .merge(crate::issuance_prerequisite::issuance_prerequisite_owner_routes())
+        .with_state(state)
 }
 
 fn wallet_verifier_owner_routes() -> Router<FlowHttpState> {

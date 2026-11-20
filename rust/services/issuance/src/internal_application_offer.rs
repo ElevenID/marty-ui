@@ -616,6 +616,7 @@ mod tests {
         CredentialTransaction {
             jwt_vc_profile: None,
             jwt_vc_signing_timing: None,
+            issuance_intent: None,
 
             id: "transaction-1".into(),
             organization_id: "org-123".into(),

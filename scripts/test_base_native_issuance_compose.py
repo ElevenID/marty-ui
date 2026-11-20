@@ -89,6 +89,17 @@ BETA_OVERLAY_ONLY = frozenset(
         "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
     }
 )
+# The dedicated Flow owner channel is opt-in; its reviewed overlay mounts the
+# token file instead of forwarding the raw-token alternative. See
+# docs/verification-before-issuance.md. No baseline owner receives these inputs.
+PREREQUISITE_OPT_IN_ONLY = frozenset(
+    {
+        "FLOW_ISSUANCE_SERVICE_TOKEN",
+        "FLOW_ISSUANCE_SERVICE_TOKEN_FILE",
+        "FLOW_PREREQUISITE_OWNER_CA_FILE",
+        "FLOW_PREREQUISITE_OWNER_URL",
+    }
+)
 EXPLICIT_MOUNTS = frozenset({"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"})
 FILE_SELECTORS = frozenset(
     {
@@ -326,6 +337,7 @@ def assert_sources(base, profile, runtime):
     omitted = (
         UNFORWARDED_LEGACY
         | BETA_OVERLAY_ONLY
+        | PREREQUISITE_OPT_IN_ONLY
         | EXPLICIT_MOUNTS
         | FILE_SELECTORS
         | NATIVE_CONFIG_META
@@ -336,6 +348,9 @@ def assert_sources(base, profile, runtime):
         )}
     )
     assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (set(env) | set(legacy))
+    for model in (base, profile):
+        for service in model["services"].values():
+            assert PREREQUISITE_OPT_IN_ONLY.isdisjoint(service.get("environment", {}))
     actual_omitted = inputs - set(env)
     assert actual_omitted == omitted, (
         "Update the exhaustive native configuration inventory: "

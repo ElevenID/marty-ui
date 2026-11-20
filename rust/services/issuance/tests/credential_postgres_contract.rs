@@ -646,6 +646,8 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     assert_eq!(transaction.nonce.as_deref(), Some(nonce.as_str()));
     let credential_id = "urn:uuid:credential-postgres-contract";
     let authorization = CredentialSigningAuthorization {
+        prerequisite: None,
+        holder_key_thumbprint: None,
         transaction: &transaction,
         authorization_session: None,
         access_token: &access_token,
@@ -2639,6 +2641,8 @@ async fn assert_authorization_only_race(
         1
     );
     let authorization = CredentialSigningAuthorization {
+        prerequisite: None,
+        holder_key_thumbprint: None,
         transaction: &first,
         authorization_session: Some(&session),
         access_token: &token,
@@ -2773,6 +2777,7 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
     let transaction = CredentialTransaction {
         jwt_vc_profile: None,
         jwt_vc_signing_timing: None,
+        issuance_intent: None,
 
         id: Uuid::new_v4().to_string(),
         organization_id: "org-initiation-race".to_owned(),
@@ -3173,6 +3178,8 @@ async fn signing_claim_rejects_changed_transaction_and_access_authority() {
             .await
             .unwrap();
         let authorization = CredentialSigningAuthorization {
+            prerequisite: None,
+            holder_key_thumbprint: None,
             transaction: &admitted,
             authorization_session: None,
             access_token: &token,
@@ -3212,6 +3219,8 @@ async fn signing_claim_rejects_changed_transaction_and_access_authority() {
             .await
             .unwrap();
         let authorization = CredentialSigningAuthorization {
+            prerequisite: None,
+            holder_key_thumbprint: None,
             transaction: &admitted,
             authorization_session: None,
             access_token: &token,
@@ -3248,6 +3257,8 @@ async fn signing_claim_rejects_changed_transaction_and_access_authority() {
     selected.issuer_algorithm = Some("EdDSA".into());
     selected.signing_service_id = Some("current-custody".into());
     let authorization = CredentialSigningAuthorization {
+        prerequisite: None,
+        holder_key_thumbprint: None,
         transaction: &admitted,
         authorization_session: None,
         access_token: "token-current-issuer",
@@ -3357,6 +3368,8 @@ async fn signing_claim_rejects_changed_linked_authorization_session() {
             .await
             .unwrap();
         let authorization = CredentialSigningAuthorization {
+            prerequisite: None,
+            holder_key_thumbprint: None,
             transaction: &admitted,
             authorization_session: Some(&session),
             access_token: &token,
@@ -3446,6 +3459,8 @@ async fn signing_claim_preserves_only_deterministic_legacy_null_client_linkage()
             ));
         }
         let authorization = CredentialSigningAuthorization {
+            prerequisite: None,
+            holder_key_thumbprint: None,
             transaction: &admitted,
             authorization_session: Some(&session),
             access_token: &token,
@@ -3487,6 +3502,8 @@ async fn signing_claim_rechecks_concurrent_row_change_and_expiry_after_lock_wait
     let admitted =
         seed_signing_claim(&pool, &repository, key, "claim-row-lock", "token-row-lock").await;
     let authorization = CredentialSigningAuthorization {
+        prerequisite: None,
+        holder_key_thumbprint: None,
         transaction: &admitted,
         authorization_session: None,
         access_token: "token-row-lock",
@@ -3531,6 +3548,8 @@ async fn signing_claim_rechecks_concurrent_row_change_and_expiry_after_lock_wait
             sqlx::query("UPDATE issuance_service.issuance_transactions SET status = $1 WHERE id = $2")
                 .bind(status).bind(&id).execute(&pool).await.unwrap();
             let authorization = CredentialSigningAuthorization {
+                prerequisite: None,
+                holder_key_thumbprint: None,
                 transaction: &admitted,
                 authorization_session: Some(&session),
                 access_token: &token,
@@ -3578,7 +3597,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
             zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
             credential_payload_format TEXT NOT NULL DEFAULT 'w3c_vcdm_v2_sd_jwt',
-            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB, issuance_intent JSONB,
             wallet_configs JSONB DEFAULT '[]'::jsonb, validity_days INTEGER NOT NULL DEFAULT 365,
             renewable BOOLEAN NOT NULL DEFAULT false,
             renewal_window_days INTEGER NOT NULL DEFAULT 30,
@@ -3676,10 +3695,14 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
     ] {
         sqlx::query(statement).execute(pool).await.unwrap();
     }
+    marty_issuance_service::verification_prerequisite::migrate(pool)
+        .await
+        .unwrap();
 }
 
 async fn drop_contract_schema(pool: &sqlx::PgPool) {
     for statement in [
+        "DROP TABLE IF EXISTS issuance_service.issuance_prerequisite_continuations",
         "DROP TABLE IF EXISTS issuance_service.credential_delivery_records",
         "DROP TABLE IF EXISTS issuance_service.oid4vci_registered_clients",
         "DROP TABLE IF EXISTS issuance_service.issuance_events",

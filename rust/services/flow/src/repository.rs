@@ -50,6 +50,8 @@ pub enum RepositoryError {
     InvalidReplayDigest,
     #[error("FLOW.INVALID_VERIFICATION_RECEIPT")]
     InvalidVerificationReceipt,
+    #[error("FLOW.ISSUANCE_PREREQUISITE_CONFLICT")]
+    IssuancePrerequisiteConflict,
     #[error("FLOW.INVALID_PHYSICAL_START_SNAPSHOT")]
     InvalidPhysicalStartSnapshot,
     #[error("FLOW.ARTIFACT_CONFLICT: {0}")]
@@ -107,6 +109,7 @@ impl InMemoryFlowRepository {
     }
 
     pub fn save_instance(&self, instance: FlowInstance) -> Result<(), RepositoryError> {
+        crate::issuance_prerequisite::reject_supplied_intent(&instance.context)?;
         crate::verification_receipt::reject_supplied_receipt(
             &instance.context,
             instance.result.as_ref(),
@@ -157,6 +160,8 @@ impl InMemoryFlowRepository {
         callback: Option<Message>,
         now_ms: u64,
     ) -> Result<bool, RepositoryError> {
+        crate::issuance_prerequisite::reject_supplied_intent(&instance.context)?;
+        crate::issuance_prerequisite::reject_supplied_intent(&expected.context)?;
         crate::verification_receipt::reject_supplied_receipt(
             &instance.context,
             instance.result.as_ref(),
@@ -346,6 +351,7 @@ impl InMemoryFlowRepository {
     ) -> Result<(ApplicationEventReceipt, bool), RepositoryError> {
         checked_public_record(&receipt)?;
         for candidate in &planned {
+            crate::issuance_prerequisite::reject_supplied_intent(&candidate.instance.context)?;
             crate::verification_receipt::reject_supplied_receipt(
                 &candidate.instance.context,
                 candidate.instance.result.as_ref(),
