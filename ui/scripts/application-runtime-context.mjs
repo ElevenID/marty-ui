@@ -23,6 +23,9 @@ const BROWSER_DRIVER_INPUTS = Object.freeze([
   'ui/scripts/application-browser-process.py', 'scripts/installer_startup_process.py',
 ]);
 export const APPLICATION_RUNTIME_BASE_IMAGE = 'nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8';
+export const APPLICATION_RELEASE_IMAGE = 'ghcr.io/elevenid/marty-ui-oss/application';
+const RELEASE_RECIPE = 'docker/application.Dockerfile';
+const RELEASE_SCHEMA = 'marty.application-image-check/v1';
 export const APPLICATION_RUNTIME_INPUTS = Object.freeze([
   { path: 'ui/scripts/application-runtime.Dockerfile', target: 'Dockerfile', mode: 0o644 },
   { path: 'ui/nginx.prod.conf', target: 'nginx.conf', mode: 0o644 },
@@ -463,7 +466,9 @@ async function defaultBrowserWorker({ origin, runtimeContext, contextManifestSha
   }
 }
 
-async function verifyBrowserResult(browser, { origin, root, manifest, contextSha, channel }) {
+// Reuse the same byte-bound observation checks when the reviewed producer
+// records a release. This validates evidence and never launches a browser.
+export async function verifyApplicationBrowserResult(browser, { origin, root, manifest, contextSha, channel }) {
   require(browser?.schema === 'marty.application-browser-startup/v1' && ['passed', 'fixture-passed'].includes(browser.status)
     && typeof browser.fixture === 'boolean' && (browser.status === 'fixture-passed') === browser.fixture,
   'Application browser worker did not complete its qualification');
@@ -534,7 +539,7 @@ function failureMessages(error) {
 }
 
 function failedBrowserReport({ error, phase, fixture, manifest, contextSha, contextUnchanged, origin,
-  imageId, containerId, cleanup, evidence, diagnostics }) {
+  imageId, containerId, cleanup, evidence, diagnostics, runtimeSchema, imageIdentity }) {
   const observation = evidence?.report || diagnostics?.report;
   const processEvidence = evidence?.process_evidence || diagnostics?.process_evidence;
   let validProcess = false;
@@ -561,7 +566,7 @@ function failedBrowserReport({ error, phase, fixture, manifest, contextSha, cont
     process_evidence: validProcess ? processEvidence : null,
     diagnostic_tool_inputs: evidence?.driver_inputs || diagnostics?.driver_inputs || [],
     retained_diagnostic_directory: diagnostics?.retained_directory || null,
-    runtime: { schema: 'marty.application-runtime-container/v1', context_sha256: contextSha,
+    runtime: { schema: runtimeSchema, ...imageIdentity, context_sha256: contextSha,
       image_id: imageId || null, container_id: containerId || null,
       endpoint: origin ? { host: '127.0.0.1', port: Number(new URL(origin).port) } : null, cleanup: { ...cleanup } },
     failure: { phase, messages: failureMessages(error) },
@@ -571,8 +576,22 @@ function failedBrowserReport({ error, phase, fixture, manifest, contextSha, cont
 // A substituted runner is only for protocol fixtures; it can never issue a
 // report claiming that a real Docker image or container was qualified.
 export async function checkApplicationRuntimeContainer({ context, reportPath, browserStartup = false,
-  browserReportPath, browserChannel }, { docker = defaultDocker, browserWorker = defaultBrowserWorker } = {}) {
+  browserReportPath, browserChannel, imageReference, buildReleaseImage = false },
+{ docker = defaultDocker, browserWorker = defaultBrowserWorker } = {}) {
   const verified = validateApplicationRuntimeContext(context);
+  require(typeof buildReleaseImage === 'boolean' && !(buildReleaseImage && imageReference !== undefined),
+    'Select one application image mode');
+  require(imageReference === undefined || (typeof imageReference === 'string'
+    && imageReference.startsWith(`${APPLICATION_RELEASE_IMAGE}@`)
+    && /^sha256:[0-9a-f]{64}$/.test(imageReference.slice(APPLICATION_RELEASE_IMAGE.length + 1))),
+  'Application image reference must use the fixed repository and a canonical digest');
+  const releaseImage = buildReleaseImage || imageReference !== undefined;
+  require(!releaseImage || (verified.manifest.exact_committed_source
+    && verified.manifest.effective_source_sha === verified.manifest.source_commit),
+  'Application release image requires exact committed source');
+  const runtimeSchema = releaseImage ? RELEASE_SCHEMA : 'marty.application-runtime-container/v1';
+  const imageIdentity = releaseImage ? { image_mode: imageReference ? 'published-digest' : 'local-release-build',
+    image_reference: imageReference || null, recipe_input: read(ROOT, RELEASE_RECIPE).record } : {};
   const report = newDestination(reportPath, [verified.root]);
   require(path.extname(report) === '.json', 'Runtime report must use a JSON path');
   require(typeof browserStartup === 'boolean' && (browserStartup
@@ -602,18 +621,44 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
   let browserEvidence;
   let browserDiagnostics;
   let origin = null;
-  let phase = 'image-build';
+  let phase = imageReference ? 'image-pull' : 'image-build';
   let failurePhase;
   let contextUnchanged = false;
-  const cleanup = { container_removed: false, image_removed: false };
+  const cleanup = { container_removed: false, image_removed: false,
+    ...(releaseImage ? { image_cache_retained: Boolean(imageReference) } : {}) };
+  const correctImageLabels = (metadata) => {
+    const labels = metadata?.Config?.Labels;
+    return releaseImage
+      ? metadata.Os === 'linux' && metadata.Architecture === 'amd64'
+        && labels?.['org.opencontainers.image.source'] === 'https://github.com/ElevenID/marty-ui'
+        && labels['org.opencontainers.image.revision'] === manifest.source_commit
+        && labels['io.elevenid.ui.audience'] === 'production'
+        && labels['io.elevenid.ui.surface'] === 'application'
+        && labels['io.elevenid.application.context-sha256'] === contextSha
+      : labels?.['io.elevenid.application-runtime.scope'] === 'diagnostic'
+        && labels['io.elevenid.application-runtime.context-sha256'] === contextSha;
+  };
+  const verifyImmutableInputs = () => {
+    require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha,
+      'Runtime check or cleanup changed its closed context');
+    if (releaseImage) assert.deepEqual(read(ROOT, RELEASE_RECIPE).record, imageIdentity.recipe_input,
+      'Application image recipe changed during its runtime check');
+  };
   try {
-    buildAttempted = true;
-    await command(['build', '--pull', '--network=none', '--build-arg', `APPLICATION_CONTEXT_SHA=${contextSha}`,
-      '--tag', tag, '--file', path.join(root, 'Dockerfile'), root], { timeout: 300_000 });
-    const image = JSON.parse((await command(['image', 'inspect', tag])).stdout);
-    require(Array.isArray(image) && image.length === 1 && /^sha256:[0-9a-f]{64}$/.test(image[0].Id), 'Docker did not identify the built image');
-    require(image[0].Config?.Labels?.['io.elevenid.application-runtime.scope'] === 'diagnostic'
-      && image[0].Config.Labels['io.elevenid.application-runtime.context-sha256'] === contextSha, 'Runtime image diagnostic labels differ');
+    if (imageReference) await command(['pull', '--platform', 'linux/amd64', imageReference], { timeout: 300_000 });
+    else {
+      buildAttempted = true;
+      await command(['build', '--pull', '--network=none',
+        ...(releaseImage ? ['--platform', 'linux/amd64', '--build-arg', `APPLICATION_SOURCE_SHA=${manifest.source_commit}`] : []),
+        '--build-arg', `APPLICATION_CONTEXT_SHA=${contextSha}`,
+        '--tag', tag, '--file', releaseImage ? path.join(ROOT, RELEASE_RECIPE) : path.join(root, 'Dockerfile'), root],
+      { timeout: 300_000 });
+    }
+    const image = JSON.parse((await command(['image', 'inspect', imageReference || tag])).stdout);
+    require(Array.isArray(image) && image.length === 1 && /^sha256:[0-9a-f]{64}$/.test(image[0].Id), 'Docker did not identify the selected image');
+    require(correctImageLabels(image[0]), releaseImage ? 'Application image source, platform or labels differ' : 'Runtime image diagnostic labels differ');
+    require(!imageReference || (Array.isArray(image[0].RepoDigests) && image[0].RepoDigests.includes(imageReference)),
+      'Application image digest differs from the requested immutable reference');
     imageId = image[0].Id;
     phase = 'runtime-startup';
     runAttempted = true;
@@ -656,6 +701,25 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       const relative = manifest.output_inventory.files[index].path;
       require(lines[index] === `644:${expected.get(relative).length}:${paths[index]}`, `Runtime resource mode or size differs: ${relative}`);
     }
+    let verifiedOutputResources;
+    if (releaseImage) {
+      // The image check also closes the container's complete output roster.
+      // HTTP/browser probes cover behavior; this binds every runtime file,
+      // including resources that the observed startup does not request.
+      const listing = await command(['exec', containerId, 'find', '/usr/share/nginx/html', '-mindepth', '1', '!', '-type', 'd', '-print']);
+      assert.deepEqual(listing.stdout.trimEnd().split('\n').sort(), [...paths].sort(),
+        'Application image output membership differs from its qualified context');
+      const hashes = await command(['exec', containerId, 'sha256sum', ...paths]);
+      const lines = hashes.stdout.trimEnd().split('\n');
+      require(lines.length === paths.length, 'Application image byte evidence is incomplete');
+      verifiedOutputResources = manifest.output_inventory.files.map((item, index) => {
+        const bytes = expected.get(item.path);
+        const sha256 = digest(bytes);
+        require(lines[index] === `${sha256.slice(7)}  ${paths[index]}`,
+          `Application image output bytes differ: ${item.path}`);
+        return { path: item.path, bytes: bytes.length, sha256, mode: 0o644 };
+      });
+    }
     const served = [];
     for (const item of manifest.resource_result.served_resources) served.push(await requestResource(origin, item.path, expected.get(item.path), remaining(5000)));
     const routeMetadata = await requestResource(origin, 'marty-web-routes.json', expected.get('marty-web-routes.json'), remaining(5000));
@@ -679,22 +743,25 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       require(browserEvidence.process_evidence.guardian?.path === 'scripts/installer_startup_process.py'
         && browserEvidence.process_evidence.guardian.sha256 === read(ROOT, 'scripts/installer_startup_process.py').record.sha256,
       'Application browser used a different process guardian');
-      await verifyBrowserResult(browserEvidence.report, { origin, root, manifest, contextSha, channel: browserChannel });
+      await verifyApplicationBrowserResult(browserEvidence.report, { origin, root, manifest, contextSha, channel: browserChannel });
     }
     phase = 'context-revalidation';
-    require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha, 'Runtime checker changed its closed context');
+    verifyImmutableInputs();
     const qualificationFixture = fixture || Boolean(browserEvidence?.report.fixture);
     result = {
-      schema: 'marty.application-runtime-container/v1', status: qualificationFixture ? 'fixture-passed' : 'passed',
+      schema: runtimeSchema, ...imageIdentity, status: qualificationFixture ? 'fixture-passed' : 'passed',
       fixture: qualificationFixture, context_sha256: contextSha, source_commit: manifest.source_commit,
       effective_source_sha: manifest.effective_source_sha, exact_committed_source: manifest.exact_committed_source,
       base_image: APPLICATION_RUNTIME_BASE_IMAGE, image_id: imageId, container_id: containerId,
       endpoint: { host: '127.0.0.1', port }, public_resources_readable: [...APPLICATION_RETAINED_PUBLIC_FILES],
       all_output_resources_readable: manifest.output_inventory.files.map((item) => item.path),
+      ...(releaseImage ? { output_resources_verified: verifiedOutputResources } : {}),
       served_resources: served, route_metadata: routeMetadata, missing_resources: missing,
       runtime_transformations: manifest.output_inventory.files.filter((item) => item.path === 'runtime-config.js' || item.path.endsWith('.html'))
         .map((item) => ({ path: item.path, original_sha256: item.sha256, runtime_sha256: digest(expected.get(item.path)), mode: 0o644 })),
-      qualification: { context_prepared: true, container_image_built: !qualificationFixture, container_resources_checked: !qualificationFixture,
+      qualification: { context_prepared: true, container_image_built: !qualificationFixture && !imageReference,
+        ...(releaseImage ? { immutable_image_verified: !qualificationFixture && Boolean(imageReference) } : {}),
+        container_resources_checked: !qualificationFixture,
         browser_startup_observed: browserStartup && !qualificationFixture, host_deployment_tested: false, oidc_journey_tested: false,
         published: false, activated: false }, cleanup,
     };
@@ -719,8 +786,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
         if (remaining.code === 0) {
           const metadata = JSON.parse(remaining.stdout);
           require(metadata.length === 1 && (!imageId || metadata[0].Id === imageId)
-            && metadata[0].Config?.Labels?.['io.elevenid.application-runtime.scope'] === 'diagnostic'
-            && metadata[0].Config.Labels['io.elevenid.application-runtime.context-sha256'] === contextSha,
+            && correctImageLabels(metadata[0]),
             'Refusing cleanup of an image with a different owner');
           await docker(['image', 'rm', '--force', tag], { timeout: 15_000 });
         } else require(/No such (?:object|image)/i.test(remaining.stderr), 'Could not inspect owned runtime image during cleanup');
@@ -730,8 +796,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       }
     } catch (error) { cleanupErrors.push(error); }
     try {
-      require(validateApplicationRuntimeContext(root).manifest_sha256 === contextSha,
-        'Runtime check or cleanup changed its closed context');
+      verifyImmutableInputs();
       contextUnchanged = true;
     } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) {
@@ -746,15 +811,17 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
     if (browserStartup) {
       try {
         const browser = failedBrowserReport({ error: failure, phase: failurePhase, fixture, manifest, contextSha,
-          contextUnchanged, origin, imageId, containerId, cleanup, evidence: browserEvidence, diagnostics: browserDiagnostics });
+          contextUnchanged, origin, imageId, containerId, cleanup, evidence: browserEvidence, diagnostics: browserDiagnostics,
+          runtimeSchema, imageIdentity });
         const bytes = Buffer.from(`${JSON.stringify(browser, null, 2)}\n`);
         writeFileSync(browserReport, bytes, { flag: 'wx', mode: 0o600 });
-        const failedRuntime = { schema: 'marty.application-runtime-container/v1', status: 'failed', fixture: browser.fixture,
+        const failedRuntime = { schema: runtimeSchema, ...imageIdentity, status: 'failed', fixture: browser.fixture,
           context_sha256: contextSha, source_commit: manifest.source_commit,
           effective_source_sha: manifest.effective_source_sha, exact_committed_source: manifest.exact_committed_source,
           base_image: APPLICATION_RUNTIME_BASE_IMAGE, image_id: imageId || null, container_id: containerId || null,
           endpoint: browser.runtime.endpoint, context_unchanged: contextUnchanged,
           qualification: { context_prepared: false, container_image_built: false, container_resources_checked: false,
+            ...(releaseImage ? { immutable_image_verified: false } : {}),
             browser_startup_observed: false, host_deployment_tested: false, oidc_journey_tested: false,
             published: false, activated: false }, cleanup: { ...cleanup }, failure: browser.failure,
           browser_startup: { report_path: browserReport, bytes: bytes.length, sha256: digest(bytes), schema: browser.schema,
@@ -765,7 +832,8 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
     }
     throw failure;
   }
-  require(cleanup.container_removed && cleanup.image_removed, 'Runtime cleanup was incomplete');
+  require(cleanup.container_removed && (imageReference ? cleanup.image_cache_retained && !cleanup.image_removed : cleanup.image_removed),
+    'Runtime cleanup was incomplete');
   if (browserStartup) {
     const observation = browserEvidence.report;
     const browser = { ...observation, status: result.fixture ? 'fixture-passed' : 'passed', fixture: result.fixture,
@@ -773,7 +841,7 @@ export async function checkApplicationRuntimeContainer({ context, reportPath, br
       qualification: { ...observation.qualification, browser_startup_observed: !result.fixture,
         sdk_wasm_initialized_in_browser: !result.fixture },
       process_evidence: browserEvidence.process_evidence, diagnostic_tool_inputs: browserEvidence.driver_inputs,
-      runtime: { schema: result.schema, context_sha256: contextSha, image_id: imageId, container_id: containerId,
+      runtime: { schema: result.schema, ...imageIdentity, context_sha256: contextSha, image_id: imageId, container_id: containerId,
         endpoint: result.endpoint, cleanup: { ...cleanup } } };
     const bytes = Buffer.from(`${JSON.stringify(browser, null, 2)}\n`);
     writeFileSync(browserReport, bytes, { flag: 'wx', mode: 0o600 });
@@ -791,7 +859,8 @@ function cli(args) {
     const flag = args[index];
     if (flag === '--check-container') { require(!options.check, 'Duplicate runtime option'); options.check = true; }
     else if (flag === '--browser-startup') { require(!options.browserStartup, 'Duplicate runtime option'); options.browserStartup = true; }
-    else if (['--context', '--report', '--browser-report', '--browser-channel'].includes(flag)) {
+    else if (flag === '--build-release-image') { require(!options.buildReleaseImage, 'Duplicate runtime option'); options.buildReleaseImage = true; }
+    else if (['--context', '--report', '--browser-report', '--browser-channel', '--image-reference'].includes(flag)) {
       require(!options[flag] && args[index + 1] && !args[index + 1].startsWith('--'), 'Duplicate or missing runtime option');
       options[flag] = args[++index];
     } else throw new Error(`Unknown runtime option: ${flag}`);
@@ -799,7 +868,8 @@ function cli(args) {
   require(options.check && options['--context'] && options['--report'],
     'Usage: application-runtime-context.mjs --context ABS_DIR --report ABS_NEW_JSON --check-container');
   return { context: options['--context'], reportPath: options['--report'], browserStartup: Boolean(options.browserStartup),
-    browserReportPath: options['--browser-report'], browserChannel: options['--browser-channel'] };
+    browserReportPath: options['--browser-report'], browserChannel: options['--browser-channel'],
+    imageReference: options['--image-reference'], buildReleaseImage: Boolean(options.buildReleaseImage) };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {

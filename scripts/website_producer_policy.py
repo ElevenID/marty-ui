@@ -15,6 +15,7 @@ STANDALONE_IMAGE = "ghcr.io/elevenid/website"
 LEGACY_REPOSITORIES = {ui.REPOSITORY: "1140864197", ui.COMMERCE_REPOSITORY: "1207411806"}
 LEGACY_WEBSITE_IMAGE = "ghcr.io/elevenid/marty-ui-oss/website"
 LEGACY_COMMERCE_WEBSITE_IMAGE = "ghcr.io/elevenid/marty-subscriptions/website"
+PACKAGE_APPLICATION_IMAGE = "ghcr.io/elevenid/marty-ui-oss/application"
 ROLES = ("website", "application", "composition")
 
 
@@ -62,5 +63,7 @@ def image_policy(uri: str, *, role: str) -> dict[str, str]:
         "application": {ui.PUBLIC_IMAGE: ui.REPOSITORY, ui.COMMERCE_IMAGE: ui.COMMERCE_REPOSITORY},
         "composition": {},
     }[role]
+    if role == "application":
+        images[PACKAGE_APPLICATION_IMAGE] = ui.REPOSITORY
     ui.require(isinstance(uri, str) and uri in images, "image is not authorized for the web producer role")
     return producer_policy(images[uri], role=role)

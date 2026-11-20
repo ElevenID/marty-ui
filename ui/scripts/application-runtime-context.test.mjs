@@ -14,8 +14,9 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { APPLICATION_RETAINED_PUBLIC_FILES, APPLICATION_RESOURCE_MIME_TYPES } from './application-public-assets.mjs';
 import {
-  APPLICATION_RUNTIME_BASE_IMAGE, APPLICATION_RUNTIME_INPUTS, checkApplicationRuntimeContainer,
+  APPLICATION_RELEASE_IMAGE, APPLICATION_RUNTIME_BASE_IMAGE, APPLICATION_RUNTIME_INPUTS, checkApplicationRuntimeContainer,
   createApplicationRuntimeContext, expectedDefaultRuntimeBytes, validateApplicationRuntimeContext, runApplicationBrowserProcess,
+  verifyApplicationBrowserResult,
 } from './application-runtime-context.mjs';
 import { APPLICATION_BROWSER_ROUTES } from './application-browser-startup.mjs';
 
@@ -190,7 +191,9 @@ test('expected runtime transformations match the actual unchanged shell hook wit
   }
 });
 
-async function dockerFixture(t, input, { corrupt, unreadable = false, badPort = false, buildFails = false, cleanupFails = false } = {}) {
+async function dockerFixture(t, input, { corrupt, unreadable = false, badPort = false, buildFails = false, cleanupFails = false,
+  releaseImage = false, imageReference, imageChange = () => {}, pullFails = false,
+  extraOutput = false, corruptFileDigest = false, preexistingImage = false } = {}) {
   const manifest = createApplicationRuntimeContext(input);
   const requests = [];
   const expected = new Map(input.outputInventory.files.map((item) => [item.path,
@@ -211,12 +214,23 @@ async function dockerFixture(t, input, { corrupt, unreadable = false, badPort = 
   let tag;
   let name;
   let owner;
-  let imageExists = false;
+  let imageExists = preexistingImage;
   let containerExists = false;
-  const image = () => [{ Id: imageId, Config: { Labels: {
-    'io.elevenid.application-runtime.scope': 'diagnostic',
-    'io.elevenid.application-runtime.context-sha256': manifest.manifest_sha256,
-  } } }];
+  const image = () => {
+    const value = { Id: imageId, ...(releaseImage ? { Os: 'linux', Architecture: 'amd64', RepoDigests: imageReference ? [imageReference] : [] } : {}),
+      Config: { Labels: releaseImage ? {
+        'org.opencontainers.image.source': 'https://github.com/ElevenID/marty-ui',
+        'org.opencontainers.image.revision': COMMIT,
+        'io.elevenid.ui.audience': 'production',
+        'io.elevenid.ui.surface': 'application',
+        'io.elevenid.application.context-sha256': manifest.manifest_sha256,
+      } : {
+        'io.elevenid.application-runtime.scope': 'diagnostic',
+        'io.elevenid.application-runtime.context-sha256': manifest.manifest_sha256,
+      } } };
+    imageChange(value);
+    return [value];
+  };
   const docker = async (args) => {
     calls.push(args);
     const okay = (stdout = '') => ({ code: 0, stdout, stderr: '' });
@@ -225,6 +239,18 @@ async function dockerFixture(t, input, { corrupt, unreadable = false, badPort = 
       if (buildFails) throw new Error('fixture Docker build failed');
       assert.ok(args.includes('--pull'));
       assert.ok(args.includes('--network=none'));
+      if (releaseImage) {
+        assert.ok(args.includes(`APPLICATION_SOURCE_SHA=${COMMIT}`));
+        assert.equal(args[args.indexOf('--file') + 1], path.join(ROOT, 'docker/application.Dockerfile'));
+        assert.equal(args[args.indexOf('--platform') + 1], 'linux/amd64');
+      }
+      imageExists = true;
+      return okay();
+    }
+    if (args[0] === 'pull') {
+      assert.equal(releaseImage, true);
+      assert.deepEqual(args, ['pull', '--platform', 'linux/amd64', imageReference]);
+      if (pullFails) throw new Error('fixture Docker pull failed');
       imageExists = true;
       return okay();
     }
@@ -246,6 +272,15 @@ async function dockerFixture(t, input, { corrupt, unreadable = false, badPort = 
       assert.equal(args[2], 'nginx');
       if (unreadable) throw new Error('fixture Nginx user cannot read output');
       return okay(input.outputInventory.files.map((item) => `644:${expected.get(item.path).length}:/usr/share/nginx/html/${item.path}`).join('\n') + '\n');
+    }
+    if (args[0] === 'exec' && args[2] === 'find') {
+      assert.equal(releaseImage, true);
+      const paths = input.outputInventory.files.map((item) => `/usr/share/nginx/html/${item.path}`);
+      return okay([...paths, ...(extraOutput ? ['/usr/share/nginx/html/unreviewed.html'] : [])].join('\n') + '\n');
+    }
+    if (args[0] === 'exec' && args[2] === 'sha256sum') {
+      assert.equal(releaseImage, true);
+      return okay(input.outputInventory.files.map((item) => `${corruptFileDigest ? '0'.repeat(64) : digest(expected.get(item.path)).slice(7)}  /usr/share/nginx/html/${item.path}`).join('\n') + '\n');
     }
     if (args[0] === 'exec') { assert.deepEqual(args.slice(2), ['nginx', '-t']); return okay(); }
     if (args[0] === 'container' && args[1] === 'rm') {
@@ -281,6 +316,110 @@ test('a mock Docker protocol fixture cannot claim real container qualification',
   assert.deepEqual(JSON.parse(readFileSync(reportPath)), result);
   assert.equal(Object.hasOwn(result, 'browser_startup'), false, 'Default v1 reports retain their original field set');
 });
+
+const RELEASE_REFERENCE = `${APPLICATION_RELEASE_IMAGE}@sha256:${'3'.repeat(64)}`;
+
+test('a local production-image check builds only the reviewed recipe and preserves its distinct evidence scope', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input, { releaseImage: true });
+  const result = await checkApplicationRuntimeContainer({ context: input.destination,
+    reportPath: path.join(input.temporary, 'image-check.json'), buildReleaseImage: true }, protocol);
+  assert.equal(result.schema, 'marty.application-image-check/v1');
+  assert.equal(result.image_mode, 'local-release-build');
+  assert.equal(result.image_reference, null);
+  assert.deepEqual(result.recipe_input, record(ROOT, 'docker/application.Dockerfile'));
+  assert.equal(result.status, 'fixture-passed');
+  assert.equal(result.qualification.container_image_built, false);
+  assert.equal(result.qualification.immutable_image_verified, false);
+  assert.equal(result.output_resources_verified.length, input.outputInventory.files.length);
+  assert.ok(result.output_resources_verified.every((item) => item.mode === 0o644));
+  assert.deepEqual(result.cleanup, { container_removed: true, image_removed: true, image_cache_retained: false });
+  assert.deepEqual(protocol.states(), { imageExists: false, containerExists: false });
+  assert.ok(protocol.calls.some((args) => args[0] === 'build'));
+  assert.ok(!protocol.calls.some((args) => args[0] === 'pull'));
+});
+
+test('a published digest image is checked without rebuilding or deleting the shared image cache', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input, { releaseImage: true, imageReference: RELEASE_REFERENCE, preexistingImage: true });
+  const result = await checkApplicationRuntimeContainer({ context: input.destination,
+    reportPath: path.join(input.temporary, 'image-check.json'), imageReference: RELEASE_REFERENCE }, protocol);
+  assert.equal(result.schema, 'marty.application-image-check/v1');
+  assert.equal(result.image_mode, 'published-digest');
+  assert.equal(result.image_reference, RELEASE_REFERENCE);
+  assert.equal(result.status, 'fixture-passed');
+  assert.equal(result.qualification.container_image_built, false);
+  assert.equal(result.qualification.immutable_image_verified, false);
+  assert.equal(result.qualification.container_resources_checked, false);
+  assert.deepEqual(result.cleanup, { container_removed: true, image_removed: false, image_cache_retained: true });
+  assert.deepEqual(protocol.states(), { imageExists: true, containerExists: false });
+  assert.ok(!protocol.calls.some((args) => args[0] === 'build' || (args[0] === 'image' && args[1] === 'rm')));
+});
+
+for (const imageReference of ['application:latest', `${APPLICATION_RELEASE_IMAGE}:latest`,
+  `${APPLICATION_RELEASE_IMAGE}@sha256:${'A'.repeat(64)}`, `ghcr.io/elsewhere/application@sha256:${'3'.repeat(64)}`,
+  `${RELEASE_REFERENCE}:latest`, '', null]) {
+  test(`mutable or unapproved application image reference is rejected: ${JSON.stringify(imageReference)}`, async (t) => {
+    const input = fixture(t);
+    createApplicationRuntimeContext(input);
+    let called = false;
+    await assert.rejects(checkApplicationRuntimeContainer({ context: input.destination,
+      reportPath: path.join(input.temporary, 'image-check.json'), imageReference },
+    { docker: async () => { called = true; throw new Error('Docker must not run'); } }), /canonical digest/);
+    assert.equal(called, false);
+  });
+}
+
+test('release image modes are exclusive and require an exact source marker', async (t) => {
+  const input = fixture(t, 'development');
+  createApplicationRuntimeContext(input);
+  let called = false;
+  const protocol = { docker: async () => { called = true; throw new Error('Docker must not run'); } };
+  const options = { context: input.destination, reportPath: path.join(input.temporary, 'image-check.json') };
+  await assert.rejects(checkApplicationRuntimeContainer({ ...options, buildReleaseImage: true, imageReference: RELEASE_REFERENCE }, protocol),
+    /Select one application image mode/);
+  for (const mode of [{ buildReleaseImage: true }, { imageReference: RELEASE_REFERENCE }]) {
+    await assert.rejects(checkApplicationRuntimeContainer({ ...options, ...mode }, protocol), /exact committed source/);
+  }
+  assert.equal(called, false);
+});
+
+for (const [label, imageChange] of [
+  ['source repository', (image) => { image.Config.Labels['org.opencontainers.image.source'] = 'https://github.com/elsewhere/application'; }],
+  ['source commit', (image) => { image.Config.Labels['org.opencontainers.image.revision'] = 'b'.repeat(40); }],
+  ['surface', (image) => { image.Config.Labels['io.elevenid.ui.surface'] = 'combined'; }],
+  ['audience', (image) => { image.Config.Labels['io.elevenid.ui.audience'] = 'customer'; }],
+  ['context', (image) => { image.Config.Labels['io.elevenid.application.context-sha256'] = `sha256:${'0'.repeat(64)}`; }],
+  ['platform', (image) => { image.Architecture = 'arm64'; }],
+  ['operating system', (image) => { image.Os = 'windows'; }],
+  ['digest', (image) => { image.RepoDigests = [`${APPLICATION_RELEASE_IMAGE}@sha256:${'4'.repeat(64)}`]; }],
+]) {
+  test(`published application image rejects a mismatched ${label} before startup`, async (t) => {
+    const input = fixture(t);
+    const protocol = await dockerFixture(t, input, { releaseImage: true, imageReference: RELEASE_REFERENCE, imageChange });
+    await assert.rejects(checkApplicationRuntimeContainer({ context: input.destination,
+      reportPath: path.join(input.temporary, 'image-check.json'), imageReference: RELEASE_REFERENCE }, protocol), /differs|differ/);
+    assert.ok(!protocol.calls.some((args) => args[0] === 'run' || (args[0] === 'image' && args[1] === 'rm')));
+    assert.deepEqual(protocol.states(), { imageExists: true, containerExists: false });
+  });
+}
+
+for (const [label, alteration] of [
+  ['unexpected output', { extraOutput: true }], ['unobserved output bytes', { corruptFileDigest: true }],
+  ['failed pull', { pullFails: true }], ['failed container cleanup', { cleanupFails: true }],
+]) {
+  test(`published image ${label} cannot yield acceptance or delete external image state`, async (t) => {
+    const input = fixture(t);
+    const protocol = await dockerFixture(t, input, { releaseImage: true, imageReference: RELEASE_REFERENCE,
+      preexistingImage: true, ...alteration });
+    const reportPath = path.join(input.temporary, 'image-check.json');
+    await assert.rejects(checkApplicationRuntimeContainer({ context: input.destination, reportPath, imageReference: RELEASE_REFERENCE }, protocol));
+    assert.equal(existsSync(reportPath), false);
+    assert.equal(protocol.states().imageExists, true);
+    if (!alteration.cleanupFails) assert.equal(protocol.states().containerExists, false);
+    assert.ok(!protocol.calls.some((args) => args[0] === 'image' && args[1] === 'rm'));
+  });
+}
 
 function browserFixtureEvidence(input, options, { realLooking = false } = {}) {
   const verified = validateApplicationRuntimeContext(input.destination);
@@ -327,6 +466,27 @@ function browserOptions(input) {
     browserReportPath: path.join(input.temporary, 'browser-startup.json'), browserChannel: 'chrome' };
 }
 
+test('record-time browser evidence replay preserves Retry, CSP and WASM recovery validation without a browser process', async (t) => {
+  const input = fixture(t);
+  createApplicationRuntimeContext(input);
+  const verified = validateApplicationRuntimeContext(input.destination);
+  const origin = 'http://127.0.0.1:12345';
+  const binding = { origin, root: verified.root, manifest: verified.manifest,
+    contextSha: verified.manifest_sha256, channel: 'chrome' };
+  const original = browserFixtureEvidence(input, { origin }).report;
+  await verifyApplicationBrowserResult(original, binding);
+  for (const alter of [
+    (browser) => { browser.routes[0].retry.session_rechecked = false; },
+    (browser) => { browser.routes[0].navigation.content_security_policy = "default-src *"; },
+    (browser) => { browser.negative_control.aborted_wasm_requests = 0; },
+    (browser) => { browser.negative_control.recovery.retry_enabled = false; },
+  ]) {
+    const changed = structuredClone(original);
+    alter(changed);
+    await assert.rejects(verifyApplicationBrowserResult(changed, binding));
+  }
+});
+
 function failedBrowserReports(options) {
   const runtime = JSON.parse(readFileSync(options.reportPath));
   const bytes = readFileSync(options.browserReportPath);
@@ -346,8 +506,8 @@ function failedBrowserReports(options) {
   return { runtime, browser };
 }
 
-async function runtimeCliFixture(t, input, protocol, { browserFailure = false } = {}) {
-  const options = browserOptions(input);
+async function runtimeCliFixture(t, input, protocol, { browserFailure = false, mode = {} } = {}) {
+  const options = { ...browserOptions(input), ...mode };
   let browserCalled = false;
   const control = createServer(async (request, response) => {
     try {
@@ -398,10 +558,61 @@ async function runtimeCliFixture(t, input, protocol, { browserFailure = false } 
   }
   const run = () => execFileAsync(process.execPath, [path.join(ROOT, 'ui/scripts/application-runtime-context.mjs'),
     '--context', options.context, '--report', options.reportPath, '--check-container', '--browser-startup',
-    '--browser-report', options.browserReportPath, '--browser-channel', 'chrome'],
+    '--browser-report', options.browserReportPath, '--browser-channel', 'chrome',
+    ...(options.buildReleaseImage ? ['--build-release-image'] : []),
+    ...(options.imageReference ? ['--image-reference', options.imageReference] : [])],
   { cwd: ROOT, env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ''}` }, timeout: 20_000, maxBuffer: 64 * 1024 });
   return { options, run, browserCalled: () => browserCalled };
 }
+
+for (const mode of [{ buildReleaseImage: true }, { imageReference: RELEASE_REFERENCE }]) {
+  test(`the production-image CLI binds sandbox-browser evidence to ${mode.buildReleaseImage ? 'its local build' : 'the exact published digest'}`, async (t) => {
+    const input = fixture(t);
+    const protocol = await dockerFixture(t, input, { releaseImage: true, imageReference: mode.imageReference });
+    const cli = await runtimeCliFixture(t, input, protocol, { mode });
+    await cli.run();
+    assert.equal(cli.browserCalled(), true);
+    const runtime = JSON.parse(readFileSync(cli.options.reportPath));
+    const browser = JSON.parse(readFileSync(cli.options.browserReportPath));
+    assert.equal(runtime.schema, 'marty.application-image-check/v1');
+    assert.equal(browser.runtime.schema, runtime.schema);
+    assert.equal(runtime.image_reference, mode.imageReference || null);
+    assert.equal(browser.runtime.image_reference, runtime.image_reference);
+    assert.equal(browser.runtime.image_mode, runtime.image_mode);
+    assert.deepEqual(browser.runtime.recipe_input, runtime.recipe_input);
+    assert.deepEqual(browser.runtime.cleanup, runtime.cleanup);
+    assert.equal(runtime.browser_startup.sha256, digest(readFileSync(cli.options.browserReportPath)));
+    for (const report of [runtime, browser]) {
+      assert.equal(report.status, 'fixture-passed');
+      assert.equal(report.fixture, true);
+      assert.equal(report.qualification.browser_startup_observed, false);
+    }
+    assert.equal(runtime.qualification.container_image_built, false);
+    assert.equal(runtime.qualification.immutable_image_verified, false);
+    assert.equal(runtime.qualification.container_resources_checked, false);
+    assert.deepEqual(protocol.states(), { imageExists: Boolean(mode.imageReference), containerExists: false });
+  });
+}
+
+test('a published-image browser failure retains bound failure evidence and removes only its owned container', async (t) => {
+  const input = fixture(t);
+  const protocol = await dockerFixture(t, input, { releaseImage: true, imageReference: RELEASE_REFERENCE });
+  const options = { ...browserOptions(input), imageReference: RELEASE_REFERENCE };
+  await assert.rejects(checkApplicationRuntimeContainer(options, { ...protocol, browserWorker: async (request) => {
+    const evidence = browserFixtureEvidence(input, request);
+    evidence.report.routes.pop();
+    return evidence;
+  } }), /required entrypoint/);
+  const { runtime, browser } = failedBrowserReports(options);
+  for (const report of [runtime, browser.runtime]) {
+    assert.equal(report.schema, 'marty.application-image-check/v1');
+    assert.equal(report.image_mode, 'published-digest');
+    assert.equal(report.image_reference, RELEASE_REFERENCE);
+  }
+  assert.deepEqual(runtime.cleanup, { container_removed: true, image_removed: false, image_cache_retained: true });
+  assert.deepEqual(protocol.states(), { imageExists: true, containerExists: false });
+  assert.ok(!protocol.calls.some((args) => args[0] === 'image' && args[1] === 'rm'));
+});
 
 test('the independent runtime CLI completes its browser validator import and publishes fixture evidence', async (t) => {
   const input = fixture(t);
