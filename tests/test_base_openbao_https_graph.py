@@ -20,7 +20,6 @@ CLIENTS = {
     "signing-keys",
     "flow",
     "issuance",
-    "canvas-sync-worker",
 }
 SCOPED_FILES = {
     "db-migrate": (
