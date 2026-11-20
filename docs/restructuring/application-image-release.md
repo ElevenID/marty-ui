@@ -158,3 +158,81 @@ as accepted publication. Composition adoption needs an explicit application
 compatibility contract and the remaining authentication/OIDC and isolated-host
 promotion, rollback and recovery evidence. Production activation remains a
 separate acceptance gate.
+
+## Prepare independent application/backend qualification
+
+The package application no longer carries the legacy combined release's backend
+version. Select the application source and the stable backend source/tag
+independently. Preparing that selection is a useful prerequisite to runtime
+qualification; it is not a compatibility receipt.
+
+`scripts/application_backend_qualification.py` prepares a private directory with
+the fourteen original application files, the ten original stable-backend files,
+an additional qualification plan and the fixed observation profile. It
+authenticates both original producers through the existing application and
+stable-installer verifiers. The
+application's retained build plan and full baseline remain bound through the
+signed receipt. The backend's inventory, bundle, complete image lock and OpenBao
+image retain their original identities.
+
+The backend archive is retained and hashed as an inert original. Its internal
+ownership manifest, embedded image lock and Compose capabilities still require
+the existing bundle inspection before a future qualification runner extracts
+or uses it. The prepared plan establishes the reviewed input identities only.
+
+```sh
+python3 scripts/application_backend_qualification.py prepare \
+  --application-assets /absolute/private/application-release \
+  --application-source-sha EXACT_APPLICATION_SOURCE_SHA \
+  --backend-assets /absolute/private/stable-backend \
+  --backend-source-sha EXACT_BACKEND_SOURCE_SHA --backend-tag vX.Y.Z \
+  --output /absolute/private/new-application-backend-qualification \
+  --gh /absolute/pinned/gh --cosign /absolute/pinned/cosign
+
+python3 scripts/application_backend_qualification.py validate \
+  --assets /absolute/private/new-application-backend-qualification \
+  --plan-id sha256:EXACT_PLAN_ID_RETURNED_BY_PREPARE \
+  --application-source-sha EXACT_APPLICATION_SOURCE_SHA \
+  --backend-source-sha EXACT_BACKEND_SOURCE_SHA --backend-tag vX.Y.Z \
+  --gh /absolute/pinned/gh --cosign /absolute/pinned/cosign
+```
+
+Preparation prints the plan's SHA-256 identity. Retain that identity with the
+reviewed application and backend selection. Validation consumes the prepared
+directory and reauthenticates the retained originals against those independently
+supplied selections and the expected plan ID. A self-consistent replacement plan
+cannot silently choose a different release, including another signed run or
+image built from the same source. The complete file inventory and trusted
+observation profile remain bound by byte length and SHA-256. Preparation checks
+original input preservation, keeps downloaded files
+inert, and publishes only the complete private directory with the existing
+Linux atomic no-replace primitive.
+
+The plan's status remains explicitly `unqualified`. Its required observations
+cover the actual production-public runtime, backend/API and identity-provider
+behavior. Isolated-host testing remains a separate pending gate. The
+application's production startup hook and nginx
+configuration do not inherit the customer runtime's settings merely because
+the selected backend also supports a customer UI. Website route matching remains
+a separate unqualified gate. This tool does not execute the observation profile,
+create signatures, produce a composition or change deployed image selections.
+The existing combined composition continues to reject the package application.
+
+### Known source-level capability gap
+
+At publisher source `f81bf70f867569db97f73b06dbaef7813e89118b`, the application
+requests `GET /v1/auth/provider` from
+[`identityProviderApi.js`](https://github.com/ElevenID/marty-ui/blob/f81bf70f867569db97f73b06dbaef7813e89118b/ui/src/services/identityProviderApi.js)
+and `POST /v1/auth/passkeys/enroll` from
+[`authApi.js`](https://github.com/ElevenID/marty-ui/blob/f81bf70f867569db97f73b06dbaef7813e89118b/ui/src/services/authApi.js).
+Both are registered by the auth service at that source. They are absent from
+the [accepted backend's auth route declarations](https://github.com/ElevenID/marty-ui/blob/ca58b8bec939f5b26bebecd849edf55b5c4af5ae/rust/services/auth/src/http_service.rs)
+at `ca58b8bec939f5b26bebecd849edf55b5c4af5ae` (`v1.1.273`). This source
+comparison does not replace a runtime probe, but the current application cannot
+inherit a compatibility claim for that backend from `/login` and `/console`
+startup alone. The qualification profile requires these capabilities to be
+observed explicitly. The accepted backend pin remains unchanged.
+
+The first actual prepared selection still requires the original signed package
+application publication and original backend evidence. Local test fixtures do
+not establish publication, authenticated runtime success or host acceptance.

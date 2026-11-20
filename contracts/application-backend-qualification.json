@@ -1,0 +1,74 @@
+{
+  "schema": "marty.application-backend-qualification-profile/v1",
+  "id": "public-application-session/v1",
+  "purpose": "Required future observations for one exact application image and an independently selected backend; this profile records no successful observations or compatibility.",
+  "platform": "linux/amd64",
+  "network": {
+    "browser_api": "same-origin",
+    "application_upstream": "gateway:8000",
+    "container_resolver": "127.0.0.11",
+    "edge_headers": ["X-Forwarded-Proto", "X-Forwarded-Host"]
+  },
+  "required_observations": [
+    {
+      "id": "application-image-and-route-identity",
+      "requires": [
+        "Run the exact independently authenticated application image digest and retain its source, runtime context and output inventory identities.",
+        "Read /marty-web-routes.json and match its source, application surface and route contract to the original receipt."
+      ]
+    },
+    {
+      "id": "production-runtime-configuration",
+      "requires": [
+        "Observe organizationCreationEnabled: false by default and explicit true and false values selected through ORGANIZATION_CREATION_ENABLED.",
+        "Confirm runtime-config.js contains no secrets; its production hook injects GA and organization creation settings only. The separate GOOGLE_SITE_VERIFICATION HTML injection is not runtime configuration.",
+        "Do not assume customer UI_ENABLED_SECTIONS or hosting configuration can be injected through the production hook."
+      ]
+    },
+    {
+      "id": "session-bootstrap-and-recovery",
+      "requires": [
+        "Observe same-origin GET /v1/auth/me with cookies and no-store caching.",
+        "Treat explicit HTTP 401 or authenticated=false as unauthenticated; authenticated=true must include a valid principal.",
+        "Observe network failure, unavailable service and malformed responses preserving an existing session and exposing bounded Retry."
+      ]
+    },
+    {
+      "id": "provider-capabilities",
+      "requires": [
+        "GET /v1/auth/provider is required, including when an external identity provider disables optional capabilities.",
+        "Observe provider_mode equal to keycloak or external, a nonempty provider_name, and Boolean registration_supported, passkey_enrollment_supported and provider_logout_supported.",
+        "Validate any account and recovery URLs as HTTPS URLs without embedded credentials."
+      ]
+    },
+    {
+      "id": "oidc-login-refresh-and-logout",
+      "requires": [
+        "Exercise /v1/auth/login?redirect_uri=/console&ui_locales=en through a real identity provider and /v1/auth/callback.",
+        "Observe the authenticated cookie session surviving browser refresh and POST /v1/auth/logout clearing it.",
+        "Exercise registration and provider logout according to the declared provider capabilities; do not infer support from successful startup."
+      ]
+    },
+    {
+      "id": "passkey-route-and-capability",
+      "requires": [
+        "POST /v1/auth/passkeys/enroll must exist and return the appropriate authenticated response or explicit unsupported capability response.",
+        "Observe a successful passkey enrollment ceremony only when passkey_enrollment_supported is true; a missing route never counts as unsupported capability handling."
+      ]
+    },
+    {
+      "id": "organization-api-and-wasm",
+      "requires": [
+        "Observe GET /v1/auth/me/organizations and protected read-only GET /v1/organizations/{id}, checking the expected organization identity and access, plus actual SDK WASM initialization against the selected backend.",
+        "Verify the selected backend services and OpenBao image digests without replacing its original UI image in the retained lock."
+      ]
+    }
+  ],
+  "separate_gates": [
+    "website-route-contract-matching",
+    "host-deployment-and-edge-routing",
+    "rollback-and-recovery",
+    "composition-admission",
+    "production-activation"
+  ]
+}
