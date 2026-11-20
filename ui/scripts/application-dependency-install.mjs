@@ -125,6 +125,8 @@ function installationEnvironment() {
   return { ...environment, PUPPETEER_SKIP_DOWNLOAD: 'true' };
 }
 
+export { installationEnvironment as applicationInstallationEnvironment };
+
 function profileInputs(dependencyProfile) {
   require(['full', 'application'].includes(dependencyProfile), 'Unsupported dependency installation profile');
   return dependencyProfile === 'application'

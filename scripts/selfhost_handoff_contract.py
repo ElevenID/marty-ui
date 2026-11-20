@@ -1,3 +1,3 @@
 """Reviewed cross-repository revision for the public self-host journey."""
 
-PINNED_INTEGRATION_SHA = "693bbc8dbe3e3a006658b0753ae03c0c682eaffc"
+PINNED_INTEGRATION_SHA = "7fa199d099a0ef1fdddd74a01a2be736cdef267e"

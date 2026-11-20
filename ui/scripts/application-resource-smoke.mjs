@@ -5,11 +5,8 @@ import {
   realpathSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { JSDOM } from 'jsdom';
-import i18next from 'i18next';
-import HttpBackend from 'i18next-http-backend';
-import { preview } from 'vite';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RETAINED_PUBLIC_FILES,
   APPLICATION_RESOURCE_MIME_TYPES as CONTENT_TYPES,
@@ -45,6 +42,27 @@ function ordinaryDirectory(directory) {
   require(metadata.isDirectory() && !metadata.isSymbolicLink() && realpathSync(absolute) === absolute,
     'Output must be an ordinary directory without symlink parents');
   return absolute;
+}
+
+async function resourceDependencies(dependencyRoot) {
+  const packages = ['jsdom', 'i18next', 'i18next-http-backend', 'vite'];
+  let specifiers = packages;
+  if (dependencyRoot !== undefined) {
+    const root = ordinaryDirectory(dependencyRoot);
+    const installed = ordinaryDirectory(path.join(root, 'node_modules'));
+    const resolver = createRequire(path.join(root, 'package.json'));
+    specifiers = packages.map((name) => {
+      const entry = resolver.resolve(name);
+      const resolved = realpathSync(entry);
+      require(resolved.startsWith(`${installed}${path.sep}`) && lstatSync(resolved).isFile(),
+        `Resource dependency resolved outside the selected installation: ${name}`);
+      return pathToFileURL(resolved).href;
+    });
+  }
+  const [dom, translations, backend, vite] = await Promise.all(specifiers.map((name) => import(name)));
+  require(typeof dom.JSDOM === 'function' && typeof translations.default?.createInstance === 'function'
+    && typeof backend.default === 'function' && typeof vite.preview === 'function', 'Invalid resource probe dependencies');
+  return { JSDOM: dom.JSDOM, i18next: translations.default, HttpBackend: backend.default, preview: vite.preview };
 }
 
 function readOutput(distDir, relative) {
@@ -139,7 +157,7 @@ function validateElementTarget(element, attribute, reference) {
   }
 }
 
-function entryReferences(entry, contents) {
+function entryReferences(entry, contents, JSDOM) {
   const dom = new JSDOM(contents.toString('utf8'), {
     url: new URL(`/${entry}`, PARSE_ORIGIN).href, includeNodeLocations: true,
     // Neither scripts nor linked resources execute in this parser.
@@ -178,7 +196,7 @@ function jsonObject(contents, relative) {
   return result;
 }
 
-function inspectOutput(distDir) {
+function inspectOutput(distDir, JSDOM) {
   const paths = outputPaths(distDir);
   const selected = new Set([...APPLICATION_RETAINED_PUBLIC_FILES, ...ENTRIES,
     ...paths.filter((name) => /\.(?:m?js|wasm|css)$/i.test(name))]);
@@ -195,7 +213,7 @@ function inspectOutput(distDir) {
     return snapshots.get(relative);
   }
   for (const name of [...selected].sort()) include(name);
-  const references = ENTRIES.flatMap((entry) => entryReferences(entry, include(entry).contents));
+  const references = ENTRIES.flatMap((entry) => entryReferences(entry, include(entry).contents, JSDOM));
   for (const reference of references) if (!reference.external) include(reference.path);
   const manifest = jsonObject(include('manifest.json').contents, 'manifest.json');
   require(Array.isArray(manifest.icons) && manifest.icons.length > 0 && manifest.icons.length <= 128,
@@ -287,10 +305,11 @@ function newReportPath(reportPath, distDir) {
   return absolute;
 }
 
-export async function runApplicationResourceSmoke({ distDir, reportPath }) {
+export async function runApplicationResourceSmoke({ distDir, reportPath, dependencyRoot }) {
   const output = ordinaryDirectory(distDir);
   const report = newReportPath(reportPath, output);
-  const { snapshots, references, icons, german, english } = inspectOutput(output);
+  const { JSDOM, i18next, HttpBackend, preview } = await resourceDependencies(dependencyRoot);
+  const { snapshots, references, icons, german, english } = inspectOutput(output, JSDOM);
   const controller = new AbortController();
   let server;
   let localePhase = false;
@@ -405,9 +424,10 @@ export async function runApplicationResourceSmoke({ distDir, reportPath }) {
 }
 
 function commandLine(argv) {
-  require(argv.length === 4 && argv[0] === '--dist' && argv[2] === '--report',
-    'Usage: application-resource-smoke.mjs --dist DIST --report ABS_NEW_JSON');
-  return { distDir: argv[1], reportPath: argv[3] };
+  require([4, 6].includes(argv.length) && argv[0] === '--dist' && argv[2] === '--report'
+    && (argv.length === 4 || (argv[4] === '--dependency-root' && path.isAbsolute(argv[5]))),
+  'Usage: application-resource-smoke.mjs --dist DIST --report ABS_NEW_JSON [--dependency-root ABS_UI]');
+  return { distDir: argv[1], reportPath: argv[3], ...(argv.length === 6 ? { dependencyRoot: argv[5] } : {}) };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
