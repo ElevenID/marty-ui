@@ -15,13 +15,14 @@ The probe uses an unusable proxy setting in the Cargo child only. It verifies re
 
 This is transport/codec evidence. Complete native presentation acceptance, mdoc CWT status and identifier-list handling, qualified product artifacts and unchanged official verifier reruns are separate requirements. Test-only registration or loopback trust does not establish production issuer or registrar authority.
 
-## Current dependency candidate
+## Accepted Core dependency
 
 Production manifests, the standalone feature probe, both lockfiles and the KMS
-custody guard agree on Core `955d51730ae4b3f1dda2e6cea99903c1ba27c51d` from
-`ElevenID/marty-core#443`. Cargo resolution retains every registry package
-version and checksum from the accepted-main merge. The source pin remains a
-review candidate while Core #443 is unmerged: protected Core integration, a
-repin to the accepted checkpoint and the consumer's required checks must precede
-normal integration of these status changes. Local verifier and transport tests
-do not establish official-suite or deployed-product acceptance.
+custody guard agree on accepted Core `e3f0384b4cad0db4ca2738a4aeac97308ddd5231`.
+`ElevenID/marty-core#443` merged through the normal protected queue on
+2026-11-20. Its tree `fcf4d6a1b24265f26b25067862757100a4aff60c` exactly matches
+the reviewed Core candidate. Both lockfiles preserve registry package versions
+and checksums, and the selected Core feature sets remain unchanged. The consumer's
+required checks and normal protected integration remain its acceptance gates.
+Local verifier and transport tests do not establish official-suite or
+deployed-product acceptance.

@@ -6,7 +6,22 @@ use serde_json::{json, Value};
 fn unsigned_materialization_does_not_satisfy_requirements_or_authorize_approval() {
     let mut request = json!({
         "app":{"id":"application-one","organization_id":"organization-one","status":"pending"},
-        "binding":{"auto_approve_on_evidence":true},
+        "binding":{"auto_approve_on_evidence":true,"approval_policy_set_id":"reviewed-learning-approval"},
+        "policy_set":{
+            "id":"reviewed-learning-approval",
+            "status":"ACTIVE",
+            "policy_type":"APPROVAL_RULES",
+            "cedar_policies":r#"permit (
+                principal == MIP::ServiceAccount::"platform-evidence-policy",
+                action == MIP::Action::"applications:approve",
+                resource == MIP::Application::"application-one"
+            ) when {
+                context.evidence_verification_status == "VERIFIED" &&
+                context.evidence_scope_matched &&
+                context.all_required_evidence_satisfied &&
+                context.required_evidence_count > 0
+            };"#
+        },
         "requirements":[{"fact_type":"learning.score","provider":"synthetic-lms","scope":{"course_id":"synthetic-course"},"pass_rule":{"completed":true}}],
         "facts":[{"id":"fact-one","logical_key":"one","provider":"synthetic-lms","fact_type":"learning.score","subject_id":"learner-one",
             "scope":{"course_id":"synthetic-course"},"assertion":{"completed":true,"score":100,"verified":true,"status":"VERIFIED","policy_allowed":true},
@@ -43,4 +58,10 @@ fn unsigned_materialization_does_not_satisfy_requirements_or_authorize_approval(
     let verified = evaluate(&request);
     assert_eq!(verified["context"]["satisfied_requirement_count"], 1);
     assert_eq!(verified["allowed"], true);
+    // A verified matching fact still grants no implicit approval authority.
+    request["binding"]["approval_policy_set_id"] = Value::Null;
+    request.as_object_mut().unwrap().remove("policy_set");
+    let without_policy = evaluate(&request);
+    assert_eq!(without_policy["context"]["satisfied_requirement_count"], 1);
+    assert_eq!(without_policy["allowed"], false);
 }
