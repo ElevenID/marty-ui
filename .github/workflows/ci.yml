@@ -145,6 +145,12 @@ jobs:
         run: node scripts/application-package-consumer.mjs --archive "$RUNNER_TEMP/application-source-package.zip" --manifest "$RUNNER_TEMP/application-source-origin.json" --producer-report "$RUNNER_TEMP/application-source-package.json" --baseline-report "$RUNNER_TEMP/application-profile-source-closure.json" --report "$RUNNER_TEMP/application-package-consumer.json" --runtime-context "$RUNNER_TEMP/application-package-runtime-context"
       - name: Build and probe the restored application runtime
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-runtime.json" --check-container
+      - name: Freeze the production application image inputs
+        working-directory: ${{ github.workspace }}
+        run: |
+          cp "$RUNNER_TEMP/application-package-runtime-context/application-runtime-context.json" "$RUNNER_TEMP/application-runtime-context.json"
+          python3 scripts/application_release.py plan --source-sha "$GITHUB_SHA" --assets "$RUNNER_TEMP" \
+            --context "$RUNNER_TEMP/application-package-runtime-context" --output "$RUNNER_TEMP/application-build-plan.json"
       - name: Bootstrap released UI dependencies
         shell: bash
         run: |
@@ -158,6 +164,8 @@ jobs:
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome
       - name: Qualify restored application browser startup and WASM recovery
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-package-browser-startup.json" --browser-channel chrome
+      - name: Build and qualify the production application recipe
+        run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-image-check.json" --check-container --build-release-image --browser-startup --browser-report "$RUNNER_TEMP/application-image-browser.json" --browser-channel chrome
       - name: Test website routing and all surface boundary guards
         run: |
           bun run test:website
@@ -225,6 +233,18 @@ jobs:
             ${{ runner.temp }}/application-package-runtime.json
             ${{ runner.temp }}/application-package-browser-runtime.json
             ${{ runner.temp }}/application-package-browser-startup.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload production application candidate evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-image-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/application-build-plan.json
+            ${{ runner.temp }}/application-runtime-context.json
+            ${{ runner.temp }}/application-image-check.json
+            ${{ runner.temp }}/application-image-browser.json
           if-no-files-found: ignore
           retention-days: 14
 

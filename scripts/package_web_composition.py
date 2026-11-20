@@ -127,6 +127,12 @@ def validate_record(record: dict) -> dict:
         web.object_keys(selected, fields, role + " composition input")
         proof.validate_producer(selected["producer"], role=role)
         web.object_keys(selected["image"], {"uri", "digest", "platform"}, role + " composition image")
+        if role == "application":
+            # This composition schema still requires the original combined
+            # application/backend release. A separately qualified package image
+            # does not establish that relationship.
+            ui.require(selected["image"]["uri"] in {ui.PUBLIC_IMAGE, ui.COMMERCE_IMAGE},
+                       "composition requires an original combined application image")
         owner = policy.image_policy(selected["image"]["uri"], role=role)
         ui.require(owner["repository"] == selected["producer"]["repository"]
                    and selected["image"]["platform"] == "linux/amd64", "composition image and producer role differ")

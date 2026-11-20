@@ -46,6 +46,11 @@ def selected_job(expression, context):
 @pytest.mark.parametrize("event,mode,override,allowed", [
     ("workflow_dispatch", "combined", {}, {"release"}),
     ("workflow_dispatch", "website", {}, {"release"}),
+    ("workflow_dispatch", "application", {}, {"application"}),
+    ("workflow_dispatch", "application", {"repository_id": "999"}, set()),
+    ("workflow_dispatch", "application", {"ref": "refs/heads/feature"}, set()),
+    ("workflow_dispatch", "application", {"ref_protected": False}, set()),
+    ("workflow_dispatch", "unknown", {}, set()),
     ("workflow_dispatch", "compose", {}, {"compose"}),
     ("push", "", {}, {"compose"}),
     ("push", "website", {}, {"compose"}),

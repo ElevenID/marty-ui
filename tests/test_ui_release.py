@@ -188,12 +188,12 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     assert release.PUBLIC_IMAGE in workflow["env"]["IMAGE"]
     dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
     assert dispatch["mode"]["default"] == "combined"
-    assert dispatch["mode"]["options"] == ["combined", "website", "compose"]
+    assert dispatch["mode"]["options"] == ["combined", "website", "application", "compose"]
     job = workflow["jobs"]["release"]
     steps = job["steps"]
     # A reviewed manifest push can compose originals but cannot publish an image.
     assert job["if"] == ("github.repository == 'ElevenID/marty-ui' && "
-                          "github.event_name == 'workflow_dispatch' && inputs.mode != 'compose'")
+                          "github.event_name == 'workflow_dispatch' && (inputs.mode == 'combined' || inputs.mode == 'website')")
     assert job["permissions"]["contents"] == "read"
     checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "${{ github.sha }}"

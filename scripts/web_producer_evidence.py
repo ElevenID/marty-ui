@@ -10,7 +10,7 @@ import website_provenance as proof
 import website_release as web
 import website_producer_policy as policy
 
-SUBJECTS = {"website-release.json", "production-web-release.json", "application-web-compatibility.json",
+SUBJECTS = {"website-release.json", "production-web-release.json", "application-web-compatibility.json", "application-release.json",
             "production-deployment.json", "production-openbao.zip", "ui.sbom.cdx.json", "ui-build-evidence.json",
             "deployment/production-deployment.json", "deployment/production-openbao.zip",
             "web-composition.json", "web-composition.zip"}

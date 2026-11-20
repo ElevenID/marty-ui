@@ -6,7 +6,7 @@ cutover remains a separate gate.
 
 ## Current continuation checkpoint
 
-Latest recorded evidence, November 19, 2026 (America/Denver):
+Latest recorded evidence, November 20, 2026 (America/Denver):
 
 | Workstream | Completed evidence | Next gate |
 | --- | --- | --- |
@@ -14,10 +14,9 @@ Latest recorded evidence, November 19, 2026 (America/Denver):
 | Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) merged as `6daf2a21`; protected-main [run `44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1) signed and verified the composition; its six-file artifact and original evidence bytes were independently inspected | Qualify the actual application/OIDC flow and isolated-host promotion, rollback and recovery with this exact composition |
 | Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) merged as `cf333d61e4cc406d0fdaa870829396291d887ea7`; clean local and hosted builds passed with 37 audited inputs absent, and [normal queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44635771801) completed with 27 successful jobs and one intended skip | Preserve the accepted source boundary while expanding application test, asset and dependency qualification |
 | Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002) merged normally as `780b531a22a89ed75442e71ed51ce4cb727c08ec`. Clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses. Both [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) and [merge-queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44647472085) completed with 27 successful jobs and one intended skip; all queue output bytes match the accepted PR rehearsal | Preserve the merged boundary and its exact diagnostic evidence while extending independent application qualification |
-| Fresh dependencies and isolated application runtime | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), source `7929095c071cfc9a427dc28b46643dbdadde2011`: the clean local fresh install and [actual hosted fresh-install/container gates](https://github.com/ElevenID/marty-ui/actions/runs/44645683982/job/135987684986) passed. The hosted proof contains 284 passing tests, all 88 output files readable by nginx, 73 checked HTTP resources, three missing-resource controls and successful image/container cleanup | Preserve the accepted full-lock baseline while qualifying the explicit application package profile; complete the current candidate's required CI and normal merge queue |
-| Application package profile | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), source `d4cb8be181fb50a41082c012ea05c39674ae54d4`: both clean local fresh installations passed 284 tests and produced identical 88-file application output and 54 public resources. Installed package records decreased from 613 to 512, with no changed retained identities. The selected audit passed without findings; both fresh installations and actual container gates also passed in [current CI](https://github.com/ElevenID/marty-ui/actions/runs/44651027127/job/136005728296) | Current hosted artifacts independently verified; aggregate CI `44657507012/1` passed, with normal queue integration still required |
-| Application browser startup | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004), corrected source `83a59f65902a6691f46d2051773313f7e2b5ff3b`: [CI `44657507012/1`](https://github.com/ElevenID/marty-ui/actions/runs/44657507012) completed with 27 successful jobs and one intended skip. Both fresh profiles passed 296 tests across 24 files and emitted identical 88-file application output. The [Website Surface job](https://github.com/ElevenID/marty-ui/actions/runs/44657507012/job/136027606885) observed real public/console rendering, production CSP, SDK WASM, Retry through bounded unavailable-session timeouts, and the separate aborted-WASM recovery control. Owned browser/process/container/image cleanup passed | Normal merge-queue integration against the current main; preserve this accepted startup evidence while qualifying the portable source package. Actual authentication/OIDC and host acceptance remain separate |
-| Portable application source package | The [source-package boundary](application-source-package.md) exports 575 selected source files plus its manifest, with Git byte/mode provenance and deterministic archives. A clean local full/profile/independent-consumer rehearsal passed all 296 tests in each installation; the restored consumer reproduced all 88 application outputs and the identical normalized 92-file runtime payload. The producer/consumer regression suite also covers altered source, archive pins, runtime context, cleanup and post-bootstrap test execution | Qualify the published source through the required hosted container/browser checks and normal queue. The current source package does not establish signed application publication, authentication/OIDC or host activation |
+| Independent application packages and browser startup | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) merged normally as `d1cf7bf93460344eaf78bbf5496eb949835138f6`. Its accepted source `83a59f65902a6691f46d2051773313f7e2b5ff3b` passed [CI `44657507012/1`](https://github.com/ElevenID/marty-ui/actions/runs/44657507012): 27 successful jobs and one intended skip. Both fresh profiles passed 296 tests across 24 files and emitted identical 88-file output. Hosted nginx/browser execution observed the SDK WASM, public/console rendering, unavailable-session Retry and aborted-WASM recovery; owned cleanup passed | Preserve the accepted package/runtime boundary while qualifying independent publication; actual authentication/OIDC and host acceptance remain separate |
+| Portable application source package | [PR #2007](https://github.com/ElevenID/marty-ui/pull/2007) merged normally as `6fd59c730a28e413cec3855037ad600f8e2dabf3`. Its source `316afe12b21ee8ece006406ab510917f2c470574` passed [CI `44677296614/1`](https://github.com/ElevenID/marty-ui/actions/runs/44677296614); all six original artifacts were independently verified against the exact integration tree `18f67468ade76f527136fcc906a7d8c2af4deeb3`. The 575-file source package plus manifest restores outside Git; all three installations pass 296 tests and produce identical 88-file output and a normalized 92-file runtime payload. Real restored-package container/browser gates and cleanup passed | Preserve the merged source boundary, archive and original hosted evidence while qualifying independent application publication |
+| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | Qualify the integration with current main through required CI and normal merge, then inspect the first actual protected-main publication. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test
@@ -25,8 +24,9 @@ rehearsal separately classifies combined adapters, demo projections and test
 setup as application omissions. Shared application inputs, assets and
 dependencies remain retained in the baseline. The accepted source/asset rehearsals
 reused installed dependencies; PR #2004 separately establishes fresh locked
-installation. Neither qualification authorizes source deletion, signed application
-publication or an actual host/OIDC journey.
+installation. These earlier qualifications do not establish source deletion, signed application
+publication or an actual host/OIDC journey. The separate application-image
+producer records its own evidence before publication can be accepted.
 
 The [public asset audit](application-assets-audit.md) records the 26 additional
 application omissions and the retained locale/runtime resources. The completed
@@ -43,9 +43,11 @@ and default website/combined build behavior remain the baseline. Both fresh
 installations run before CI bootstrap changes the root package manifest, and both
 container checks exercise the unchanged production nginx/startup files. Removing
 the four audited roots is a bounded dependency reduction. The [portable source-package milestone](application-source-package.md) carries this
-accepted profile into an independently restored source tree. Complete package graph
-minimization, final source extraction, a signed application producer and
-isolated-host/OIDC qualification remain subsequent gates.
+accepted profile into an independently restored source tree. The
+[application image producer](application-image-release.md) builds from that
+consumer context and retains independent publication evidence. Complete package
+graph minimization, final source extraction and isolated-host/OIDC qualification
+remain subsequent gates.
 
 The browser increment replays the immutable application-profile context after the
 existing UI bootstrap makes diagnostic browser tooling available. It keeps all

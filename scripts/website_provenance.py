@@ -98,7 +98,7 @@ def verify_subject(subject: Path, *, producer: dict, gh: Path, cosign: Path,
     if role is not None:
         allowed = {
             "website": {"website-release.json"},
-            "application": {"production-web-release.json", "application-web-compatibility.json",
+            "application": {"production-web-release.json", "application-web-compatibility.json", "application-release.json",
                             "production-deployment.json", "production-openbao.zip", "ui.sbom.cdx.json", "ui-build-evidence.json"},
             "composition": {"web-composition.json", "web-composition.zip"},
         }
