@@ -7,11 +7,14 @@ Policy's native evaluation and Flow's durable finalization. It supports the
 existing opt-in, single-credential, holder-bound SD-JWT DCQL profile described
 in [SD-JWT prerequisite evidence](sd-jwt-prerequisite-evidence.md).
 
-It does not authorize issuance. Issuance still needs an immutable issuing
-intent and an expiring, single-use continuation, bound to the tenant,
-applicant/session, holder, template version, configuration, policy and exact
-dataset. That continuation must be consumed under the atomic signing claim,
-including all retry and alternate initiation paths.
+The V2 record alone does not authorize issuance. The subsequent
+[verification-before-issuance profile](verification-before-issuance.md) binds
+it to an immutable issuing intent and an expiring, single-use continuation,
+including the tenant, initiating principal, applicant, holder, template version,
+configuration, Policy revision and exact dataset. Issuance consumes that
+continuation under the atomic signing claim and fences retries and unsupported
+initiation paths. Its first supported profile and rollout requirements are
+documented separately.
 
 V2 is explicitly managed-only. It neither reinterprets `FrozenOid4vpRequestV1`
 nor relaxes V1's validator, digest domains or API. Legacy successful results
@@ -91,6 +94,16 @@ row; it retains that original sealed digest and verifies the stable frozen
 fields. Recovery preserves an authentic historical fact after its recorded
 deadline, without renewing it for issuance. Policy observation and nonce
 consumption retain distinct microsecond clocks; no exact COMMIT time is claimed.
+
+The native Policy verifier captures one precise observation and derives JWT
+epoch seconds from that same instant. Its sealed evidence retains the exact
+microseconds, and acquisition and recovery require the result's RFC3339
+`evaluation_timestamp` to represent that same instant. Fractional precision is
+bounded to six digits before parsing; truncation cannot relabel an observation.
+Credential, holder and receipt deadlines remain exclusive, and a later sample
+cannot move backwards even within one second. Existing valid whole-second
+records remain readable. Deploy the updated Flow readers before enabling the
+precise Policy producer, because older readers require whole-second observations.
 
 Generic writes reject reserved owner fields. Artifact replacement additionally
 checks the stored row so sanitized input cannot erase a finalized receipt or

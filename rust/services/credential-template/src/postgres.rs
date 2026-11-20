@@ -49,6 +49,11 @@ impl PostgresCredentialTemplateStore {
             .as_ref()
             .map(|profile| json_value("jwt_vc_profile", profile))
             .transpose()?;
+        let verification_prerequisite = template
+            .verification_prerequisite
+            .as_ref()
+            .map(|policy| json_value("verification_prerequisite", policy))
+            .transpose()?;
         if let Some(value) = &template.compliance_profile {
             reject_private_json("compliance_profile", value)?;
         }
@@ -79,10 +84,10 @@ impl PostgresCredentialTemplateStore {
                 supported_formats, credential_payload_format, wallet_configs, compliance_profile,
                 compliance_profile_id, application_template_id, trust_profile_id,
                 revocation_profile_id, issuer_algorithm, issuer_did, issuance_protocol, version,
-                created_at, updated_at, jwt_vc_profile
+                created_at, updated_at, jwt_vc_profile, verification_prerequisite
              ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-                $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
+                $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
              ) ON CONFLICT (id) DO UPDATE SET
                 organization_id=EXCLUDED.organization_id, name=EXCLUDED.name,
                 description=EXCLUDED.description, status=EXCLUDED.status,
@@ -104,7 +109,8 @@ impl PostgresCredentialTemplateStore {
                 revocation_profile_id=EXCLUDED.revocation_profile_id,
                 issuer_algorithm=EXCLUDED.issuer_algorithm, issuer_did=EXCLUDED.issuer_did,
                 issuance_protocol=EXCLUDED.issuance_protocol, version=EXCLUDED.version,
-                updated_at=EXCLUDED.updated_at, jwt_vc_profile=EXCLUDED.jwt_vc_profile",
+                updated_at=EXCLUDED.updated_at, jwt_vc_profile=EXCLUDED.jwt_vc_profile,
+                verification_prerequisite=EXCLUDED.verification_prerequisite",
         )
         .bind(&template.id)
         .bind(&template.organization_id)
@@ -137,6 +143,7 @@ impl PostgresCredentialTemplateStore {
         .bind(template.created_at)
         .bind(template.updated_at)
         .bind(jwt_vc_profile)
+        .bind(verification_prerequisite)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -162,7 +169,7 @@ impl PostgresCredentialTemplateStore {
     ) -> Result<Vec<CredentialTemplate>, CredentialTemplateRepositoryError> {
         let rows = sqlx::query(
             "SELECT * FROM credential_template_service.credential_templates
-             WHERE organization_id=$1 AND ($2::text IS NULL OR status=$2 OR status='jose1_' || $2)
+             WHERE organization_id=$1 AND ($2::text IS NULL OR status=$2 OR status='jose1_' || $2 OR status='prerequisite1_' || $2)
              ORDER BY created_at, id",
         )
         .bind(organization_id)
@@ -178,7 +185,7 @@ impl PostgresCredentialTemplateStore {
     ) -> Result<Vec<CredentialTemplate>, CredentialTemplateRepositoryError> {
         let rows = sqlx::query(
             "SELECT * FROM credential_template_service.credential_templates
-             WHERE ($1::text IS NULL OR status=$1 OR status='jose1_' || $1) ORDER BY created_at, id",
+             WHERE ($1::text IS NULL OR status=$1 OR status='jose1_' || $1 OR status='prerequisite1_' || $1) ORDER BY created_at, id",
         )
         .bind(status.map(TemplateStatus::as_str))
         .fetch_all(&self.pool)
@@ -459,14 +466,25 @@ fn template_from_row(row: &PgRow) -> Result<CredentialTemplate, CredentialTempla
         .try_get::<Option<Value>, _>("jwt_vc_profile")?
         .map(|value| decode("jwt_vc_profile", value))
         .transpose()?;
-    let public_status = match (status.strip_prefix("jose1_"), jwt_vc_profile.is_some()) {
-        (Some(value), true) => value,
-        (None, false) => status.as_str(),
+    let verification_prerequisite: Option<
+        marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1,
+    > = row
+        .try_get::<Option<Value>, _>("verification_prerequisite")?
+        .map(|value| decode("verification_prerequisite", value))
+        .transpose()?;
+    let public_status = match (
+        status.strip_prefix("jose1_"),
+        status.strip_prefix("prerequisite1_"),
+        jwt_vc_profile.is_some(),
+        verification_prerequisite.is_some(),
+    ) {
+        (Some(value), None, true, false) | (None, Some(value), false, true) => value,
+        (None, None, false, false) => status.as_str(),
         _ => {
             return Err(invalid_data(
                 "jwt_vc_profile",
                 "profile storage lifecycle mismatch".into(),
-            ))
+            ));
         }
     };
     let privacy_posture: String = row.try_get("privacy_posture")?;
@@ -492,6 +510,7 @@ fn template_from_row(row: &PgRow) -> Result<CredentialTemplate, CredentialTempla
         supported_formats,
         credential_payload_format: row.try_get("credential_payload_format")?,
         jwt_vc_profile,
+        verification_prerequisite,
         wallet_configs: decode_row_or_default(row, "wallet_configs")?,
         compliance_profile: checked_optional_row_json(row, "compliance_profile")?,
         compliance_profile_id: row.try_get("compliance_profile_id")?,

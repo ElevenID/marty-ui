@@ -4472,10 +4472,14 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     # migration together. Managed evidence needs Policy's private native fixture
     # and real gRPC acquisition through Flow's durable owner repository; keeping
     # that joined test here avoids a public test-only authority constructor.
+    # The same fixture now persists the guarded template and exercises native
+    # Issuance through an authenticated Flow owner and non-exportable signer.
     assert edges == {
         ("marty-issuance-service", "marty-signing-keys"),
         ("marty-issuance-service", "marty-credential-template"),
         ("marty-presentation-policy", "marty-flow"),
+        ("marty-presentation-policy", "marty-credential-template"),
+        ("marty-presentation-policy", "marty-issuance-service"),
         ("marty-flow", "marty-presentation-policy"),
         ("marty-gateway", "marty-auth"),
     }, (
@@ -4496,6 +4500,14 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     _assert_service_fixture_dependency(
         documents[rust / "services/presentation-policy/Cargo.toml"],
         workspace_dependencies, "marty-flow", "../flow",
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/presentation-policy/Cargo.toml"],
+        workspace_dependencies, "marty-credential-template", "../credential-template",
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/presentation-policy/Cargo.toml"],
+        workspace_dependencies, "marty-issuance-service", "../issuance",
     )
 
     # The Gateway own-session guard is qualified against the actual Auth gRPC

@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }

@@ -46,6 +46,10 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-credential-template = { path = "../credential-template" }
+marty-issuance-service = { path = "../issuance" }
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-flow = { path = "../flow" }
 mmf-push.workspace = true
 marty-service-runtime = { path = "../../crates/service-runtime", features = ["https"] }

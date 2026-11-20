@@ -417,6 +417,7 @@ pub fn marty_login_badge(
     ];
     CredentialTemplate {
         jwt_vc_profile: None,
+        verification_prerequisite: None,
 
         id: MARTY_LOGIN_BADGE_ID.to_owned(),
         organization_id: marty_organization_id.to_owned(),

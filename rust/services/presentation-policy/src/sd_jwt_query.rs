@@ -22,6 +22,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::verification::VerificationObservation;
 use crate::{
     normalize_credential_format, policy_revision, EvaluatePresentationRequest, PolicyStatus,
     PresentationPolicy, PresentationVerificationError, ResolvedIssuerKey,
@@ -59,7 +60,7 @@ pub struct SdJwtDcqlRequest {
     audience: String,
     vct: String,
     claims: Vec<String>,
-    checked_at_epoch_seconds: u64,
+    observed_at: VerificationObservation,
 }
 
 impl std::fmt::Debug for SdJwtDcqlRequest {
@@ -115,7 +116,7 @@ impl AuthenticatedSdJwtPresentationEvidence {
             policy,
             request,
             DetectedCredentialFormat::SdJwt,
-            self.request.checked_at_epoch_seconds,
+            self.request.observed_at,
         )
         .ok()
         .flatten()
@@ -127,17 +128,20 @@ impl AuthenticatedSdJwtPresentationEvidence {
             .is_ok_and(|digest| digest == self.policy_claims_digest)
     }
 
-    pub(crate) fn revalidate_at(&mut self, now: u64) -> Result<(), PresentationVerificationError> {
+    pub(crate) fn revalidate_at(
+        &mut self,
+        now: VerificationObservation,
+    ) -> Result<(), PresentationVerificationError> {
         revalidate_sd_jwt_times(
             now,
-            self.request.checked_at_epoch_seconds,
+            self.request.observed_at,
             self.valid_from_epoch_seconds,
             self.expires_at_epoch_seconds,
             self.holder_proof_issued_at,
             self.holder_proof_not_before,
             self.holder_proof_expires_at,
         )?;
-        self.request.checked_at_epoch_seconds = now;
+        self.request.observed_at = now;
         Ok(())
     }
 }
@@ -176,6 +180,10 @@ pub struct AuthenticatedSdJwtQueryEvidence {
     issuer_algorithm: String,
     matched_claims: Vec<String>,
     checked_at_epoch_seconds: u64,
+    /// Exact native observation retained privately for managed finalization.
+    /// The existing query projection continues to expose JWT epoch seconds.
+    #[serde(skip)]
+    observed_at: VerificationObservation,
     /// Internal consistency fence for the adjacent native policy facts. The
     /// public projection intentionally carries no claim values or their hashes.
     #[serde(skip)]
@@ -383,6 +391,10 @@ impl AuthenticatedSdJwtQueryEvidence {
         self.checked_at_epoch_seconds
     }
 
+    pub(crate) fn checked_at_epoch_micros(&self) -> i64 {
+        self.observed_at.epoch_micros()
+    }
+
     pub(crate) fn finalization_deadline_micros(
         &self,
         policy: &PresentationPolicy,
@@ -435,7 +447,7 @@ impl AuthenticatedSdJwtQueryEvidence {
             policy,
             request,
             DetectedCredentialFormat::SdJwt,
-            self.checked_at_epoch_seconds,
+            self.observed_at,
         )
         .ok()
         .flatten()
@@ -449,17 +461,21 @@ impl AuthenticatedSdJwtQueryEvidence {
 
     /// Refresh the observation after awaited key/trust/status work. A native
     /// library's JWT leeway must not extend this profile's live validity window.
-    pub(crate) fn revalidate_at(&mut self, now: u64) -> Result<(), PresentationVerificationError> {
+    pub(crate) fn revalidate_at(
+        &mut self,
+        now: VerificationObservation,
+    ) -> Result<(), PresentationVerificationError> {
         revalidate_sd_jwt_times(
             now,
-            self.checked_at_epoch_seconds,
+            self.observed_at,
             self.valid_from_epoch_seconds,
             self.expires_at_epoch_seconds,
             self.holder_proof_issued_at,
             self.holder_proof_not_before,
             self.holder_proof_expires_at,
         )?;
-        self.checked_at_epoch_seconds = now;
+        self.checked_at_epoch_seconds = now.epoch_seconds();
+        self.observed_at = now;
         Ok(())
     }
 }
@@ -498,7 +514,7 @@ impl SdJwtDcqlRequest {
         policy: &PresentationPolicy,
         request: &EvaluatePresentationRequest,
         format: DetectedCredentialFormat,
-        checked_at_epoch_seconds: u64,
+        observed_at: VerificationObservation,
     ) -> Result<Option<Self>, PresentationVerificationError> {
         if policy.prerequisite_evidence_profile.is_some()
             && request
@@ -680,7 +696,7 @@ impl SdJwtDcqlRequest {
             audience: transport.verifier_client_id.clone(),
             vct,
             claims: names.into_iter().collect(),
-            checked_at_epoch_seconds,
+            observed_at,
         }))
     }
 
@@ -706,7 +722,8 @@ impl SdJwtDcqlRequest {
                 .is_ok_and(|digest| digest == evidence.audience_digest)
             && evidence.vct == self.vct
             && evidence.matched_claims == self.claims
-            && evidence.checked_at_epoch_seconds == self.checked_at_epoch_seconds
+            && evidence.checked_at_epoch_seconds == self.observed_at.epoch_seconds()
+            && evidence.observed_at == self.observed_at
     }
 
     pub(crate) fn matches_presentation(
@@ -802,7 +819,7 @@ impl SdJwtDcqlRequest {
         let holder_proof_not_before = optional_numeric_date(&holder_payload, "nbf")?;
         let holder_proof_expires_at = optional_numeric_date(&holder_payload, "exp")?;
         if !holder_proof_is_live(
-            self.checked_at_epoch_seconds,
+            self.observed_at.epoch_seconds(),
             holder_proof_issued_at,
             holder_proof_not_before,
             holder_proof_expires_at,
@@ -836,13 +853,13 @@ impl SdJwtDcqlRequest {
         if self.issuer_not_before_required && claims.get("nbf").and_then(Value::as_u64).is_none() {
             return Err("SD-JWT trust policy requires a signed not-before time");
         }
-        if issued_at > self.checked_at_epoch_seconds
-            || expires_at <= self.checked_at_epoch_seconds
+        if issued_at > self.observed_at.epoch_seconds()
+            || expires_at <= self.observed_at.epoch_seconds()
             || expires_at <= issued_at
             || claims.get("nbf").is_some_and(|value| {
                 value
                     .as_u64()
-                    .is_none_or(|not_before| not_before > self.checked_at_epoch_seconds)
+                    .is_none_or(|not_before| not_before > self.observed_at.epoch_seconds())
             })
         {
             return Err("SD-JWT credential lifetime rejected");
@@ -915,7 +932,8 @@ impl SdJwtDcqlRequest {
             vct: self.vct.clone(),
             issuer_algorithm: issuer_algorithm.as_str().to_owned(),
             matched_claims: self.claims.clone(),
-            checked_at_epoch_seconds: self.checked_at_epoch_seconds,
+            checked_at_epoch_seconds: self.observed_at.epoch_seconds(),
+            observed_at: self.observed_at,
             policy_claims_digest,
             issued_at_epoch_seconds: issued_at,
             valid_from_epoch_seconds,
@@ -941,15 +959,19 @@ impl SdJwtDcqlRequest {
 }
 
 fn revalidate_sd_jwt_times(
-    now: u64,
-    checked_at: u64,
+    observation: VerificationObservation,
+    checked_at: VerificationObservation,
     valid_from: u64,
     expires_at: u64,
     holder_issued_at: f64,
     holder_not_before: Option<f64>,
     holder_expires_at: Option<f64>,
 ) -> Result<(), PresentationVerificationError> {
-    if now < checked_at || now < valid_from || now >= expires_at {
+    let now = observation.epoch_seconds();
+    if observation.epoch_micros() < checked_at.epoch_micros()
+        || now < valid_from
+        || now >= expires_at
+    {
         return Err(PresentationVerificationError::Failed(
             "PRESENTATION_POLICY.SD_JWT_EXPIRED_DURING_EVALUATION".into(),
         ));

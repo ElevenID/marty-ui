@@ -28,6 +28,7 @@ mod http_read;
 mod http_verification;
 mod instance_execution;
 mod instance_side_effects;
+mod issuance_prerequisite;
 mod migration;
 mod physical_start;
 mod postgres;

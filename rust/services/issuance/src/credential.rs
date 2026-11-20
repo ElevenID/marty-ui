@@ -216,6 +216,8 @@ pub struct CredentialTransaction {
     pub credential_payload_format: String,
     pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcIssuanceSelection>,
     pub jwt_vc_signing_timing: Option<marty_oid4vci::JwtVcProfileTiming>,
+    pub issuance_intent:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuanceIntentBindingV1>,
     pub wallet_configs: Vec<Value>,
     pub validity_days: i64,
     pub renewable: bool,
@@ -234,6 +236,7 @@ pub struct CredentialTransaction {
 
 impl CredentialTransaction {
     pub(crate) fn validate_jwt_vc_profile(&self) -> Result<(), CredentialIssuanceError> {
+        crate::verification_prerequisite::validate_transaction(self)?;
         marty_jwt_vc_issuance::validate_selection(
             &self.credential_payload_format,
             &self.credential_template_id,
@@ -300,6 +303,8 @@ pub struct CredentialSigningAuthorization<'a> {
     pub transaction: &'a CredentialTransaction,
     pub authorization_session: Option<&'a CredentialAuthorizationSession>,
     pub access_token: &'a str,
+    pub prerequisite: Option<&'a crate::verification_prerequisite::AcquiredPrerequisiteEvidence>,
+    pub holder_key_thumbprint: Option<&'a str>,
 }
 
 impl std::fmt::Debug for CredentialSigningAuthorization<'_> {
@@ -677,6 +682,7 @@ impl std::fmt::Debug for CredentialPorts {
 pub struct CredentialIssuanceService {
     ports: CredentialPorts,
     issuer_base_url: Arc<str>,
+    prerequisites: Option<Arc<crate::verification_prerequisite_client::FlowPrerequisiteClient>>,
 }
 
 impl CredentialIssuanceService {
@@ -685,7 +691,17 @@ impl CredentialIssuanceService {
         Self {
             ports,
             issuer_base_url: Arc::from(issuer_base_url.trim_end_matches('/')),
+            prerequisites: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_prerequisites(
+        mut self,
+        client: Option<Arc<crate::verification_prerequisite_client::FlowPrerequisiteClient>>,
+    ) -> Self {
+        self.prerequisites = client;
+        self
     }
 
     pub async fn issue(
@@ -756,6 +772,29 @@ impl CredentialIssuanceService {
             .proof_verifier
             .verify(proof_jwt, nonce, &transaction.organization_id, &issuer)
             .await?;
+        let prerequisite = if let Some(intent) = transaction.issuance_intent.as_ref() {
+            let client = self.prerequisites.as_ref().ok_or_else(|| {
+                CredentialIssuanceError::LifecycleUnavailable(
+                    "prerequisite owner is not configured".into(),
+                )
+            })?;
+            let acquired = client
+                .evidence(intent)
+                .await
+                .map_err(|_| CredentialIssuanceError::ApplicationEligibilityDenied)?;
+            acquired.validate_for_signing(
+                &transaction,
+                &verified,
+                crate::verification_prerequisite::now_micros(),
+            )?;
+            Some(acquired)
+        } else {
+            None
+        };
+        let holder_key_thumbprint = prerequisite
+            .as_ref()
+            .map(|_| crate::verification_prerequisite::verified_holder_thumbprint(&verified))
+            .transpose()?;
         match self.ports.nonce_repository.consume_proof_nonce(nonce).await {
             Ok(true) => {}
             Ok(false) => return Err(CredentialIssuanceError::InvalidNonce),
@@ -783,6 +822,8 @@ impl CredentialIssuanceService {
                 transaction: &admitted_transaction,
                 authorization_session: authorization_session.as_ref(),
                 access_token,
+                prerequisite: prerequisite.as_ref(),
+                holder_key_thumbprint: holder_key_thumbprint.as_deref(),
             },
         )
         .await
@@ -1535,7 +1576,7 @@ fn validate_profile_issuer(
     transaction: &CredentialTransaction,
     issuer: &IssuerContext,
 ) -> Result<(), CredentialIssuanceError> {
-    if transaction.jwt_vc_profile.is_some()
+    if (transaction.jwt_vc_profile.is_some() || transaction.issuance_intent.is_some())
         && (transaction.issuer_profile_id.as_deref() != Some(issuer.issuer_profile_id.as_str())
             || transaction.issuer_did.as_deref() != Some(issuer.issuer_did.as_str())
             || transaction.issuer_algorithm.as_deref() != Some(issuer.algorithm.as_str())
@@ -1712,6 +1753,7 @@ mod tests {
         CredentialTransaction {
             jwt_vc_profile: None,
             jwt_vc_signing_timing: None,
+            issuance_intent: None,
 
             id: "tx-signing-contract".to_owned(),
             organization_id: "org-a".to_owned(),

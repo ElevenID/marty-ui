@@ -175,10 +175,12 @@ signing denial, and generates the valid, wrong-hostname and version-2 public
 certificates. It then removes its owned process and files. The administrative
 token stays within fixture provisioning; no existing KMS endpoint is contacted.
 
-The next W05 step must combine authenticated native/owner observations with
-Flow's durable replay receipt while preserving policy-observation and
-nonce-consumption times separately. Issuance must then bind that evidence to the
-tenant, applicant, authorization session, credential configuration, exact
-dataset, saved policy revision, and holder, and atomically consume the expiring
-continuation during `claim_for_signing`. None of those broader guarantees follows
-from HTTPS authentication alone.
+[Managed evidence V2](managed-oid4vp-evidence-v2.md) combines authenticated
+native/owner observations with Flow's durable receipt while preserving
+policy-observation and nonce-consumption times separately. The subsequent
+[verification-before-issuance profile](verification-before-issuance.md) binds
+that evidence to the immutable tenant, initiating principal, applicant,
+credential configuration, exact dataset, saved Policy revision and holder,
+then atomically consumes the expiring continuation during `claim_for_signing`.
+Its pre-authorized profile rejects authorization-session and other unsupported
+routes. None of those broader guarantees follows from HTTPS authentication alone.

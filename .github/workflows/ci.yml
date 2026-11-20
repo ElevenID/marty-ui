@@ -1256,7 +1256,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_trust_profile_migration_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_trust_profile_migration_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test w05_flow_test w05_issuance_test w05_template_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
           # createdb above must succeed: never mark an existing installation.
@@ -1618,6 +1618,37 @@ jobs:
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
           run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1
+      - name: Exercise issuance prerequisite owner and database fences
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        env:
+          FLOW_ISSUANCE_PREREQUISITE_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/w05_flow_test
+          CREDENTIAL_TEMPLATE_PREREQUISITE_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/w05_template_test
+          ISSUANCE_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/w05_issuance_test
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          flow_executable="$(resolve_recorded_contract_executable marty-flow issuance_prerequisite_behavior)"
+          flow_test=issuance_prerequisite_postgres_start_retry_binding_and_lock_freshness
+          "$flow_executable" "$flow_test" --ignored --exact --list | grep -Fx "$flow_test: test"
+          run_timed flow_issuance_prerequisite "$flow_executable" "$flow_test" --ignored --exact --nocapture
+          template_executable="$(resolve_recorded_contract_executable marty-credential-template verification_prerequisite_postgres)"
+          template_test=prerequisite_postgres_readiness_roundtrip_downgrade_and_schema_tampering
+          "$template_executable" "$template_test" --ignored --exact --list | grep -Fx "$template_test: test"
+          run_timed template_issuance_prerequisite "$template_executable" "$template_test" --ignored --exact --nocapture
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("#marty-issuance-service@"))
+            | select(.target.name == "marty_issuance_service")
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          issuance_test=verification_prerequisite::tests::prerequisite_postgres_fences_omission_retargeting_unsupported_writers_and_replay
+          "${executables[0]}" "$issuance_test" --ignored --exact --list | grep -Fx "$issuance_test: test"
+          run_timed issuance_prerequisite_fences "${executables[0]}" "$issuance_test" --ignored --exact --nocapture
       - name: Exercise managed Policy evidence through Flow PostgreSQL commit
         if: matrix.lane == 'contracts'
         working-directory: rust

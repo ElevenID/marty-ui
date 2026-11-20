@@ -189,6 +189,8 @@ pub struct InitiationTemplate {
     pub selective_disclosure_claims: Vec<String>,
     pub credential_payload_format: String,
     pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    pub verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     pub template_version: i32,
     pub not_before_offset_seconds: i64,
     pub issuance_protocol: String,
@@ -210,6 +212,7 @@ impl Default for InitiationTemplate {
             selective_disclosure_claims: Vec::new(),
             credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
             jwt_vc_profile: None,
+            verification_prerequisite: None,
             template_version: 1,
             not_before_offset_seconds: 0,
             issuance_protocol: "OID4VCI_PRE_AUTH".into(),
@@ -390,6 +393,18 @@ impl InitiationService {
         request: &InitiationRequest,
         raw_idempotency_key: Option<&str>,
     ) -> Result<InitiationReservation, InitiationServiceError> {
+        self.initiate_with_principal(request, raw_idempotency_key, None)
+            .await
+    }
+
+    /// The principal is supplied only by an already authenticated transport.
+    /// Ordinary internal callers cannot create a guarded offer by omission.
+    pub(crate) async fn initiate_with_principal(
+        &self,
+        request: &InitiationRequest,
+        raw_idempotency_key: Option<&str>,
+        trusted_principal: Option<&str>,
+    ) -> Result<InitiationReservation, InitiationServiceError> {
         request.validate()?;
         let binding = idempotency_binding(raw_idempotency_key, request)?;
         match self
@@ -411,6 +426,15 @@ impl InitiationService {
                 .recover_idempotently(&request.organization_id, binding)
                 .await?
             {
+                if let Some(intent) = &transaction.issuance_intent {
+                    if trusted_principal != Some(intent.initiating_principal_id.as_str())
+                        || intent
+                            .validate_at(self.ports.clock.now().timestamp_micros())
+                            .is_err()
+                    {
+                        return Err(prerequisite_error());
+                    }
+                }
                 return Ok(InitiationReservation {
                     transaction,
                     created: false,
@@ -418,6 +442,29 @@ impl InitiationService {
             }
         }
         let template = self.resolve_template(request).await?;
+        let prerequisite = template.verification_prerequisite.clone();
+        if let Some(policy) = prerequisite.as_ref() {
+            policy.validate().map_err(|_| prerequisite_error())?;
+            if trusted_principal.is_none()
+                || request.credential_template_id.is_none()
+                || request.authorized_client_id.is_some()
+                || request.application_id.is_some()
+                || request.holder_did.is_some()
+                || request.credential_document.is_some()
+                || request.normalized_delivery_mode()? != "wallet_only"
+                || template.issuance_protocol != "OID4VCI_PRE_AUTH"
+                || template.template_version < 1
+                || !template
+                    .credential_payload_format
+                    .eq_ignore_ascii_case("sd_jwt_vc")
+                || template.jwt_vc_profile.is_some()
+                || !template.wallet_configs.is_empty()
+                || template.renewable
+            {
+                return Err(prerequisite_error());
+            }
+        }
+        let template_version = template.template_version;
         let jwt_vc_profile = match template.jwt_vc_profile.as_ref() {
             Some(policy)
                 if template.credential_payload_format
@@ -494,7 +541,13 @@ impl InitiationService {
         }
         let now = self.ports.clock.now();
         let seed = self.ports.seeds.generate();
-        let expires_at = self.offer_expires_at(now, request.offer_ttl_seconds)?;
+        let mut expires_at = self.offer_expires_at(now, request.offer_ttl_seconds)?;
+        if let Some(policy) = prerequisite.as_ref() {
+            expires_at = expires_at.min(
+                now.checked_add_signed(Duration::seconds(i64::from(policy.ttl_seconds)))
+                    .ok_or_else(prerequisite_error)?,
+            );
+        }
         let mut transaction = CredentialTransaction {
             id: seed.transaction_id,
             organization_id: request.organization_id.clone(),
@@ -516,9 +569,14 @@ impl InitiationService {
             credential_type: Some(template.credential_type),
             selective_disclosure_claims: template.selective_disclosure_claims,
             zk_predicate_claims: template.zk_predicate_claims,
-            credential_payload_format: template.credential_payload_format,
+            credential_payload_format: if prerequisite.is_some() {
+                "SD_JWT_VC".into()
+            } else {
+                template.credential_payload_format
+            },
             jwt_vc_profile,
             jwt_vc_signing_timing: None,
+            issuance_intent: None,
             wallet_configs: template.wallet_configs,
             validity_days: template.validity_days,
             renewable: template.renewable,
@@ -554,11 +612,35 @@ impl InitiationService {
         transaction.issuer_did = Some(issuer.issuer_did);
         transaction.issuer_algorithm = Some(issuer.algorithm);
         transaction.signing_service_id = Some(issuer.signing_service_id);
-        self.ports
+        if let Some(prerequisite) = prerequisite {
+            transaction.issuance_intent = Some(
+                crate::verification_prerequisite::bind_intent(
+                    &transaction,
+                    u32::try_from(template_version).map_err(|_| prerequisite_error())?,
+                    trusted_principal.ok_or_else(prerequisite_error)?,
+                    prerequisite,
+                )
+                .map_err(|_| prerequisite_error())?,
+            );
+        }
+        let reservation = self
+            .ports
             .repository
             .reserve_idempotently(&transaction)
             .await
-            .map_err(Into::into)
+            .map_err(InitiationServiceError::from)?;
+        // The unique idempotency insert may lose a race after the earlier read.
+        // Recover only the same authenticated principal's original intent.
+        if let Some(intent) = &reservation.transaction.issuance_intent {
+            if trusted_principal != Some(intent.initiating_principal_id.as_str())
+                || intent
+                    .validate_at(self.ports.clock.now().timestamp_micros())
+                    .is_err()
+            {
+                return Err(prerequisite_error());
+            }
+        }
+        Ok(reservation)
     }
 
     async fn validate_client(
@@ -648,6 +730,12 @@ impl InitiationService {
         }
         claims
     }
+}
+
+fn prerequisite_error() -> InitiationServiceError {
+    InitiationServiceError::Template(InitiationDependencyError::Invalid(
+        "verification prerequisite requires its authenticated, configured pre-authorized issuance route".into(),
+    ))
 }
 
 fn validate_explicit_inputs(
@@ -1044,7 +1132,7 @@ mod tests {
             _force: bool,
         ) -> Result<IssuerContext, CredentialIssuanceError> {
             self.0.push("resolve-required-remote-kms-issuer-context");
-            assert_eq!(credential_format, "jwt_vc_json");
+            assert!(matches!(credential_format, "jwt_vc_json" | "dc+sd-jwt"));
             Ok(IssuerContext {
                 issuer_profile_id: "issuer-profile-1".to_owned(),
                 issuer_did: "did:web:issuer.example".to_owned(),
@@ -1115,6 +1203,133 @@ mod tests {
         )
         .unwrap();
         (service, repository, calls)
+    }
+
+    #[derive(Clone)]
+    struct PrerequisiteTemplate(InitiationTemplate);
+
+    #[async_trait]
+    impl InitiationTemplateResolver for PrerequisiteTemplate {
+        async fn resolve(
+            &self,
+            _id: &str,
+        ) -> Result<InitiationTemplate, InitiationDependencyError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn prerequisite_template() -> InitiationTemplate {
+        InitiationTemplate {
+            credential_payload_format: "SD_JWT_VC".into(),
+            template_version: 2,
+            issuance_protocol: "OID4VCI_PRE_AUTH".into(),
+            revocation_profile_id: Some("profile-1".into()),
+            issuer_did: Some("did:web:issuer.example".into()),
+            issuer_algorithm: Some("ES256".into()),
+            renewable: false,
+            verification_prerequisite: Some(marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1 {
+                profile: marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisiteProfileV1::ManagedSdJwtDcqlSameHolderV1,
+                flow_definition_id: "managed-prerequisite".into(), flow_definition_version: 3,
+                policy: marty_oid4vp_contract::FrozenPolicyIdentity {
+                    id: "policy-prerequisite".into(), version: 4,
+                    content_digest: format!("sha256:{}", "a".repeat(64)),
+                }, verifier_issuer_did: "did:web:verifier.example".into(), ttl_seconds: 180,
+            }),
+            ..InitiationTemplate::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn prerequisite_requires_trusted_principal_and_seals_the_resolved_intent() {
+        let (mut service, repository, _) = service_harness();
+        service.ports.templates = Arc::new(PrerequisiteTemplate(prerequisite_template()));
+        let mut input = request();
+        input.application_id = None;
+        input.authorized_client_id = None;
+        assert!(service.initiate(&input, Some("guarded-key")).await.is_err());
+        assert!(repository.transaction.lock().unwrap().is_none());
+        let reserved = service
+            .initiate_with_principal(&input, Some("guarded-key"), Some("user-1"))
+            .await
+            .unwrap();
+        let intent = reserved.transaction.issuance_intent.as_ref().unwrap();
+        assert_eq!(intent.initiating_principal_id, "user-1");
+        assert_eq!(intent.applicant_id.as_deref(), Some("applicant-1"));
+        assert_eq!(intent.credential_template_version, 2);
+        assert_eq!(intent.prerequisite.policy.version, 4);
+        assert_eq!(
+            intent.expires_at_epoch_micros - intent.created_at_epoch_micros,
+            180_000_000
+        );
+        assert!(
+            crate::verification_prerequisite::validate_transaction(&reserved.transaction).is_ok()
+        );
+        let replay = service
+            .initiate_with_principal(&input, Some("guarded-key"), Some("user-1"))
+            .await
+            .unwrap();
+        assert_eq!(reserved.transaction, replay.transaction);
+        assert!(service
+            .initiate_with_principal(&input, Some("guarded-key"), Some("applicant-1"))
+            .await
+            .is_err());
+        assert!(service.initiate(&input, Some("guarded-key")).await.is_err());
+
+        for mutation in 0..6 {
+            let mut changed = reserved.transaction.clone();
+            match mutation {
+                0 => {
+                    changed
+                        .claims
+                        .insert("degree".into(), serde_json::json!("changed"));
+                }
+                1 => changed.organization_id = "org-other".into(),
+                2 => changed.issuer_did = Some("did:web:other.example".into()),
+                3 => changed.credential_type = Some("OtherCredential".into()),
+                4 => changed.signing_service_id = Some("other-kms".into()),
+                _ => changed.validity_days += 1,
+            }
+            assert!(
+                crate::verification_prerequisite::validate_transaction(&changed).is_err(),
+                "mutation {mutation}"
+            );
+        }
+        let mut dpop_bound = reserved.transaction;
+        dpop_bound.claims.insert(
+            "_dpop_jkt".into(),
+            serde_json::json!("bound-transport-proof"),
+        );
+        assert!(crate::verification_prerequisite::validate_transaction(&dpop_bound).is_ok());
+    }
+
+    #[tokio::test]
+    async fn prerequisite_unsupported_initiation_routes_fail_before_reservation() {
+        for mutation in 0..8 {
+            let (mut service, repository, _) = service_harness();
+            let mut template = prerequisite_template();
+            let mut input = request();
+            input.application_id = None;
+            input.authorized_client_id = None;
+            match mutation {
+                0 => input.application_id = Some("application-1".into()),
+                1 => input.authorized_client_id = Some("client-1".into()),
+                2 => input.holder_did = Some("did:key:holder".into()),
+                3 => template.renewable = true,
+                4 => template.wallet_configs = vec![serde_json::json!({"wallet_id":"default"})],
+                5 => template.issuance_protocol = "OID4VCI_AUTH_CODE".into(),
+                6 => template.credential_payload_format = "MSO_MDOC".into(),
+                _ => input.delivery_mode = "didcomm".into(),
+            }
+            service.ports.templates = Arc::new(PrerequisiteTemplate(template));
+            assert!(
+                service
+                    .initiate_with_principal(&input, None, Some("user-1"))
+                    .await
+                    .is_err(),
+                "mutation {mutation}"
+            );
+            assert!(repository.transaction.lock().unwrap().is_none());
+        }
     }
 
     #[tokio::test]

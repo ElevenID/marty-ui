@@ -338,6 +338,7 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
         replace: Mutex::new(None),
     });
     let state = FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: None,
         repository: repository.clone(),
         providers: Arc::new(FlowProviderRegistry {

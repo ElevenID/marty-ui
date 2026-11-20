@@ -21,7 +21,7 @@ pub(crate) fn managed_validity(
     {
         return Err(invalid());
     }
-    let evaluated_at = seconds_to_micros(query.checked_at_epoch_seconds())?;
+    let evaluated_at = query.checked_at_epoch_micros();
     let projected_time = result["evaluation_timestamp"]
         .as_str()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())

@@ -44,7 +44,7 @@ macro_rules! transaction_columns {
      zk_predicate_claims, credential_payload_format, wallet_configs, validity_days,
      renewable, renewal_window_days, delivery_mode, issuer_profile_id,
      issuer_mode, issuer_did_override, issuer_algorithm, signing_service_id,
-     reserved_credential_id, oid4vci_client_id, created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing"
+     reserved_credential_id, oid4vci_client_id, created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing, issuance_intent"
     };
 }
 
@@ -197,10 +197,10 @@ const RESERVE_INITIATION: &str = concat!(
           validity_days, renewable, renewal_window_days, delivery_mode,
           issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
           signing_service_id, reserved_credential_id, oid4vci_client_id,
-          created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing)
+          created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing, issuance_intent)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
              $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-             $26, $27, $28, $29, $30, $31, $32, $33, $34)
+             $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
      ON CONFLICT (organization_id, idempotency_key_hash) DO NOTHING
      RETURNING ",
     transaction_columns!()
@@ -277,6 +277,12 @@ where
                 .map(|value| json!(value)),
         )
         .bind(transaction.jwt_vc_signing_timing.map(|value| json!(value)))
+        .bind(
+            transaction
+                .issuance_intent
+                .as_ref()
+                .map(|value| json!(value)),
+        )
         .fetch_optional(executor)
         .await
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
@@ -629,7 +635,16 @@ impl CredentialRepository for PostgresCredentialRepository {
                    AND event.event_type = 'oid4vci_notification_binding'
                  LIMIT 1
              ) AS binding ON TRUE
-             WHERE credential.transaction_id = $1",
+             WHERE credential.transaction_id = $1
+               AND (transaction.issuance_intent IS NULL OR EXISTS (
+                   SELECT 1 FROM issuance_service.issuance_prerequisite_continuations continuation
+                   WHERE continuation.transaction_id = transaction.id
+                     AND continuation.organization_id = transaction.organization_id
+                     AND continuation.intent_digest = transaction.issuance_intent->>'intent_digest'
+                     AND continuation.flow_instance_id = transaction.issuance_intent->>'flow_instance_id'
+                     AND continuation.credential_id = credential.id
+                     AND continuation.credential_id = transaction.reserved_credential_id
+                     AND continuation.consumed_at IS NOT NULL))",
         )
         .bind(transaction_id)
         .bind(notification_binding_event_id(transaction_id))
@@ -762,6 +777,37 @@ impl CredentialRepository for PostgresCredentialRepository {
                 return Err(CredentialIssuanceError::InvalidAccessToken);
             }
         }
+        // Recheck the actual owner acquisition and native holder after every
+        // row-lock wait, using the database clock. A DTO or earlier timestamp
+        // cannot authorize this signing boundary.
+        let prerequisite = match current.issuance_intent.as_ref() {
+            Some(_) => {
+                if authorization.authorization_session.is_some() {
+                    return Err(crate::verification_prerequisite::invalid());
+                }
+                let acquired = authorization
+                    .prerequisite
+                    .ok_or_else(crate::verification_prerequisite::invalid)?;
+                let holder = authorization
+                    .holder_key_thumbprint
+                    .ok_or_else(crate::verification_prerequisite::invalid)?;
+                let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                    .fetch_one(&mut *database)
+                    .await
+                    .map_err(repository_error)?;
+                acquired.validate_current(&current, holder, now.timestamp_micros())?;
+                acquired.validate_current(transaction, holder, now.timestamp_micros())?;
+                Some((acquired, now))
+            }
+            None => {
+                if authorization.prerequisite.is_some()
+                    || authorization.holder_key_thumbprint.is_some()
+                {
+                    return Err(crate::verification_prerequisite::invalid());
+                }
+                None
+            }
+        };
         if current.status != CredentialTransactionStatus::Authorized {
             if !matches!(
                 current.status,
@@ -769,6 +815,21 @@ impl CredentialRepository for PostgresCredentialRepository {
             ) || !same_signing_target(transaction, &current)
             {
                 return Err(CredentialIssuanceError::InvalidTransactionState);
+            }
+            if let Some((acquired, _)) = prerequisite {
+                let consumed: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM issuance_service.issuance_prerequisite_continuations
+                     WHERE transaction_id=$1 AND organization_id=$2 AND intent_digest=$3
+                     AND evidence_digest=$4 AND holder_key_thumbprint=$5 AND credential_id=$6
+                     AND consumed_at IS NOT NULL)")
+                    .bind(&current.id).bind(&current.organization_id)
+                    .bind(&current.issuance_intent.as_ref().expect("guarded branch").intent_digest)
+                    .bind(acquired.evidence_digest()).bind(acquired.holder_thumbprint())
+                    .bind(&current.reserved_credential_id)
+                    .fetch_one(&mut *database).await.map_err(repository_error)?;
+                if !consumed {
+                    return Err(crate::verification_prerequisite::invalid());
+                }
             }
             let live = sqlx::query_scalar::<_, bool>(SIGNING_AUTHORITY_IS_LIVE)
                 .bind(&authorization.transaction.id)
@@ -792,6 +853,29 @@ impl CredentialRepository for PostgresCredentialRepository {
             return Err(CredentialIssuanceError::InvalidTransactionState);
         }
         transaction.validate_jwt_vc_profile()?;
+        if let Some((acquired, now)) = prerequisite {
+            let intent = current.issuance_intent.as_ref().expect("guarded branch");
+            let expires_at = DateTime::<Utc>::from_timestamp_micros(acquired.expires_at_micros())
+                .ok_or_else(crate::verification_prerequisite::invalid)?;
+            sqlx::query(
+                "INSERT INTO issuance_service.issuance_prerequisite_continuations
+                 (transaction_id, organization_id, intent_digest, evidence_digest, flow_instance_id,
+                  holder_key_thumbprint, credential_id, created_at, expires_at, consumed_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$8)",
+            )
+            .bind(&current.id)
+            .bind(&current.organization_id)
+            .bind(&intent.intent_digest)
+            .bind(acquired.evidence_digest())
+            .bind(&intent.flow_instance_id)
+            .bind(acquired.holder_thumbprint())
+            .bind(credential_id)
+            .bind(now)
+            .bind(expires_at)
+            .execute(&mut *database)
+            .await
+            .map_err(repository_error)?;
+        }
         let jwt_vc_signing_timing = if let Some(selection) = &transaction.jwt_vc_profile {
             let issued_at: DateTime<Utc> =
                 sqlx::query_scalar("SELECT date_trunc('second', clock_timestamp())")
@@ -1414,6 +1498,14 @@ pub(crate) fn transaction_row(
             .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
         jwt_vc_signing_timing: get::<Option<Value>>(&row, "jwt_vc_signing_timing")?
             .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
+        issuance_intent: get::<Option<Value>>(&row, "issuance_intent")?
+            .map(|value| {
+                marty_oid4vp_contract::issuance_prerequisite::IssuanceIntentBindingV1::from_json(
+                    &value.to_string(),
+                )
+            })
             .transpose()
             .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
         wallet_configs: json_vec(&row, "wallet_configs")?,

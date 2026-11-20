@@ -13,7 +13,9 @@ observations, bound to that native record. Neither record is
 `AuthenticatedOid4vpEvidenceV1`, asserts durable replay consumption, or grants
 issuance authority. The separate [managed evidence V2 producer](managed-oid4vp-evidence-v2.md)
 now composes their authenticated acquisitions with durable Flow finalization.
-An issuance-owned continuation remains required before the workflow is complete.
+The subsequent [verification-before-issuance profile](verification-before-issuance.md)
+adds the immutable intent and issuance-owned continuation for its documented
+pre-authorized SD-JWT, same-holder path.
 
 [Flow verification receipts](flow-verification-receipts.md) now provide a
 separate postcommit persistence record for the frozen request, submission,
@@ -234,7 +236,8 @@ result and callback together after evaluation. Its precommit replay flag is not
 a durable consumption receipt. The separate Flow receipt is constructed inside
 that transaction and exposed only after successful commit. Managed V2 composes
 that receipt through its private acquisition and repository path. The
-issuance-owned continuation remains separate work.
+issuance-owned continuation is implemented separately in the
+[verification-before-issuance profile](verification-before-issuance.md).
 
 ## Review and regression coverage
 
@@ -283,11 +286,14 @@ These fixes do not relax the dependency rule, alter production migrations or
 bypass live signing authorization. Actual PostgreSQL assertions remain a
 separate gate from compilation and tests that return early without a database.
 
-## Next implementation boundary
+## Issuance continuation
 
-Bind the [managed V2 evidence](managed-oid4vp-evidence-v2.md) to an immutable
-issuing intent, including tenant, applicant/session, holder, template version,
-configuration, policy and exact dataset, through an
-issuance-owned single-use continuation with expiry. Revalidate and consume
-that continuation under the existing atomic signing claim before enabling the
-prerequisite-to-issuance workflow.
+The [verification-before-issuance profile](verification-before-issuance.md)
+binds [managed V2 evidence](managed-oid4vp-evidence-v2.md) to an immutable issuing
+intent, including tenant, initiating principal, applicant, holder, template
+version, configuration, Policy revision and exact dataset. Issuance revalidates
+and consumes its expiring single-use continuation under the existing atomic
+signing claim. Follow that profile's owner configuration and database rollout
+requirements before enabling prerequisite templates. Other credential profiles,
+installed-wallet interoperability and deployed-stack qualification retain their
+independent gates.

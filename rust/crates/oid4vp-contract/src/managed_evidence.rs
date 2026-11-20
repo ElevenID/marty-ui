@@ -177,6 +177,7 @@ impl ManagedPolicyEvidenceProjectionV2 {
     ) -> Result<(), Oid4vpContractError> {
         self.validate_historical()?;
         self.validity.validate_for_request(request, result)?;
+        self.validate_result_observation(result)?;
         let transport = request.oid4vp_transport;
         transport.validate_transport()?;
         let authority = transport
@@ -292,6 +293,38 @@ impl ManagedPolicyEvidenceProjectionV2 {
         validate_privacy(self, tokens)
     }
 
+    fn validate_result_observation(&self, result: &Value) -> Result<(), Oid4vpContractError> {
+        // Native policy facts retain JWT epoch seconds. Their match below does
+        // not permit retiming the precise observation within that same second:
+        // acquisition and recovery must match the original Policy timestamp.
+        let observed = result
+            .get("evaluation_timestamp")
+            .and_then(Value::as_str)
+            .filter(|value| value.len() <= 64)
+            .filter(|value| {
+                // Chrono accepts and truncates fractional digits past nanosecond
+                // precision. The owner contract emits at most six, so reject
+                // higher precision lexically before any lossy parsing occurs.
+                value.split_once('.').is_none_or(|(_, fraction)| {
+                    let digits = fraction
+                        .bytes()
+                        .take_while(|byte| byte.is_ascii_digit())
+                        .count();
+                    (1..=6).contains(&digits)
+                })
+            })
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .filter(|value| {
+                value.timestamp_subsec_nanos() < 1_000_000_000
+                    && value.timestamp_subsec_nanos() % 1_000 == 0
+            })
+            .map(|value| value.timestamp_micros());
+        if observed != Some(self.validity.evaluated_at_epoch_micros) {
+            return Err(Oid4vpContractError::BindingMismatch);
+        }
+        Ok(())
+    }
+
     fn validate_body(&self) -> Result<(), Oid4vpContractError> {
         require_size(self)?;
         if self.contract != MANAGED_POLICY_EVIDENCE_CONTRACT_V2 {
@@ -326,9 +359,6 @@ impl ManagedPolicyEvidenceProjectionV2 {
         require_thumbprint(&self.holder_key_thumbprint)?;
         require_thumbprint(&self.issuer_key_thumbprint)?;
         let evaluated = self.validity.evaluated_at_epoch_micros;
-        if evaluated % 1_000_000 != 0 {
-            return Err(Oid4vpContractError::InvalidLifetime);
-        }
         let evaluated_seconds = evaluated / 1_000_000;
         if self.validity.organization_id != self.organization_id
             || self.validity.policy != self.policy
@@ -590,6 +620,7 @@ impl ManagedOid4vpEvidenceProjectionV2 {
     pub fn validate_for_stored_result(&self, result: &Value) -> Result<(), Oid4vpContractError> {
         self.validate_historical()?;
         self.receipt.validate_result(result)?;
+        self.policy_evidence.validate_result_observation(result)?;
         if result
             .get(MANAGED_POLICY_EVIDENCE_DIGEST_V2)
             .and_then(Value::as_str)
@@ -859,7 +890,9 @@ fn invalid() -> Oid4vpContractError {
 
 /// Reject duplicate keys throughout native-result Value fields as well as the
 /// typed outer record. Parsing still establishes no owner provenance.
-fn parse_strict<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, Oid4vpContractError> {
+pub(crate) fn parse_strict<T: serde::de::DeserializeOwned>(
+    input: &str,
+) -> Result<T, Oid4vpContractError> {
     if input.len() > MAX_EVIDENCE_PROJECTION_BYTES {
         return Err(Oid4vpContractError::SizeLimit(MANAGED_POLICY_EVIDENCE_V2));
     }

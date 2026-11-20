@@ -18,7 +18,10 @@ the native query and managed-owner records described in
 A receipt does not establish that an earlier policy decision was still valid
 at database commit, authenticate a plaintext owner response, become
 `AuthenticatedOid4vpEvidenceV1`, authorize a credential offer, or grant an
-issuance continuation. Those remaining W05 boundaries stay explicit.
+issuance continuation. [Managed evidence V2](managed-oid4vp-evidence-v2.md)
+composes the authenticated observations and receipt; the separate
+[verification-before-issuance profile](verification-before-issuance.md)
+establishes and consumes the issuance-owned continuation.
 
 ## Clock ownership
 

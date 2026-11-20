@@ -646,6 +646,8 @@ pub fn evaluate_verified_material_for_policy(
     }
     if authenticated_sd_jwt_query.as_ref().is_some_and(|query| {
         !query.matches_request(policy, request)
+            || policy_facts["evaluation_time_epoch_seconds"].as_u64()
+                != Some(query.checked_at_epoch_seconds())
             || policy_facts["credentials"]
                 .as_array()
                 .is_none_or(|credentials| {
@@ -716,6 +718,13 @@ pub fn evaluate_verified_material_for_policy(
         authenticated_outer_jti.as_deref(),
         authenticated_issuer.as_ref(),
     );
+    if let Some(query) = authenticated_sd_jwt_query.as_ref() {
+        // Keep the precise observation from the sealed native query. The
+        // adjacent facts/result JSON cannot supply or relabel this clock.
+        let observed_at = chrono::DateTime::from_timestamp_micros(query.checked_at_epoch_micros())
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        result["evaluation_timestamp"] = json!(observed_at.to_rfc3339());
+    }
     // The reference comes from the saved policy used above, never from request
     // context, verifier facts or the native result's self-reported identity.
     result["policy_revision"] = crate::policy_revision::policy_revision_value(policy)
@@ -1120,6 +1129,7 @@ pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
         "credential_ranking_strategy": policy.credential_ranking_strategy.to_uppercase(),
         "credential_ranking_weights": policy.credential_ranking_weights,
         "version": policy.version,
+        "policy_revision": crate::policy_revision::policy_revision(policy).ok(),
         "created_at": policy.created_at.to_rfc3339(),
         "updated_at": policy.updated_at.to_rfc3339()
     }))

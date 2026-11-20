@@ -172,6 +172,7 @@ async fn public_retention_postgres_erases_payloads_preserves_quota_and_replay_re
         crate::PublicVerificationCatalog::from_json(&configuration["catalog"].to_string(), false)
             .unwrap();
     let router = crate::flow_read_router(crate::FlowHttpState {
+        issuance_prerequisite_authenticator: None,
         service_authenticator: Some(Arc::new(
             mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
         )),

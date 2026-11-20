@@ -2636,6 +2636,16 @@ mod bounded_sd_jwt_query_evidence {
         };
         use std::sync::atomic::AtomicU64;
 
+        mod issuance_prerequisite_handoff {
+            use super::*;
+            include!("verification_issuance_prerequisite_tests.rs");
+        }
+
+        mod evaluation_precision {
+            use super::*;
+            include!("verification_precision_tests.rs");
+        }
+
         #[derive(Clone, Copy)]
         enum Mode {
             Valid,
@@ -3996,6 +4006,8 @@ mod bounded_sd_jwt_query_evidence {
                 .unwrap();
                 assert!(rejected, "{corrupt} corruption must fail owner recovery");
             }
+
+            issuance_prerequisite_handoff::qualify(fixture, &providers, &pool, values).await;
 
             // Historical recovery observes the actual passage of the short
             // owner's deadline. No persisted timestamps or evidence are forged.

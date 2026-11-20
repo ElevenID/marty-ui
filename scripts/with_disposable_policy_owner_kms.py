@@ -26,6 +26,12 @@ path is MARTY_TEST_POLICY_WORKLOAD_CA_CERT. Each signer token is restricted to i
 own non-exportable key. The existing MARTY_TEST_POLICY_OWNER_TLS values remain
 available for the independent owner HTTPS contract.
 
+The joined issuance contract also receives a separate Ed25519 Transit signer
+through the MARTY_TEST_ISSUANCE_SIGNING_ environment prefix: KMS_URL,
+KMS_CA_CERT_FILE, KMS_TOKEN_FILE, KEY_NAME and PUBLIC_JWK_FILE. The key is fixed
+to version 1 and non-exportable. Its token permits only public metadata reads
+and signing; export, rotation and cross-owner signing are explicitly denied.
+
 The ordinary run clears HTTP proxy variables in the test child so its legacy
 HTTP decoy remains reachable. Repeat with --poison-proxy to prove that owner and
 remote-signer HTTPS bypass ambient proxies. Build dependencies first: that option
@@ -36,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 from pathlib import Path
 import re
@@ -323,6 +330,86 @@ def policy_workload_environment(
     return environment
 
 
+def issuance_signing_environment(
+    bao: Bao, root: Path, address: str, owner: dict[str, str]
+) -> dict[str, str]:
+    """Provision a separate non-exportable issuer key for the joined contract."""
+    key_name = "w05-issuance-" + secrets.token_hex(8)
+    bao.request("POST", f"transit/keys/{key_name}", {
+        "type": "ed25519",
+        "exportable": False,
+        "allow_plaintext_backup": False,
+    })
+    metadata = bao.request("GET", f"transit/keys/{key_name}")["data"]
+    if (
+        metadata["type"] != "ed25519"
+        or metadata["latest_version"] != 1
+        or metadata["exportable"] is not False
+        or metadata["allow_plaintext_backup"] is not False
+    ):
+        raise RuntimeError("unexpected issuance signer metadata")
+    public_key = base64.b64decode(metadata["keys"]["1"]["public_key"], validate=True)
+    if len(public_key) != 32:
+        raise RuntimeError("unexpected issuance public key")
+    public_jwk_file = root / "issuance-public-jwk.json"
+    public_jwk_file.write_text(json.dumps({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode("ascii"),
+    }), encoding="ascii")
+
+    policy_name = "w05-issuance-signer-" + secrets.token_hex(8)
+    bao.request("PUT", f"sys/policies/acl/{policy_name}", {
+        "policy": (
+            f'path "transit/keys/{key_name}" {{ capabilities = ["read"] }}\n'
+            f'path "transit/sign/{key_name}" {{ capabilities = ["update"] }}'
+        ),
+    })
+    token = bao.request("POST", "auth/token/create", {
+        "policies": [policy_name],
+        "no_default_policy": True,
+        "ttl": "1h",
+        "renewable": False,
+    })["auth"]["client_token"]
+    owner_token = Path(owner[TLS_PREFIX + "KMS_TOKEN_FILE"]).read_text(encoding="ascii")
+    if token in (bao.token, owner_token):
+        raise RuntimeError("issuance signer token is reused or administrative")
+    token_file = root / "issuance-signer-token"
+    token_file.write_text(token, encoding="ascii")
+    if os.name != "nt":
+        token_file.chmod(0o600)
+
+    proof = {
+        "input": base64.b64encode(b"issuance-signer-scope").decode("ascii"),
+        "key_version": 1,
+    }
+    signature = bao.request("POST", f"transit/sign/{key_name}", proof, token=token)
+    if not signature.get("data", {}).get("signature", "").startswith("vault:v1:"):
+        raise RuntimeError("issuance signer scope proof failed")
+    denied = [
+        ("GET", f"transit/export/signing-key/{key_name}", None, token),
+        ("POST", f"transit/keys/{key_name}/rotate", {}, token),
+        ("POST", f"transit/sign/{owner[TLS_PREFIX + 'KMS_KEY_NAME']}", proof, token),
+        ("POST", f"transit/sign/{key_name}", proof, owner_token),
+    ]
+    for method, path, body, credential in denied:
+        try:
+            bao.request(method, path, body, token=credential)
+        except HTTPError as error:
+            if error.code != 403:
+                raise RuntimeError("issuance signer isolation proof failed") from None
+        else:
+            raise RuntimeError("issuance signer isolation proof failed")
+    prefix = "MARTY_TEST_ISSUANCE_SIGNING_"
+    return {
+        prefix + "KMS_URL": address,
+        prefix + "KMS_CA_CERT_FILE": str(root / "vault-ca.pem"),
+        prefix + "KMS_TOKEN_FILE": str(token_file),
+        prefix + "KEY_NAME": key_name,
+        prefix + "PUBLIC_JWK_FILE": str(public_jwk_file),
+    }
+
+
 def execute(executable: Path, command: list[str], *, poison_proxy: bool = False) -> int:
     with tempfile.TemporaryDirectory(prefix="marty-policy-owner-kms-") as temporary:
         root = Path(temporary)
@@ -356,6 +443,7 @@ def execute(executable: Path, command: list[str], *, poison_proxy: bool = False)
             owner = owner_environment(bao, root, address)
             environment.update(owner)
             environment.update(policy_workload_environment(bao, root, address, owner))
+            environment.update(issuance_signing_environment(bao, root, address, owner))
             environment["MARTY_TEST_OPENBAO_EXECUTABLE"] = str(executable)
             # The ordinary run must keep its legacy HTTP decoy reachable:
             # an inherited dead proxy could otherwise conceal a fallback attempt.

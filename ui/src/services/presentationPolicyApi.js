@@ -551,6 +551,7 @@ export function buildPresentationPolicyPayload(data = {}) {
     activate_immediately: _activateImmediately,
     status: _status,
     holder_binding,
+    policy_revision: _policyRevision,
     freshness_requirements,
     single_presentation: _singlePresentation,
     template_id: _templateId,
@@ -733,7 +734,7 @@ export async function getPresentationPolicy(id, scope = null) {
  */
 export async function updatePresentationPolicy(id, data) {
   const organizationId = requireOrganizationId(data);
-  const { organization_id: _organizationId, freshness_requirements, ...payload } = data;
+  const { organization_id: _organizationId, policy_revision: _policyRevision, freshness_requirements, ...payload } = data;
   // PATCH is a sparse update, not a new policy. Never manufacture
   // requirements or binding defaults for an unrelated metadata edit.
   if (typeof payload.holder_binding === 'string') {
@@ -862,6 +863,7 @@ export function buildCredentialTemplatePatch(data = {}) {
     'display_style', 'validity_rules', 'supported_formats', 'application_template_id',
     'trust_profile_id', 'revocation_profile_id', 'issuer_did',
     'credential_payload_format', 'issuance_protocol',
+    'jwt_vc_profile', 'verification_prerequisite',
   ]);
   const privateFields = new Set([
     'key_reference', 'signing_service_id', 'signing_key_reference', 'issuer_profile_id',

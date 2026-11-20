@@ -84,6 +84,8 @@ pub async fn prepare_verification_request(
     options: &VerificationRequestRetrievalOptions,
     now: DateTime<Utc>,
 ) -> Result<PreparedVerificationRequest, FlowVerificationRequestError> {
+    crate::issuance_prerequisite::bound_intent(&instance)
+        .map_err(|_| FlowVerificationRequestError::InvalidContext)?;
     if !matches!(
         instance.status,
         FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
