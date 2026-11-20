@@ -383,6 +383,8 @@ function buildEnvironment(sourceSha) {
   return { ...environment, MARTY_UI_SHA: sourceSha, MARTY_PRODUCTION_PAGES: 'public', VITE_UI_VARIANT: 'public' };
 }
 
+export { buildEnvironment as applicationBuildEnvironment, verifyApplicationTestResult, verifyApplicationResourceResult };
+
 function verifyApplicationTestResult(temporary, exported) {
   const raw = readInput(temporary, 'application-tests.json').bytes;
   const result = JSON.parse(raw.toString('utf8'));
