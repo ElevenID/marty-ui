@@ -204,7 +204,11 @@
       "api_paths": ["/v1/delivery-destinations", "/v1/delivery-destinations/{destination_id}"],
       "ui_paths": ["/console/org/connect/delivery-destinations"],
       "schema_refs": ["#/components/schemas/schemas__delivery_destination_profile"],
-      "limitations": ["Configured destinations do not by themselves establish external transport readiness."]
+      "limitations": [
+        "The linked schema describes the upstream protocol vocabulary. Marty accepts these providers: elevenid_wallet, oid4vci_wallet, didcomm_v2, open_badges_backpack, custom, physical_document_bureau.",
+        "Marty accepts these delivery targets: wallet, didcomm_v2, external_api, webhook, physical_document.",
+        "Configured destinations do not by themselves establish external transport readiness."
+      ]
     },
     {
       "id": "issuer-identity",

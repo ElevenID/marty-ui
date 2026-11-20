@@ -44,10 +44,10 @@ def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
 
 def test_health_rejects_missing_declared_check_and_accepts_disabled_check() -> None:
     model = {"services": {"gateway": {"healthcheck": {"test": ["CMD", "true"]}},
-                          "canvas-sync-worker": {"healthcheck": {"disable": True}}}}
+                          "notification": {"healthcheck": {"disable": True}}}}
     states = [{"Service": "gateway", "State": "running", "Health": ""},
-              {"Service": "canvas-sync-worker", "State": "running", "Health": ""}]
-    services = {"gateway", "canvas-sync-worker"}
+              {"Service": "notification", "State": "running", "Health": ""}]
+    services = {"gateway", "notification"}
     assert not activation.healthy(states, services, model)
     states[0]["Health"] = "healthy"
     assert activation.healthy(states, services, model)
