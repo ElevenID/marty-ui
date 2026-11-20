@@ -65,22 +65,64 @@ parent was `49bb88b07a26fa454819cf3ae5c6a6d7179d27b2`, while the manifest pinned
 This demonstrates admission before merge; it is not a completed composition.
 PR #2000 subsequently merged at `49bb88b07a26fa454819cf3ae5c6a6d7179d27b2`.
 The refreshed manifest pins that actual main parent and retains the same two
-original invocations. Repeat normal CI and queue admission on the updated head,
-and retain its exact source and run evidence in PR #1999.
+original invocations. The refreshed source completed required CI and the normal
+merge queue. PR #1999 merged as
+`6daf2a216fbc6e16472a06977b21f33896f372f5` at 12:06:45 PM America/Denver on
+November 19, with the expected first parent
+`49bb88b07a26fa454819cf3ae5c6a6d7179d27b2`.
 
-## Acceptance and continuation
+## Completed signed composition
 
-After the manifest change merges, inspect the exact production-web workflow
-attempt from that merged source. It must finish successfully and upload one
-`web-composition-RUN-ATTEMPT` artifact with the six original outer files listed
-in the [composition guide](../independent-website-release.md#compose-with-an-existing-product).
-Verify its selected website/application identities, backend source/tag, image
-pins, original proof payloads and both outer signatures/attestations. Record the
-successful run, attempt, source, artifact ID, size and SHA-256 in the PR's
-completion checkpoint. Until that evidence exists, signed cross-owner
-composition remains pending.
+The exact protected-main push
+[`44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1)
+completed successfully on that merged source. Its
+[compose job](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/job/135810417284)
+passed the source and manifest guards, original website intake, application and
+backend authentication, composition signing and GitHub provenance, final proof
+re-verification and artifact upload. The image-producing release job was
+intentionally skipped.
 
-Then qualify the composition on the existing isolated deployment using the
+| Evidence | Value |
+| --- | --- |
+| Artifact | [`web-composition-44594894023-1`, ID `14564688078`](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/artifacts/14564688078) |
+| Actions archive size | 10,644,299 bytes |
+| Actions archive SHA-256 | `ced2c670ff35e716128911e959a03d80ef72a507d24be357bc544f6f635e1b02` |
+| Composition ID | `sha256:476f8b387b42c4904a50a9bfd02173e88cba7e90f74548f50f58d8613a893124` |
+| Composition JSON SHA-256 | `5c98c13f825cbe9e4f118354f24ffef98581c725a0101ae3a73634b442baebe5` |
+| Payload ZIP SHA-256 | `342434fb1d0991998c3420ed3751acef49ef7be30fb02304c02d2558a3c3713f` |
+| Backend source / producer | `ca58b8bec939f5b26bebecd849edf55b5c4af5ae`, original `cd.yml` run `42362661646`, attempt 1 |
+
+The downloaded Actions archive matched its published size and digest and
+contained exactly the six outer files in the
+[composition guide](../independent-website-release.md#compose-with-an-existing-product).
+Independent inspection checked the two outer attestation subjects, source and
+workflow/run identity, the complete 22-file payload inventory, the existing
+manifest validator and bounded extraction, and retained backend edge capability.
+All five original website files and seven original application files matched
+the selected producer archives byte for byte. These structural checks supplement
+the successful hosted cryptographic verification; they are not a separate local
+cryptographic verification claim.
+
+The website image remains
+`ghcr.io/elevenid/website@sha256:e02735cddc77f284049f6ddc81a54ecf4de1af9fde17faee19f255ce7a11c8b6`.
+The application image remains
+`ghcr.io/elevenid/marty-ui-oss/ui-public@sha256:c4f5b38aa21a9ea66fd66543a010fadd5f271f46a542fc8a86946b2e12934ff6`.
+The original release selections in the table above are unchanged. Signed
+cross-owner composition is complete.
+
+## Continuation gates
+
+[PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) prepares a partial
+application source boundary. Its exact candidate `10ce5784eb6a49a925c5c629c56e546beaae1e7a`
+passed [required CI](https://github.com/ElevenID/marty-ui/actions/runs/44583667407)
+with 27 successful jobs and one intended skip, including an application build
+with 37 selected inputs absent. That run tested the pre-composition base;
+normal merge-queue validation against the current main remains required.
+Composition completion satisfies the PR's sequencing prerequisite. Continue
+with the application-specific test profile and expanded source-absence rehearsal,
+then audited asset ownership and an independent locked package/container build.
+
+Qualify this composition on the existing isolated deployment using the
 actual application and OIDC flow. Exercise active/previous asset retention,
 promotion, failed promotion recovery, rollback, reboot recovery and website
 availability while product services are stopped. Product and OpenBao pins must

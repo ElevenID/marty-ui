@@ -13,7 +13,6 @@ import { productionBuildContract, productionBuildContractPlugin } from './script
 import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
 import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
 import { devServerOrigin } from './scripts/dev-server-origin.mjs'
-import { platformDemoScenarios } from './src/services/platformDemoScenarios.js'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
@@ -185,6 +184,12 @@ export default defineConfig(async ({ mode }) => {
   let demoRoutes = []
 
   if (!isSelfhostBuild && !isApplicationBuild) {
+    // Keep the website catalog helper out of application config resolution.
+    // A file URL leaves this import inside its owning branch when Vite bundles
+    // the config, so application exports can omit the demo source entirely.
+    const { platformDemoScenarios } = await import(
+      new URL('./src/services/platformDemoScenarios.js', import.meta.url).href
+    )
     const {
       BLOG_POSTS,
       BLOG_AUTHORS,
