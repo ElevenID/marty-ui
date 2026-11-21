@@ -46,6 +46,7 @@ class SelectedInputs:
     repair_model: Callable = field(repr=False, compare=False)
     continue_journal: Callable = field(repr=False, compare=False)
     transition_product: Callable = field(repr=False, compare=False)
+    check_website_composition: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -1206,13 +1207,23 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                         gh=gh,cosign=cosign,registry_config=registry_config,stack=proof_stack)
                 product_completion.append(pending)
                 return decode(packed(pending['result']))
+        def check_website_composition(assets, *, gh, cosign, registry_config):
+            with lease_lock:
+                require(active and not completion and not staging and not model_completion
+                        and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                from selfhost_windows_website import inspect_composition
+                # Inspection uses only config/inspect reads. In particular it
+                # must not call the kernel-witness or native custody producers.
+                return inspect_composition(cfg, choice, values, record, assets,
+                    gh=gh, cosign=cosign, registry_config=registry_config)
         from selfhost_windows_continuation import CHECKPOINT, checkpoint
         generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
                 digest(packed(selected)), _root, generation_sequence,
-                check_configuration, check_current, recover_existing, stage_renewal, repair_model, continue_journal, transition_product)
+                check_configuration, check_current, recover_existing, stage_renewal, repair_model,
+                continue_journal, transition_product, check_website_composition)
         finally:
             with lease_lock:
                 active = False;values.clear()

@@ -161,6 +161,7 @@
     "scripts/selfhost_windows_renewal.py",
     "scripts/selfhost_windows_renewal_native.py",
     "scripts/selfhost_windows_selection.py",
+    "scripts/selfhost_windows_website.py",
     "scripts/selfhost_windows_model.py",
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",
