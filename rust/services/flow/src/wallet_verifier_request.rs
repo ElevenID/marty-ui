@@ -16,6 +16,22 @@ use crate::{
     Oid4vpClientIdScheme, RequestObjectCompatibility, RequestObjectOptions, RequestObjectTransport,
 };
 
+/// The custody key may carry the provider's did:web method ID. A derived
+/// did:jwk or did:key uses a different JOSE kid for the same public key.
+fn request_key_projection(
+    mut public_jwk: Value,
+    custody_method: &str,
+    request_kid: &str,
+) -> Result<Value, WalletVerifierRequestError> {
+    if let Some(kid) = public_jwk.get_mut("kid") {
+        if kid.as_str() != Some(custody_method) && kid.as_str() != Some(request_kid) {
+            return Err(WalletVerifierRequestError::Unavailable);
+        }
+        *kid = Value::String(request_kid.to_owned());
+    }
+    Ok(public_jwk)
+}
+
 const STORED_REQUEST: &str = "paired_wallet_signed_request_v1";
 const CONTRACT: &str = "marty.flow/wallet-verifier-request/v1";
 const MAXIMUM_BYTES: usize = 64 * 1024;
@@ -421,7 +437,11 @@ pub async fn prepare_wallet_verifier_request(
         request_uri: format!("{base}/v1/flows/instances/{}/request", instance.id),
         client_id: client_id.into(),
         request_key_id: request_key_id.into(),
-        public_jwk,
+        public_jwk: request_key_projection(
+            public_jwk,
+            &identity.verification_method_id,
+            &expected_key_id,
+        )?,
         request_jws_sha256: format!("{:x}", Sha256::digest(compact_request_jws.as_bytes())),
         compact_request_jws: compact_request_jws.clone(),
         response_uri: claims["response_uri"].as_str().ok_or_else(invalid)?.into(),
@@ -469,6 +489,24 @@ mod tests {
     use crate::{SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult};
     use async_trait::async_trait;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    #[test]
+    fn request_projection_binds_only_the_verified_method_alias() {
+        let custody = "did:web:issuer.example#signer";
+        let derived = "did:jwk:example#0";
+        let key = json!({"kty":"EC","kid":custody,"x":"public-x","y":"public-y"});
+        let mut expected = key.clone();
+        expected["kid"] = json!(derived);
+        assert_eq!(
+            request_key_projection(key.clone(), custody, derived).unwrap(),
+            expected
+        );
+        assert_eq!(
+            request_key_projection(key.clone(), custody, custody).unwrap(),
+            key
+        );
+        assert!(request_key_projection(key, "unrelated", derived).is_err());
+    }
 
     use std::{
         collections::BTreeMap,
