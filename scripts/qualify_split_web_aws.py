@@ -35,6 +35,9 @@ MARTY_REVIEWED_DOTENV = {
 }
 NGINX_FIXTURE = "nginx@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606"
 CHROME = "/usr/bin/google-chrome"
+# Chrome adds a random directory and SingletonSocket below TMPDIR. Reserve
+# space within Linux's Unix-socket pathname bound, counting UTF-8 bytes.
+MAX_CHROME_TEMP_DIRECTORY_BYTES = 60
 SCHEMA = "marty.split-web-host-qualification/v1"
 KEEP_ENV = (
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
@@ -87,10 +90,20 @@ def ordinary_path(value: str, *, exists: bool) -> Path:
     return result
 
 
+def chrome_temporary_directory(evidence: Path) -> Path:
+    directory = evidence / "temporary"
+    size = len(str(directory).encode("utf-8"))
+    require(size <= MAX_CHROME_TEMP_DIRECTORY_BYTES,
+            "Browser temporary directory is " + str(size) + " UTF-8 bytes; maximum is "
+            + str(MAX_CHROME_TEMP_DIRECTORY_BYTES) + ". Choose a shorter --evidence-root.")
+    return directory
+
+
 def paths(options) -> tuple[Path, Path, Path]:
     marty = ordinary_path(options.marty_root, exists=True)
     website = ordinary_path(options.website_root, exists=True)
     evidence = ordinary_path(options.evidence_root, exists=False)
+    chrome_temporary_directory(evidence)
     roots = (marty, website, evidence, Path(__file__).resolve().parents[1])
     for index, left in enumerate(roots):
         for right in roots[index + 1:]:
@@ -174,6 +187,7 @@ def validate_dotenv_inputs(root: Path, reviewed: dict[str, str]) -> None:
 
 def preflight(options, roots) -> tuple[dict, dict, dict]:
     marty, website, evidence = roots
+    temporary = chrome_temporary_directory(evidence)
     require(sys.platform == "linux" and platform.machine() == "x86_64", "Linux x86_64 is required")
     require(os.getuid() != 0 and os.getuid() == os.geteuid(), "Run as the prepared non-root Docker user")
     require(sys.version_info >= (3, 10), "Python 3.10 or later is required")
@@ -236,6 +250,8 @@ def preflight(options, roots) -> tuple[dict, dict, dict]:
                  "memory_total_kib": int(memory["MemTotal"].split()[0]),
                  "memory_available_kib": int(memory["MemAvailable"].split()[0]),
                  "source_filesystem_free_bytes": shutil.disk_usage(evidence.parent).free,
+                 "browser_temporary_directory": str(temporary),
+                 "browser_temporary_directory_utf8_bytes": len(str(temporary).encode("utf-8")),
                  "operator_supplied_instance_id": options.aws_instance_id},
         "docker": {"endpoint": env["DOCKER_HOST"], "engine_id": info.get("ID"),
                    "rootless": True, "cgroup_version": info["CgroupVersion"], "cgroup_driver": info["CgroupDriver"],
@@ -350,6 +366,7 @@ def systemd_command(stage: dict, unit: str, env: dict, tools: dict, seconds: int
 
 def run(options, roots, initial: dict, tools: dict, env: dict) -> dict:
     marty, website, evidence = roots
+    temporary = chrome_temporary_directory(evidence)
     require(options.deadline_utc is not None, "run requires the operator's bounded UTC deadline")
     deadline = datetime.strptime(options.deadline_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
     require(300 <= deadline - time.time() <= 8 * 3600, "Deadline must be 5 minutes to 8 hours ahead")
@@ -361,8 +378,7 @@ def run(options, roots, initial: dict, tools: dict, env: dict) -> dict:
             (evidence / relative).mkdir(mode=0o700)
     (evidence / "bunfig.toml").write_text("")
     os.chmod(evidence / "bunfig.toml", 0o600)
-    env = {**env, "TMPDIR": str(evidence / "temporary"), "TMP": str(evidence / "temporary"),
-           "TEMP": str(evidence / "temporary")}
+    env = {**env, "TMPDIR": str(temporary), "TMP": str(temporary), "TEMP": str(temporary)}
     plan = stages(roots, tools)
     report = {"schema": SCHEMA, "status": "running", "started_at": now(), "deadline_utc": options.deadline_utc,
               "runner": fingerprint(Path(__file__).resolve()), "initial": initial, "steps": [],

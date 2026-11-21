@@ -56,6 +56,16 @@ commit/tree check. Other actual dotenv files, including ignored `.env` and
 `.env.local`, remain refused. Checked-in `.env*.example` files remain allowed. Place the evidence
 directory outside all checkouts; it must not exist before execution.
 
+Use a short evidence path under a private parent, such as `/home/marty/q3/e`.
+The complete temporary base `<evidence-root>/temporary` must be at most **60
+UTF-8 bytes**. Chrome adds its own random directory and `SingletonSocket` path;
+longer bases can exceed Linux's Unix-socket pathname limit even when ordinary
+files fit. Non-ASCII characters can consume several bytes each. `plan`,
+`preflight`, and `run` reject an overlong base before starting diagnostics or
+creating evidence. The runner records the selected base and byte count in its
+preflight report. Keep each failed attempt and choose a fresh short path for
+the next attempt; do not relax the application browser sandbox.
+
 The frontend checks do not require a healthy application backend. The application
 browser gate intentionally observes the static runtime's real unavailable
 session state. The website handoff test uses its existing isolated fixture.
@@ -82,7 +92,7 @@ export DOCKER_HOST=unix:///run/user/1001/docker.sock
 python3 /home/marty/development/split-web-runner/scripts/qualify_split_web_aws.py plan \
   --marty-root /home/marty/development/split-web-marty-b1095e8c \
   --website-root /home/marty/development/split-web-website-14ec367 \
-  --evidence-root /home/marty/development/split-web-evidence-b1095e8c-14ec367 \
+  --evidence-root /home/marty/q3/e \
   --docker-socket /run/user/1001/docker.sock
 ```
 
@@ -94,7 +104,7 @@ container. Then invoke the same command with `run` and an explicit UTC deadline:
 python3 /home/marty/development/split-web-runner/scripts/qualify_split_web_aws.py run \
   --marty-root /home/marty/development/split-web-marty-b1095e8c \
   --website-root /home/marty/development/split-web-website-14ec367 \
-  --evidence-root /home/marty/development/split-web-evidence-b1095e8c-14ec367 \
+  --evidence-root /home/marty/q3/e \
   --docker-socket /run/user/1001/docker.sock \
   --deadline-utc 2026-11-21T08:50:00Z
 ```
