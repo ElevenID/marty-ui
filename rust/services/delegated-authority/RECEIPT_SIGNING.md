@@ -9,10 +9,11 @@ returned ES256 or Ed25519 signature against the configured public key. It holds
 no private key and never accepts issuer, provider URI, key reference, JWK or
 signing authority from a delegated-use command.
 
-This batch does not select the adapter in an executable delegated-use host,
-expose a use route, change human command-host roles, advertise public delegated
-capabilities, provision a provider key, or enable a deployment. The default
-Signing Keys origin set and public key-purpose catalog remain unchanged.
+The adapter is not selected in an executable delegated-use host. It does not
+change human command-host roles, advertise public delegated capabilities,
+provision a live provider key, or enable a deployment. The default Signing Keys
+origin set and public key-purpose catalog remain unchanged. The local
+qualification below creates only new disposable provider and Redis instances.
 
 The wire receipt continues to use the pinned Protocol profile
 `urn:marty:delegated-decision-receipt:v1` and JWS type
@@ -81,8 +82,9 @@ Signing Keys' verification token needs update permission for
 its existing verify permissions. Mint and verify policies must stay separate;
 the receipt signer must not inherit another origin's mint permission. The
 existing token-file reader reloads the scoped credential for each operation.
-This batch does not provision keys or policies or reuse the signing key as a
-MAC key.
+Live key and policy provisioning remains an explicit operator action. The local
+qualification provisions separate disposable MAC and signing keys with the same
+permission split; the signing key is never reused as a MAC key.
 
 For AWS, set `MARTY_SIGNING_GRANT_PROVIDER=aws-kms` and the existing absolute
 `MARTY_SIGNING_GRANT_AWS_CONFIG_FILE`. Its
@@ -136,7 +138,11 @@ The adapter first resolves through the existing authenticated
 organization-scoped profile, resolver provenance, exact purpose and public key.
 It resolves again after receipt preparation so an earlier key resolution cannot
 hide a changed profile. Signing Keys repeats current profile, key and registry
-checks in its existing issuer-signing path.
+checks in its existing issuer-signing path. Before a receipt sign, it also reads
+the configured provider's current public key and compares it to the resolved
+public key, including explicitly registered custody services. This check is
+required because receipt keys are not part of the standard managed-service
+projection. A key rotated behind an unchanged DID fails before provider signing.
 
 Before minting, both the adapter and shared signing-grant purpose guard parse
 the exact `base64url(header).base64url(payload)` input. They reject duplicate
@@ -186,9 +192,86 @@ invalid or substituted signatures, replay denial and single-attempt uncertain
 responses. Tests use generated in-memory keys and synthetic transcripts; the
 production constructor never accepts local private keys or test minters.
 
-The HTTP fixture models the existing Signing Keys contract and the replay-denial
-response. It does not constitute a live OpenBao/AWS or Redis receipt-origin
-qualification. That managed deployment test, scoped IAM/Transit policies,
-operator-owned provisioning, and executable host composition remain required
-before selecting this adapter for live traffic. No public capability
-qualification is claimed by these local tests.
+### Native disposable OpenBao and Redis gate
+
+`rust/services/signing-keys/tests/delegated_receipt_live_kms.rs` adds a separate
+ignored integration contract using the actual Signing Keys HTTP router and
+signing kernel, actual TLS OpenBao Transit operations, and actual Redis replay,
+profile, DID and encrypted registry storage. It exercises both ES256 and Ed25519.
+It does not replace provider responses with HTTP mocks or load private signing
+or MAC keys into the test process.
+
+Run it with independently verified OpenBao **2.5.5** and Redis **7.4.12** native
+executables. The wrapper checks compatible versions; release integrity must be
+verified separately against the official distribution provenance. For the Redis
+source distribution, the checksum is published by
+[redis/redis-hashes](https://github.com/redis/redis-hashes); this gate was built
+from the 7.4.12 archive with SHA-256
+`56588ee1648539556f2b6cf4e873e3734afbbe40fa952fec2fcd6b6d7dae2924`.
+OpenBao's [declarative audit configuration](https://openbao.org/docs/configuration/audit/)
+is used without enabling API-driven audit-device creation.
+
+Build before starting the short-lived fixture:
+
+```sh
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test \
+  --manifest-path rust/Cargo.toml --offline --locked \
+  -p marty-signing-keys --test delegated_receipt_live_kms --no-run
+
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 python3 \
+  scripts/with_disposable_delegated_receipt_kms.py \
+  --openbao /absolute/path/to/bao \
+  --redis-server /absolute/path/to/redis-server -- \
+  cargo test --manifest-path rust/Cargo.toml --offline --locked \
+  -p marty-signing-keys --test delegated_receipt_live_kms \
+  delegated_receipts_use_real_custody_and_fail_closed_across_rotation_and_replay \
+  -- --ignored --exact --nocapture
+```
+
+The wrapper launches new loopback processes in a private temporary directory.
+OpenBao uses a generated public CA and TLS. Redis uses a random password,
+database 15 and disabled persistence. Both independent nonce sentinels must
+match before the test writes any fixture data. The OpenBao administrative
+credential stays inside the provisioner and its owned server environment. The
+historical `MARTY_TEST_OPENBAO_ROOT_TOKEN` guard variable contains a separate
+marker-read-only leaf token, not the administrative credential. Signing,
+public-key reads, controlled fixture rotation, MAC minting, MAC verification,
+registry-envelope encryption and guard reads have distinct scoped leaf roles.
+Token files and audit records are private; both processes and all fixture state
+are removed after the command exits, including a failed test.
+
+The gate proves:
+
+- The dedicated receipt MAC verifies remotely. Mint cannot verify; verify cannot
+  mint; receipt and gateway mint tokens cannot mint for each other's origin.
+  Unrelated roles cannot sign, and the signer cannot rotate or export its keys.
+- Actual Transit signatures verify against their public JWK for the exact
+  receipt input and fail for substituted input. Provider credentials are stored
+  under Transit encryption in Redis, with no plaintext token in the registry.
+- The origin remains denied by a default verifier. Resolver and issuer-sign API
+  credentials are distinct. A substituted tenant is denied without signing.
+- Public issuer selection excludes receipt profiles. Registry writes reject
+  mixed-purpose receipt keys, and a valid gateway grant for a generic signing
+  purpose cannot reuse a receipt key through the public service-sign route.
+- Redis rejects reuse of a consumed grant. A real provider signing denial maps
+  to unavailable, consumes the grant and produces exactly one remote sign
+  request. Restoring provider permissions does not make that grant reusable.
+  Private provider audit records prove the request counts.
+- Revoking the current issuer profile or rotating its Transit key after receipt
+  preparation prevents signing. The rotation case exposed a missing provider
+  comparison for custom receipt custody; the final kernel now performs it.
+
+These claims cover the in-process production router/kernel with real remote
+OpenBao and Redis. The outer `HttpManagedDelegatedReceiptSigner` is still tested
+through its separate HTTP fixture; this native gate does not qualify an external
+Signing Keys HTTPS deployment, production identity wiring, or its server trust
+configuration. The provider failure case is a real permission denial, not a
+simulated network timeout. The atomic replay check applies to a grant's nonce;
+it does not replace retained-command ownership or forbid an authorized minter
+from deliberately issuing a fresh grant. Neither the current-key observation
+nor the test creates a distributed transaction with provider rotation; the
+outer adapter's exact-key signature verification remains necessary.
+
+AWS/IAM receipt-origin qualification, live operator-owned provisioning and
+executable host composition remain required before selecting this adapter for
+live traffic. No public capability or deployed-service qualification is claimed.

@@ -4,8 +4,9 @@
 //! operation evaluation with Marty OID4VP and MMF Cedar adapters. A successful
 //! evaluation is not a bearer permit or an operation commit. Default-off human
 //! approval and lifecycle-command hosts compose behind the Gateway. Delegated-use
-//! runtime composition, final-use replay/revision enforcement and signed receipts
-//! remain separate qualification milestones.
+//! composition includes retained commands, an explicit authenticated internal
+//! router, machine credential/audit gates and signed receipts. Public hosting
+//! and authoritative source deployment remain separate qualification milestones.
 pub mod approval;
 pub mod approval_host_config;
 pub mod approval_http;
@@ -22,6 +23,8 @@ pub mod consent_postgres;
 pub mod domain;
 pub mod machine_auth;
 pub mod machine_cedar;
+pub mod machine_credentials;
+pub mod machine_evidence;
 pub mod oid4vp;
 pub mod organization_authority;
 pub mod postgres;
@@ -50,6 +53,7 @@ pub use service::*;
 pub use wire::{decode_grant_snapshot, GrantWireError};
 
 pub mod use_commands;
+pub mod use_http;
 pub mod use_postgres;
 pub use use_commands::*;
 pub use use_postgres::{delegated_use_receipt_ref, PgDelegationUseRepository};

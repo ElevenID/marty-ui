@@ -214,6 +214,12 @@ impl AuthenticatedMachineProof {
     pub fn evidence_bytes(&self) -> &[u8] {
         &self.evidence_bytes
     }
+    pub fn evidence_ref(&self) -> &str {
+        &self.proof.evidence_ref
+    }
+    pub fn completed_at(&self) -> DateTime<Utc> {
+        self.completed_at
+    }
     pub fn valid_until(&self) -> DateTime<Utc> {
         self.proof.valid_until
     }

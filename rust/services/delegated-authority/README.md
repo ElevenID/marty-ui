@@ -3,8 +3,9 @@
 This crate implements the managed DelegationGrant v1 lifecycle, persistence and
 delegated operation evaluation layer, including Marty OID4VP proof and MMF Cedar
 adapters. The internal retained-use composition additionally provides original
-command claims, a concrete Flow transaction owner, selected machine-policy
-verification and managed receipt-signing adapters. An optional organization
+command claims, an explicitly assembled authenticated internal router, a concrete
+Flow transaction owner, selected machine-policy/credential verification, durable
+machine audit and managed receipt-signing adapters. An optional organization
 approval producer is hosted behind the authenticated Gateway; delegated-use
 authorization is not production-qualified.
 The optional delegated-authority capability must remain undiscoverable until its
@@ -149,6 +150,15 @@ return `UnsupportedCommand`; they are not composed through this lifecycle
 service or its human executable. The separate internal
 [`DelegationUseCommandService`](USE_COMMANDS.md) implements the bounded KEY use
 composition without installing a use host or Gateway route.
+
+The [internal use HTTP router](USE_HTTP.md) authenticates a dedicated forwarding
+workload and carries its original 30-second-bounded observation into source
+rechecks and COMMIT guards. It is not registered in an executable. Full-machine
+use additionally requires the [audited machine gate](MACHINE_AUTH.md): migration
+0007 retains exact immutable audit bytes and rejects machine receipts without a
+matching retained record. The selected [nested JWT-VC adapter](MACHINE_CREDENTIALS.md)
+performs real issuer and holder cryptography while leaving authoritative
+Trust Profile, issuer/key/status ownership explicitly configured.
 
 The service accepts original request bytes. It reuses the bounded JSON reader
 before normal deserialization, rejects duplicate/unknown fields, explicit nulls,

@@ -935,3 +935,6 @@ async fn concrete_cedar_rejects_wrong_policy_source_schema_and_clock_state() {
         assert!(h.verify().await.is_err(), "accepted Cedar fault {fault}");
     }
 }
+
+#[path = "machine_evidence_tests.rs"]
+mod evidence_tests;

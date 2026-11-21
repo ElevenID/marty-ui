@@ -110,11 +110,20 @@ result does not prove no external work occurred. This candidate supplies no
 automatic claim takeover, expiry cleanup, signing retry or reconciliation
 override.
 
-Finalization deliberately compares the complete Flow snapshot again under its
-lock. Even a benign request-retrieval update after finalization preparation can
-cause `Conflict` and leave the original command unresolved. A future host must
-coordinate that progress path; this candidate does not relax the comparison or
-automatically re-evaluate and re-sign after it changes.
+Finalization compares the immutable authority projection of the complete Flow
+snapshot under its row lock. It permits only the progress fields and bounded
+derived context already allowed by migration 0005. Grant/operation binding,
+nonce, frozen request, actor, definition, original times and terminal state must
+still match; cached signed requests cannot be replaced. Cancellation during
+signing remains terminal and leaves the command unresolved.
+
+Benign request retrieval during preparation, signing or the final row-lock wait
+therefore preserves the latest history and can complete without another signing
+attempt. Completion history, `updated_at`, `completed_at` and consumption use a
+fresh database instant sampled after the Flow lock, so they cannot move behind
+the accepted retrieval update. Later expiry still rolls back the whole final
+transaction. This change does not rewrite migration 0005 or qualify public
+wallet ingress.
 
 ## Migration and qualification
 

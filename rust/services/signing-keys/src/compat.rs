@@ -761,7 +761,11 @@ impl SigningCompatibilityService {
                 "Signing algorithm must match the DID-resolved issuer profile binding.".into(),
             ));
         }
-        if service_id == "managed-openbao-transit" {
+        // Receipt keys use explicitly registered custody services. Re-read
+        // their provider key too; a stale DID must not authorize a rotated key.
+        if service_id == "managed-openbao-transit"
+            || profile_purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        {
             let current = self
                 .provider_public_key_for_profile(
                     &request.organization_id,

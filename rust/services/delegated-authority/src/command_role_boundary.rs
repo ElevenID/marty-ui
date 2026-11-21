@@ -76,7 +76,7 @@ pub(crate) async fn check_command_roles(
             "SELECT EXISTS(SELECT 1 FROM pg_roles r CROSS JOIN pg_class t
              JOIN pg_namespace n ON n.oid=t.relnamespace
              WHERE n.nspname='delegated_authority_service'
-               AND t.relname IN ('use_command_claims','use_admissions','use_receipts','use_command_results')
+               AND t.relname IN ('use_command_claims','use_admissions','use_receipts','use_command_results','machine_authentication_evidence')
                AND (r.rolname=$1 OR pg_has_role($1::TEXT,r.oid,'MEMBER'))
                AND (has_table_privilege(r.oid,t.oid,'SELECT') OR has_any_column_privilege(r.oid,t.oid,'SELECT')))",
         )

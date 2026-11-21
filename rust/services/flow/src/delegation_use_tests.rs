@@ -20,11 +20,11 @@ use p256::ecdsa::{
     Signature, SigningKey,
 };
 use sha2::{Digest, Sha256};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize};
 
 use crate::{validate_flow_schema, FlowDelegatedUseOwner};
 
-struct Access(AtomicBool);
+struct Access(AtomicBool, AtomicI64);
 #[async_trait]
 impl DelegationUseCommandAuthorizer for Access {
     async fn authorize(
@@ -50,7 +50,7 @@ impl DelegationUseCommandAuthorizer for Access {
         }
         Ok(VerifiedDelegationCommandAccess {
             observed_at: now,
-            valid_until: now + Duration::seconds(30),
+            valid_until: now + Duration::seconds(self.1.load(Ordering::SeqCst)),
         })
     }
 }
@@ -91,6 +91,8 @@ impl ExternalConstraintVerifier for NoExternal {
 struct ReceiptSigner {
     key: SigningKey,
     calls: AtomicUsize,
+    delay_ms: AtomicU64,
+    while_signing: Mutex<Option<(PgPool, Uuid, bool)>>,
 }
 #[async_trait]
 impl DelegatedDecisionReceiptSigner for ReceiptSigner {
@@ -112,6 +114,23 @@ impl DelegatedDecisionReceiptSigner for ReceiptSigner {
         request: DelegatedReceiptSigningRequest,
     ) -> Result<Vec<u8>, DelegatedReceiptSigningError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let delay = self.delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
+        let progress = { self.while_signing.lock().unwrap().take() };
+        if let Some((pool, challenge_id, cancel)) = progress {
+            let query = if cancel {
+                "UPDATE flow_service.flow_instances SET status='cancelled',completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1"
+            } else {
+                "UPDATE flow_service.flow_instances SET context=jsonb_set(context::jsonb,'{request_retrieved}','true'),state_history=state_history::jsonb || jsonb_build_array(jsonb_build_object('event','concurrent_wallet_retrieval')),updated_at=clock_timestamp() WHERE id=$1"
+            };
+            sqlx::query(query)
+                .bind(challenge_id.to_string())
+                .execute(&pool)
+                .await
+                .map_err(|_| DelegatedReceiptSigningError)?;
+        }
         let signature: Signature = self.key.sign(&request.signing_input);
         Ok(signature.normalize_s().to_bytes().to_vec())
     }
@@ -192,13 +211,15 @@ impl Integrated {
         let signer = Arc::new(ReceiptSigner {
             key: SigningKey::from_slice(&rand::random::<[u8; 32]>())?,
             calls: AtomicUsize::new(0),
+            delay_ms: AtomicU64::new(0),
+            while_signing: Mutex::new(None),
         });
         let receipts = Arc::new(DelegatedDecisionReceiptIssuer::new(
             signer.clone(),
             fixture.grant.authority.issuer.clone(),
             60,
         )?);
-        let access = Arc::new(Access(AtomicBool::new(true)));
+        let access = Arc::new(Access(AtomicBool::new(true), AtomicI64::new(30)));
         let service = Arc::new(DelegationUseCommandService::new(
             PgDelegationUseRepository::new(pool.clone()),
             fixture.lifecycle.clone(),
@@ -300,6 +321,324 @@ impl Integrated {
             .await
             .unwrap()
     }
+
+    async fn http(&self, raw: &[u8], valid_for: Duration) -> axum::response::Response {
+        use axum::{body::Body, http::Request};
+        use marty_delegated_authority::use_http::{
+            delegated_use_command_router, DelegationUseHttpState,
+        };
+        use tower::ServiceExt;
+        let token = "synthetic-integrated-use-service-hop-token";
+        let now = Utc::now();
+        let organization = self.caller.organization_id();
+        let state =
+            DelegationUseHttpState::new(self.service.clone(), token.into(), organization).unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/internal/v1/organizations/{organization}/delegated-use-commands"
+            ))
+            .header("content-type", "application/json")
+            .header("x-service-token", token)
+            .header("x-marty-use-organization-id", organization.to_string())
+            .header("x-marty-use-principal-type", "SERVICE_ACCOUNT")
+            .header("x-marty-use-principal-id", &self.caller.actor().id)
+            .header(
+                "x-marty-use-observed-at",
+                now.to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            )
+            .header(
+                "x-marty-use-valid-until",
+                (now + valid_for).to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            )
+            .body(Body::from(raw.to_vec()))
+            .unwrap();
+        delegated_use_command_router(state)
+            .oneshot(request)
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn final_snapshot_allows_only_bounded_progress_and_preserves_authority() {
+    use crate::delegation_use::same_delegated_authority_snapshot;
+    let fixture = Fixture::new(fixed_now()).await;
+    let prepared = prepare_delegated_verification_start(
+        &fixture.providers,
+        &fixture.configuration,
+        fixture.definition.clone(),
+        fixture.admission().await,
+    )
+    .await
+    .unwrap();
+    let original = prepared.instance;
+    let mut progress = original.clone();
+    progress.context["request_retrieved"] = json!(true);
+    progress
+        .state_history
+        .push(json!({"event":"request_retrieved"}));
+    progress.updated_at += Duration::milliseconds(1);
+    assert!(same_delegated_authority_snapshot(&original, &progress).unwrap());
+    for case in 0..17 {
+        let mut changed = progress.clone();
+        match case {
+            0 => changed.id = Uuid::new_v4().to_string(),
+            1 => changed.organization_id = Uuid::new_v4().to_string(),
+            2 => changed.flow_definition_id = Uuid::new_v4().to_string(),
+            3 => changed.subject_id = Some("urn:example:other-actor".into()),
+            4 => changed.subject_type = "machine_identity".into(),
+            5 => changed.status = FlowInstanceStatus::Cancelled,
+            6 => changed.expires_at = original.expires_at.map(|time| time + Duration::seconds(1)),
+            7 => changed.result = Some(json!({"decision":"PERMIT"})),
+            8 => changed.context["oid4vp_client_id"] = json!("did:web:foreign.example"),
+            9 => changed.context["_marty_delegation_binding"] = json!({"changed":true}),
+            10 => changed.context["request_retrieved"] = json!(false),
+            11 => changed.context["oid4vp_response_uri"] = json!("https://foreign.example/submit"),
+            12 => changed.context["oid4vp_response_encryption_jwk"] = json!({"kty":"EC"}),
+            13 => changed.context["oid4vp_expected_state"] = json!(Uuid::new_v4()),
+            14 => changed.context["verification_audience"] = json!("https://foreign.example"),
+            15 => changed.context["oid4vp_verifier_context"] = json!(false),
+            16 => changed.updated_at = original.updated_at - Duration::milliseconds(1),
+            _ => unreachable!(),
+        }
+        assert!(
+            !same_delegated_authority_snapshot(&original, &changed).unwrap(),
+            "case {case}"
+        );
+    }
+    let mut cached = progress.clone();
+    cached.context["paired_wallet_signed_request_v1"] = json!({"jwt":"original"});
+    let mut replaced = cached.clone();
+    replaced.context["paired_wallet_signed_request_v1"] = json!({"jwt":"replacement"});
+    assert!(!same_delegated_authority_snapshot(&cached, &replaced).unwrap());
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_concurrent_retrieval_preserves_authority_and_latest_history() -> TestResult {
+    let f = Integrated::new().await?;
+    let (_, _, challenge) = f.start().await?;
+    let request = f.final_request(&challenge).await?;
+    *f.signer.while_signing.lock().unwrap() = Some((f.pool.clone(), challenge.challenge_id, false));
+    let completed = f.service.execute(&f.caller, &request).await?;
+    assert!(
+        matches!(completed.result,DelegationUseCommandResult::FinalUse{ref decision,..} if decision=="PERMIT")
+    );
+    let instance = PostgresFlowRepository::new(f.pool.clone())
+        .instance(&challenge.challenge_id.to_string())
+        .await?
+        .unwrap();
+    assert_eq!(instance.status, FlowInstanceStatus::Completed);
+    assert_eq!(instance.context["request_retrieved"], true);
+    assert!(instance
+        .state_history
+        .iter()
+        .any(|value| value["event"] == "concurrent_wallet_retrieval"));
+    assert_eq!(
+        instance.state_history.last().unwrap()["event"],
+        "delegated_use_evidence_recorded"
+    );
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM flow_service.delegated_use_consumptions")
+            .await,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_retrieval_during_final_row_lock_keeps_completion_time_monotonic() -> TestResult
+{
+    let f = Integrated::new().await?;
+    let (_, _, challenge) = f.start().await?;
+    let request = f.final_request(&challenge).await?;
+    let mut retrieval = f.pool.begin().await?;
+    sqlx::query("SELECT id FROM flow_service.flow_instances WHERE id=$1 FOR UPDATE")
+        .bind(challenge.challenge_id.to_string())
+        .fetch_one(&mut *retrieval)
+        .await?;
+    let service = f.service.clone();
+    let caller = f.caller.clone();
+    let work = tokio::spawn(async move { service.execute(&caller, &request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT * FROM flow_service.flow_instances%FOR UPDATE%')")
+                .fetch_one(&f.pool).await.unwrap();
+            if waiting { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await?;
+    let retrieved_at: DateTime<Utc> = sqlx::query_scalar("UPDATE flow_service.flow_instances SET context=jsonb_set(context::jsonb,'{request_retrieved}','true'),updated_at=clock_timestamp(),state_history=state_history::jsonb || jsonb_build_array(jsonb_build_object('event','retrieval_after_final_lock_wait','timestamp',clock_timestamp())) WHERE id=$1 RETURNING updated_at")
+        .bind(challenge.challenge_id.to_string()).fetch_one(&mut *retrieval).await?;
+    retrieval.commit().await?;
+    work.await??;
+    let instance = PostgresFlowRepository::new(f.pool.clone())
+        .instance(&challenge.challenge_id.to_string())
+        .await?
+        .unwrap();
+    assert_eq!(instance.status, FlowInstanceStatus::Completed);
+    assert!(instance.updated_at >= retrieved_at);
+    assert_eq!(instance.completed_at, Some(instance.updated_at));
+    let retrieval_event = instance
+        .state_history
+        .iter()
+        .find(|item| item["event"] == "retrieval_after_final_lock_wait")
+        .unwrap();
+    let retrieval_time =
+        DateTime::parse_from_rfc3339(retrieval_event["timestamp"].as_str().unwrap())?;
+    let completion = instance.state_history.last().unwrap();
+    let completed_time = DateTime::parse_from_rfc3339(completion["timestamp"].as_str().unwrap())?;
+    assert!(completed_time >= retrieval_time);
+    let consumed_at: DateTime<Utc> = sqlx::query_scalar(
+        "SELECT recorded_at FROM flow_service.delegated_use_consumptions WHERE challenge_id=$1",
+    )
+    .bind(challenge.challenge_id)
+    .fetch_one(&f.pool)
+    .await?;
+    assert_eq!(consumed_at, instance.updated_at);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_cancellation_during_signing_remains_terminal_and_unresolved() -> TestResult {
+    let f = Integrated::new().await?;
+    let (_, _, challenge) = f.start().await?;
+    let request = f.final_request(&challenge).await?;
+    *f.signer.while_signing.lock().unwrap() = Some((f.pool.clone(), challenge.challenge_id, true));
+    assert!(matches!(
+        f.service.execute(&f.caller, &request).await,
+        Err(DelegationUseCommandError::Conflict)
+    ));
+    let instance = PostgresFlowRepository::new(f.pool.clone())
+        .instance(&challenge.challenge_id.to_string())
+        .await?
+        .unwrap();
+    assert_eq!(instance.status, FlowInstanceStatus::Cancelled);
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM flow_service.delegated_use_consumptions")
+            .await,
+        0
+    );
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM delegated_authority_service.use_receipts")
+            .await,
+        0
+    );
+    assert!(matches!(
+        f.service.execute(&f.caller, &request).await,
+        Err(DelegationUseCommandError::PreparationPending)
+    ));
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_http_authentication_deadline_survives_signing_wait() -> TestResult {
+    use axum::{body::to_bytes, http::StatusCode};
+    let f = Integrated::new().await?;
+    let (_, _, challenge) = f.start().await?;
+    let request = f.final_request(&challenge).await?;
+    f.signer.delay_ms.store(450, Ordering::SeqCst);
+    let response = f.http(&request, Duration::milliseconds(300)).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024).await?)?;
+    assert_eq!(body["detail"], "delegation_use_evidence_expired");
+    let instance = PostgresFlowRepository::new(f.pool.clone())
+        .instance(&challenge.challenge_id.to_string())
+        .await?
+        .unwrap();
+    assert_eq!(instance.status, FlowInstanceStatus::AwaitingWallet);
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM flow_service.delegated_use_consumptions")
+            .await,
+        0
+    );
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM delegated_authority_service.use_receipts")
+            .await,
+        0
+    );
+    let repeated = f.http(&request, Duration::seconds(25)).await;
+    assert_eq!(repeated.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(repeated.into_body(), 1024).await?)?;
+    assert_eq!(body["detail"], "delegation_use_preparation_pending");
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_http_hop_does_not_qualify_an_overlong_source_observation() -> TestResult {
+    use axum::http::StatusCode;
+    let f = Integrated::new().await?;
+    let (start, _, challenge) = f.start().await?;
+    let finalize = f.final_request(&challenge).await?;
+    f.access.1.store(3_600, Ordering::SeqCst);
+    assert_eq!(
+        f.http(&start, Duration::seconds(25)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.http(&finalize, Duration::seconds(25)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM delegated_authority_service.use_command_claims")
+            .await,
+        1
+    );
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM delegated_authority_service.use_receipts")
+            .await,
+        0
+    );
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires isolated FLOW_POSTGRES_TEST_URL"]
+async fn postgres_use_http_completion_and_recovery_still_require_current_source_access(
+) -> TestResult {
+    use axum::{body::to_bytes, http::StatusCode};
+    let f = Integrated::new().await?;
+    let (start, _, challenge) = f.start().await?;
+    let recovered_start = f.http(&start, Duration::seconds(25)).await;
+    assert_eq!(recovered_start.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(recovered_start.into_body(), 65536).await?)?;
+    assert_eq!(body["recovered"], true);
+    assert_eq!(
+        body["result"]["challenge_id"],
+        challenge.challenge_id.to_string()
+    );
+    let request = f.final_request(&challenge).await?;
+    let finalized = f.http(&request, Duration::seconds(25)).await;
+    assert_eq!(finalized.status(), StatusCode::OK);
+    let original: serde_json::Value =
+        serde_json::from_slice(&to_bytes(finalized.into_body(), 65536).await?)?;
+    assert_eq!(original["result"]["decision"], "PERMIT");
+    let recovered = f.http(&request, Duration::seconds(25)).await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(recovered.into_body(), 65536).await?)?;
+    assert_eq!(body["result"], original["result"]);
+    assert_eq!(body["recovered"], true);
+    f.access.0.store(false, Ordering::SeqCst);
+    assert_eq!(
+        f.http(&request, Duration::seconds(25)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 1);
+    Ok(())
 }
 
 #[tokio::test]

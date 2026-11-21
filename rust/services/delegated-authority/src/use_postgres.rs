@@ -671,5 +671,6 @@ pub(crate) async fn verify_use_schema(pool: &PgPool) -> Result<(), RepositoryErr
     if indexes != 9 {
         return Err(RepositoryError::SchemaNotReady);
     }
+    crate::machine_evidence::verify_machine_evidence_schema(pool).await?;
     Ok(())
 }

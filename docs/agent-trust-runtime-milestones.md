@@ -6,9 +6,11 @@ main at `f662bb326bd0a83eb8191dc002bc3db57ec08cc3`, including the accepted
 Core JWT 11 dependency alignment. It preserves that existing lifecycle service
 and Flow admission implementation. The application now includes candidate agent directory administration,
 exact-terms organization approval, managed key-control enrollment and an opt-in
-human lifecycle command host. The current follow-on adds an internal retained
-delegated-use composition, selected full-machine authentication and managed
-receipt-signing adapter. Public delegated execution remains gated.
+human lifecycle command host. Retained delegated use now includes authenticated
+internal command transport, selected full-machine and nested JWT-VC verification,
+durable machine-audit retention, concurrency-safe Flow finalization and managed
+receipt signing qualified against disposable OpenBao/Redis. Public delegated
+execution remains gated.
 
 ## Implemented in this application slice
 
@@ -21,9 +23,9 @@ receipt-signing adapter. Public delegated execution remains gated.
 | M02 directory and enrollment candidate | Tenant inventory, public-key history, immutable audit, authorized administration, retained signed-challenge enrollment and a local key-custodian signer | Managed entries start PROVISIONED; explicit key-control enrollment permits ACTIVE eligibility, with authority NOT_ASSESSED. Operational MAP, external host trust and suspended-identity resume remain separate |
 | M03 approval candidate | Exact immutable terms, explicit human confirmation, durable recovery/withdrawal, independent current Organization authority and an opt-in executable | One configured organization and KEY binding; represented-subject SESSION establishment and broader authority profiles remain separate work |
 | P03 application lifecycle commands | Atomic grant/journal/original-result persistence, opt-in human Gateway/host composition, exact producer confirmation and current Organization authorization rechecked after lock waits | Selected human organization/KEY profile only; the human executable and Gateway still reject START_USE and FINALIZE_USE |
-| M02 selected machine authentication candidate | Concrete Core OID4VP verification, strict MAP/full-machine consistency, required credential/attestation ports, actual MMF machine-policy evaluation and aggregate evidence digest | Requires independent full MachineIdentity and provider qualification; current SERVICE_ACCOUNT inventory and enrollment do not satisfy this gate; audit record retention needs the consuming host |
-| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied local transaction | Internal KEY-grant composition only; no executable use host or authenticated ingress is installed, and unresolved claims are never automatically retried |
-| Managed decision receipt candidate | Dedicated signing-grant origin, explicitly pinned remote key, strict transcript binding and independent returned-signature verification | Default off; live provider, credential custody and executable host qualification remain pending |
+| M02 selected machine authentication candidate | Concrete Core OID4VP verification, strict MAP/full-machine consistency, real nested JWT-VC issuer/holder verification, actual MMF machine-policy evaluation and append-only exact audit retention | Requires independent full MachineIdentity/MAP and issuer/status/provider qualification; current SERVICE_ACCOUNT inventory and enrollment do not satisfy this gate |
+| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition only; router is not installed by an executable, wallet/proof ingress remains separate, and unresolved claims are never automatically retried |
+| Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Default off; deployed outer HTTPS adapter, production custody/credentials and executable host qualification remain pending |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -52,20 +54,21 @@ The broader milestones are not closed by these libraries and candidate
 administration paths. The next application packages still need:
 
 - Deployment qualification of the implemented selected machine proof/MAP/Cedar
-  gate: an independent full MachineIdentity source, required credential and
-  attestation verification, current policy/entity sources, and durable machine
-  audit retention. Connection/grant aggregation and independent directory
+  and audited credential gates: independent full MachineIdentity/MAP and
+  issuer/key/status owners, required attestation and current policy/entity
+  sources. The new concrete audit repository still needs its reviewed deployment
+  role and source owners must retain their own evidence. Connection/grant aggregation and independent directory
   qualification remain separate. Enrollment key possession does not satisfy
   these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
   establishment beyond the implemented human/organization KEY profile.
-- Qualified workload/caller ingress and source freshness for the implemented
-  internal use composition. Human command authorization/confirmation is
+- Qualified workload/caller sources, protected service-hop deployment and an
+  executable selecting the implemented internal use router. Human command authorization/confirmation is
   implemented; the human administration host does not accept machine use calls.
 - Deployment of retained `START_USE`/`FINALIZE_USE`, the concrete same-database
   Flow owner and managed receipt signer with reviewed serving privileges,
-  authenticated request retrieval/proof submission, live signing-provider
-  qualification and a separately reviewed pending-claim reconciliation design.
+  authenticated request retrieval/proof submission, deployed signing-provider
+  qualification beyond the passing disposable gate, and a separately reviewed pending-claim reconciliation design.
   Ordinary Flow finalization remains guarded.
 - Public delegated-use hosting, packaged public clients, independent consumer
   verification and explicit capability qualification. Human lifecycle commands,
@@ -233,6 +236,10 @@ commit uses `[skip ci]`, and no hosted workflow is manually dispatched.
 
 ## Retained delegated-use and machine gate follow-on
 
+This section records the published `085d65c` baseline. The subsequent machine
+audit, credential, internal HTTP, concurrency and live custody work is recorded
+in the next section; historical gaps below describe that earlier checkpoint.
+
 The follow-on after `0404d1100f34f1423c80c432c0cd63df60908f48` implements the
 internal KEY-grant use composition. Durable original claims precede Flow
 preparation or receipt signing. START_USE records the exact challenge and
@@ -304,3 +311,90 @@ External TLS/OpenBao and separately provisioned fenced-role gates remain open.
 Hosted Actions, production rollout, a live receipt provider and independent public
 consumer qualification are not claimed. Public capability promotion still
 depends on the remaining runtime gates above.
+
+## Machine evidence and authenticated transport follow-on
+
+This parallel follow-on starts from published application commit
+`085d65ca3298db17989710b3136eaedf9e6e3c26`. It closes five bounded implementation
+and local qualification gaps while preserving the Marty/Rifare boundary.
+
+| Area | Delivered change | Remaining qualification |
+| --- | --- | --- |
+| Machine evidence | Concrete append-only PostgreSQL repository and audited verifier composition; exact bytes/digest/scope retained before proof conversion; migration 0007 links every new full-machine receipt to its retained submitted-proof audit | Provision the restricted audit role and independently qualify/retain evidence at each authoritative source owner |
+| Machine credentials | Concrete Core `MartyNestedVc2JwtV1` adapter with real ES256/EdDSA issuer and holder verification, registered credential identity, all required MAP types and current Trust Profile/issuer/key/status binding | Full MachineIdentity/MAP and JWT-VC status owners are explicit source ports; Organization remains SERVICE_ACCOUNT inventory |
+| Internal command transport | Dedicated service-hop authentication, exact typed caller metadata, original P03 bytes, bounded authentication propagated through current source reads and COMMIT | Explicit router only; no executable, public Gateway selection or wallet/proof HTTP ingress |
+| Concurrent Flow retrieval | Locked comparison of immutable authority with only the existing bounded progress allowance; preserve latest history and monotonic completion/consumption timestamps | Cancellation, changed scope and expiry stay terminal; no automatic retry/re-sign or pending-claim takeover |
+| Managed receipt custody | Actual Signing Keys router/kernel exercised with TLS OpenBao Transit and password-protected Redis for Ed25519 and ES256; custom-provider rotation bug fixed | Outer deployed HTTPS adapter, production credential/custody deployment, AWS/IAM and network-timeout profiles remain separate |
+
+The audit writer has SELECT/INSERT on its own table and no use ledger, grant,
+Flow, consent or source-owner privileges. The use writer needs audit SELECT only.
+The database enforces exact audit hash/reference/document relationships, original
+deadlines through deferred COMMIT and receipt binding to tenant, actor, grant
+revision, submitted proof, challenge, key and operation. Historical recovery
+does not reconstruct authenticated proof. Pre-0007 receipts remain unchanged
+and are counted explicitly as legacy history when they have no later audit;
+missing post-migration evidence fails validation. No historical evidence is
+fabricated.
+
+Independent review found and corrected four concurrency/freshness cases. Source
+observations now pass their own maximum-lifetime check before a shorter HTTP
+deadline is applied. Original authentication observation and expiry remain both
+clock bounds after dispatch. Finalization checks authentication after awaited
+proof resolution and preparation before it begins signing. Flow completion uses
+the fresh database clock obtained after its row lock, preventing timestamps from
+moving behind a concurrent retrieval. Targeted regressions exercise these exact
+failure scenarios.
+
+The live provider gate also found a measured custody defect: rotating an
+explicitly registered Transit receipt key behind an unchanged DID initially
+returned HTTP 200. The corrected receipt-purpose kernel now compares the current
+provider public key before remote signing and returns conflict on the stale pin.
+The existing standard managed-provider behavior remains intact. Provider audit
+counts prove no signing on replay or stale-pin rejection, and exactly one signing
+attempt for a real provider permission denial.
+
+### Follow-on verification
+
+These checks use the locked dependency graph offline, real local PostgreSQL and
+explicit disposable custody fixtures. Views overlap and must not be summed.
+
+| Check | Result |
+| --- | --- |
+| Nested JWT-VC credentials and full machine-gate composition | 12 passed using real ephemeral Ed25519/P-256 signatures, including forged issuer under a valid holder and over 100 scoped/status/profile/expiry cases |
+| Machine audit PostgreSQL integration | Seven passed: real Core Ed25519 proof, exact retention/recovery, role and guard drift, receipt binding, storage failure and pre-/post-/deferred-COMMIT expiry |
+| Internal HTTP boundary | Five passed, including actual loopback HTTP body-read expiry and zero dispatch on malformed/foreign/human metadata |
+| Full Delegated Authority library with serialized PostgreSQL fixtures | 210 passed, zero failures or ignores; one unchanged external command-corpus case explicitly filtered |
+| Final use/source/clock regression | 29 passed on the final source-validation and original-observation bounds; external command corpus explicitly excluded |
+| Read-only upgrade preflight | 131 PostgreSQL tests passed, including historical retention, five new guard bindings, exact critical CHECK constraints, privilege isolation and empty-table constraint drift |
+| Concrete Flow transaction and HTTP integration | 17 passed, zero ignored; includes exact immutable-scope comparison, retrieval during signing and row-lock wait, cancellation, signed PERMIT/DENY, historical recovery, source loss and HTTP expiry |
+| Final Flow HTTP source/clock regression | Three passed on the final original-observation bound, including fresh finalization, historical recovery, current source denial, overlong source rejection and expiry during signing |
+| Live receipt custody | One explicit ignored-by-default gate passed for both Ed25519 and ES256 against actual OpenBao 2.5.5 and Redis 7.4.12; covers real signatures, encrypted credentials, separate roles, default-off, exclusive purpose, replay, provider denial, revocation and rotation |
+| Signing Keys library regression | 274 passed; 22 existing independent fixture cases remain ignored in the normal library run |
+| Combined all-targets compilation | Passed for Gateway, Flow, Delegated Authority, principal binding, signing grant and Signing Keys |
+
+The broad service and 17-case Flow groups preceded the final original-observation
+clock-bound adjustment. The final focused use/HTTP checks cover that adjustment
+and both fresh and historical source authorization. The private external command
+corpus and unchanged prior UI/Protocol suites are historical evidence above,
+not rerun claims in this batch. Synthetic actor, consent, full-machine, issuer
+status and policy sources in local tests do not qualify live source ownership.
+
+Only additive Delegated Authority migration 0007 is new. All 15 published Flow,
+Organization and Delegated Authority migrations remain byte-identical to the
+baseline; Cargo manifest/lock and the Protocol pin are unchanged. The Signing
+Keys compatibility file retains CRLF. Scoped formatting, whitespace, local
+document links and the OSS commerce boundary pass.
+
+Next deployment work is explicit authoritative workload/MAP and issuer/status
+ownership, required attestation/current policy sources, a separately selected
+use executable with wallet/proof ingress and reviewed serving roles, production
+HTTPS/custody qualification and independent public consumer verification.
+Pending-claim reconciliation needs its own reviewed contract. Public support and
+discovery remain unchanged until those gates are qualified; Rifare retains its
+own execution, budgets, reservations and business idempotency.
+
+The implementation contracts are [internal HTTP](../rust/services/delegated-authority/USE_HTTP.md),
+[machine credentials](../rust/services/delegated-authority/MACHINE_CREDENTIALS.md),
+[machine audit](../rust/services/delegated-authority/MACHINE_AUTH.md),
+[Flow finalization](../rust/services/flow/DELEGATED_USE.md) and
+[receipt custody](../rust/services/delegated-authority/RECEIPT_SIGNING.md).

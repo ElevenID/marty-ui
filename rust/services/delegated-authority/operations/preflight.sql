@@ -68,7 +68,8 @@ DECLARE
         '63cb2d26f3efff51c6725f0c67e3c6c4541f70bce69a0559c6ed0afa53a295c1',
         'cedcf39d7d2cc35defe20066c5fad80e2c00b39f422fb0ffe9590ac508e9f16a',
         '2dbd6187782f4e53608adfce3a60a8619eb0d598bb66ec78cd83cb013a6596f6',
-        '11682b6f2a646ded3a56f05f0f6dc7c66f183f35cad4b2892bb7c5a089495287'
+        '11682b6f2a646ded3a56f05f0f6dc7c66f183f35cad4b2892bb7c5a089495287',
+        'b7bf6fe2257c3869b3d35088c5892ad719f7e86b466cbf42d58ebf41bd9c115f'
     ];
     evidence_tables TEXT[] := ARRAY['consent_confirmations','consent_withdrawals',
         'representation_authority_sources','representation_authority_assertions'];
@@ -80,6 +81,8 @@ DECLARE
     use_table_count INTEGER := 0;
     use_claim_count BIGINT := 0;
     use_result_count BIGINT := 0;
+    machine_evidence_count BIGINT := 0;
+    legacy_machine_receipt_count BIGINT := 0;
     bad BOOLEAN;
     role_index INTEGER;
     object_record RECORD;
@@ -171,6 +174,9 @@ BEGIN
     END LOOP;
     IF (schema_version >= 6 AND use_table_count <> 5) OR (schema_version < 6 AND use_table_count <> 0) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: retained use tables are partial or untracked';
+    END IF;
+    IF (schema_version>=7) IS DISTINCT FROM (to_regclass('delegated_authority_service.machine_authentication_evidence') IS NOT NULL) THEN
+        RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: machine audit table disagrees with recorded migrations';
     END IF;
     IF selected_phase='post-migration' AND schema_version <> cardinality(expected_checksums) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: post-migration inspection requires every bundled migration';
@@ -347,7 +353,12 @@ BEGIN
         (6,'use_receipts','use_receipts_immutable','reject_lifecycle_event_mutation',27),
         (6,'use_receipts','use_receipts_no_truncate','reject_lifecycle_event_mutation',34),
         (6,'use_command_results','use_command_results_immutable','reject_lifecycle_event_mutation',27),
-        (6,'use_command_results','use_command_results_no_truncate','reject_lifecycle_event_mutation',34)
+        (6,'use_command_results','use_command_results_no_truncate','reject_lifecycle_event_mutation',34),
+        (7,'machine_authentication_evidence','machine_authentication_evidence_binding','guard_machine_authentication_evidence',7),
+        (7,'machine_authentication_evidence','machine_authentication_evidence_commit','check_machine_authentication_evidence_commit',5),
+        (7,'machine_authentication_evidence','machine_authentication_evidence_immutable','reject_lifecycle_event_mutation',27),
+        (7,'machine_authentication_evidence','machine_authentication_evidence_no_truncate','reject_lifecycle_event_mutation',34),
+        (7,'use_receipts','use_receipts_machine_evidence','guard_use_machine_evidence',7)
       ) AS expected(version,table_name,trigger_name,function_name,trigger_type)
       WHERE version<=schema_version
     LOOP
@@ -356,9 +367,9 @@ BEGIN
               AND t.tgname=trigger_record.trigger_name AND NOT t.tgisinternal
               AND t.tgenabled='O' AND t.tgtype=trigger_record.trigger_type
               AND t.tgqual IS NULL AND t.tgnargs=0 AND t.tgattr=''::int2vector
-              AND t.tgdeferrable=(trigger_record.trigger_name='use_command_results_commit')
-              AND t.tginitdeferred=(trigger_record.trigger_name='use_command_results_commit')
-              AND (t.tgconstraint<>0)=(trigger_record.trigger_name='use_command_results_commit')
+              AND t.tgdeferrable=(trigger_record.trigger_name IN ('use_command_results_commit','machine_authentication_evidence_commit'))
+              AND t.tginitdeferred=(trigger_record.trigger_name IN ('use_command_results_commit','machine_authentication_evidence_commit'))
+              AND (t.tgconstraint<>0)=(trigger_record.trigger_name IN ('use_command_results_commit','machine_authentication_evidence_commit'))
               AND p.pronamespace=schema_id AND p.proname=trigger_record.function_name
               AND p.pronargs=0) THEN
             RAISE EXCEPTION 'DA_PREFLIGHT_TRIGGER: required guard/journal trigger is absent, disabled or retargeted';
@@ -719,6 +730,90 @@ BEGIN
         END;
     END IF;
 
+    IF schema_version>=7 THEN
+        IF (WITH expected(name,expression) AS (VALUES
+            ('machine_evidence_digest_matches_bytes','(evidence_digest = (''sha256:''::text || encode(sha256(audit_bytes), ''hex''::text)))'),
+            ('machine_evidence_document_matches_bytes','((convert_from(audit_bytes, ''UTF8''::name))::jsonb = audit_document)'),
+            ('machine_evidence_reference_matches_digest','(evidence_ref = (''urn:marty:machine-authentication:''::text || evidence_digest))'))
+            SELECT count(*) FROM expected e JOIN pg_constraint c ON c.conname=e.name
+              AND c.conrelid='delegated_authority_service.machine_authentication_evidence'::regclass
+            WHERE c.contype='c' AND c.convalidated AND c.conislocal AND pg_get_expr(c.conbin,c.conrelid)=e.expression)<>3 THEN
+            RAISE EXCEPTION 'DA_PREFLIGHT_MACHINE_CONSTRAINT: exact audit bytes/digest/document checks are missing or weakened';
+        END IF;
+        IF NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_constraint c ON c.conindid=i.indexrelid
+            WHERE i.indrelid='delegated_authority_service.machine_authentication_evidence'::regclass
+              AND c.contype='p' AND i.indisunique AND i.indisvalid AND i.indisready AND i.indislive
+              AND i.indpred IS NULL AND i.indexprs IS NULL AND i.indnkeyatts=2 AND i.indnatts=2
+              AND ARRAY(SELECT a.attname::TEXT FROM unnest(i.indkey) WITH ORDINALITY k(attnum,ord)
+                  JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.ord)
+                  =ARRAY['organization_id','evidence_ref']) THEN
+            RAISE EXCEPTION 'DA_PREFLIGHT_MACHINE_INDEX: exact tenant/audit identity index is missing or weakened';
+        END IF;
+        BEGIN
+            SELECT count(*) INTO machine_evidence_count FROM delegated_authority_service.machine_authentication_evidence;
+            SELECT EXISTS(SELECT 1 FROM delegated_authority_service.machine_authentication_evidence e
+                WHERE octet_length(e.audit_bytes) NOT BETWEEN 1 AND 65536
+                  OR e.evidence_digest IS DISTINCT FROM ('sha256:'||encode(sha256(e.audit_bytes),'hex'))
+                  OR e.evidence_ref IS DISTINCT FROM ('urn:marty:machine-authentication:'||e.evidence_digest)
+                  OR convert_from(e.audit_bytes,'UTF8')::JSONB IS DISTINCT FROM e.audit_document
+                  OR e.audit_document->>'profile' IS DISTINCT FROM 'urn:marty:machine-authentication-evidence:v1'
+                  OR e.actor_type IS DISTINCT FROM 'MACHINE_IDENTITY'
+                  OR e.audit_document#>>'{scope,organization_id}' IS DISTINCT FROM e.organization_id::TEXT
+                  OR e.audit_document#>>'{scope,principal,type}' IS DISTINCT FROM e.actor_type
+                  OR e.audit_document#>>'{scope,principal,id}' IS DISTINCT FROM e.actor_id
+                  OR e.audit_document#>>'{scope,machine_identity_id}' IS DISTINCT FROM e.machine_identity_id::TEXT
+                  OR e.audit_document#>>'{scope,grant_id}' IS DISTINCT FROM e.grant_id::TEXT
+                  OR e.audit_document#>>'{scope,grant_revision}' IS DISTINCT FROM e.grant_revision::TEXT
+                  OR e.audit_document#>>'{scope,challenge_id}' IS DISTINCT FROM e.challenge_id::TEXT
+                  OR e.audit_document#>>'{scope,proof_evidence_ref}' IS DISTINCT FROM e.audit_document#>>'{proof,evidence_ref}'
+                  OR (e.audit_document->>'completed_at')::TIMESTAMPTZ IS DISTINCT FROM e.completed_at
+                  OR (e.audit_document->>'valid_until')::TIMESTAMPTZ IS DISTINCT FROM e.valid_until
+                  OR e.completed_at>e.retained_at OR e.retained_at>=e.valid_until
+            ) INTO bad;
+            IF bad THEN RAISE EXCEPTION 'invalid retained machine authentication evidence'; END IF;
+            -- Migration 0007 does not synthesize audit for original pre-0007
+            -- machine receipts. Count that history explicitly; it is not a new
+            -- qualification or permission to execute/retry an old outcome.
+            SELECT count(*) INTO legacy_machine_receipt_count
+              FROM delegated_authority_service.use_receipts r
+              WHERE r.actor_type='MACHINE_IDENTITY'
+                AND r.recorded_at<(SELECT applied_at FROM delegated_authority_service.schema_migrations WHERE version=7)
+                AND NOT EXISTS(SELECT 1 FROM delegated_authority_service.machine_authentication_evidence e
+                    WHERE e.organization_id=r.organization_id AND e.evidence_ref=r.receipt_document#>>'{evaluation,proof_evidence_ref}');
+            SELECT EXISTS(SELECT 1 FROM delegated_authority_service.use_receipts r
+                LEFT JOIN delegated_authority_service.machine_authentication_evidence e
+                    ON e.organization_id=r.organization_id AND e.evidence_ref=r.receipt_document#>>'{evaluation,proof_evidence_ref}'
+                WHERE (r.actor_type<>'MACHINE_IDENTITY' AND r.receipt_document#>>'{evaluation,proof_evidence_ref}' LIKE 'urn:marty:machine-authentication:%')
+                   OR (r.actor_type='MACHINE_IDENTITY' AND
+                       (e.evidence_ref IS NOT NULL OR r.recorded_at>=(SELECT applied_at FROM delegated_authority_service.schema_migrations WHERE version=7)) AND (
+                    e.evidence_ref IS NULL OR e.actor_type IS DISTINCT FROM r.actor_type OR e.actor_id IS DISTINCT FROM r.actor_id
+                    OR e.challenge_id IS DISTINCT FROM r.challenge_id
+                    OR e.audit_document#>'{scope,principal}' IS DISTINCT FROM r.receipt_document#>'{evaluation,actor}'
+                    OR e.audit_document#>>'{scope,organization_id}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,organization_id}'
+                    OR e.audit_document#>>'{scope,grant_id}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,grant,id}'
+                    OR e.audit_document#>>'{scope,grant_revision}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,grant,revision}'
+                    OR e.audit_document#>>'{scope,proof_evidence_ref}' IS DISTINCT FROM ('urn:marty:oid4vp-proof:'||substr(r.proof_digest,8))
+                    OR e.audit_document#>>'{scope,challenge_digest}' IS DISTINCT FROM ('sha256:'||encode(sha256(convert_to(r.receipt_document#>>'{evaluation,challenge}','UTF8')),'hex'))
+                    OR e.audit_document#>>'{scope,action}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,operation,action}'
+                    OR e.audit_document#>>'{scope,audience}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,operation,audience}'
+                    OR e.audit_document#>>'{scope,resource}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,operation,resource_id}'
+                    OR e.audit_document#>>'{scope,operation_profile}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,operation,request_profile}'
+                    OR e.audit_document#>>'{scope,operation_digest}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,operation,request_digest}'
+                    OR r.receipt_document#>>'{evaluation,binding,method}' IS DISTINCT FROM 'KEY'
+                    OR e.audit_document#>>'{scope,key_thumbprint}' IS DISTINCT FROM r.receipt_document#>>'{evaluation,binding,key_thumbprint}'
+                    OR (r.receipt_document#>>'{evaluation,proof_verified_at}')::TIMESTAMPTZ IS DISTINCT FROM (e.audit_document#>>'{proof,verified_at}')::TIMESTAMPTZ
+                    OR (r.receipt_document#>>'{evaluation,proof_valid_until}')::TIMESTAMPTZ IS DISTINCT FROM e.valid_until
+                    OR (r.receipt_document#>>'{evaluation,evaluated_at}')::TIMESTAMPTZ IS NULL
+                    OR (r.receipt_document#>>'{evaluation,evaluated_at}')::TIMESTAMPTZ<e.completed_at
+                    OR (r.receipt_document#>>'{evaluation,evaluated_at}')::TIMESTAMPTZ>=e.valid_until
+                    OR e.retained_at>r.recorded_at OR r.authorization_expires_at>e.valid_until))) INTO bad;
+            IF bad THEN RAISE EXCEPTION 'invalid retained machine receipt binding'; END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION USING MESSAGE='DA_PREFLIGHT_MACHINE_HISTORY: exact audit bytes, scope or receipt binding is inconsistent',
+                HINT='Preserve original private evidence. Historical audit never authenticates a new proof or renews a deadline.';
+        END;
+    END IF;
+
     PERFORM set_config('marty.preflight.result',CASE WHEN selected_phase='post-migration'
         THEN 'DATABASE_PREFLIGHT_PASSED' ELSE 'PRE_MIGRATION_INSPECTION_PASSED' END,true);
     PERFORM set_config('marty.preflight.version',schema_version::TEXT,true);
@@ -730,6 +825,8 @@ BEGIN
     PERFORM set_config('marty.preflight.observations',observation_count::TEXT,true);
     PERFORM set_config('marty.preflight.use_claims',use_claim_count::TEXT,true);
     PERFORM set_config('marty.preflight.use_results',use_result_count::TEXT,true);
+    PERFORM set_config('marty.preflight.machine_evidence',machine_evidence_count::TEXT,true);
+    PERFORM set_config('marty.preflight.legacy_machine_receipts',legacy_machine_receipt_count::TEXT,true);
 END
 $preflight$;
 
@@ -745,6 +842,8 @@ SELECT jsonb_build_object(
     'organization_authority_observation_count',current_setting('marty.preflight.observations')::BIGINT,
     'use_command_claim_count',current_setting('marty.preflight.use_claims')::BIGINT,
     'use_command_result_count',current_setting('marty.preflight.use_results')::BIGINT,
+    'machine_authentication_evidence_count',current_setting('marty.preflight.machine_evidence')::BIGINT,
+    'legacy_machine_receipt_count',current_setting('marty.preflight.legacy_machine_receipts')::BIGINT,
     'runtime_qualification','NOT_ASSESSED',
     'execution_authorized',false
 ) AS delegated_authority_database_preflight;

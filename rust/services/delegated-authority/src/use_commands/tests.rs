@@ -3,7 +3,7 @@ use crate::*;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, PgPool};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Mutex,
 };
 
@@ -177,6 +177,8 @@ struct TestFlow {
     fail_start: AtomicBool,
     fail_commit: AtomicBool,
     final_commits: AtomicUsize,
+    final_preparations: AtomicUsize,
+    final_preparation_delay_ms: AtomicU64,
 }
 struct Start {
     snapshot: PreparedUseChallengeSnapshot,
@@ -290,6 +292,11 @@ impl DelegationUseFlowOwner for FlowPort {
         _: Uuid,
         _: &str,
     ) -> Result<Box<dyn PreparedUseFinalization>, DelegationUseCommandError> {
+        self.0.final_preparations.fetch_add(1, Ordering::SeqCst);
+        let delay = self.0.final_preparation_delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
         Ok(Box::new(Final {
             id: c.challenge_id,
             org: c.organization_id,
@@ -378,6 +385,8 @@ impl Fixture {
             fail_start: AtomicBool::new(false),
             fail_commit: AtomicBool::new(false),
             final_commits: AtomicUsize::new(0),
+            final_preparations: AtomicUsize::new(0),
+            final_preparation_delay_ms: AtomicU64::new(0),
         });
         let signer = Arc::new(Signer {
             calls: AtomicUsize::new(0),
@@ -492,6 +501,52 @@ fn use_decoder_is_closed_and_canonical_and_does_not_enable_human_host() {
     let text = String::from_utf8(bytes).unwrap();
     let duplicate = text.replacen("{", "{\"command\":\"START_USE\",", 1);
     assert!(decode_delegation_use_command(duplicate.as_bytes()).is_err());
+}
+
+#[tokio::test]
+async fn authenticated_observation_lower_bound_rejects_regressed_mutation_and_recovery_clocks() {
+    struct FixedClock(DateTime<Utc>);
+    impl DelegationClock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+    let observed_at = DateTime::from_timestamp(1_795_219_200, 0).unwrap();
+    let grant = crate::test_support::pending_grant();
+    let caller = DelegationCommandCaller::from_authenticated_context(
+        grant.organization_id,
+        grant.terms.delegate.clone(),
+    )
+    .unwrap();
+    let intent = DelegationUseIntent::Finalize {
+        challenge_id: Uuid::new_v4(),
+        proof_submission_id: Uuid::new_v4(),
+    };
+    for regression in [false, true] {
+        let now = observed_at - Duration::seconds(i64::from(regression));
+        let source = Arc::new(Access {
+            mutation: AtomicBool::new(true),
+            read: AtomicBool::new(true),
+            lifetime_ms: std::sync::atomic::AtomicI64::new(25_000),
+        });
+        let bounded = AuthenticationBoundUseAuthorizer {
+            inner: source,
+            clock: Arc::new(FixedClock(now)),
+            observed_at,
+            expires_at: observed_at + Duration::seconds(25),
+        };
+        // `started` is also after the service-clock regression. Comparing only
+        // against that fresh timestamp cannot preserve the HTTP observation.
+        let mutation = bounded.authorize(&caller, &intent, &grant, now).await;
+        let recovery = bounded.authorize_recovery(&caller, &grant, now).await;
+        if regression {
+            assert_eq!(mutation.err(), Some(DelegationUseCommandError::Expired));
+            assert_eq!(recovery.err(), Some(DelegationUseCommandError::Expired));
+        } else {
+            assert_eq!(mutation.unwrap().observed_at, observed_at);
+            assert_eq!(recovery.unwrap().observed_at, observed_at);
+        }
+    }
 }
 
 #[tokio::test]
@@ -766,6 +821,66 @@ async fn postgres_current_permission_loss_while_signing_prevents_commit() {
         f.execute(&command).await.err(),
         Some(DelegationUseCommandError::PreparationPending)
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn postgres_authentication_expiry_during_final_preparation_never_starts_signing() {
+    let _lock = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
+    let f = Fixture::new().await;
+    let id = f.start_id().await;
+    let command = f.final_command(id);
+    let raw = serde_json::to_vec(&command).unwrap();
+    f.flow
+        .final_preparation_delay_ms
+        .store(1_200, Ordering::SeqCst);
+    let authenticated_at = Utc::now();
+    let authenticated_until = authenticated_at + Duration::seconds(1);
+    assert_eq!(
+        f.service
+            .execute_before(&f.caller, &raw, authenticated_at, authenticated_until)
+            .await
+            .err(),
+        Some(DelegationUseCommandError::Expired)
+    );
+    // This must reach the asynchronous preparation under valid admission; the
+    // regression is the missing deadline recheck before starting the signer.
+    assert_eq!(f.flow.final_preparations.load(Ordering::SeqCst), 1);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(f.flow.final_commits.load(Ordering::SeqCst), 0);
+    assert_eq!(f.count("use_receipts").await, 0);
+    assert_eq!(f.count("use_command_claims").await, 2);
+    assert_eq!(f.count("use_command_results").await, 1);
+    let consumed: bool = sqlx::query_scalar(
+        "SELECT consumed FROM use_test_flow_records WHERE id=$1 AND organization_id=$2",
+    )
+    .bind(id)
+    .bind(f.grant.organization_id)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert!(!consumed);
+
+    // Renewing the service-hop authentication cannot restart the retained
+    // original command or manufacture a different signed result.
+    f.flow.final_preparation_delay_ms.store(0, Ordering::SeqCst);
+    let renewed_at = Utc::now();
+    assert_eq!(
+        f.service
+            .execute_before(
+                &f.caller,
+                &raw,
+                renewed_at,
+                renewed_at + Duration::seconds(25),
+            )
+            .await
+            .err(),
+        Some(DelegationUseCommandError::PreparationPending)
+    );
+    assert_eq!(f.flow.final_preparations.load(Ordering::SeqCst), 1);
+    assert_eq!(f.signer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(f.count("use_command_claims").await, 2);
+    assert_eq!(f.count("use_command_results").await, 1);
 }
 
 #[tokio::test]

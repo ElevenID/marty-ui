@@ -34,9 +34,11 @@ the source is authentic. Unsupported policy selections, absent registered
 credentials, inconsistent assignments, inactive machines and invalid key
 lifetimes fail closed.
 
-`machine_auth::MartyMachineOid4vpProofVerifier` implements the existing
-`DelegateProofVerifier` port and can be injected into
-`DelegationUseAuthorizer`. Its concrete proof implementation is always
+`machine_auth::MartyMachineOid4vpProofVerifier` supplies the complete in-process
+qualification gate. Durable machine use selects
+`machine_evidence::AuditedMachineOid4vpProofVerifier` as the existing
+`DelegateProofVerifier` port for `DelegationUseAuthorizer`. Its concrete proof
+implementation is always
 `MartyOid4vpDelegateProofVerifier`, using pinned Marty Core cryptography.
 An arbitrary proof-verifier implementation or a caller-authored successful
 verification flag cannot replace that cryptographic step in this wrapper.
@@ -71,9 +73,65 @@ does not lose the machine-policy provenance when the result is converted into
 the generic delegated proof type.
 
 `evidence_document()` and `evidence_bytes()` expose that audit record to a
-qualified consuming host. This reference is not a new proof envelope or a
-storage API. Hashing the record does not durably store it; the host must retain
-the record and referenced source evidence before advertising this composition.
+qualified consuming host. This reference is not a new proof envelope.
+`machine_evidence::PgMachineAuthenticationEvidenceRepository` now retains those
+exact bytes, their digest and JSON document in the private append-only
+`machine_authentication_evidence` table. Migration 0007 is additive; migrations
+0001–0006 and their existing records remain unchanged.
+
+### Durable evidence and final use
+
+`AuditedMachineOid4vpProofVerifier` accepts the concrete full-machine verifier
+and concrete PostgreSQL repository. It verifies through Core and the selected
+providers, retains the resulting opaque proof's exact audit, awaits COMMIT, and
+checks the original deadline again using its trusted clock. Storage errors,
+clock regression and expiry return no qualified generic proof. The repository
+also checks the database clock around storage; an initially deferred database
+guard checks the insertion deadline at transaction completion. An I/O delay
+that outlasts that guard still cannot pass the wrapper's post-COMMIT check.
+COMMIT has no cancellation timeout or automatic retry. A committed record may
+therefore remain useful history even when its proof has become unusable.
+
+`RetainedMachineAuthenticationProof` is opaque and non-deserializable. Its
+conversion returns the original bounded generic proof only after durable
+retention. Exact duplicate retention is idempotent and preserves the first
+retention timestamp; it cannot rewrite bytes, renew evidence or extend expiry.
+The audit table denies UPDATE, DELETE and TRUNCATE, including accidental writes
+by its owner through ordinary SQL. Private debug output is redacted.
+
+The audit writer is a distinct nonowner PostgreSQL identity. Readiness requires
+SELECT/INSERT on the audit table, SELECT on the migration ledger and schema
+USAGE. It rejects reachable administrative roles, destructive privileges,
+same-database source/ledger writes, unrelated table reads and executable security-definer
+functions. It receives no lifecycle or use-ledger write authority. Existing
+human lifecycle and consent/authority producer identities receive no audit
+access. A future use writer needs SELECT on the audit table for receipt binding;
+it must never inherit the audit writer's INSERT authority.
+
+A new `MACHINE_IDENTITY` receipt cannot be appended without the retained audit.
+The database guard binds tenant, complete typed actor, grant/revision,
+challenge ID and nonce digest, operation/action/audience/resource, key
+fingerprint, original proof verification time and the aggregate deadline. It
+rejects a plain Core-only proof reference for a machine receipt and a machine
+authentication reference on any other principal type. The `SERVICE_ACCOUNT`
+proof path otherwise keeps its existing semantics. The retained use owner
+still owns challenge replay, current grant checks and atomic receipt/result
+commit.
+
+`recover(organization_id, evidence_ref)` returns only
+`HistoricalMachineAuthenticationEvidence`, scoped to the exact tenant and
+reference. It rechecks the stored bytes/digest/document and timestamp binding,
+and returns original history after expiry without calling a provider or
+creating authentication authority. There is no conversion from historical
+records into a proof and no public raw-audit route. A consuming host must
+separately authorize historical inspection; regular use responses contain only
+the existing receipt references and bounded outcomes.
+
+The referenced state, credential, attestation and Cedar source evidence still
+belongs to its source owner. Retaining the aggregate does not manufacture or
+retain those source records, establish their trust, install a production host,
+or qualify the deployment. Sources must already retain the exact records
+behind their returned references.
 
 ## Required trusted providers
 
@@ -104,6 +162,19 @@ every required type.
 No production credential or attestation source is installed here. Synthetic
 test providers exercise the composition contract; they are not issuer or
 attestation qualification.
+
+## Concrete nested JWT-VC adapter
+
+[`machine_credentials::MartyNestedJwtVcMachineCredentialVerifier`](MACHINE_CREDENTIALS.md)
+performs actual Core issuer and holder verification for exactly one registered
+`MartyNestedVc2JwtV1` credential covering every required MAP type. It supports
+ES256 and EdDSA with the self-certifying holder selection. Its explicit trusted
+authority/status port binds the full scope, exact compact credential digest,
+selected Trust Profile, issuer/key and current profile/issuer/key/credential
+state. It returns a source-retained record URI into the aggregate audit and
+enforces the original, source, credential and key deadlines. The live full
+machine/MAP and JWT-VC authority/status owners remain qualification gates. The
+existing managed SD-JWT owners are not implicitly broadened.
 
 ## Concrete MMF Cedar adapter
 
@@ -147,8 +218,9 @@ provenance needed to explain its decision and revalidate at its final-use
 boundary. `AuthenticatedMachineProof::ensure_current` only checks the retained
 time bound; it does not refresh source state.
 
-The gate is read-only and has a five-second aggregate provider timeout. It never
-consumes a nonce, inserts a replay reservation, activates a grant, creates
+The underlying qualification gate is read-only and has a five-second aggregate
+provider timeout. The audited wrapper additionally retains its private evidence.
+Neither component consumes a nonce, inserts a replay reservation, activates a grant, creates
 credentials, or executes a business operation. The retained use owner must
 atomically enforce the current grant revision and challenge/replay admission.
 Source freshness, provider identity, storage isolation, issuer/attestation
@@ -162,4 +234,17 @@ exercise the pure MAP parser/selection, current machine/key requirements,
 provider absence/errors, complete evidence scope, credential coverage,
 attestation and policy binding, time bounds, timeout behavior, and actual MMF
 Cedar permit/forbid/schema handling. No private signing key is copied into
-these tests, and no private Protocol corpus is embedded.
+the static vector tests, and no private Protocol corpus is embedded.
+
+The durable audit tests additionally generate ephemeral test-only Ed25519 keys
+and current VPs so actual PostgreSQL clock checks can run. They exercise a
+restricted audit writer, exact byte retention and duplicate behavior, immutable
+expired recovery, all audit/receipt guards, final-use scope/deadline binding,
+missing evidence, storage failure, expiry before insertion, deferred commit
+expiry and I/O completing after the original deadline. Source, consent,
+attestation and transport-shaped receipt fixtures are explicitly synthetic.
+The SQL upgrade preflight checks schema 0007, original migration checksums,
+role isolation, exact byte/digest/document constraints, audit history and new
+receipt linkage without changing data.
+Original pre-0007 machine receipts without this audit are counted separately as
+legacy history; an upgrade never invents missing audit or renews their authority.

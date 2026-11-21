@@ -8,7 +8,7 @@ or qualify a deployed delegated-authority service.
 
 The companion
 [`operations/preflight.sql`](../rust/services/delegated-authority/operations/preflight.sql)
-recognizes the exact bundled migrations 0001–0006. It never applies migrations,
+recognizes the exact bundled migrations 0001–0007. It never applies migrations,
 creates a grant, writes a source assertion, repairs a record or manufactures a
 journal. Its successful report explicitly retains
 `runtime_qualification: NOT_ASSESSED` and `execution_authorized: false`.
@@ -32,8 +32,8 @@ lifecycle history.
 ## Prepare the maintenance boundary
 
 1. Select the exact reviewed application artifact and its matching migration and
-   preflight files. Keep migrations 0001–0005 byte-for-byte unchanged. The new
-   retained-use migration is additive; rewriting an applied migration is not
+   preflight files. Keep migrations 0001–0006 byte-for-byte unchanged. The new
+   machine-audit migration is additive; rewriting an applied migration is not
    an upgrade strategy.
 2. Stop new lifecycle writes and drain in-flight request transactions. Also
    pause confirmation, withdrawal, authority-refresh and authority-revocation
@@ -70,7 +70,7 @@ passwords into a command line, review log or this runbook. A libpq service file
 or the deployment's existing protected connection configuration can identify
 the operator connection without disclosing a secret.
 
-| Identity | Lifecycle-service minimum access through migration 0006 |
+| Identity | Lifecycle-service minimum access through migration 0007 |
 | --- | --- |
 | Migration owner | Owns the service schema, tables and functions; runs the reviewed migrator during maintenance. Its credentials are unavailable to request and producer processes. |
 | Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results` and `command_identities`; EXECUTE on `grant_instant(TEXT)`. |
@@ -199,6 +199,42 @@ the service README: authentication, authorization, trusted confirmation and
 representation sources, freshness, signing, audit, recovery and the relevant
 deployment tests. Database readiness never creates that qualification.
 
+## Additive machine-authentication audit retention
+
+Migration 0007 adds private `machine_authentication_evidence` storage, four
+audit guards and the `use_receipts_machine_evidence` guard. It does not rewrite
+migrations 0001–0006, existing receipts or source evidence. The post-migration
+inspection now requires all seven original checksums and verifies the exact
+tenant/evidence primary key, enabled guard bindings, deferred retention
+expiry check, exact bytes/digest/document constraint expressions and retained
+correspondence, complete retained
+scope and machine receipt linkage. Expired evidence remains immutable history.
+
+The lifecycle/confirmation/authority roles above gain **no** audit access. A
+qualified machine audit composition uses a separate nonowner connection with
+schema USAGE, SELECT on `schema_migrations` and SELECT/INSERT only on
+`machine_authentication_evidence`. Its runtime readiness rejects unrelated
+reads, same-database source/ledger writes, destructive authority and reachable escalation.
+A qualified future use writer additionally needs SELECT on this audit table
+for its same-transaction receipt guard, never audit INSERT. The original
+four-role preflight does not claim to qualify those future application roles;
+the concrete audit repository performs its own connected-role readiness.
+
+Every newly appended `MACHINE_IDENTITY` use receipt requires matching retained
+machine evidence for its original tenant, typed actor, grant revision,
+challenge, operation, key, proof times and deadline. A machine-reference prefix
+on another principal type is rejected. Recovery does not turn stored evidence
+into a new proof, regenerate a receipt, refresh a source or authorize a retry.
+
+Pre-0007 machine receipts that have no retained aggregate audit are preserved
+and reported as `legacy_machine_receipt_count`. No migration synthesizes that
+missing record. The report also includes `machine_authentication_evidence_count`;
+both counts are historical inspection, with `runtime_qualification=NOT_ASSESSED`
+and `execution_authorized=false`. The selected full-machine host, source
+identity/status owners, source-record retention and live deployment remain
+independent qualification gates. See the service's
+[`MACHINE_AUTH.md`](../rust/services/delegated-authority/MACHINE_AUTH.md).
+
 ## Additional roles and privileges for the organization approval candidate
 
 The four-role preflight above remains usable for a lifecycle-only deployment.
@@ -276,7 +312,7 @@ supporting audit/proof material. Historical result recovery, if exposed by a
 qualified runtime, still requires current caller/resource authorization. A
 stored result is never current authority or permission to repeat a side effect.
 
-Do not run down migrations, remove the 0004–0006 ledger entries, drop command, use or approval tables,
+Do not run down migrations, remove the 0004–0007 ledger entries, drop command, use or approval tables,
 relax guards or reuse a command identity to make an older binary appear ready.
 An older binary expecting a shorter migration list must fail readiness. Use a
 compatible reviewed fix or an explicitly tested recovery deployment before
@@ -316,7 +352,7 @@ are skipped, which must not be reported as live database validation.
 ## Optional human lifecycle command host
 
 The separate `marty-delegation-commands` executable uses the same checksum-verified
-Delegated Authority migrations, now through 0006, and is disabled by default.
+Delegated Authority migrations, now through 0007, and is disabled by default.
 It continues to support human lifecycle commands only. Its restricted command
 writer additionally needs SELECT/INSERT on the shared `command_identities`
 registry, whose trigger prevents lifecycle/use identity collisions. Provision that writer

@@ -410,6 +410,64 @@ pub struct DelegationUseCommandService {
     access: Arc<dyn DelegationUseCommandAuthorizer>,
     clock: Arc<dyn DelegationClock>,
 }
+
+/// Authentication of a trusted service hop is an additional upper bound on
+/// current source authorization. It never substitutes for that authorization.
+struct AuthenticationBoundUseAuthorizer {
+    inner: Arc<dyn DelegationUseCommandAuthorizer>,
+    clock: Arc<dyn DelegationClock>,
+    observed_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+impl AuthenticationBoundUseAuthorizer {
+    fn bound(
+        &self,
+        mut access: VerifiedDelegationCommandAccess,
+        started: DateTime<Utc>,
+    ) -> Result<VerifiedDelegationCommandAccess, DelegationUseCommandError> {
+        let now = self.clock.now();
+        if now < started || now < self.observed_at || now >= self.expires_at {
+            return Err(DelegationUseCommandError::Expired);
+        }
+        // Check the original source contract before shortening its deadline;
+        // clamping must not make an overlong/unqualified source look valid.
+        check_access(&access, started, now)?;
+        access.valid_until = access.valid_until.min(self.expires_at);
+        Ok(access)
+    }
+}
+#[async_trait]
+impl DelegationUseCommandAuthorizer for AuthenticationBoundUseAuthorizer {
+    async fn authorize(
+        &self,
+        caller: &DelegationCommandCaller,
+        intent: &DelegationUseIntent,
+        grant: &DelegationGrant,
+        now: DateTime<Utc>,
+    ) -> Result<VerifiedDelegationCommandAccess, DelegationUseCommandError> {
+        let current = self.clock.now();
+        if current < self.observed_at || current >= self.expires_at {
+            return Err(DelegationUseCommandError::Expired);
+        }
+        self.bound(self.inner.authorize(caller, intent, grant, now).await?, now)
+    }
+    async fn authorize_recovery(
+        &self,
+        caller: &DelegationCommandCaller,
+        grant: &DelegationGrant,
+        now: DateTime<Utc>,
+    ) -> Result<VerifiedDelegationCommandAccess, DelegationUseCommandError> {
+        let current = self.clock.now();
+        if current < self.observed_at || current >= self.expires_at {
+            return Err(DelegationUseCommandError::Expired);
+        }
+        self.bound(
+            self.inner.authorize_recovery(caller, grant, now).await?,
+            now,
+        )
+    }
+}
+
 impl DelegationUseCommandService {
     pub fn new(
         repository: PgDelegationUseRepository,
@@ -460,6 +518,43 @@ impl DelegationUseCommandService {
     ) -> Result<DelegationUseCommandResponse, DelegationUseCommandError> {
         self.execute_decoded(caller, decode_delegation_use_command(raw)?)
             .await
+    }
+
+    /// Selected only by the authenticated internal HTTP boundary. The original
+    /// hop deadline reaches source rechecks, the ledger's commit deadline and
+    /// its deferred database guard. No timeout cancels signing or COMMIT.
+    pub(crate) async fn execute_before(
+        &self,
+        caller: &DelegationCommandCaller,
+        raw: &[u8],
+        observed_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<DelegationUseCommandResponse, DelegationUseCommandError> {
+        let now = self.clock.now();
+        if now < observed_at
+            || now >= expires_at
+            || observed_at
+                .checked_add_signed(Duration::seconds(30))
+                .is_none_or(|maximum| expires_at > maximum)
+        {
+            return Err(DelegationUseCommandError::Expired);
+        }
+        let scoped = Self {
+            repository: self.repository.clone(),
+            lifecycle: self.lifecycle.clone(),
+            challenges: self.challenges.clone(),
+            evaluation: self.evaluation.clone(),
+            receipts: self.receipts.clone(),
+            flow: self.flow.clone(),
+            access: Arc::new(AuthenticationBoundUseAuthorizer {
+                inner: self.access.clone(),
+                clock: self.clock.clone(),
+                observed_at,
+                expires_at,
+            }),
+            clock: self.clock.clone(),
+        };
+        scoped.execute(caller, raw).await
     }
     pub async fn execute_decoded(
         &self,
@@ -641,6 +736,7 @@ impl DelegationUseCommandService {
         )
         .await
         .map_err(|_| DelegationUseCommandError::Unavailable)??;
+        guard.check(self.clock.now())?;
         let now = self.clock.now();
         if submission.organization_id != caller.organization_id()
             || submission.challenge_id != challenge_id
@@ -678,6 +774,7 @@ impl DelegationUseCommandService {
             .flow
             .prepare_finalization(&challenge, proof_submission_id, &proof_digest)
             .await?;
+        guard.check(self.clock.now())?;
         // Exactly one invocation for this retained finalization identity. Failure
         // leaves Pending, never an automatic re-sign or a synthetic DENY receipt.
         let receipt = self

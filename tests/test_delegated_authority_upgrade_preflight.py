@@ -226,7 +226,7 @@ def test_use_upgrade_backfills_existing_command_identity_without_rewriting_histo
     database.sql(f"SET ROLE {identifier(database.roles['migration_owner'])}; BEGIN;\n" + raw.decode() +
         f"\nINSERT INTO delegated_authority_service.schema_migrations(version,checksum) VALUES (6,{literal('sha256:' + hashlib.sha256(raw).hexdigest())}); COMMIT; RESET ROLE;")
     database.privileges()
-    assert_passed(database.inspect("post-migration"), version=6, grants=1, events=1, results=1)
+    assert_passed(database.inspect("pre-migration"), version=6, grants=1, events=1, results=1)
     assert database.sql("SELECT command_document::text || result_document::text FROM delegated_authority_service.command_results;").stdout == original
     assert database.sql("SELECT command_id::text FROM delegated_authority_service.command_identities;").stdout.strip() == command["command_id"]
 
@@ -292,7 +292,7 @@ def test_retained_use_schema_must_match_recorded_version(database, mutation):
     if mutation == "table":
         database.sql("DROP TABLE delegated_authority_service.use_command_results;")
     else:
-        database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version=6;")
+        database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version>=6;")
     assert_rejected_without_changes(database, "DA_PREFLIGHT_SCHEMA_STATE", phase="post-migration")
 
 
@@ -313,10 +313,13 @@ def test_retained_use_unique_indexes_cannot_be_weakened(database, mutation):
     assert_rejected_without_changes(database, "DA_PREFLIGHT_USE_INDEX", phase="post-migration")
 
 
-def insert_retained_use(database, outcome="pending"):
+def insert_retained_use(database, outcome="pending", *, delegate_type=None):
     """Synthetic owner-state evidence; this is not proof or signer qualification."""
     stamp = lambda value: value.isoformat().replace("+00:00", "Z")
-    grant = insert_grant(database)
+    candidate = pending_grant()
+    if delegate_type is not None:
+        candidate["terms"]["delegate"]["type"] = delegate_type
+    grant = insert_grant(database, candidate)
     approved_at = stamp(datetime.now(timezone.utc) - timedelta(seconds=2))
     grant = {**grant, "status": "ACTIVE", "revision": 2, "updated_at": approved_at,
              "approval": {"profile": "urn:example:approval", "grant_id": grant["id"],
@@ -387,7 +390,7 @@ def test_retained_use_history_survives_grant_revocation_without_recovery_side_ef
     database.sql(f"UPDATE delegated_authority_service.delegation_grants SET status='REVOKED',revision=3,updated_at={literal(grant['updated_at'])},grant_document={literal(json.dumps(grant))}::jsonb WHERE id={literal(grant['id'])};")
     before = database.snapshot()
     report = database.inspect("post-migration")
-    assert_passed(report, version=6, grants=1, events=3)
+    assert_passed(report, version=7, grants=1, events=3)
     data = json.loads(report.stdout)
     assert data["use_command_claim_count"] == claims and data["use_command_result_count"] == results
     assert database.snapshot() == before
@@ -490,7 +493,7 @@ def test_organization_approval_preflight_preserves_historical_evidence_after_rev
     revoke_grant(database, grant)
     before = database.snapshot()
     report = database.inspect("post-migration")
-    assert_passed(report, version=6, grants=1, events=2)
+    assert_passed(report, version=7, grants=1, events=2)
     parsed = json.loads(report.stdout)
     assert parsed["approval_review_count"] == parsed["approval_confirmation_count"] == parsed["organization_authority_observation_count"] == 1
     assert database.snapshot() == before
@@ -529,7 +532,7 @@ def test_approval_producer_optional_privileges_do_not_require_lifecycle_result_a
             delegated_authority_service.approval_storage_identity TO {authority};
         GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {authority};
     """)
-    assert_passed(database.inspect("post-migration"), version=6)
+    assert_passed(database.inspect("post-migration"), version=7)
     database.sql(f"GRANT INSERT ON delegated_authority_service.organization_authority_observations TO {consent};")
     assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
 
@@ -733,3 +736,149 @@ def test_missing_psql_variable_returns_failure_without_creating_objects(database
     assert result.returncode != 0
     assert "DA_PREFLIGHT_REQUIRED_VARIABLE" in result.stderr
     assert database.snapshot() == {}
+
+
+def insert_machine_audit(database, *, lifetime=30):
+    """Synthetic retained owner evidence, never crypto/source qualification."""
+    now = datetime.now(timezone.utc)
+    stamp = lambda value: value.isoformat().replace("+00:00", "Z")
+    organization, machine, grant, challenge = [str(uuid4()) for _ in range(4)]
+    completed, deadline = stamp(now), stamp(now + timedelta(seconds=lifetime))
+    scope = {"organization_id": organization, "machine_identity_id": machine,
+             "deployment_profile_id": str(uuid4()), "principal": {"type": "MACHINE_IDENTITY", "id": "urn:synthetic:machine"},
+             "runtime_instance_ref": "urn:synthetic:runtime", "key_id": "synthetic-key",
+             "key_thumbprint": "sha256:" + "a" * 64, "policy_id": str(uuid4()), "policy_digest": "sha256:" + "b" * 64,
+             "grant_id": grant, "grant_revision": 2, "challenge_id": challenge,
+             "challenge_digest": "sha256:" + "c" * 64, "proof_evidence_ref": "urn:synthetic:core-proof",
+             "action": "urn:synthetic:action", "audience": "urn:synthetic:audience", "resource": "urn:synthetic:resource",
+             "operation_profile": "urn:synthetic:operation:v1", "operation_digest": "sha256:" + "d" * 64}
+    document = {"profile": "urn:marty:machine-authentication-evidence:v1", "scope": scope,
+                "policy_document": {"synthetic_fixture_only": True},
+                "state": {"evidence_ref": "urn:synthetic:state", "observed_at": completed, "valid_until": deadline},
+                "proof": {"evidence_ref": scope["proof_evidence_ref"], "verified_at": completed, "valid_until": deadline},
+                "credentials": {"trust_profile_id": str(uuid4()), "credentials": [], "observed_at": completed, "valid_until": deadline},
+                "attestation": None, "machine_authorization": None, "completed_at": completed, "valid_until": deadline}
+    raw = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    digest = "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+    reference = "urn:marty:machine-authentication:" + digest
+    database.sql(f"""INSERT INTO delegated_authority_service.machine_authentication_evidence
+        (organization_id,evidence_ref,evidence_digest,actor_type,actor_id,machine_identity_id,grant_id,grant_revision,
+         challenge_id,audit_bytes,audit_document,completed_at,valid_until,retained_at)
+        VALUES ({literal(organization)},{literal(reference)},{literal(digest)},'MACHINE_IDENTITY','urn:synthetic:machine',
+            {literal(machine)},{literal(grant)},2,{literal(challenge)},convert_to({literal(raw)},'UTF8'),
+            {literal(raw)}::JSONB,{literal(completed)},{literal(deadline)},clock_timestamp());""")
+    return document, reference
+
+
+@pytest.mark.parametrize("table,trigger", [
+    ("machine_authentication_evidence", "machine_authentication_evidence_binding"),
+    ("machine_authentication_evidence", "machine_authentication_evidence_commit"),
+    ("machine_authentication_evidence", "machine_authentication_evidence_immutable"),
+    ("machine_authentication_evidence", "machine_authentication_evidence_no_truncate"),
+    ("use_receipts", "use_receipts_machine_evidence"),
+])
+def test_every_machine_audit_guard_is_required(database, table, trigger):
+    database.migrate()
+    database.privileges()
+    database.sql(f"ALTER TABLE delegated_authority_service.{table} DISABLE TRIGGER {trigger};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TRIGGER", phase="post-migration")
+
+
+def test_machine_audit_commit_guard_must_be_deferred(database):
+    database.migrate()
+    database.privileges()
+    database.sql("DROP TRIGGER machine_authentication_evidence_commit ON delegated_authority_service.machine_authentication_evidence; CREATE TRIGGER machine_authentication_evidence_commit AFTER INSERT ON delegated_authority_service.machine_authentication_evidence FOR EACH ROW EXECUTE FUNCTION delegated_authority_service.check_machine_authentication_evidence_commit();")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TRIGGER", phase="post-migration")
+
+
+@pytest.mark.parametrize("role", ["request_role", "confirmation_role", "authority_role"])
+@pytest.mark.parametrize("privilege", ["SELECT", "INSERT"])
+def test_existing_runtime_roles_cannot_read_or_write_private_machine_audit(database, role, privilege):
+    database.migrate()
+    database.privileges()
+    database.sql(f"GRANT {privilege} ON delegated_authority_service.machine_authentication_evidence TO {identifier(database.roles[role])};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
+
+
+@pytest.mark.parametrize("mutation", ["table", "version", "index"])
+def test_machine_audit_schema_must_match_recorded_migration_and_exact_identity(database, mutation):
+    database.migrate()
+    database.privileges()
+    if mutation == "table":
+        database.sql("DROP TABLE delegated_authority_service.machine_authentication_evidence CASCADE;")
+        code = "DA_PREFLIGHT_SCHEMA_STATE"
+    elif mutation == "version":
+        database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version=7;")
+        code = "DA_PREFLIGHT_SCHEMA_STATE"
+    else:
+        database.sql("ALTER TABLE delegated_authority_service.machine_authentication_evidence DROP CONSTRAINT machine_authentication_evidence_pkey; CREATE UNIQUE INDEX weaker_machine_audit ON delegated_authority_service.machine_authentication_evidence(evidence_ref);")
+        code = "DA_PREFLIGHT_MACHINE_INDEX"
+    assert_rejected_without_changes(database, code, phase="post-migration")
+
+
+def test_expired_machine_audit_is_preserved_history_without_runtime_qualification(database):
+    database.migrate()
+    database.privileges()
+    insert_machine_audit(database, lifetime=1)
+    database.sql("SELECT pg_sleep(1.1);")
+    before = database.snapshot()
+    result = database.inspect("post-migration")
+    assert_passed(result, version=7)
+    report = json.loads(result.stdout.strip())
+    assert report["machine_authentication_evidence_count"] == 1
+    assert report["legacy_machine_receipt_count"] == 0
+    assert report["execution_authorized"] is False
+    assert database.snapshot() == before
+
+
+@pytest.mark.parametrize("mutation", ["actor", "grant", "challenge", "deadline", "retained-at", "bytes"])
+def test_machine_audit_history_corruption_is_rejected_without_repair(database, mutation):
+    database.migrate()
+    database.privileges()
+    insert_machine_audit(database)
+    assignment = {"actor": "actor_id='urn:synthetic:wrong-actor'", "grant": "grant_id=gen_random_uuid()",
+                  "challenge": "challenge_id=gen_random_uuid()", "deadline": "valid_until=valid_until+interval '1 second'",
+                  "retained-at": "retained_at=valid_until", "bytes": "audit_bytes=convert_to(' '||convert_from(audit_bytes,'UTF8'),'UTF8')"}[mutation]
+    if mutation == "bytes":
+        # Owner-only synthetic corruption, solely to test inspection. Never a
+        # runtime migration, recovery or evidence import procedure.
+        database.sql("""DO $$ DECLARE item RECORD; BEGIN
+            FOR item IN SELECT conname FROM pg_constraint WHERE conrelid='delegated_authority_service.machine_authentication_evidence'::regclass
+              AND contype='c' AND pg_get_constraintdef(oid) LIKE '%sha256(audit_bytes)%' LOOP
+              EXECUTE format('ALTER TABLE delegated_authority_service.machine_authentication_evidence DROP CONSTRAINT %I',item.conname);
+            END LOOP; END $$;""")
+    database.sql(f"ALTER TABLE delegated_authority_service.machine_authentication_evidence DISABLE TRIGGER machine_authentication_evidence_immutable; UPDATE delegated_authority_service.machine_authentication_evidence SET {assignment}; ALTER TABLE delegated_authority_service.machine_authentication_evidence ENABLE TRIGGER machine_authentication_evidence_immutable;")
+    code = "DA_PREFLIGHT_MACHINE_CONSTRAINT" if mutation == "bytes" else "DA_PREFLIGHT_MACHINE_HISTORY"
+    assert_rejected_without_changes(database, code, phase="post-migration")
+
+
+@pytest.mark.parametrize("delegate_type", ["SERVICE_ACCOUNT", "MACHINE_IDENTITY"])
+def test_additive_machine_audit_migration_preserves_preexisting_use_outcome(database, delegate_type):
+    database.migrate(6)
+    database.privileges()
+    insert_retained_use(database, "PERMIT", delegate_type=delegate_type)
+    before = database.snapshot()
+    migration = SERVICE / "migrations/0007_machine_authentication_evidence.sql"
+    raw = migration.read_bytes()
+    database.sql(f"SET ROLE {identifier(database.roles['migration_owner'])}; BEGIN;\n" + raw.decode() +
+        f"\nINSERT INTO delegated_authority_service.schema_migrations(version,checksum) VALUES (7,{literal('sha256:' + hashlib.sha256(raw).hexdigest())}); COMMIT; RESET ROLE;")
+    after = database.snapshot()
+    for table, rows in before.items():
+        if table != "schema_migrations":
+            assert after[table] == rows
+    result = database.inspect("post-migration")
+    assert_passed(result, version=7, grants=1, events=2)
+    report = json.loads(result.stdout.strip())
+    assert report["machine_authentication_evidence_count"] == 0
+    assert report["legacy_machine_receipt_count"] == int(delegate_type == "MACHINE_IDENTITY")
+
+
+@pytest.mark.parametrize("constraint", ["machine_evidence_digest_matches_bytes", "machine_evidence_document_matches_bytes", "machine_evidence_reference_matches_digest"])
+@pytest.mark.parametrize("mutation", ["missing", "weakened"])
+def test_machine_audit_byte_binding_constraints_cannot_be_removed_or_weakened(database, constraint, mutation):
+    database.migrate()
+    database.privileges()
+    database.sql(f"ALTER TABLE delegated_authority_service.machine_authentication_evidence DROP CONSTRAINT {constraint};")
+    if mutation == "weakened":
+        database.sql(f"ALTER TABLE delegated_authority_service.machine_authentication_evidence ADD CONSTRAINT {constraint} CHECK(true);")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_MACHINE_CONSTRAINT", phase="post-migration")

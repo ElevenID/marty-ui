@@ -342,6 +342,81 @@ struct FlowPreparedUseFinalization {
     storage_id: Uuid,
 }
 
+/// Request retrieval can advance progress after proof evaluation or while the
+/// signer is awaiting its provider. Compare the complete immutable source scope
+/// while preserving the latest progress/history under the existing row lock.
+/// This allowlist matches migration0005; no historical migration is rewritten.
+pub(crate) fn same_delegated_authority_snapshot(
+    prepared: &FlowInstanceRecord,
+    current: &FlowInstanceRecord,
+) -> UseResult<bool> {
+    let derived = [
+        "request_retrieved",
+        "mip_messages",
+        "oid4vp_response_uri",
+        "oid4vp_response_encryption_jwk",
+        "oid4vp_expected_state",
+        "verification_audience",
+        "oid4vp_verifier_context",
+        "paired_wallet_signed_request_v1",
+    ];
+    let context = &current.context;
+    let response_uri = prepared
+        .context
+        .get("request_uri")
+        .and_then(Value::as_str)
+        .and_then(|value| value.strip_suffix("/request"))
+        .map(|base| format!("{base}/submit"));
+    if context
+        .get("request_retrieved")
+        .is_some_and(|v| v != &json!(true))
+        || context
+            .get("oid4vp_response_uri")
+            .is_some_and(|v| v.as_str() != response_uri.as_deref())
+        || context
+            .get("oid4vp_response_encryption_jwk")
+            .is_some_and(|v| !v.is_null())
+        || context
+            .get("oid4vp_expected_state")
+            .is_some_and(|v| v.as_str() != Some(prepared.id.as_str()))
+        || context
+            .get("verification_audience")
+            .is_some_and(|v| Some(v) != prepared.context.get("oid4vp_client_id"))
+        || context
+            .get("oid4vp_verifier_context")
+            .is_some_and(|v| v != &json!(true))
+        || prepared
+            .context
+            .get("paired_wallet_signed_request_v1")
+            .is_some_and(|v| context.get("paired_wallet_signed_request_v1") != Some(v))
+    {
+        return Ok(false);
+    }
+    let project = |instance: &FlowInstanceRecord| -> UseResult<Value> {
+        let mut value = serde_json::to_value(instance).map_err(unavailable)?;
+        let object = value
+            .as_object_mut()
+            .ok_or(DelegationUseCommandError::Conflict)?;
+        for name in [
+            "current_step_id",
+            "step_history",
+            "state_history",
+            "updated_at",
+        ] {
+            object.remove(name);
+        }
+        let context = object
+            .get_mut("context")
+            .and_then(Value::as_object_mut)
+            .ok_or(DelegationUseCommandError::Conflict)?;
+        for name in derived {
+            context.remove(name);
+        }
+        Ok(value)
+    };
+    Ok(current.updated_at >= prepared.updated_at && project(prepared)? == project(current)?)
+}
+
 #[async_trait]
 impl PreparedUseFinalization for FlowPreparedUseFinalization {
     async fn commit(
@@ -362,10 +437,13 @@ impl PreparedUseFinalization for FlowPreparedUseFinalization {
             .bind(&self.instance.id).bind(&self.instance.organization_id).fetch_optional(&mut *transaction).await.map_err(unavailable)?
             .ok_or(DelegationUseCommandError::Conflict)?;
         let stored = instance_from_row(&row).map_err(unavailable)?;
-        if stored != self.instance {
+        if !same_delegated_authority_snapshot(&self.instance, &stored)? {
             return Err(DelegationUseCommandError::Conflict);
         }
         let fresh = database_now(transaction).await?;
+        if stored.updated_at > fresh {
+            return Err(DelegationUseCommandError::Conflict);
+        }
         let challenge = challenge_from_records(
             self.retained.organization_id,
             self.retained.grant.id,
@@ -427,11 +505,11 @@ impl PreparedUseFinalization for FlowPreparedUseFinalization {
             "receipt_ref":receipt_ref,"receipt_digest":receipt_digest});
         let mut history = stored.state_history.clone();
         history.push(
-            json!({"prior_state":stored.status,"new_state":"completed","timestamp":now,
+            json!({"prior_state":stored.status,"new_state":"completed","timestamp":fresh,
             "actor":evaluation.actor().id,"event":"delegated_use_evidence_recorded"}),
         );
         let updated = sqlx::query("UPDATE flow_service.flow_instances SET status='completed',current_step_id=NULL,completed_at=$3,updated_at=$3,result=$4,state_history=$5 WHERE id=$1 AND organization_id=$2 AND status='awaiting_wallet'")
-            .bind(&stored.id).bind(&stored.organization_id).bind(now).bind(result).bind(Value::Array(history))
+            .bind(&stored.id).bind(&stored.organization_id).bind(fresh).bind(result).bind(Value::Array(history))
             .execute(&mut *transaction).await.map_err(unavailable)?;
         if updated.rows_affected() != 1 {
             return Err(DelegationUseCommandError::Conflict);
@@ -439,7 +517,7 @@ impl PreparedUseFinalization for FlowPreparedUseFinalization {
         sqlx::query("INSERT INTO flow_service.delegated_use_consumptions(challenge_id,organization_id,proof_submission_id,proof_digest,receipt_ref,receipt_digest,decision,recorded_at,authorization_expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
             .bind(self.retained.challenge_id).bind(self.retained.organization_id).bind(self.submission_id)
             .bind(&self.proof_digest).bind(&receipt_ref).bind(&receipt_digest).bind(receipt.payload().decision)
-            .bind(now).bind(receipt.payload().expires_at.min(self.retained.expires_at))
+            .bind(fresh).bind(receipt.payload().expires_at.min(self.retained.expires_at))
             .execute(&mut *transaction).await.map_err(unavailable)?;
         let after = database_now(transaction).await?;
         if after < fresh
