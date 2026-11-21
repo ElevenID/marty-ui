@@ -20,10 +20,13 @@ pub mod commands;
 pub mod consent;
 pub mod consent_postgres;
 pub mod domain;
+pub mod machine_auth;
+pub mod machine_cedar;
 pub mod oid4vp;
 pub mod organization_authority;
 pub mod postgres;
 pub mod receipt;
+pub mod receipt_signing;
 pub mod repository;
 pub mod service;
 #[cfg(test)]
@@ -41,6 +44,12 @@ pub use oid4vp::*;
 pub use organization_authority::*;
 pub use postgres::PgDelegationGrantRepository;
 pub use receipt::*;
+pub use receipt_signing::*;
 pub use repository::*;
 pub use service::*;
 pub use wire::{decode_grant_snapshot, GrantWireError};
+
+pub mod use_commands;
+pub mod use_postgres;
+pub use use_commands::*;
+pub use use_postgres::{delegated_use_receipt_ref, PgDelegationUseRepository};

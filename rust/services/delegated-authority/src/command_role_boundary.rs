@@ -45,7 +45,7 @@ pub(crate) async fn check_command_roles(
         writer,
         "delegated_authority_service",
         &writer_role,
-        &["delegation_grants", "command_results"],
+        &["delegation_grants", "command_results", "command_identities"],
         &["delegation_grants"],
     )
     .await?;
@@ -60,11 +60,33 @@ pub(crate) async fn check_command_roles(
         has_table_privilege(current_user,'delegated_authority_service.delegation_grants','INSERT')
         AND has_table_privilege(current_user,'delegated_authority_service.delegation_grants','UPDATE')
         AND has_table_privilege(current_user,'delegated_authority_service.command_results','INSERT')
+        AND has_table_privilege(current_user,'delegated_authority_service.command_identities','SELECT')
+        AND has_table_privilege(current_user,'delegated_authority_service.command_identities','INSERT')
         AND has_schema_privilege(current_user,'delegated_authority_service','USAGE')
         AND has_function_privilege(current_user,'delegated_authority_service.grant_instant(TEXT)','EXECUTE')")
         .fetch_one(writer).await.map_err(|_| ApprovalProducerError::NotReady)?;
     if !required || storage_identity(writer).await? != storage_identity(reader).await? {
         return Err(ApprovalProducerError::NotReady);
+    }
+    // Lifecycle/evidence identities must not gain retained use proof/receipt
+    // visibility through direct, inherited or SET ROLE membership. The shared
+    // identity registry is the sole new lifecycle serving privilege.
+    for role in [&writer_role, &read_role] {
+        let reads_use: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_roles r CROSS JOIN pg_class t
+             JOIN pg_namespace n ON n.oid=t.relnamespace
+             WHERE n.nspname='delegated_authority_service'
+               AND t.relname IN ('use_command_claims','use_admissions','use_receipts','use_command_results')
+               AND (r.rolname=$1 OR pg_has_role($1::TEXT,r.oid,'MEMBER'))
+               AND (has_table_privilege(r.oid,t.oid,'SELECT') OR has_any_column_privilege(r.oid,t.oid,'SELECT')))",
+        )
+        .bind(role)
+        .fetch_one(writer)
+        .await
+        .map_err(|_| ApprovalProducerError::NotReady)?;
+        if reads_use {
+            return Err(ApprovalProducerError::NotReady);
+        }
     }
     for role in [&writer_role, &read_role] {
         check_role_boundary(organization, "organization_service", role, &[]).await?;

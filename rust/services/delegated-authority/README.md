@@ -2,8 +2,11 @@
 
 This crate implements the managed DelegationGrant v1 lifecycle, persistence and
 delegated operation evaluation layer, including Marty OID4VP proof and MMF Cedar
-adapters. An optional organization approval producer is hosted behind the
-authenticated Gateway; delegated-use authorization is not production-qualified.
+adapters. The internal retained-use composition additionally provides original
+command claims, a concrete Flow transaction owner, selected machine-policy
+verification and managed receipt-signing adapters. An optional organization
+approval producer is hosted behind the authenticated Gateway; delegated-use
+authorization is not production-qualified.
 The optional delegated-authority capability must remain undiscoverable until its
 remaining runtime integrations are qualified.
 
@@ -142,7 +145,10 @@ bearer-permit guarantee is implied.
 [versioned command contract](https://github.com/ElevenID/marty-protocol/blob/6126da7619e057be2ff58dd38a5d50f49891d1b3/protocol/delegated-authority/COMMANDS.md):
 `CREATE_GRANT`, `APPROVE_GRANT`, `SUSPEND_GRANT`, `REINSTATE_GRANT`,
 `REVOKE_GRANT`, and `RECOVER_RESULT`. `START_USE` and `FINALIZE_USE` explicitly
-return `UnsupportedCommand`; they are not composed through this service.
+return `UnsupportedCommand`; they are not composed through this lifecycle
+service or its human executable. The separate internal
+[`DelegationUseCommandService`](USE_COMMANDS.md) implements the bounded KEY use
+composition without installing a use host or Gateway route.
 
 The service accepts original request bytes. It reuses the bounded JSON reader
 before normal deserialization, rejects duplicate/unknown fields, explicit nulls,
@@ -214,9 +220,11 @@ pending final-use job. A missing result can overlap an uncommitted preparation;
 it is not proof that no request is running or permission to repeat a business
 operation. An ambiguous commit is reconciled using the same original command
 identity and digest. The service never retries external work and does not impose
-an application cancellation deadline on COMMIT. Future `START_USE`/`FINALIZE_USE`
-composition still needs its own durable pending/unresolved state, retained nonce
-guard, proof submission owner, managed signer and challenge/result transaction.
+an application cancellation deadline on COMMIT. The separate
+[`START_USE`/`FINALIZE_USE` composition](USE_COMMANDS.md) adds durable
+pending/unresolved state, retained nonce admission, proof submission ownership
+and atomic challenge/result persistence. It requires explicit source and signer
+selection and does not change this lifecycle service's admission boundary.
 
 Migration 0004 grants no privileges automatically. The request-serving role needs
 only SELECT/INSERT on `command_results`, in addition to its existing grant/journal
@@ -518,12 +526,13 @@ the existing tenant-scoped Flow instance, requires an active OID4VP definition
 and unfinished, unexpired session, validates its frozen request, and reads the
 typed binding and verifier pin from private Flow context. Public start and
 advance requests reject reserved keys at every nesting level; public results
-remove them recursively. It reuses the Flow nonce/session lifecycle; no second
-nonce table or request URI scheme is introduced. The trusted starter described
-above populates the snapshot from an authenticated admission. Production session
-evidence composition and the final-use receipt/operation contract remain
-separate integration gates. A mock or in-memory challenge store is test-only and
-cannot qualify production replay protection.
+remove them recursively. It reuses the Flow request/session lifecycle and request
+URI scheme. The retained-use owner adds immutable nonce correlation and replay
+retention without replacing Flow as the challenge owner. The trusted starter
+described above populates the snapshot from an authenticated admission.
+Production session evidence, authenticated proof ingress and public runtime
+composition remain separate qualification gates. A mock or in-memory challenge
+store is test-only and cannot qualify production replay protection.
 
 Regression tests use public-only signed Ed25519 JWT VP vectors with the actual
 pinned Marty verifier. They cover valid key/session proofs, wrong keys, changed
@@ -537,8 +546,8 @@ changes.
 ## Signed delegated decision receipts
 
 The crate now defines the Delegated Decision Receipt v1 payload and compact JWS
-envelope from the pinned MIP schema. A receipt is built only from a successful,
-nonserializable DelegationUseEvaluation; the operation, typed actor/subject,
+envelope from the pinned MIP schema. A receipt is built only from a completed,
+nonserializable DelegationUseEvaluation, carrying PERMIT or DENY; the operation, typed actor/subject,
 grant revision/digest, approval and authority evidence references, OID4VP nonce
 and proof evidence, active status observation, policy identity and all evidence
 deadlines are copied from verified service state. External-profile evaluations
@@ -558,9 +567,46 @@ Receipt expiry is bounded by the evaluation, proof, current grant/consent status
 external constraint evidence and configured receipt lifetime. The payload is
 evidence of one evaluation, not a bearer permit. It does not consume the Flow
 nonce, reserve merchant idempotency, or atomically commit a purchase. Those
-remain separate final-use and consuming-domain obligations. A production signer
-adapter and independent JWS verification against the protocol's ES256/EdDSA
-conformance vectors are still required before runtime qualification.
+remain separate final-use and consuming-domain obligations. The
+[`HttpManagedDelegatedReceiptSigner`](RECEIPT_SIGNING.md) now provides an explicit
+managed-custody adapter with exact public-key pins, a dedicated signing-grant
+origin and independent verification of the returned signature. Live provider
+and credential qualification, executable selection and independent protocol
+consumer verification remain required before runtime qualification.
+
+## Internal retained-use and selected machine composition
+
+[`DelegationUseCommandService`](USE_COMMANDS.md) and
+`PgDelegationUseRepository` retain the original command identity before external
+preparation or signing, then atomically persist challenge admission or a signed
+final decision. Completed denial is retained just like permit. An unresolved
+claim never triggers automatic preparation, evaluation or signing again.
+Historical recovery preserves the exact result and requires current read
+authorization.
+
+The concrete `FlowDelegatedUseOwner` operates through the supplied PostgreSQL
+connection, checks its immutable storage identity and retains nonce, proof and
+consumption state. Its immutable proof-submission API requires a separately
+authenticated ingress; submitted bytes become evidence only after the configured
+cryptographic verifier runs. All current state comparisons and deadlines are
+rechecked at the local commit boundary. The resulting response has
+`semantics: EVIDENCE_ONLY` and asserts no business side effect.
+
+[`MartyMachineOid4vpProofVerifier`](MACHINE_AUTH.md) supplies a selected
+`DelegateProofVerifier` composition using actual Core OID4VP verification,
+strict full-machine/MAP consistency and every selected credential, attestation
+and machine-authorization requirement. `MmfMachineAuthorizationVerifier` runs
+the selected machine policy through MMF Cedar; separate delegated/domain policy
+evaluation remains required. The current SERVICE_ACCOUNT enrollment inventory
+does not satisfy the full MachineIdentity source contract. Its aggregate proof
+reference binds all machine qualification observations, but durable storage of
+that audit record still belongs to the consuming host.
+
+These are internal composition APIs. The human administration executable and
+Gateway continue rejecting use commands; no default machine source, signer or
+use host is installed. See the
+[application checkpoint](../../../docs/delegated-use-runtime-candidate.md) for
+the measured verification and remaining deployment work.
 
 ## Optional organization approval producer
 
@@ -646,24 +692,32 @@ from enabling these approval administration routes.
 
 ## Remaining runtime qualification
 
-- Qualify the optional KEY organization approval path across live Gateway,
-  Auth, Organization and independently provisioned producer credentials.
-  Additional represented-subject/issuer relationships need their own reviewed
-  authority source; they cannot reuse organization membership as a shortcut.
-- Compose the implemented Flow starter with authenticated organization/action
-  authorization and a qualified session-establishment source for session-bound
-  signing keys. Qualify request retrieval and proof submission through that
-  composed runtime.
-- Implement configured external-authority/status and external-constraint sources,
-  plus the consuming domain's active Cedar policy and typed entity source.
-- Integrate current grant/evidence checks, challenge consumption, replay
-  reservation and signed receipts into the delegated final-use path. Coordinate
-  this with the consuming domain's own operation idempotency and commit contract;
-  a read-only evaluation cannot make an external side effect atomic.
-- Compose lifecycle and delegated-use HTTP/gRPC hosting, public Gateway
-  contracts, organization action authorization, attributed security audit
-  delivery and capability discovery. Approval administration is separately gated.
-- Qualify deployment and end-to-end behavior across the relevant services.
+- Qualify the optional KEY organization approval and human command paths across
+  live Gateway, Auth, Organization and independently provisioned credentials.
+  Additional represented-subject/issuer relationships and session-bound signing
+  keys require their own reviewed authority and establishment sources.
+- Qualify the selected machine gate's independent full MachineIdentity/MAP
+  source, credential issuer/status providers, required attestation and current
+  machine-policy/schema/entity source. Preserve the SERVICE_ACCOUNT inventory
+  distinction and fail closed for missing configured requirements.
+- Configure external-authority/status and external-constraint sources where
+  selected, plus the consuming domain's active Cedar policy and typed entities.
+  Verify freshness and revocation behavior across those independent owners.
+- Compose an explicit use executable with authenticated callers, request
+  retrieval and immutable proof ingress, the concrete same-database Flow owner,
+  restricted use writer and independent source credentials. The human command
+  executable and Gateway lifecycle surface must continue rejecting use commands.
+- Retain the machine audit document and referenced evidence durably before
+  returning a qualified machine result; its aggregate hash alone is not storage.
+  Establish attributed audit delivery and a separate reconciliation design for
+  retained pending claims without silently retrying external work.
+- Qualify live managed receipt custody and its separate mint/verify authority,
+  exact issuer/key pins, rotation and unavailable/replay behavior. The implemented
+  HTTP adapter and local signature tests do not qualify OpenBao/AWS/Redis operation.
+- Qualify public Gateway contracts, independent receipt consumers and deployment
+  behavior before capability discovery changes. Rifare must retain its own
+  operation idempotency and business commit contract; the local evidence/nonce
+  transaction does not make an external business side effect atomic.
 
 No allow-all consent verifier is provided for production. Test doubles exist only
 under `cfg(test)`. There is no public delegated-use route, discovery

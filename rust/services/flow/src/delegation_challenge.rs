@@ -70,7 +70,7 @@ impl DelegationOid4vpChallengeStore for FlowDelegationOid4vpChallengeStore {
     }
 }
 
-fn challenge_from_records(
+pub(crate) fn challenge_from_records(
     organization_id: Uuid,
     grant_id: Uuid,
     challenge_id: Uuid,

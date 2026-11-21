@@ -67,7 +67,8 @@ DECLARE
         '9e1f6df883edeaf1abba52b3ff8ceafed0e9ecbf32f5ee723a9f458b09f29ff6',
         '63cb2d26f3efff51c6725f0c67e3c6c4541f70bce69a0559c6ed0afa53a295c1',
         'cedcf39d7d2cc35defe20066c5fad80e2c00b39f422fb0ffe9590ac508e9f16a',
-        '2dbd6187782f4e53608adfce3a60a8619eb0d598bb66ec78cd83cb013a6596f6'
+        '2dbd6187782f4e53608adfce3a60a8619eb0d598bb66ec78cd83cb013a6596f6',
+        '11682b6f2a646ded3a56f05f0f6dc7c66f183f35cad4b2892bb7c5a089495287'
     ];
     evidence_tables TEXT[] := ARRAY['consent_confirmations','consent_withdrawals',
         'representation_authority_sources','representation_authority_assertions'];
@@ -75,6 +76,10 @@ DECLARE
     approval_tables TEXT[] := ARRAY['approval_storage_identity','approval_reviews',
         'approval_confirmation_bindings','organization_authority_observations'];
     approval_count INTEGER := 0;
+    use_tables TEXT[] := ARRAY['command_identities','use_command_claims','use_admissions','use_receipts','use_command_results'];
+    use_table_count INTEGER := 0;
+    use_claim_count BIGINT := 0;
+    use_result_count BIGINT := 0;
     bad BOOLEAN;
     role_index INTEGER;
     object_record RECORD;
@@ -161,6 +166,12 @@ BEGIN
        OR (schema_version < 5 AND approval_count <> 0) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: organization approval tables are partial or untracked';
     END IF;
+    FOREACH table_name IN ARRAY use_tables LOOP
+        IF to_regclass(format('delegated_authority_service.%I',table_name)) IS NOT NULL THEN use_table_count := use_table_count + 1; END IF;
+    END LOOP;
+    IF (schema_version >= 6 AND use_table_count <> 5) OR (schema_version < 6 AND use_table_count <> 0) THEN
+        RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: retained use tables are partial or untracked';
+    END IF;
     IF selected_phase='post-migration' AND schema_version <> cardinality(expected_checksums) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: post-migration inspection requires every bundled migration';
     END IF;
@@ -223,11 +234,11 @@ BEGIN
                             (privilege_name='SELECT' AND object_record.relname IN
                               ('schema_migrations','delegation_grants','grant_lifecycle_events',
                                'consent_confirmations','consent_withdrawals',
-                               'representation_authority_sources','representation_authority_assertions','command_results',
+                               'representation_authority_sources','representation_authority_assertions','command_results','command_identities',
                                'approval_storage_identity','approval_reviews','approval_confirmation_bindings',
                                'organization_authority_observations'))
                             OR (object_record.relname='delegation_grants' AND privilege_name IN ('INSERT','UPDATE'))
-                            OR (object_record.relname='command_results' AND privilege_name='INSERT')
+                            OR (object_record.relname IN ('command_results','command_identities') AND privilege_name='INSERT')
                         WHEN role_index=3 THEN
                             (object_record.relname IN ('consent_confirmations','consent_withdrawals',
                                 'approval_reviews','approval_confirmation_bindings')
@@ -271,9 +282,9 @@ BEGIN
                         (privilege_name='SELECT' AND object_record.relname IN
                           ('schema_migrations','delegation_grants','grant_lifecycle_events',
                            'consent_confirmations','consent_withdrawals','representation_authority_sources',
-                           'representation_authority_assertions','command_results'))
+                           'representation_authority_assertions','command_results','command_identities'))
                         OR (object_record.relname='delegation_grants' AND privilege_name IN ('INSERT','UPDATE'))
-                        OR (object_record.relname='command_results' AND privilege_name='INSERT')
+                        OR (object_record.relname IN ('command_results','command_identities') AND privilege_name='INSERT')
                       WHEN role_index=3 THEN object_record.relname IN ('consent_confirmations','consent_withdrawals')
                         AND privilege_name IN ('SELECT','INSERT')
                       ELSE object_record.relname IN ('representation_authority_sources','representation_authority_assertions')
@@ -320,7 +331,23 @@ BEGIN
         (5,'approval_confirmation_bindings','approval_confirmation_bindings_no_truncate','reject_lifecycle_event_mutation',34),
         (5,'organization_authority_observations','organization_authority_observations_guard','guard_organization_authority_observation',7),
         (5,'organization_authority_observations','organization_authority_observations_immutable','reject_lifecycle_event_mutation',27),
-        (5,'organization_authority_observations','organization_authority_observations_no_truncate','reject_lifecycle_event_mutation',34)
+        (5,'organization_authority_observations','organization_authority_observations_no_truncate','reject_lifecycle_event_mutation',34),
+        (6,'command_results','command_results_identity','register_lifecycle_command_identity',7),
+        (6,'use_command_claims','use_command_claims_binding','guard_use_command_claim',7),
+        (6,'use_admissions','use_admissions_binding','guard_use_admission',7),
+        (6,'use_receipts','use_receipts_binding','guard_use_receipt',7),
+        (6,'use_command_results','use_command_results_binding','guard_use_result',7),
+        (6,'use_command_results','use_command_results_commit','check_use_result_commit',5),
+        (6,'command_identities','command_identities_immutable','reject_lifecycle_event_mutation',27),
+        (6,'command_identities','command_identities_no_truncate','reject_lifecycle_event_mutation',34),
+        (6,'use_command_claims','use_command_claims_immutable','reject_lifecycle_event_mutation',27),
+        (6,'use_command_claims','use_command_claims_no_truncate','reject_lifecycle_event_mutation',34),
+        (6,'use_admissions','use_admissions_immutable','reject_lifecycle_event_mutation',27),
+        (6,'use_admissions','use_admissions_no_truncate','reject_lifecycle_event_mutation',34),
+        (6,'use_receipts','use_receipts_immutable','reject_lifecycle_event_mutation',27),
+        (6,'use_receipts','use_receipts_no_truncate','reject_lifecycle_event_mutation',34),
+        (6,'use_command_results','use_command_results_immutable','reject_lifecycle_event_mutation',27),
+        (6,'use_command_results','use_command_results_no_truncate','reject_lifecycle_event_mutation',34)
       ) AS expected(version,table_name,trigger_name,function_name,trigger_type)
       WHERE version<=schema_version
     LOOP
@@ -329,7 +356,9 @@ BEGIN
               AND t.tgname=trigger_record.trigger_name AND NOT t.tgisinternal
               AND t.tgenabled='O' AND t.tgtype=trigger_record.trigger_type
               AND t.tgqual IS NULL AND t.tgnargs=0 AND t.tgattr=''::int2vector
-              AND NOT t.tgdeferrable AND NOT t.tginitdeferred
+              AND t.tgdeferrable=(trigger_record.trigger_name='use_command_results_commit')
+              AND t.tginitdeferred=(trigger_record.trigger_name='use_command_results_commit')
+              AND (t.tgconstraint<>0)=(trigger_record.trigger_name='use_command_results_commit')
               AND p.pronamespace=schema_id AND p.proname=trigger_record.function_name
               AND p.pronargs=0) THEN
             RAISE EXCEPTION 'DA_PREFLIGHT_TRIGGER: required guard/journal trigger is absent, disabled or retargeted';
@@ -554,6 +583,142 @@ BEGIN
         END;
     END IF;
 
+    IF schema_version >= 6 THEN
+        WITH expected(table_name,index_name,columns,predicate) AS (VALUES
+        ('command_identities','command_identities_pkey',ARRAY['organization_id','actor_type','actor_id','command_id'],NULL::TEXT),
+        ('use_command_claims','use_command_claims_pkey',ARRAY['organization_id','actor_type','actor_id','command_id'],NULL::TEXT),
+        ('use_command_claims','use_command_start_challenge',ARRAY['organization_id','challenge_id'],'START_USE'),
+        ('use_command_claims','use_command_final_challenge',ARRAY['organization_id','challenge_id'],'FINALIZE_USE'),
+        ('use_admissions','use_admissions_pkey',ARRAY['organization_id','challenge_id'],NULL::TEXT),
+        ('use_admissions','use_admissions_organization_id_verifier_id_nonce_key',ARRAY['organization_id','verifier_id','nonce'],NULL::TEXT),
+        ('use_receipts','use_receipts_pkey',ARRAY['organization_id','challenge_id'],NULL::TEXT),
+        ('use_receipts','use_receipts_organization_id_receipt_ref_key',ARRAY['organization_id','receipt_ref'],NULL::TEXT),
+        ('use_command_results','use_command_results_pkey',ARRAY['organization_id','actor_type','actor_id','command_id'],NULL::TEXT))
+        SELECT count(*) INTO use_table_count FROM expected e JOIN pg_class t ON t.oid=to_regclass('delegated_authority_service.'||e.table_name)
+        JOIN pg_index i ON i.indrelid=t.oid JOIN pg_class x ON x.oid=i.indexrelid
+        WHERE x.relname=e.index_name AND i.indisunique AND i.indisvalid AND i.indisready AND i.indislive AND i.indexprs IS NULL
+        AND i.indnatts=cardinality(e.columns) AND i.indnkeyatts=cardinality(e.columns)
+        AND ARRAY(SELECT a.attname::TEXT FROM unnest(i.indkey) WITH ORDINALITY k(attnum,ord) JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=k.attnum ORDER BY k.ord)=e.columns
+        AND pg_get_expr(i.indpred,i.indrelid) IS NOT DISTINCT FROM CASE WHEN e.predicate IS NULL THEN NULL ELSE format('(command_name = %L::text)',e.predicate) END;
+        IF use_table_count<>9 THEN
+            RAISE EXCEPTION 'DA_PREFLIGHT_USE_INDEX: retained command/challenge/nonce unique index is missing or weakened';
+        END IF;
+        -- Preserve unresolved claims and historical decisions after expiry or
+        -- revocation. This is structural evidence inspection, not signature,
+        -- command canonicalization, current authority or Flow qualification.
+        BEGIN
+            SELECT count(*) INTO use_claim_count FROM delegated_authority_service.use_command_claims;
+            SELECT count(*) INTO use_result_count FROM delegated_authority_service.use_command_results;
+            SELECT EXISTS (
+                SELECT 1 FROM delegated_authority_service.command_identities i
+                LEFT JOIN delegated_authority_service.command_results l USING(organization_id,actor_type,actor_id,command_id)
+                LEFT JOIN delegated_authority_service.use_command_claims u USING(organization_id,actor_type,actor_id,command_id)
+                WHERE (l.command_id IS NULL)=(u.command_id IS NULL)
+                    OR i.command_digest IS DISTINCT FROM COALESCE(l.command_digest,u.command_digest)
+                    OR i.command_name IS DISTINCT FROM COALESCE(l.command_document->>'command',u.command_name)
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.command_results l
+                LEFT JOIN delegated_authority_service.command_identities i USING(organization_id,actor_type,actor_id,command_id)
+                WHERE i.command_id IS NULL
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.use_command_claims c
+                LEFT JOIN delegated_authority_service.command_identities i USING(organization_id,actor_type,actor_id,command_id)
+                LEFT JOIN delegated_authority_service.delegation_grants g ON g.organization_id=c.organization_id AND g.id=c.grant_id
+                LEFT JOIN delegated_authority_service.grant_lifecycle_events e ON e.organization_id=c.organization_id AND e.grant_id=c.grant_id AND e.revision=c.grant_revision
+                WHERE i.command_id IS NULL OR g.id IS NULL OR e.revision IS NULL OR e.status IS DISTINCT FROM 'ACTIVE'
+                    OR c.grant_document->>'organization_id' IS DISTINCT FROM c.organization_id::TEXT
+                    OR c.grant_document->>'id' IS DISTINCT FROM c.grant_id::TEXT
+                    OR c.grant_document->>'revision' IS DISTINCT FROM c.grant_revision::TEXT
+                    OR c.grant_document->>'status' IS DISTINCT FROM 'ACTIVE'
+                    OR c.grant_document->>'terms_digest' IS DISTINCT FROM e.terms_digest
+                    OR c.grant_document->>'updated_at' IS DISTINCT FROM e.occurred_at
+                    OR c.grant_document#>>'{terms,delegate,type}' IS DISTINCT FROM c.actor_type
+                    OR c.grant_document#>>'{terms,delegate,id}' IS DISTINCT FROM c.actor_id
+                    OR c.grant_document#>>'{terms,binding,method}' IS DISTINCT FROM 'KEY'
+                    OR (c.grant_document - ARRAY['status','revision','updated_at']) IS DISTINCT FROM (g.grant_document - ARRAY['status','revision','updated_at'])
+                    OR c.command_document->>'profile' IS DISTINCT FROM 'urn:marty:delegation-command:v1'
+                    OR c.command_document->>'command_id' IS DISTINCT FROM c.command_id::TEXT
+                    OR c.command_document->>'command' IS DISTINCT FROM c.command_name
+                    OR CASE c.command_name WHEN 'START_USE' THEN
+                        c.command_document#>>'{grant,id}' IS DISTINCT FROM c.grant_id::TEXT
+                        OR c.command_document#>>'{grant,revision}' IS DISTINCT FROM c.grant_revision::TEXT
+                        OR c.command_document#>>'{grant,terms_digest}' IS DISTINCT FROM e.terms_digest
+                        WHEN 'FINALIZE_USE' THEN c.command_document->>'challenge_id' IS DISTINCT FROM c.challenge_id::TEXT
+                        ELSE true END
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.use_admissions a
+                LEFT JOIN delegated_authority_service.use_command_claims c USING(organization_id,actor_type,actor_id,command_id)
+                LEFT JOIN delegated_authority_service.use_command_results r USING(organization_id,actor_type,actor_id,command_id)
+                WHERE c.command_id IS NULL OR r.command_id IS NULL OR c.command_name IS DISTINCT FROM 'START_USE'
+                    OR c.challenge_id IS DISTINCT FROM a.challenge_id
+                    OR a.challenge_document->>'organization_id' IS DISTINCT FROM a.organization_id::TEXT
+                    OR a.challenge_document->>'challenge_id' IS DISTINCT FROM a.challenge_id::TEXT
+                    OR a.challenge_document->'grant' IS DISTINCT FROM c.grant_document
+                    OR a.challenge_document->'operation' IS DISTINCT FROM c.command_document->'operation'
+                    OR a.challenge_document->>'verifier_id' IS DISTINCT FROM a.verifier_id
+                    OR a.challenge_document->>'nonce' IS DISTINCT FROM a.nonce
+                    OR (a.challenge_document->>'created_at')::TIMESTAMPTZ IS DISTINCT FROM a.created_at
+                    OR (a.challenge_document->>'expires_at')::TIMESTAMPTZ IS DISTINCT FROM a.expires_at
+                    OR a.expires_at<=a.created_at
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.use_receipts r
+                LEFT JOIN delegated_authority_service.use_command_claims c USING(organization_id,actor_type,actor_id,command_id)
+                LEFT JOIN delegated_authority_service.use_admissions a ON a.organization_id=r.organization_id AND a.challenge_id=r.challenge_id
+                LEFT JOIN delegated_authority_service.use_command_results o ON o.organization_id=r.organization_id AND o.actor_type=r.actor_type AND o.actor_id=r.actor_id AND o.command_id=r.command_id
+                WHERE c.command_id IS NULL OR a.challenge_id IS NULL OR o.command_id IS NULL
+                    OR c.command_name IS DISTINCT FROM 'FINALIZE_USE' OR c.challenge_id IS DISTINCT FROM r.challenge_id
+                    OR a.actor_type IS DISTINCT FROM r.actor_type OR a.actor_id IS DISTINCT FROM r.actor_id
+                    OR c.command_document->>'proof_submission_id' IS DISTINCT FROM r.proof_submission_id::TEXT
+                    OR r.receipt_document->>'profile' IS DISTINCT FROM 'urn:marty:delegated-decision-receipt:v1'
+                    OR COALESCE(r.receipt_document->>'decision','') NOT IN ('PERMIT','DENY')
+                    OR r.receipt_ref IS DISTINCT FROM ('urn:marty:delegated-receipt:'||(r.receipt_document->>'id'))
+                    OR r.receipt_document#>>'{evaluation,organization_id}' IS DISTINCT FROM r.organization_id::TEXT
+                    OR r.receipt_document#>>'{evaluation,challenge}' IS DISTINCT FROM a.nonce
+                    OR r.receipt_document#>>'{evaluation,actor,type}' IS DISTINCT FROM r.actor_type
+                    OR r.receipt_document#>>'{evaluation,actor,id}' IS DISTINCT FROM r.actor_id
+                    OR r.receipt_document#>'{evaluation,operation}' IS DISTINCT FROM a.challenge_document->'operation'
+                    OR r.receipt_document#>>'{evaluation,grant,id}' IS DISTINCT FROM c.grant_id::TEXT
+                    OR r.receipt_document#>>'{evaluation,grant,revision}' IS DISTINCT FROM c.grant_revision::TEXT
+                    OR r.receipt_document#>>'{evaluation,grant,terms_digest}' IS DISTINCT FROM c.grant_document->>'terms_digest'
+                    OR cardinality(string_to_array(r.compact_jws,'.')) IS DISTINCT FROM 3
+                    OR r.receipt_document IS DISTINCT FROM convert_from(decode(translate(split_part(r.compact_jws,'.',2),'-_','+/') || repeat('=',(4-length(split_part(r.compact_jws,'.',2))%4)%4),'base64'),'UTF8')::JSONB
+                    OR r.receipt_digest IS DISTINCT FROM ('sha256:'||encode(sha256(convert_to(r.compact_jws,'UTF8')),'hex'))
+                    OR r.authorization_expires_at IS DISTINCT FROM (r.receipt_document->>'expires_at')::TIMESTAMPTZ
+                    OR r.authorization_expires_at>a.expires_at OR r.authorization_expires_at<=r.recorded_at
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.use_command_results r
+                LEFT JOIN delegated_authority_service.use_command_claims c USING(organization_id,actor_type,actor_id,command_id)
+                LEFT JOIN delegated_authority_service.use_admissions a ON a.organization_id=c.organization_id AND a.challenge_id=c.challenge_id
+                LEFT JOIN delegated_authority_service.use_receipts s ON s.organization_id=c.organization_id AND s.challenge_id=c.challenge_id
+                WHERE c.command_id IS NULL OR a.challenge_id IS NULL
+                    OR r.response_document->>'profile' IS DISTINCT FROM 'urn:marty:delegation-command-response:v1'
+                    OR r.response_document->>'original_command_id' IS DISTINCT FROM r.command_id::TEXT
+                    OR r.response_document->>'command_digest' IS DISTINCT FROM c.command_digest
+                    OR r.response_document->>'recovered' IS DISTINCT FROM 'false'
+                    OR r.response_document#>>'{result,challenge_id}' IS DISTINCT FROM c.challenge_id::TEXT
+                    OR CASE c.command_name WHEN 'START_USE' THEN
+                        r.response_document#>>'{result,kind}' IS DISTINCT FROM 'CHALLENGE'
+                        OR r.response_document#>'{result,operation}' IS DISTINCT FROM a.challenge_document->'operation'
+                        OR r.response_document#>'{result,grant}' IS DISTINCT FROM c.command_document->'grant'
+                        OR (r.response_document#>>'{result,created_at}')::TIMESTAMPTZ IS DISTINCT FROM a.created_at
+                        OR (r.response_document#>>'{result,expires_at}')::TIMESTAMPTZ IS DISTINCT FROM a.expires_at
+                      WHEN 'FINALIZE_USE' THEN s.challenge_id IS NULL OR s.command_id IS DISTINCT FROM c.command_id
+                        OR r.response_document#>>'{result,kind}' IS DISTINCT FROM 'FINAL_USE'
+                        OR r.response_document#>>'{result,semantics}' IS DISTINCT FROM 'EVIDENCE_ONLY'
+                        OR r.response_document#>>'{result,decision}' IS DISTINCT FROM s.receipt_document->>'decision'
+                        OR r.response_document#>>'{result,receipt_ref}' IS DISTINCT FROM s.receipt_ref
+                        OR r.response_document#>>'{result,receipt_digest}' IS DISTINCT FROM s.receipt_digest
+                        OR (r.response_document#>>'{result,recorded_at}')::TIMESTAMPTZ IS DISTINCT FROM s.recorded_at
+                        OR (r.response_document#>>'{result,authorization_expires_at}')::TIMESTAMPTZ IS DISTINCT FROM s.authorization_expires_at
+                      ELSE true END
+            ) INTO bad;
+            IF bad THEN RAISE EXCEPTION 'invalid retained use identity or history'; END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION USING MESSAGE='DA_PREFLIGHT_USE_HISTORY: retained command identity, admission or receipt evidence is inconsistent',
+                HINT='Preserve pending claims and original receipts. Inspection cannot clear an ambiguous command or authorize retry/signing.';
+        END;
+    END IF;
+
     PERFORM set_config('marty.preflight.result',CASE WHEN selected_phase='post-migration'
         THEN 'DATABASE_PREFLIGHT_PASSED' ELSE 'PRE_MIGRATION_INSPECTION_PASSED' END,true);
     PERFORM set_config('marty.preflight.version',schema_version::TEXT,true);
@@ -563,6 +728,8 @@ BEGIN
     PERFORM set_config('marty.preflight.reviews',review_count::TEXT,true);
     PERFORM set_config('marty.preflight.confirmations',confirmation_count::TEXT,true);
     PERFORM set_config('marty.preflight.observations',observation_count::TEXT,true);
+    PERFORM set_config('marty.preflight.use_claims',use_claim_count::TEXT,true);
+    PERFORM set_config('marty.preflight.use_results',use_result_count::TEXT,true);
 END
 $preflight$;
 
@@ -576,6 +743,8 @@ SELECT jsonb_build_object(
     'approval_review_count',current_setting('marty.preflight.reviews')::BIGINT,
     'approval_confirmation_count',current_setting('marty.preflight.confirmations')::BIGINT,
     'organization_authority_observation_count',current_setting('marty.preflight.observations')::BIGINT,
+    'use_command_claim_count',current_setting('marty.preflight.use_claims')::BIGINT,
+    'use_command_result_count',current_setting('marty.preflight.use_results')::BIGINT,
     'runtime_qualification','NOT_ASSESSED',
     'execution_authorized',false
 ) AS delegated_authority_database_preflight;

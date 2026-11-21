@@ -8,7 +8,7 @@ or qualify a deployed delegated-authority service.
 
 The companion
 [`operations/preflight.sql`](../rust/services/delegated-authority/operations/preflight.sql)
-recognizes the exact bundled migrations 0001–0005. It never applies migrations,
+recognizes the exact bundled migrations 0001–0006. It never applies migrations,
 creates a grant, writes a source assertion, repairs a record or manufactures a
 journal. Its successful report explicitly retains
 `runtime_qualification: NOT_ASSESSED` and `execution_authorized: false`.
@@ -32,12 +32,12 @@ lifecycle history.
 ## Prepare the maintenance boundary
 
 1. Select the exact reviewed application artifact and its matching migration and
-   preflight files. Keep migrations 0001–0004 byte-for-byte unchanged. The new
-   organization-approval migration is additive; rewriting an applied migration is not
+   preflight files. Keep migrations 0001–0005 byte-for-byte unchanged. The new
+   retained-use migration is additive; rewriting an applied migration is not
    an upgrade strategy.
 2. Stop new lifecycle writes and drain in-flight request transactions. Also
    pause confirmation, withdrawal, authority-refresh and authority-revocation
-   producers and any background lifecycle jobs. Confirm the old process and its
+   producers, any selected internal use writer and background lifecycle jobs. Confirm the old process and its
    connection pools cannot resume writes during maintenance.
 3. Preserve a database backup or approved recovery point and the corresponding
    application/source audit artifacts. Verify restoreability in an isolated
@@ -70,10 +70,10 @@ passwords into a command line, review log or this runbook. A libpq service file
 or the deployment's existing protected connection configuration can identify
 the operator connection without disclosing a secret.
 
-| Identity | Lifecycle-service minimum access through migration 0005 |
+| Identity | Lifecycle-service minimum access through migration 0006 |
 | --- | --- |
 | Migration owner | Owns the service schema, tables and functions; runs the reviewed migrator during maintenance. Its credentials are unavailable to request and producer processes. |
-| Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results`; EXECUTE on `grant_instant(TEXT)`. |
+| Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results` and `command_identities`; EXECUTE on `grant_instant(TEXT)`. |
 | Confirmation producer | Schema USAGE; SELECT/INSERT on `consent_confirmations` and `consent_withdrawals`; EXECUTE on `grant_instant(TEXT)`. |
 | Representation-authority producer | Schema USAGE; SELECT/INSERT on `representation_authority_sources` and `representation_authority_assertions`. |
 
@@ -158,7 +158,8 @@ GRANT SELECT ON delegated_authority_service.schema_migrations,
   delegated_authority_service.representation_authority_sources,
   delegated_authority_service.representation_authority_assertions TO :"request_role";
 GRANT SELECT, INSERT
-  ON delegated_authority_service.command_results TO :"request_role";
+  ON delegated_authority_service.command_results,
+  delegated_authority_service.command_identities TO :"request_role";
 GRANT SELECT, INSERT ON delegated_authority_service.consent_confirmations,
   delegated_authority_service.consent_withdrawals TO :"confirmation_role";
 GRANT SELECT, INSERT ON delegated_authority_service.representation_authority_sources,
@@ -180,6 +181,16 @@ to the original pending revision and immutable terms, confirmations to their
 original human/session/review and consent, and observations to the independent
 authority assertion. Later revocation or withdrawal does not require rewriting
 that history. The report includes counts for all three kinds of approval evidence.
+
+Migration 0006 backfills the shared command identity registry from original
+lifecycle results and adds immutable use claims, admissions, receipts and
+results. The preflight checks its sixteen guard bindings, exact unique index
+shapes, namespace coverage and retained Pending, CHALLENGE, PERMIT and DENY
+histories. Receipt checks compare the stored payload and exact compact-JWS
+digest; they do not cryptographically qualify the signer. A pending claim is a
+valid retained state and must not be deleted because it has no final result.
+The old lifecycle and producer roles receive no read or write access to the
+four use-specific evidence tables.
 
 Then invoke the repository's `readiness()` using the request connection. Both
 checks must succeed before ending database maintenance. Re-enabling any hosted
@@ -265,7 +276,7 @@ supporting audit/proof material. Historical result recovery, if exposed by a
 qualified runtime, still requires current caller/resource authorization. A
 stored result is never current authority or permission to repeat a side effect.
 
-Do not run down migrations, remove the 0004/0005 ledger entries, drop command or approval tables,
+Do not run down migrations, remove the 0004–0006 ledger entries, drop command, use or approval tables,
 relax guards or reuse a command identity to make an older binary appear ready.
 An older binary expecting a shorter migration list must fail readiness. Use a
 compatible reviewed fix or an explicitly tested recovery deployment before
@@ -305,8 +316,10 @@ are skipped, which must not be reported as live database validation.
 ## Optional human lifecycle command host
 
 The separate `marty-delegation-commands` executable uses the same checksum-verified
-Delegated Authority migrations through 0005. It introduces no new Delegated
-Authority migration and is disabled by default. Provision a restricted command
+Delegated Authority migrations, now through 0006, and is disabled by default.
+It continues to support human lifecycle commands only. Its restricted command
+writer additionally needs SELECT/INSERT on the shared `command_identities`
+registry, whose trigger prevents lifecycle/use identity collisions. Provision that writer
 writer plus distinct evidence and Organization readers as described in
 [COMMAND_HOST.md](../rust/services/delegated-authority/COMMAND_HOST.md). The command
 host does not receive either consent/authority producer writer credential.
@@ -321,3 +334,40 @@ opt-in. See [the enrollment operator contract](managed-agent-enrollment-candidat
 Preserve retained challenges/outcomes and the existing original command results
 when disabling either feature or rolling back application traffic. Historical
 results do not restore expired/revoked authority.
+
+## Internal delegated-use composition
+
+The new `DelegationUseCommandService` is an internal library composition. It has
+no selected public executable or production use-writer provisioning in this
+candidate. Do not expand the lifecycle writer or the evidence-reader role to
+make it a use host; their readiness checks reject access to use-specific tables.
+
+A future qualified use host must select a separate bounded use role and the
+actual `FlowDelegatedUseOwner`. Delegated Authority migration 0006 and Flow's
+additive `0005_delegated_use_retention.sql` must be installed in the same
+authoritative PostgreSQL database. The Flow adapter independently pins its
+storage identity and checks it on the connection supplied by each use
+transaction. The authoritative Flow challenge or consumption, retained nonce,
+receipt and original response then commit together. Separate pools are allowed;
+separate database transactions or a second Flow database are not this adapter's
+contract. The four-role SQL preflight does not qualify that additional role or
+the cross-owner Flow composition.
+
+Reserve the original command identity before external preparation or signing.
+If that work is uncertain, retain the pending claim and its challenge identity.
+If a later local transaction fails, all of its Flow/result writes roll back
+together, while the earlier claim remains. Never delete the claim, release its
+nonce or retry signing automatically. No recovery lease or operator override is
+provided by this candidate.
+
+Flow migration 0005 adds four restricted retained tables, thirteen guard
+bindings and a stable storage identity. Earlier Flow migrations retain their
+original bytes. Preserve this state together with the five Delegated Authority
+tables during rollback or backup reconciliation. The existing human host and
+Gateway still reject `START_USE` and `FINALIZE_USE`; database installation alone
+does not expose either operation.
+
+See [USE_COMMANDS.md](../rust/services/delegated-authority/USE_COMMANDS.md),
+[Flow's retained-use contract](../rust/services/flow/DELEGATED_USE.md), and
+[the candidate milestone](delegated-use-runtime-candidate.md) for transaction,
+source freshness, managed signing and remaining runtime qualification gates.

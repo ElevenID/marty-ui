@@ -201,7 +201,7 @@ impl DelegatedDecisionReceiptIssuer {
         })
     }
 
-    /// Sign one successful, nonserializable evaluation. A receipt's expiry is
+    /// Sign one completed, nonserializable evaluation (PERMIT or DENY). A receipt's expiry is
     /// capped by every verified evidence deadline retained in the evaluation.
     /// Receipt issuance does not consume a Flow nonce or commit a domain action;
     /// those remain separate final-use and consuming-domain obligations.
@@ -242,7 +242,7 @@ impl DelegatedDecisionReceiptIssuer {
             profile: DELEGATED_DECISION_RECEIPT_PROFILE,
             id: Uuid::new_v4(),
             issuer: self.issuer.clone(),
-            decision: "PERMIT",
+            decision: evaluation.decision().as_str(),
             evaluation: DelegatedEvaluationV1 {
                 profile: DELEGATED_EVALUATION_PROFILE,
                 organization_id: evaluation.organization_id(),

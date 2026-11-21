@@ -796,6 +796,9 @@ impl PostgresFlowRepository {
             }
         }
         if let Some(prepared) = delegated {
+            crate::delegation_use::retain_started_challenge(&mut transaction, prepared)
+                .await
+                .map_err(|_| record("delegation retained admission"))?;
             let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
                 .fetch_one(&mut *transaction)
                 .await
@@ -1850,7 +1853,7 @@ const ARTIFACT_UPSERT_BY_TRANSACTION: &str = "INSERT INTO flow_service.flow_inst
     updated_at=EXCLUDED.updated_at \
     WHERE flow_instance_artifacts.flow_instance_id=EXCLUDED.flow_instance_id RETURNING *";
 
-fn definition_from_row(row: &PgRow) -> Result<FlowDefinitionRecord, RepositoryError> {
+pub(crate) fn definition_from_row(row: &PgRow) -> Result<FlowDefinitionRecord, RepositoryError> {
     let preconditions_value: Value = row.try_get("preconditions").map_err(storage)?;
     let preconditions = preconditions_value
         .as_array()
@@ -1914,7 +1917,7 @@ fn application_receipt_from_row(row: &PgRow) -> Result<ApplicationEventReceipt, 
     })
 }
 
-fn instance_from_row(row: &PgRow) -> Result<FlowInstanceRecord, RepositoryError> {
+pub(crate) fn instance_from_row(row: &PgRow) -> Result<FlowInstanceRecord, RepositoryError> {
     checked_public_record(FlowInstanceRecord {
         id: row.try_get("id").map_err(storage)?,
         flow_definition_id: row.try_get("flow_definition_id").map_err(storage)?,

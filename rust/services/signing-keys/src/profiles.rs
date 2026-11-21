@@ -29,6 +29,7 @@ const KEY_PURPOSES: &[&str] = &[
     "csca",
     "jwks_signing",
     "lti_tool_signing",
+    marty_signing_grant::delegated_decision::KEY_PURPOSE,
 ];
 pub(crate) const PROTOCOL_FORMATS: &[&str] = &[
     "MDOC",
@@ -38,6 +39,7 @@ pub(crate) const PROTOCOL_FORMATS: &[&str] = &[
     "JSON_LD",
     "ZK_MDOC",
     "ICAO_EMRTD",
+    marty_signing_grant::delegated_decision::PROFILE_FORMAT,
 ];
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -496,6 +498,112 @@ mod managed_reference_tests {
     }
 
     #[test]
+    fn delegated_receipt_profiles_require_exclusive_explicit_configuration_and_stay_nonpublic() {
+        use marty_signing_grant::delegated_decision::{KEY_PURPOSE, PROFILE_FORMAT, WIRE_FORMAT};
+        for algorithm in ["ES256", "EdDSA"] {
+            let body = json!({
+                "id":"receipt-profile", "organization_id":"org-1", "status":"active",
+                "issuer_did":"did:web:receipt.example", "verification_method_id":"did:web:receipt.example#key-1",
+                "signing_service_id":"receipt-service", "signing_key_reference":"receipt-key",
+                "credential_format":PROFILE_FORMAT, "key_purpose":KEY_PURPOSE, "algorithm":algorithm
+            });
+            let normalized = normalize_profile(
+                "org-1",
+                NormalizeProfileRequest {
+                    body: body.clone(),
+                    existing: None,
+                    now: None,
+                    profile_id: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(normalized["key_purpose"], KEY_PURPOSE);
+            let binding = ValidateBindingRequest {
+                profile: body.clone(),
+                service: json!({"id":"receipt-service","credential_formats":[WIRE_FORMAT],"key_purposes":[KEY_PURPOSE,"vc_jwt_issuer"],"algorithms":[algorithm]}),
+                registry: json!({"key_reference_purposes":{"receipt-service":{"receipt-key":[KEY_PURPOSE]}}}),
+            };
+            assert!(validate_binding(&binding).is_ok());
+            assert!(find_profiles(
+                &[body],
+                "org-1",
+                &FindProfilesRequest {
+                    active_only: true,
+                    require_public_identity: true,
+                    ..Default::default()
+                }
+            )
+            .is_empty());
+            for (path, value) in [
+                ("/credential_formats", json!(["*"])),
+                ("/credential_formats", json!([])),
+                ("/key_purposes", json!([])),
+            ] {
+                let mut invalid = binding.clone();
+                *invalid.service.pointer_mut(path).unwrap() = value;
+                assert!(validate_binding(&invalid).is_err());
+            }
+            for purposes in [
+                json!([]),
+                json!([KEY_PURPOSE, "vc_jwt_issuer"]),
+                json!(["vc_jwt_issuer"]),
+            ] {
+                let mut invalid = binding.clone();
+                invalid.registry["key_reference_purposes"]["receipt-service"]["receipt-key"] =
+                    purposes;
+                assert!(validate_binding(&invalid).is_err());
+            }
+            for (field, value) in [
+                ("algorithm", "RS256"),
+                ("credential_format", "VC_JWT"),
+                ("key_purpose", "vc_jwt_issuer"),
+            ] {
+                let mut invalid = binding.clone();
+                invalid.profile[field] = json!(value);
+                assert!(validate_binding(&invalid).is_err());
+                assert!(normalize_profile(
+                    "org-1",
+                    NormalizeProfileRequest {
+                        body: invalid.profile,
+                        existing: None,
+                        now: None,
+                        profile_id: None
+                    }
+                )
+                .is_err());
+            }
+            assert_eq!(
+                custody_format(&CustodyFormatRequest {
+                    key_purpose: KEY_PURPOSE.into(),
+                    credential_format: PROFILE_FORMAT.into()
+                })
+                .unwrap()
+                .wire_format,
+                WIRE_FORMAT
+            );
+            assert!(custody_format(&CustodyFormatRequest {
+                key_purpose: "vc_jwt_issuer".into(),
+                credential_format: PROFILE_FORMAT.into()
+            })
+            .is_err());
+            let mut relabelled = binding.clone();
+            relabelled.profile["key_purpose"] = json!("vc_jwt_issuer");
+            relabelled.registry["key_reference_purposes"]["receipt-service"]["receipt-key"] =
+                json!(["vc_jwt_issuer"]);
+            assert!(validate_binding(&relabelled).is_err());
+            assert!(find_profiles(
+                &[relabelled.profile],
+                "org-1",
+                &FindProfilesRequest {
+                    require_public_identity: true,
+                    ..Default::default()
+                }
+            )
+            .is_empty());
+        }
+    }
+
+    #[test]
     fn managed_profile_binding_rejects_foreign_tuple_and_namespaced_keys() {
         let own = crate::registry::managed_key_reference_for_fields(
             "org-a",
@@ -678,6 +786,14 @@ pub fn normalize_profile(
             "Demo holder keys require SD_JWT_VC and ES256.".into(),
         ));
     }
+    if (key_purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        || credential_format == marty_signing_grant::delegated_decision::PROFILE_FORMAT)
+        && (key_purpose != marty_signing_grant::delegated_decision::KEY_PURPOSE
+            || credential_format != marty_signing_grant::delegated_decision::PROFILE_FORMAT
+            || !matches!(algorithm.as_str(), "ES256" | "EdDSA"))
+    {
+        return Err(ProfileError::Invalid("Delegated decision profiles require their dedicated format/purpose and ES256 or EdDSA.".into()));
+    }
     let issuer_mode = string_field("issuer_mode", "org_managed");
     allowed("issuer_mode", &issuer_mode, ISSUER_MODES)?;
     let policy = normalize_attestation_policy(field("key_attestation_policy"))?;
@@ -748,6 +864,22 @@ pub fn validate_binding(request: &ValidateBindingRequest) -> Result<(), ProfileE
             "Signing service '{service_id}' is not configured for key_purpose '{purpose}'."
         )));
     }
+    if (purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        || string(profile, "credential_format").as_deref()
+            == Some(marty_signing_grant::delegated_decision::PROFILE_FORMAT))
+        && (purpose != marty_signing_grant::delegated_decision::KEY_PURPOSE
+            || string(profile, "credential_format").as_deref()
+                != Some(marty_signing_grant::delegated_decision::PROFILE_FORMAT)
+            || !matches!(algorithm.as_str(), "ES256" | "EdDSA")
+            || !service_purposes.contains(&purpose)
+            || !strings(service.get("credential_formats"))
+                .iter()
+                .any(|format| format == marty_signing_grant::delegated_decision::WIRE_FORMAT))
+    {
+        return Err(ProfileError::Invalid(
+            "Delegated decision signing requires an explicitly registered dedicated tuple.".into(),
+        ));
+    }
     let service_algorithms = strings(service.get("algorithms"));
     if !algorithm.is_empty()
         && !service_algorithms.is_empty()
@@ -793,6 +925,17 @@ pub fn validate_binding(request: &ValidateBindingRequest) -> Result<(), ProfileE
         return Err(ProfileError::Invalid(format!(
             "Key reference '{key_reference}' must be registered exclusively for lti_tool_signing."
         )));
+    }
+    let receipt_purpose = marty_signing_grant::delegated_decision::KEY_PURPOSE;
+    if (purpose == receipt_purpose && reference_purposes != [receipt_purpose])
+        || (purpose != receipt_purpose
+            && reference_purposes
+                .iter()
+                .any(|value| value == receipt_purpose))
+    {
+        return Err(ProfileError::Invalid(
+            "Delegated receipt keys must have an exclusive, explicit purpose binding.".into(),
+        ));
     }
     if !reference_purposes.is_empty() && !reference_purposes.contains(&purpose) {
         return Err(ProfileError::Invalid(format!(
@@ -988,6 +1131,17 @@ pub fn find_profiles(
 pub fn custody_format(
     request: &CustodyFormatRequest,
 ) -> Result<CustodyFormatResponse, ProfileError> {
+    if (request.key_purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        || protocol_wire_format(&request.credential_format).as_deref()
+            == Some(marty_signing_grant::delegated_decision::WIRE_FORMAT))
+        && (request.key_purpose != marty_signing_grant::delegated_decision::KEY_PURPOSE
+            || protocol_wire_format(&request.credential_format).as_deref()
+                != Some(marty_signing_grant::delegated_decision::WIRE_FORMAT))
+    {
+        return Err(ProfileError::Invalid(
+            "Delegated decision custody requires its exact format and purpose.".into(),
+        ));
+    }
     if request.key_purpose == "demo_holder_binding"
         && !matches!(
             request.credential_format.as_str(),
@@ -1012,6 +1166,9 @@ pub fn custody_format(
         ));
     }
     let purpose_format = match request.key_purpose.as_str() {
+        marty_signing_grant::delegated_decision::KEY_PURPOSE => {
+            Some(marty_signing_grant::delegated_decision::WIRE_FORMAT)
+        }
         "oid4vp_request_signing" => Some("oauth-authz-req+jwt"),
         "lti_tool_signing" => Some("lti_tool_jwt"),
         "vdsnc_signing" | "csca" | "mdoc_iaca" => Some("mso_mdoc"),
@@ -1046,6 +1203,13 @@ fn validate_find_request(request: &FindProfilesRequest) -> Result<(), ProfileErr
 }
 
 fn is_public_identity(profile: &Map<String, Value>) -> bool {
+    if string(profile, "key_purpose").as_deref()
+        == Some(marty_signing_grant::delegated_decision::KEY_PURPOSE)
+        || string(profile, "credential_format").as_deref()
+            == Some(marty_signing_grant::delegated_decision::PROFILE_FORMAT)
+    {
+        return false;
+    }
     string(profile, "issuer_did").is_some_and(|value| value.starts_with("did:"))
         && string(profile, "credential_format")
             .is_some_and(|value| PROTOCOL_FORMATS.contains(&value.to_ascii_uppercase().as_str()))
@@ -1058,6 +1222,9 @@ fn profile_wire_format(profile: &Map<String, Value>) -> Option<String> {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "vc_jwt_issuer".to_string());
     let purpose_format = match purpose.as_str() {
+        marty_signing_grant::delegated_decision::KEY_PURPOSE => {
+            Some(marty_signing_grant::delegated_decision::WIRE_FORMAT)
+        }
         "oid4vp_request_signing" => Some("oauth-authz-req+jwt"),
         "lti_tool_signing" => Some("lti_tool_jwt"),
         "vdsnc_signing" => Some("mso_mdoc"),
@@ -1076,6 +1243,9 @@ pub(crate) fn protocol_wire_format(protocol_format: &str) -> Option<String> {
         .replace('-', "_")
         .as_str()
     {
+        "delegated_decision_jws" | "mip_delegated_decision+jws" => {
+            Some(marty_signing_grant::delegated_decision::WIRE_FORMAT.to_string())
+        }
         "mdoc" | "mso_mdoc" => Some("mso_mdoc".to_string()),
         "sd_jwt_vc" | "dc+sd_jwt" | "vc+sd_jwt" => Some("dc+sd-jwt".to_string()),
         "vc_jwt" | "jwt_vc" | "jwt_vc_json" => Some("jwt_vc_json".to_string()),

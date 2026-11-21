@@ -24,7 +24,12 @@ base64.workspace = true
 hex.workspace = true
 mmf-security.workspace = true
 marty-organization = { path = "../organization" }
+marty-principal-runtime-binding = { path = "../../crates/principal-runtime-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
+p256 = { workspace = true, features = ["ecdsa"] }
+ed25519-dalek.workspace = true
+reqwest.workspace = true
 axum.workspace = true
 marty-oid4vci = { workspace = true, features = ["verifier"] }
 marty-verification.workspace = true
@@ -39,5 +44,6 @@ sqlx.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 tokio.workspace = true
 tower.workspace = true

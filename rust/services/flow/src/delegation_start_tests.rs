@@ -32,12 +32,15 @@ use crate::{
     SigningIdentityProvider, SigningRequest, SigningResult,
 };
 
+#[path = "delegation_use_tests.rs"]
+mod use_command_tests;
+
 #[path = "../tests/support/flow_schema.rs"]
 mod flow_schema;
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-struct Clock(Mutex<DateTime<Utc>>);
+struct Clock(Mutex<DateTime<Utc>>, AtomicBool);
 impl Clock {
     fn set(&self, now: DateTime<Utc>) {
         *self.0.lock().unwrap() = now;
@@ -45,7 +48,11 @@ impl Clock {
 }
 impl DelegationClock for Clock {
     fn now(&self) -> DateTime<Utc> {
-        *self.0.lock().unwrap()
+        if self.1.load(Ordering::SeqCst) {
+            Utc::now()
+        } else {
+            *self.0.lock().unwrap()
+        }
     }
 }
 
@@ -75,11 +82,39 @@ struct Fixture {
 
 impl Fixture {
     async fn new(now: DateTime<Utc>) -> Self {
-        let clock = Arc::new(Clock(Mutex::new(now)));
+        Self::new_with_delegate(
+            now,
+            "urn:example:actual-delegate".into(),
+            format!("sha256:{}", "a".repeat(64)),
+        )
+        .await
+    }
+
+    async fn new_with_delegate(
+        now: DateTime<Utc>,
+        delegate_id: String,
+        key_thumbprint: String,
+    ) -> Self {
+        Self::new_with_repository(
+            now,
+            delegate_id,
+            key_thumbprint,
+            Arc::new(InMemoryDelegationGrantRepository::default()),
+        )
+        .await
+    }
+
+    async fn new_with_repository(
+        now: DateTime<Utc>,
+        delegate_id: String,
+        key_thumbprint: String,
+        repository: Arc<dyn marty_delegated_authority::DelegationGrantRepository>,
+    ) -> Self {
+        let clock = Arc::new(Clock(Mutex::new(now), AtomicBool::new(false)));
         let consent_until = Arc::new(Mutex::new(now + Duration::seconds(60)));
         let lifecycle = Arc::new(
             DelegationAuthorityService::with_clock(
-                Arc::new(InMemoryDelegationGrantRepository::default()),
+                repository,
                 Arc::new(Consent(consent_until.clone())),
                 Authority {
                     mode: AuthorityMode::Managed,
@@ -111,11 +146,11 @@ impl Fixture {
                     },
                     delegate: Principal {
                         principal_type: PrincipalType::ServiceAccount,
-                        id: "urn:example:actual-delegate".into(),
+                        id: delegate_id,
                     },
                     binding: Binding {
                         method: BindingMethod::Key,
-                        key_thumbprint: Some(format!("sha256:{}", "a".repeat(64))),
+                        key_thumbprint: Some(key_thumbprint),
                         session_ref: None,
                         establishment_evidence_ref: None,
                     },
@@ -179,6 +214,7 @@ impl Fixture {
         };
         let ports = Arc::new(Ports {
             organization_id: grant.organization_id.to_string(),
+            actor_id: grant.terms.delegate.id.clone(),
         });
         let providers = FlowProviderRegistry {
             presentation_policy: Some(ports.clone()),
@@ -235,6 +271,7 @@ impl Fixture {
 
 struct Ports {
     organization_id: String,
+    actor_id: String,
 }
 #[async_trait]
 impl PresentationPolicyProvider for Ports {
@@ -351,7 +388,7 @@ impl FlowReferenceProvider for Ports {
         principal_id: &str,
         organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError> {
-        assert_eq!(principal_id, "urn:example:actual-delegate");
+        assert_eq!(principal_id, self.actor_id);
         assert_eq!(organization_id, self.organization_id);
         Ok(FlowReference {
             kind,

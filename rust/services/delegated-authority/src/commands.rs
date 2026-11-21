@@ -272,7 +272,7 @@ pub fn decode_delegation_command(
     ))
 }
 
-fn canonical_uuid(value: &Value) -> Result<Uuid, DelegationCommandError> {
+pub(crate) fn canonical_uuid(value: &Value) -> Result<Uuid, DelegationCommandError> {
     let text = value
         .as_str()
         .ok_or(DelegationCommandError::InvalidCommand)?;
@@ -285,7 +285,7 @@ fn canonical_uuid(value: &Value) -> Result<Uuid, DelegationCommandError> {
 
 // RFC 8785 subset for this exact schema: the only numeric field is an unsigned,
 // JSON-safe revision. This is not a canonicalizer for arbitrary JSON documents.
-fn canonical_command_json(value: &Value) -> Result<Vec<u8>, DelegationCommandError> {
+pub(crate) fn canonical_command_json(value: &Value) -> Result<Vec<u8>, DelegationCommandError> {
     let invalid = || DelegationCommandError::InvalidCommand;
     match value {
         Value::Number(n) => n

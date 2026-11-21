@@ -109,7 +109,7 @@ checksums/guards, actual connected roles, and source isolation.
 
 Run `marty-delegation-commands migrate` with `DELEGATION_MIGRATION_DATABASE_URL`
 (or its `_FILE`) as a controlled owner step. This applies the existing checksum
-verified migrations through 0005. Serving never applies migrations or creates
+verified migrations through 0006. Serving never applies migrations or creates
 roles. `verify-owned-schema` uses `DELEGATION_COMMAND_RUNTIME_DATABASE_URL` for a
 read-only schema check. Source Organization migrations are owned by that service.
 
@@ -149,6 +149,8 @@ GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT)
 GRANT INSERT, UPDATE ON delegated_authority_service.delegation_grants
   TO marty_delegation_command;
 GRANT INSERT ON delegated_authority_service.command_results
+  TO marty_delegation_command;
+GRANT SELECT, INSERT ON delegated_authority_service.command_identities
   TO marty_delegation_command;
 
 GRANT USAGE ON SCHEMA organization_service TO marty_delegation_org_read;

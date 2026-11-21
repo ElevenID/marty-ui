@@ -105,7 +105,7 @@ impl FlowDelegatedVerificationStarter {
         Ok(prepared.response)
     }
 
-    async fn prepare(
+    pub(crate) async fn prepare(
         &self,
         admission: DelegationChallengeAdmission,
     ) -> Result<PreparedDelegatedVerificationStart, FlowDelegationStartError> {

@@ -13,9 +13,17 @@
 //! signed enrollment challenge. That result establishes current key possession
 //! only; its host must atomically consume the retained challenge. It does not
 //! perform operational machine authentication or establish delegated authority.
+//!
+//! The separate [`machine_policy`] module strictly selects the pinned MAP
+//! requirements for a full current machine and key. That output remains a
+//! consistency result. The delegated-authority service composes it with actual
+//! OID4VP cryptography and independently verified credential/attestation/policy
+//! evidence; no enrollment result or public verification flag substitutes for
+//! those checks.
 
 #![forbid(unsafe_code)]
 
+pub mod machine_policy;
 pub mod managed_enrollment;
 mod model;
 mod strict_json;

@@ -29,6 +29,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         5,
         include_str!("../migrations/0005_organization_approval.sql"),
     ),
+    (
+        6,
+        include_str!("../migrations/0006_retained_use_commands.sql"),
+    ),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;
@@ -201,6 +205,7 @@ impl PgDelegationGrantRepository {
         if triggers != 31 {
             return Err(RepositoryError::SchemaNotReady);
         }
+        crate::use_postgres::verify_use_schema(&self.pool).await?;
         Ok(())
     }
 }
@@ -244,6 +249,20 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
                 result: original,
                 recovered: true,
             });
+        }
+        let identity_claimed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM delegated_authority_service.command_identities
+             WHERE organization_id=$1 AND actor_type=$2 AND actor_id=$3 AND command_id=$4)",
+        )
+        .bind(identity.organization_id)
+        .bind(actor_type(&identity)?)
+        .bind(&identity.actor.id)
+        .bind(identity.command_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(map_database)?;
+        if identity_claimed {
+            return Err(RepositoryError::CommandConflict);
         }
         if let Some(previous) = &prepared.mutation.previous {
             let row = sqlx::query(

@@ -6,7 +6,9 @@ main at `f662bb326bd0a83eb8191dc002bc3db57ec08cc3`, including the accepted
 Core JWT 11 dependency alignment. It preserves that existing lifecycle service
 and Flow admission implementation. The application now includes candidate agent directory administration,
 exact-terms organization approval, managed key-control enrollment and an opt-in
-human lifecycle command host. Public delegated execution remains gated.
+human lifecycle command host. The current follow-on adds an internal retained
+delegated-use composition, selected full-machine authentication and managed
+receipt-signing adapter. Public delegated execution remains gated.
 
 ## Implemented in this application slice
 
@@ -18,7 +20,10 @@ human lifecycle command host. Public delegated execution remains gated.
 | M02 principal binding foundation | Strict Rust principal/runtime/key/session consistency checks, typed fingerprints and opaque validated output | Operational proof authentication remains separate; bounded enrollment proof is implemented by the separate purpose-specific adapter below |
 | M02 directory and enrollment candidate | Tenant inventory, public-key history, immutable audit, authorized administration, retained signed-challenge enrollment and a local key-custodian signer | Managed entries start PROVISIONED; explicit key-control enrollment permits ACTIVE eligibility, with authority NOT_ASSESSED. Operational MAP, external host trust and suspended-identity resume remain separate |
 | M03 approval candidate | Exact immutable terms, explicit human confirmation, durable recovery/withdrawal, independent current Organization authority and an opt-in executable | One configured organization and KEY binding; represented-subject SESSION establishment and broader authority profiles remain separate work |
-| P03 application lifecycle commands | Atomic grant/journal/original-result persistence, opt-in human Gateway/host composition, exact producer confirmation and current Organization authorization rechecked after lock waits | Selected human organization/KEY profile only; START_USE and FINALIZE_USE remain unsupported |
+| P03 application lifecycle commands | Atomic grant/journal/original-result persistence, opt-in human Gateway/host composition, exact producer confirmation and current Organization authorization rechecked after lock waits | Selected human organization/KEY profile only; the human executable and Gateway still reject START_USE and FINALIZE_USE |
+| M02 selected machine authentication candidate | Concrete Core OID4VP verification, strict MAP/full-machine consistency, required credential/attestation ports, actual MMF machine-policy evaluation and aggregate evidence digest | Requires independent full MachineIdentity and provider qualification; current SERVICE_ACCOUNT inventory and enrollment do not satisfy this gate; audit record retention needs the consuming host |
+| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied local transaction | Internal KEY-grant composition only; no executable use host or authenticated ingress is installed, and unresolved claims are never automatically retried |
+| Managed decision receipt candidate | Dedicated signing-grant origin, explicitly pinned remote key, strict transcript binding and independent returned-signature verification | Default off; live provider, credential custody and executable host qualification remain pending |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -46,18 +51,22 @@ qualified delegated-use contracts.
 The broader milestones are not closed by these libraries and candidate
 administration paths. The next application packages still need:
 
-- Operational machine proof authentication, required machine credentials, Machine
-  Authentication Policy/attestation/Cedar evaluation, connection/grant aggregation
-  and independent directory qualification. Enrollment key possession is implemented
-  but does not satisfy these operational checks.
+- Deployment qualification of the implemented selected machine proof/MAP/Cedar
+  gate: an independent full MachineIdentity source, required credential and
+  attestation verification, current policy/entity sources, and durable machine
+  audit retention. Connection/grant aggregation and independent directory
+  qualification remain separate. Enrollment key possession does not satisfy
+  these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
   establishment beyond the implemented human/organization KEY profile.
-- Qualified workload/proof authentication adapters and deployment qualification of
-  source freshness. Human command authorization/confirmation composition is
-  implemented; external and machine callers remain separate work.
-- Durable `START_USE` command correlation and retained tenant/verifier nonce
-  admission, followed by dedicated `FINALIZE_USE` persistence and managed
-  receipt signing. Ordinary Flow finalization remains guarded.
+- Qualified workload/caller ingress and source freshness for the implemented
+  internal use composition. Human command authorization/confirmation is
+  implemented; the human administration host does not accept machine use calls.
+- Deployment of retained `START_USE`/`FINALIZE_USE`, the concrete same-database
+  Flow owner and managed receipt signer with reviewed serving privileges,
+  authenticated request retrieval/proof submission, live signing-provider
+  qualification and a separately reviewed pending-claim reconciliation design.
+  Ordinary Flow finalization remains guarded.
 - Public delegated-use hosting, packaged public clients, independent consumer
   verification and explicit capability qualification. Human lifecycle commands,
   directory, enrollment and approval hosting are opt-in candidates.
@@ -68,6 +77,7 @@ See [the optional protocol consumer contract](architecture/agent-trust-protocol-
 [principal binding integration](principal-runtime-binding.md),
 [the directory and approval candidate](agent-identity-and-approval-candidate.md),
 [managed enrollment and human command hosting](managed-agent-enrollment-candidate.md),
+[the retained delegated-use candidate](delegated-use-runtime-candidate.md),
 [the delegation upgrade procedure](delegated-authority-upgrade.md), and
 [the delegated-authority service](../rust/services/delegated-authority/README.md)
 for the implemented contracts and their limits.
@@ -150,9 +160,10 @@ builds above were run with Bun 1.4.4.
 Public MIP remains 0.5.0. Support levels and discovery stay unchanged. Validation
 ran locally; hosted Actions, production rollout and independent browser/issuer
 qualification are not claimed. The subsequent enrollment/human-command slice is
-described below. Operational machine authentication, retained START_USE admission, dedicated FINALIZE_USE
-persistence and receipt signing remain required before Rifare uses those paths
-for business execution.
+described below. The later retained-use candidate implements the corresponding
+machine gate, START_USE admission, FINALIZE_USE persistence and receipt-signing
+boundaries. Their deployment and public consumer qualification remain required
+before Rifare uses those paths for business execution.
 
 ## Managed enrollment and human command follow-on
 
@@ -219,3 +230,77 @@ All eight previously published Organization/Delegated Authority migration files
 retain their exact bytes. The lockfile adds references to existing workspace
 packages only; package versions, sources and checksums are unchanged. The
 commit uses `[skip ci]`, and no hosted workflow is manually dispatched.
+
+## Retained delegated-use and machine gate follow-on
+
+The follow-on after `0404d1100f34f1423c80c432c0cd63df60908f48` implements the
+internal KEY-grant use composition. Durable original claims precede Flow
+preparation or receipt signing. START_USE records the exact challenge and
+retained verifier nonce; FINALIZE_USE records a completed PERMIT or DENY and its
+signed receipt. Pending claims are retained without automatic retry or takeover,
+and recovered results preserve their original evidence and timestamps.
+
+The concrete Flow owner commits authoritative challenge, proof and consumption
+state on the same connection as the use ledger, checking the immutable Flow
+storage identity. It locks and compares current definitions, original instances
+and immutable proof submissions, with fresh clocks and deferred expiry guards.
+The result remains `EVIDENCE_ONLY`; Rifare owns domain execution and business
+idempotency. No executable use host or public Gateway route is installed, and
+the existing human command host continues rejecting use commands.
+
+The machine adapter composes the actual pinned Core OID4VP verifier with the
+selected MAP, full machine/key/runtime state and all required evidence ports.
+The selected machine policy runs through the actual MMF Cedar engine. Missing
+credential, attestation or policy requirements fail closed. Current Organization
+SERVICE_ACCOUNT inventory is not converted into a full MachineIdentity; that
+source and its provider qualification remain required. The proof digest now
+commits the complete machine qualification audit record, but a consuming host
+must still durably retain that record and the referenced evidence.
+
+The receipt adapter uses an independently configured public-key pin and a
+dedicated signing-grant origin. It verifies actual returned ES256 or Ed25519
+signatures and rejects changed issuer/key/profile state. Signing Keys adds only
+an explicit default-off receipt-origin selection; live OpenBao/AWS/Redis custody
+qualification, credentials and executable composition remain separate work.
+
+Delegated Authority migration 0006 and Flow migration 0005 are additive. Earlier
+migration bytes, public MIP/support/discovery, the Protocol checkout and Rifare
+execution behavior remain unchanged. The current contract and remaining gates
+are in [the retained delegated-use candidate](delegated-use-runtime-candidate.md).
+
+### Current follow-on validation
+
+These local checks use the locked Rust graph offline. Focused and aggregate
+rows overlap and must not be summed. Synthetic providers do not qualify live
+credential issuers, attesters, source freshness or managed signing custody.
+
+| Check | Result |
+| --- | --- |
+| Principal binding and enrolled/pinned Protocol coverage | 56 passed, zero ignored, including 10 new MAP cases and four compile-fail contracts |
+| Selected machine proof/MAP/Cedar gate | 13 passed with actual Core VP crypto and MMF Cedar; one additional opaque service compile-fail doctest passed |
+| Retained use ledger | 15 focused tests passed, including all 14 explicit PostgreSQL cases |
+| OID4VP verifier-ID compatibility and retained ledger | 24 focused tests passed after preserving opaque verifier client IDs; includes the 15 ledger tests |
+| Full delegated-authority service | 184 passed, zero failures or ignores, with PostgreSQL enabled and serialized; one separately configured external command-corpus test explicitly filtered |
+| External command corpus | The filtered case separately passed against the clean pinned Protocol checkout |
+| Read-only upgrade preflight | 101 live PostgreSQL tests passed |
+| Managed receipt adapter | Six tests passed with actual ES256/Ed25519 signatures |
+| Signing-grant library | 32 passed; three existing live provider tests ignored |
+| Signing Keys library | 274 passed; 22 existing live/external fixtures ignored |
+| Signing Keys executable | Targeted binary compilation passed |
+| Concrete Flow transaction/proof integration | 10 passed, zero ignored; includes six new explicit PostgreSQL cases with actual Core/ES256 proof, signed PERMIT/DENY, post-sign rollback, source isolation, retrieval progress and deferred expiry |
+| Broader Flow library | 92 passed; 13 fixture cases ignored in the normal run, including the six delegated-use cases and public-retention case executed explicitly |
+| Existing Flow PostgreSQL regressions | Five passed across retained-data handling, physical-start/finalization/callback atomicity, issuance-prerequisite freshness and public HTTP retry/quota/cancel races; one separate fenced-role case remains ignored |
+| Combined six-package all-targets compilation | Passed for Gateway, Flow, Delegated Authority, principal binding, signing grant and Signing Keys |
+| Formatting and whitespace | Scoped Rust formatting and CRLF-aware diff checks passed |
+
+The 184-test aggregate preceded the final verifier-client-ID correction. The
+subsequent 24-test run covers the corrected ledger/OID4VP path, and the external
+command corpus passed separately with its required pinned source configuration.
+The focused Flow group repeats four normal-library tests and explicitly runs
+six additional PostgreSQL cases. Public retention was also selected separately;
+these seven cases cover seven of the normal library's thirteen ignores.
+External TLS/OpenBao and separately provisioned fenced-role gates remain open.
+
+Hosted Actions, production rollout, a live receipt provider and independent public
+consumer qualification are not claimed. Public capability promotion still
+depends on the remaining runtime gates above.

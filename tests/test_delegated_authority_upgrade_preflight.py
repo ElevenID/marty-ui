@@ -116,6 +116,8 @@ def database_factory(postgres):
             """)
             if sql("SELECT to_regclass('delegated_authority_service.command_results') IS NOT NULL;").stdout.strip() == "t":
                 sql(f"GRANT SELECT,INSERT ON delegated_authority_service.command_results TO {request};")
+            if sql("SELECT to_regclass('delegated_authority_service.command_identities') IS NOT NULL;").stdout.strip() == "t":
+                sql(f"GRANT SELECT,INSERT ON delegated_authority_service.command_identities TO {request};")
 
         def inspect(phase="pre-migration", *, overrides=None):
             variables = {"phase": phase, **roles, **(overrides or {})}
@@ -214,6 +216,198 @@ def assert_rejected_without_changes(database, code, *, phase="pre-migration", ov
     assert database.snapshot() == before
 
 
+def test_use_upgrade_backfills_existing_command_identity_without_rewriting_history(database):
+    database.migrate(5)
+    grant = insert_grant(database)
+    command = insert_create_result(database, grant)
+    original = database.sql("SELECT command_document::text || result_document::text FROM delegated_authority_service.command_results;").stdout
+    migration = SERVICE / "migrations/0006_retained_use_commands.sql"
+    raw = migration.read_bytes()
+    database.sql(f"SET ROLE {identifier(database.roles['migration_owner'])}; BEGIN;\n" + raw.decode() +
+        f"\nINSERT INTO delegated_authority_service.schema_migrations(version,checksum) VALUES (6,{literal('sha256:' + hashlib.sha256(raw).hexdigest())}); COMMIT; RESET ROLE;")
+    database.privileges()
+    assert_passed(database.inspect("post-migration"), version=6, grants=1, events=1, results=1)
+    assert database.sql("SELECT command_document::text || result_document::text FROM delegated_authority_service.command_results;").stdout == original
+    assert database.sql("SELECT command_id::text FROM delegated_authority_service.command_identities;").stdout.strip() == command["command_id"]
+
+
+@pytest.mark.parametrize("mutation", ["digest", "name", "orphan"])
+def test_shared_command_identity_history_drift_is_rejected_without_repair(database, mutation):
+    database.migrate()
+    database.privileges()
+    grant = insert_grant(database)
+    insert_create_result(database, grant)
+    if mutation == "orphan":
+        database.sql(f"INSERT INTO delegated_authority_service.command_identities VALUES ({literal(str(uuid4()))},'USER','urn:example:orphan',{literal(str(uuid4()))},'START_USE',{literal('sha256:'+'d'*64)});")
+    else:
+        assignment = "command_digest='sha256:'||repeat('d',64)" if mutation == "digest" else "command_name='START_USE'"
+        database.sql(f"ALTER TABLE delegated_authority_service.command_identities DISABLE TRIGGER command_identities_immutable; UPDATE delegated_authority_service.command_identities SET {assignment}; ALTER TABLE delegated_authority_service.command_identities ENABLE TRIGGER command_identities_immutable;")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_USE_HISTORY", phase="post-migration")
+
+
+@pytest.mark.parametrize("table,trigger", [
+    ("command_results", "command_results_identity"),
+    ("use_command_claims", "use_command_claims_binding"),
+    ("use_admissions", "use_admissions_binding"),
+    ("use_receipts", "use_receipts_binding"),
+    ("use_command_results", "use_command_results_binding"),
+    ("use_command_results", "use_command_results_commit"),
+    *[(name, name + suffix) for name in ("command_identities", "use_command_claims", "use_admissions", "use_receipts", "use_command_results")
+      for suffix in ("_immutable", "_no_truncate")],
+])
+def test_every_retained_use_guard_is_required(database, table, trigger):
+    database.migrate()
+    database.privileges()
+    database.sql(f"ALTER TABLE delegated_authority_service.{table} DISABLE TRIGGER {trigger};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TRIGGER", phase="post-migration")
+
+
+def test_retained_use_deadline_guard_must_be_deferred(database):
+    database.migrate()
+    database.privileges()
+    database.sql("DROP TRIGGER use_command_results_commit ON delegated_authority_service.use_command_results; CREATE TRIGGER use_command_results_commit AFTER INSERT ON delegated_authority_service.use_command_results FOR EACH ROW EXECUTE FUNCTION delegated_authority_service.check_use_result_commit();")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TRIGGER", phase="post-migration")
+
+
+@pytest.mark.parametrize("privilege", ["SELECT", "INSERT"])
+def test_lifecycle_writer_requires_only_registry_addition(database, privilege):
+    database.migrate()
+    database.privileges()
+    database.sql(f"REVOKE {privilege} ON delegated_authority_service.command_identities FROM {identifier(database.roles['request_role'])};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_MISSING_PRIVILEGE", phase="post-migration")
+
+
+@pytest.mark.parametrize("table", ["use_command_claims", "use_admissions", "use_receipts", "use_command_results"])
+def test_lifecycle_writer_is_not_granted_retained_use_evidence(database, table):
+    database.migrate()
+    database.privileges()
+    database.sql(f"GRANT SELECT ON delegated_authority_service.{table} TO {identifier(database.roles['request_role'])};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
+
+
+@pytest.mark.parametrize("mutation", ["table", "version"])
+def test_retained_use_schema_must_match_recorded_version(database, mutation):
+    database.migrate()
+    database.privileges()
+    if mutation == "table":
+        database.sql("DROP TABLE delegated_authority_service.use_command_results;")
+    else:
+        database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version=6;")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_SCHEMA_STATE", phase="post-migration")
+
+
+@pytest.mark.parametrize("mutation", ["missing-start", "missing-final", "wrong-predicate", "wrong-columns", "missing-nonce"])
+def test_retained_use_unique_indexes_cannot_be_weakened(database, mutation):
+    database.migrate()
+    database.privileges()
+    if mutation == "missing-nonce":
+        database.sql("ALTER TABLE delegated_authority_service.use_admissions DROP CONSTRAINT use_admissions_organization_id_verifier_id_nonce_key;")
+    elif mutation == "missing-final":
+        database.sql("DROP INDEX delegated_authority_service.use_command_final_challenge;")
+    else:
+        database.sql("DROP INDEX delegated_authority_service.use_command_start_challenge;")
+        if mutation == "wrong-predicate":
+            database.sql("CREATE UNIQUE INDEX use_command_start_challenge ON delegated_authority_service.use_command_claims(organization_id,challenge_id) WHERE command_name='FINALIZE_USE';")
+        elif mutation == "wrong-columns":
+            database.sql("CREATE UNIQUE INDEX use_command_start_challenge ON delegated_authority_service.use_command_claims(organization_id,command_id) WHERE command_name='START_USE';")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_USE_INDEX", phase="post-migration")
+
+
+def insert_retained_use(database, outcome="pending"):
+    """Synthetic owner-state evidence; this is not proof or signer qualification."""
+    stamp = lambda value: value.isoformat().replace("+00:00", "Z")
+    grant = insert_grant(database)
+    approved_at = stamp(datetime.now(timezone.utc) - timedelta(seconds=2))
+    grant = {**grant, "status": "ACTIVE", "revision": 2, "updated_at": approved_at,
+             "approval": {"profile": "urn:example:approval", "grant_id": grant["id"],
+                "approver": grant["terms"]["grantor"], "evidence_ref": "urn:example:consent",
+                "authority_evidence_ref": "urn:example:authority", "terms_digest": grant["terms_digest"], "approved_at": approved_at}}
+    database.sql(f"UPDATE delegated_authority_service.delegation_grants SET status='ACTIVE',revision=2,updated_at={literal(approved_at)},grant_document={literal(json.dumps(grant))}::jsonb WHERE id={literal(grant['id'])};")
+    org, gid = map(literal, (grant["organization_id"], grant["id"]))
+    actor = grant["terms"]["delegate"]
+    start_id, challenge = str(uuid4()), str(uuid4())
+    grant_ref = {key: grant[key] for key in ("id", "revision", "terms_digest")}
+    operation = {"action": grant["terms"]["actions"][0], "resource_id": grant["terms"]["resources"][0],
+                 "audience": grant["terms"]["audiences"][0], "request_profile": "urn:example:operation:v1", "request_digest": "sha256:" + "e" * 64}
+    start = {"profile": "urn:marty:delegation-command:v1", "command": "START_USE", "command_id": start_id, "grant": grant_ref, "operation": operation}
+    digest = "sha256:" + "c" * 64
+
+    def claim(command):
+        database.sql(f"""INSERT INTO delegated_authority_service.use_command_claims
+            (organization_id,actor_type,actor_id,command_id,command_name,command_digest,command_document,challenge_id,grant_id,grant_revision,grant_document)
+            VALUES ({org},{literal(actor['type'])},{literal(actor['id'])},{literal(command['command_id'])},{literal(command['command'])},{literal(digest)},{literal(json.dumps(command))}::jsonb,{literal(challenge)},{gid},2,{literal(json.dumps(grant))}::jsonb);""")
+
+    claim(start)
+    if outcome == "pending":
+        return grant
+    created = datetime.now(timezone.utc)
+    expires = created + timedelta(minutes=2)
+    snapshot = {"organization_id": grant["organization_id"], "challenge_id": challenge, "grant": grant, "operation": operation,
+                "verifier_id": "urn:example:verifier", "nonce": "n" * 32, "created_at": stamp(created), "expires_at": stamp(expires)}
+    challenge_result = {"kind": "CHALLENGE", "challenge_id": challenge, "grant": grant_ref, "operation": operation,
+                        "created_at": stamp(created), "expires_at": stamp(expires)}
+    response = {"profile": "urn:marty:delegation-command-response:v1", "original_command_id": start_id,
+                "command_digest": digest, "recovered": False, "result": challenge_result}
+    database.sql(f"""BEGIN;
+        INSERT INTO delegated_authority_service.use_admissions (organization_id,challenge_id,actor_type,actor_id,command_id,verifier_id,nonce,challenge_document,created_at,expires_at)
+        VALUES ({org},{literal(challenge)},{literal(actor['type'])},{literal(actor['id'])},{literal(start_id)},'urn:example:verifier',{literal('n'*32)},{literal(json.dumps(snapshot))}::jsonb,{literal(stamp(created))},{literal(stamp(expires))});
+        INSERT INTO delegated_authority_service.use_command_results VALUES ({org},{literal(actor['type'])},{literal(actor['id'])},{literal(start_id)},{literal(json.dumps(response))}::jsonb,clock_timestamp(),clock_timestamp()+interval '20 seconds'); COMMIT;""")
+    if outcome == "challenge":
+        return grant
+    command = {"profile": "urn:marty:delegation-command:v1", "command": "FINALIZE_USE", "command_id": str(uuid4()), "challenge_id": challenge, "proof_submission_id": str(uuid4())}
+    claim(command)
+    issued = datetime.now(timezone.utc)
+    auth_expires = issued + timedelta(seconds=30)
+    payload = {"profile": "urn:marty:delegated-decision-receipt:v1", "id": str(uuid4()), "decision": outcome,
+               "issuer": grant["authority"]["issuer"], "evaluation": {"organization_id": grant["organization_id"],
+                   "challenge": "n" * 32, "actor": actor, "grant": grant_ref, "operation": operation},
+               "issued_at": stamp(issued), "expires_at": stamp(auth_expires)}
+    # A valid transport-shaped synthetic JWS isolates structural history checks.
+    # There is no assertion that this signature or simplified payload is qualified.
+    import base64
+    encode = lambda value: base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+    compact = encode(b'{"alg":"EdDSA","kid":"urn:example:key","typ":"mip-delegated-decision+jws"}') + "." + encode(json.dumps(payload).encode()) + "." + encode(bytes(64))
+    receipt_ref = "urn:marty:delegated-receipt:" + payload["id"]
+    receipt_digest = "sha256:" + hashlib.sha256(compact.encode()).hexdigest()
+    final_result = {"kind": "FINAL_USE", "challenge_id": challenge, "decision": outcome, "receipt_ref": receipt_ref,
+                    "receipt_digest": receipt_digest, "recorded_at": stamp(issued), "authorization_expires_at": stamp(auth_expires), "semantics": "EVIDENCE_ONLY"}
+    response = {**response, "original_command_id": command["command_id"], "result": final_result}
+    database.sql(f"""BEGIN;
+        INSERT INTO delegated_authority_service.use_receipts VALUES ({org},{literal(challenge)},{literal(actor['type'])},{literal(actor['id'])},{literal(command['command_id'])},{literal(command['proof_submission_id'])},{literal('sha256:'+'a'*64)},{literal(receipt_ref)},{literal(receipt_digest)},{literal(compact)},{literal(json.dumps(payload))}::jsonb,{literal(stamp(issued))},{literal(stamp(auth_expires))});
+        INSERT INTO delegated_authority_service.use_command_results VALUES ({org},{literal(actor['type'])},{literal(actor['id'])},{literal(command['command_id'])},{literal(json.dumps(response))}::jsonb,clock_timestamp(),clock_timestamp()+interval '20 seconds'); COMMIT;""")
+    return grant
+
+
+@pytest.mark.parametrize("outcome,claims,results", [("pending", 1, 0), ("challenge", 1, 1), ("PERMIT", 2, 2), ("DENY", 2, 2)])
+def test_retained_use_history_survives_grant_revocation_without_recovery_side_effects(database, outcome, claims, results):
+    database.migrate()
+    database.privileges()
+    grant = insert_retained_use(database, outcome)
+    grant = {**grant, "status": "REVOKED", "revision": 3, "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+    database.sql(f"UPDATE delegated_authority_service.delegation_grants SET status='REVOKED',revision=3,updated_at={literal(grant['updated_at'])},grant_document={literal(json.dumps(grant))}::jsonb WHERE id={literal(grant['id'])};")
+    before = database.snapshot()
+    report = database.inspect("post-migration")
+    assert_passed(report, version=6, grants=1, events=3)
+    data = json.loads(report.stdout)
+    assert data["use_command_claim_count"] == claims and data["use_command_result_count"] == results
+    assert database.snapshot() == before
+
+
+@pytest.mark.parametrize("table,assignment", [
+    ("use_command_claims", "command_digest='sha256:'||repeat('d',64)"),
+    ("use_admissions", "nonce=repeat('x',32)"),
+    ("use_receipts", "compact_jws=compact_jws||'x'"),
+    ("use_receipts", "receipt_document=jsonb_set(receipt_document,'{decision}','\"DENY\"')"),
+    ("use_command_results", "response_document=jsonb_set(response_document,'{result,semantics}','\"EXECUTE\"')"),
+])
+def test_retained_use_history_corruption_is_rejected_without_repair(database, table, assignment):
+    database.migrate()
+    database.privileges()
+    insert_retained_use(database, "PERMIT")
+    database.sql(f"ALTER TABLE delegated_authority_service.{table} DISABLE TRIGGER {table}_immutable; UPDATE delegated_authority_service.{table} SET {assignment}; ALTER TABLE delegated_authority_service.{table} ENABLE TRIGGER {table}_immutable;")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_USE_HISTORY", phase="post-migration")
+
+
 def test_clean_install_preflight_creates_no_service_schema(database):
     assert_passed(database.inspect(), version=0)
     assert database.snapshot() == {}
@@ -296,7 +490,7 @@ def test_organization_approval_preflight_preserves_historical_evidence_after_rev
     revoke_grant(database, grant)
     before = database.snapshot()
     report = database.inspect("post-migration")
-    assert_passed(report, version=5, grants=1, events=2)
+    assert_passed(report, version=6, grants=1, events=2)
     parsed = json.loads(report.stdout)
     assert parsed["approval_review_count"] == parsed["approval_confirmation_count"] == parsed["organization_authority_observation_count"] == 1
     assert database.snapshot() == before
@@ -335,7 +529,7 @@ def test_approval_producer_optional_privileges_do_not_require_lifecycle_result_a
             delegated_authority_service.approval_storage_identity TO {authority};
         GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {authority};
     """)
-    assert_passed(database.inspect("post-migration"), version=5)
+    assert_passed(database.inspect("post-migration"), version=6)
     database.sql(f"GRANT INSERT ON delegated_authority_service.organization_authority_observations TO {consent};")
     assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
 
@@ -360,7 +554,7 @@ def test_approval_schema_and_guard_drift_fail_closed(database, mutation):
         code = "DA_PREFLIGHT_SCHEMA_STATE"
     elif mutation == "missing-ledger":
         database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version=5;")
-        code = "DA_PREFLIGHT_SCHEMA_STATE"
+        code = "DA_PREFLIGHT_MIGRATION_HISTORY"
     elif mutation == "disabled-guard":
         database.sql("ALTER TABLE delegated_authority_service.approval_reviews DISABLE TRIGGER approval_reviews_binding;")
         code = "DA_PREFLIGHT_TRIGGER"

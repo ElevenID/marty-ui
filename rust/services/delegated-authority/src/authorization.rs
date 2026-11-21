@@ -322,12 +322,27 @@ pub trait DelegationCedarEvaluator: Send + Sync {
 #[error("delegation policy evaluation failed")]
 pub struct CedarEvaluationError;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DelegationUseDecision {
+    Permit,
+    Deny,
+}
+impl DelegationUseDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Permit => "PERMIT",
+            Self::Deny => "DENY",
+        }
+    }
+}
+
 /// An evaluation result, not a capability token. The fields are private so a
 /// caller cannot construct one from an unverified grant or policy response.
 /// The exact typed actor and operation are retained for the consuming final-use
 /// transaction; a grant/challenge pair alone must not authorize substitution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DelegationUseEvaluation {
+    decision: DelegationUseDecision,
     organization_id: Uuid,
     grant_id: Uuid,
     challenge_id: Uuid,
@@ -361,6 +376,9 @@ pub struct DelegationUseEvaluation {
 }
 
 impl DelegationUseEvaluation {
+    pub fn decision(&self) -> DelegationUseDecision {
+        self.decision
+    }
     pub fn organization_id(&self) -> Uuid {
         self.organization_id
     }
@@ -530,6 +548,22 @@ impl DelegationUseAuthorizer {
         &self,
         request: &DelegationUseRequest,
     ) -> Result<DelegationUseEvaluation, DelegationUseError> {
+        let result = self.evaluate_decision(request).await?;
+        if result.decision != DelegationUseDecision::Permit {
+            return Err(DelegationUseError::PolicyDenied);
+        }
+        Ok(result)
+    }
+
+    /// Produce a sealed completed policy decision only after proof, scope,
+    /// constraints and fresh current grant/consent checks succeed. A completed
+    /// Cedar FORBID/ABSTAIN is DENY evidence and must be retained by final-use
+    /// persistence; dependency/proof failures remain errors, never synthetic
+    /// denials. Existing `evaluate` retains its permit-only compatibility.
+    pub async fn evaluate_decision(
+        &self,
+        request: &DelegationUseRequest,
+    ) -> Result<DelegationUseEvaluation, DelegationUseError> {
         validate_request(request)?;
         let deadline = tokio::time::Instant::now() + self.evaluation_timeout;
         let result = tokio::time::timeout_at(deadline, self.evaluate_inner(request))
@@ -690,9 +724,6 @@ impl DelegationUseAuthorizer {
             .map_err(|_| DelegationUseError::Unavailable)?;
         let after_policy = self.now_after(after_constraints)?;
         validate_cedar_result(&cedar_result, after_constraints, after_policy)?;
-        if cedar_result.decision != CedarDecision::Permit {
-            return Err(DelegationUseError::PolicyDenied);
-        }
         valid_until = valid_until.min(cedar_result.valid_until);
         if valid_until <= after_policy {
             return Err(DelegationUseError::EvidenceExpired);
@@ -718,6 +749,11 @@ impl DelegationUseAuthorizer {
             return Err(DelegationUseError::Unavailable);
         }
         Ok(DelegationUseEvaluation {
+            decision: if cedar_result.decision == CedarDecision::Permit {
+                DelegationUseDecision::Permit
+            } else {
+                DelegationUseDecision::Deny
+            },
             organization_id: grant.organization_id,
             grant_id: grant.id,
             challenge_id: request.challenge_id,

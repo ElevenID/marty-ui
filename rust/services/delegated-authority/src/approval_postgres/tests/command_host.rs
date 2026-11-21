@@ -24,7 +24,8 @@ impl CommandFixture {
              GRANT USAGE ON SCHEMA delegated_authority_service TO {writer_role};
              GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {writer_role};
              GRANT INSERT,UPDATE ON delegated_authority_service.delegation_grants TO {writer_role};
-             GRANT INSERT ON delegated_authority_service.command_results TO {writer_role};"
+             GRANT INSERT ON delegated_authority_service.command_results TO {writer_role};
+             GRANT SELECT,INSERT ON delegated_authority_service.command_identities TO {writer_role};"
         ))).execute(&source.owner).await.unwrap();
         for table in EVIDENCE_READ_TABLES {
             sqlx::raw_sql(AssertSqlSafe(format!(
@@ -355,6 +356,16 @@ async fn real_command_host_readiness_rejects_producer_privileges_and_unsafe_role
     };
     f.host.readiness().await.unwrap();
     for (grant, revoke) in [
+        (
+            format!(
+                "GRANT SELECT ON delegated_authority_service.use_receipts TO {}",
+                f.writer_role
+            ),
+            format!(
+                "REVOKE SELECT ON delegated_authority_service.use_receipts FROM {}",
+                f.writer_role
+            ),
+        ),
         (
             format!(
                 "GRANT INSERT ON delegated_authority_service.consent_confirmations TO {}",

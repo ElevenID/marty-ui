@@ -27,6 +27,15 @@ const MIN_NONCE_CHARS: usize = 22;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 const MAX_VERIFIER_CLIENT_ID_BYTES: usize = 2_048;
 
+/// Trusted Flow owns client-ID construction and selected-prefix validation.
+/// OID4VP prefixes can contain underscores, so these identifiers are not
+/// necessarily RFC URI schemes. Keep the value opaque and compare it exactly.
+pub(crate) fn valid_verifier_client_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_VERIFIER_CLIENT_ID_BYTES
+        && value.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
 /// Reserved Flow context key. Public Flow start/update inputs reject the
 /// `_marty_` prefix, and public projections remove it recursively.
 pub const DELEGATION_FLOW_CONTEXT_KEY: &str = "_marty_delegation_oid4vp_v1";
@@ -290,9 +299,7 @@ fn validate_challenge(
         // RFC 3986 URI schemes. Flow's canonical identity constructor owns
         // their format and authority. This trusted value remains opaque here;
         // Core compares it exactly to the authenticated JWT audience.
-        || challenge.verifier_client_id.is_empty()
-        || challenge.verifier_client_id.len() > MAX_VERIFIER_CLIENT_ID_BYTES
-        || !challenge.verifier_client_id.bytes().all(|byte| byte.is_ascii_graphic())
+        || !valid_verifier_client_id(&challenge.verifier_client_id)
         || challenge.expires_at <= now
         || challenge.nonce.len() > MAX_CHALLENGE_BYTES
         || challenge.nonce.chars().count() < MIN_NONCE_CHARS
