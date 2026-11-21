@@ -29,6 +29,7 @@ use crate::{
     VerifiedManagedCredentialAuthority,
 };
 
+const MAX_SUBJECT_BYTES: usize = 2048;
 const PROFILE_ERROR: &str = "PRESENTATION_POLICY.UNSUPPORTED_SD_JWT_DCQL_PROFILE";
 
 /// Borrowed native evaluation state; it is never a transport or cached-facts
@@ -830,7 +831,7 @@ impl SdJwtDcqlRequest {
         // prerequisites still require that identity; ordinary presentation
         // authentication binds the issuer, holder key and complete query.
         let subject = match claims.get("sub") {
-            Some(Value::String(subject)) if bounded_text(subject, MAX_IDENTIFIER_BYTES) => {
+            Some(Value::String(subject)) if bounded_text(subject, MAX_SUBJECT_BYTES) => {
                 Some(subject.as_str())
             }
             None if self.expected_trust_profile.is_none() => None,

@@ -1609,6 +1609,24 @@ mod bounded_sd_jwt_query_evidence {
     }
 
     #[tokio::test]
+    async fn ordinary_oid4vp_accepts_an_issuer_signed_long_did_jwk_subject() {
+        let fixture = Fixture::new();
+        let mut claims = fixture.claims.clone();
+        let mut public_key = claims["cnf"]["jwk"].clone();
+        public_key["kid"] = json!(format!("urn:example:{}", "a".repeat(140)));
+        let subject = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(public_key.to_string()));
+        assert!(subject.len() > 255 && subject.len() <= 2048);
+        claims["sub"] = json!(subject);
+        let token = presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now);
+        let material = fixture.verify(&fixture.request_for_token(token)).await;
+        assert!(material.authenticated_sd_jwt_query().is_some());
+        assert_eq!(
+            material.policy_facts()["credentials"][0]["signature_verified"],
+            true
+        );
+    }
+
+    #[tokio::test]
     async fn ordinary_oid4vp_dcql_accepts_holder_bound_sd_jwt_without_subject() {
         let fixture = Fixture::new();
         assert!(fixture.policy.prerequisite_evidence_profile.is_none());
