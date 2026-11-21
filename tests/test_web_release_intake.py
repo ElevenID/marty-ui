@@ -203,12 +203,12 @@ def composer_workflow():
     return workflow, compose, website, application
 
 
-def test_composer_workflow_keeps_legacy_default_and_scopes_external_credentials_to_website(composer_workflow):
+def test_composer_workflow_defaults_to_standalone_and_scopes_external_credentials_to_website(composer_workflow):
     workflow, compose, website, application = composer_workflow
     dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]
     selection = dispatch["inputs"]["website_repository"]
     assert selection["type"] == "choice"
-    assert selection["default"] == ui.REPOSITORY
+    assert selection["default"] == policy.STANDALONE_REPOSITORY
     assert selection["options"] == [ui.REPOSITORY, policy.STANDALONE_REPOSITORY]
     assert "github.repository == 'ElevenID/marty-ui'" in compose["if"]
     assert compose["steps"].index(website) < compose["steps"].index(application)

@@ -113,7 +113,7 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     post_build_verify = script.index(
         'Write-Step "Reverify coordinated source after image builds"'
     )
-    final_build = script.index('Write-Step "Build marker-bearing public UI image"')
+    final_build = script.index('Write-Step "Build marker-bearing application UI image"')
     ui_content_verify = script.index(
         'Write-Step "Verify public UI image homepage content"'
     )
@@ -274,7 +274,7 @@ def test_beta_runner_builds_application_images_serially_before_maintenance() -> 
     invoke = script.index(
         "Invoke-Compose -Arguments ($applicationBuildArguments + @($service))", loop
     )
-    ui_build = script.index('Write-Step "Build marker-bearing public UI image"')
+    ui_build = script.index('Write-Step "Build marker-bearing application UI image"')
     maintenance = script.index(
         'Write-Step "Enter maintenance window and apply live migration"'
     )

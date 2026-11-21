@@ -46,7 +46,7 @@ test('the real Vite config only opts out of the development overlay for explicit
     }
   });
   process.env.VITE_UI_VARIANT = 'selfhost';
-  process.env.MARTY_UI_SURFACE = 'combined';
+  process.env.MARTY_UI_SURFACE = 'application';
   const configFile = path.join(uiRoot, 'vite.config.ts');
   for (const flag of [undefined, '0', '1', 'false']) {
     if (flag === undefined) delete process.env.MARTY_DEV_CHECKER_OVERLAY;

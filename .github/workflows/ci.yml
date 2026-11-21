@@ -155,6 +155,19 @@ jobs:
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
+          # Keep the exact source inputs for the committed-profile tests below.
+          bootstrap_inputs="$(mktemp -d "$RUNNER_TEMP/application-bootstrap-inputs.XXXXXX")"
+          cp -p package.json bun.lock "$bootstrap_inputs/"
+          restore_bootstrap_inputs() {
+            local status=$?
+            trap - EXIT
+            cp -p "$bootstrap_inputs/package.json" package.json || status=1
+            cp -p "$bootstrap_inputs/bun.lock" bun.lock || status=1
+            rm -r -- "$bootstrap_inputs" || status=1
+            git -C "$GITHUB_WORKSPACE" diff --exit-code --stat HEAD -- || status=1
+            exit "$status"
+          }
+          trap restore_bootstrap_inputs EXIT
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
@@ -3130,9 +3143,6 @@ jobs:
       - name: Verify production CSP permits Rust WASM but blocks JavaScript eval
         working-directory: tests
         run: node --test scripts/ui-wasm-csp.test.js
-      - name: Build and verify the public demo platform
-        working-directory: tests
-        run: npm run test:demo-platform
       - name: Run deterministic credential lifecycle gate
         working-directory: tests
         run: npx playwright test --config playwright.applicant-wallet.config.js
@@ -3144,8 +3154,6 @@ jobs:
           path: |
             tests/test-results/
             tests/playwright-report-applicant-wallet/
-            tests/artifacts/demo-platform-playwright/
-            tests/artifacts/demo-platform-playwright-report/
           retention-days: 14
 
   security:

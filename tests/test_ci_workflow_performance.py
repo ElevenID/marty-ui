@@ -199,6 +199,30 @@ def test_application_browser_gate_uses_the_locally_installed_puppeteer_browser_c
     assert "exit 1" in bootstrap
 
 
+def test_credential_lifecycle_gate_has_no_retired_website_prerequisite() -> None:
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
+        "test-credential-lifecycle-browser"
+    ]
+    steps = {step.get("name"): step for step in job["steps"]}
+    assert job["if"] == "needs.changes.outputs.ui == 'true'"
+    assert steps["Verify production CSP permits Rust WASM but blocks JavaScript eval"][
+        "run"
+    ] == "node --test scripts/ui-wasm-csp.test.js"
+    lifecycle = steps["Run deterministic credential lifecycle gate"]
+    assert lifecycle["run"] == (
+        "npx playwright test --config playwright.applicant-wallet.config.js"
+    )
+    assert lifecycle["working-directory"] == "tests"
+    assert "if" not in lifecycle
+    assert all("test:demo-platform" not in step.get("run", "") for step in job["steps"])
+    evidence = steps["Upload browser evidence"]
+    assert evidence["if"] == "always()"
+    assert evidence["with"]["path"].splitlines() == [
+        "tests/test-results/",
+        "tests/playwright-report-applicant-wallet/",
+    ]
+
+
 def test_selfhost_operator_guide_is_a_packaged_input() -> None:
     manifest = json.loads(
         (ROOT / "deploy-config" / "bundles" / "selfhost.json").read_text(

@@ -44,8 +44,8 @@ def selected_job(expression, context):
 
 
 @pytest.mark.parametrize("event,mode,override,allowed", [
-    ("workflow_dispatch", "combined", {}, {"release"}),
-    ("workflow_dispatch", "website", {}, {"release"}),
+    ("workflow_dispatch", "combined", {}, set()),
+    ("workflow_dispatch", "website", {}, set()),
     ("workflow_dispatch", "application", {}, {"application"}),
     ("workflow_dispatch", "application", {"repository_id": "999"}, set()),
     ("workflow_dispatch", "application", {"ref": "refs/heads/feature"}, set()),
@@ -53,7 +53,7 @@ def selected_job(expression, context):
     ("workflow_dispatch", "unknown", {}, set()),
     ("workflow_dispatch", "compose", {}, {"compose"}),
     ("push", "", {}, {"compose"}),
-    ("push", "website", {}, {"compose"}),
+    ("push", "website", {}, set()),
     ("push", "", {"repository": "Elsewhere/marty-ui"}, set()),
     ("push", "", {"repository_id": "999"}, set()),
     ("push", "", {"ref": "refs/heads/feature"}, set()),
@@ -73,21 +73,60 @@ def test_manifest_push_admits_only_the_original_repository_protected_main_compos
         },
         "inputs": {"mode": mode},
     }
-    assert {name for name, job in workflow["jobs"].items() if selected_job(job["if"], context)} == allowed
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"request", "application", "compose"}
+    request = jobs["request"]
+    assert "if" not in request  # Invalid requests must fail before any producer runs.
+    assert request["permissions"] == {"contents": "read"}
+    assert len(request["steps"]) == 1
+    admission = request["steps"][0]
+    assert admission["name"] == "Reject retired producers and require protected main"
+    assert admission["env"] == {
+        "RELEASE_MODE": "${{ inputs.mode }}",
+        "RELEASE_EVENT": "${{ github.event_name }}",
+        "RELEASE_REPOSITORY": "${{ github.repository }}",
+        "RELEASE_REPOSITORY_ID": "${{ github.repository_id }}",
+        "RELEASE_REF": "${{ github.ref }}",
+        "RELEASE_REF_PROTECTED": "${{ github.ref_protected }}",
+        "RELEASE_PUSH_DELETED": "${{ github.event.deleted }}",
+    }
+    github = context["github"]
+    environment = {
+        "PATH": os.environ["PATH"], "RELEASE_MODE": mode, "RELEASE_EVENT": event,
+        "RELEASE_REPOSITORY": github["repository"],
+        "RELEASE_REPOSITORY_ID": github["repository_id"],
+        "RELEASE_REF": github["ref"],
+        "RELEASE_REF_PROTECTED": str(github["ref_protected"]).lower(),
+        "RELEASE_PUSH_DELETED": str(github["event"]["deleted"]).lower(),
+    }
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc"], input=admission["run"], env=environment,
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert (result.returncode == 0) is bool(allowed), result.stderr
+    for name in ("application", "compose"):
+        assert jobs[name]["needs"] == ["request"]
+    selected = {
+        name for name in ("application", "compose")
+        if result.returncode == 0 and selected_job(jobs[name]["if"], context)
+    }
+    assert selected == allowed
 
 
-@pytest.mark.parametrize("job_name", ["release", "compose"])
-@pytest.mark.parametrize(("expected", "actual", "allowed"), [
-    ("a" * 40, "a" * 40, True),
-    ("", "a" * 40, True),  # Existing standalone dispatch remains supported.
-    ("a" * 40, "b" * 40, False),  # Main advanced after the parent's read.
-    ("main", "a" * 40, False),
-    ("A" * 40, "a" * 40, False),
-    ("a" * 40 + "\n", "a" * 40, False),
+@pytest.mark.parametrize("job_name", ["application", "compose"])
+@pytest.mark.parametrize(("expected", "actual", "application_allowed", "compose_allowed"), [
+    ("a" * 40, "a" * 40, True, True),
+    ("", "a" * 40, False, True),  # Application publication requires an exact source.
+    ("a" * 40, "b" * 40, False, False),  # Main advanced after the parent's read.
+    ("main", "a" * 40, False, False),
+    ("A" * 40, "a" * 40, False, False),
+    ("a" * 40 + "\n", "a" * 40, False, False),
 ])
 def test_child_refuses_foreign_expected_source_before_other_work(
-    tmp_path: Path, job_name: str, expected: str, actual: str, allowed: bool,
+    tmp_path: Path, job_name: str, expected: str, actual: str,
+    application_allowed: bool, compose_allowed: bool,
 ) -> None:
+    allowed = application_allowed if job_name == "application" else compose_allowed
     workflow = yaml.safe_load(WORKFLOW.read_text())
     steps = workflow["jobs"][job_name]["steps"]
     guard = steps[1]
@@ -106,7 +145,9 @@ def test_child_refuses_foreign_expected_source_before_other_work(
     executable.chmod(0o700)
     environment = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
                        PROBE_LOG=str(probe), GITHUB_REF="refs/heads/main", GITHUB_SHA=actual,
-                       EXPECTED_SOURCE_SHA=expected, MODE="website", BACKEND_TAG="")
+                       EXPECTED_SOURCE_SHA=expected, BACKEND_TAG="", WEBSITE_RUN="",
+                       WEBSITE_ATTEMPT="", APPLICATION_RUN="", APPLICATION_ATTEMPT="",
+                       GITHUB_ENV=str(tmp_path / "github-env"), RUNNER_TEMP=str(tmp_path / "runner"))
     result = subprocess.run(["bash", "--noprofile", "--norc"], input=guard["run"],
                             env=environment, capture_output=True, text=True, check=False)
     assert (result.returncode == 0) is allowed, result.stderr
