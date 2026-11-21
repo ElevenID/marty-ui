@@ -31,6 +31,9 @@ PAUSED_CASES = {"unchanged", "device_id", "user_id", "organization_id", "inactiv
     "issuer_profile", "verifier_profile", "pairing_expired", "binding_revoked", "signing_revoked",
     "key_version", "bearer_rotated", "credential_revoked", "membership_revoked"}
 
+GOVERNANCE_CASES = (PAUSED_CASES | {"issuer_" + case for case in PAUSED_CASES} | {"issuer_issuer_only"}
+    | {"registered_unchanged", "registered_bearer_rotated", "registered_membership_revoked"})
+
 
 def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
     binary = binary.resolve(strict=True)
@@ -113,7 +116,7 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                         self.respond(401, b"{}")
                         return
                     parts = url.path.removeprefix(prefix).split("/")
-                    all_paused_cases = PAUSED_CASES | {"issuer_" + case for case in PAUSED_CASES} | {"issuer_issuer_only"}
+                    all_paused_cases = GOVERNANCE_CASES
                     if len(parts) != 2 or parts[1] not in all_paused_cases or url.query:
                         self.respond(400, b"{}")
                         return
@@ -163,7 +166,7 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                 if not url.path.startswith(f"/internal/v1/trust-profiles/{selected_profile}/"):
                     self.respond(404, b"{}")
                     return
-                if url.path.endswith("/wallet-managed-verifier-authority") or is_issuer:
+                if organization == HTTP_ORG:
                     with pause_lock:
                         active = pause["case"]
                     if active is not None:
@@ -322,7 +325,7 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                         "HTTPS_PROXY", "https_proxy")}
                     http_detail = pairing.execute(device_http_binary, HTTP_CASE,
                         dict(fixture_environment, **database_environment))
-                if paused_cases != PAUSED_CASES | {"issuer_" + case for case in PAUSED_CASES} | {"issuer_issuer_only"}:
+                if paused_cases != GOVERNANCE_CASES:
                     raise RuntimeError("Device HTTP did not execute all controlled scope races")
             if fixture_errors:
                 raise RuntimeError("TLS fixture handler failed: " + ",".join(fixture_errors))
