@@ -192,13 +192,13 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
     publication and activation owner; it is not an activation capability.
     """
     import selfhost_windows_selection as selection
+    selection.require_logical_tls_project(logical_project)
     import selfhost_windows_renewal_native as native
     renewal = selection.renewal
     with _failed_current_inputs(config_path) as lease:
         cfg, record, observed, stack = (lease[name] for name in ('config', 'record', 'observed', 'stack'))
         from selfhost_windows_recovery_leaf_caps import require_closed_retirements
         require_closed_retirements(cfg)
-        require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}', logical_project))
         root = Path(output_dir)
         require(root.parent == Path(cfg['current_secrets']).parent
                 and re.fullmatch(r'windows-renewal-[0-9a-f]{32}', root.name)

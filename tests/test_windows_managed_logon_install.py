@@ -30,6 +30,7 @@ def invoke(tmp_path,case):
 $ErrorActionPreference='Stop'
 $global:record=@{trigger_types=@()}
 function Get-ScheduledTask {
+ @{accessed=$true}|ConvertTo-Json|Set-Content TASKACCESS
  if ('CASE' -eq 'inventory-failure') { throw 'synthetic inventory failure' }
  if ('CASE' -eq 'existing-task') { return [pscustomobject]@{TaskName='Marty-Candidate-Recovery';TaskPath='\OtherOwner\'} }
 }
@@ -91,6 +92,7 @@ function New-Object { param($ComObject)
         task+=" -RenewCredentials -LogicalTlsProject 'marty-selfhost-synthetic' -RenewalIntervalMinutes 240"
         if case=='renew-bad-interval':task=task.replace('240','0')
         elif case=='renew-bad-project':task=task.replace('marty-selfhost-synthetic','PRIVATE_SENTINEL')
+        elif case=='renew-production-namespace':task=task.replace('marty-selfhost-synthetic','marty-production-synthetic')
         elif case=='renew-no-python':code=code.replace(' -ManagedPython PYTHON','')
         elif case=='renew-short-first-delay':task+=' -FirstRenewalDelaySeconds 14'
         elif case=='renew-long-first-delay':task+=' -FirstRenewalDelaySeconds 14401'
@@ -102,6 +104,7 @@ function New-Object { param($ComObject)
     if case=='recovery-first-delay':task+=' -FirstRenewalDelaySeconds 15'
     if case=='recovery-window':task+=' -RenewalWindowMinutes 30'
     for key,value in {'CASE':case,'COLLISION':legacy.quote(tmp_path/'collision.json'),
+        'TASKACCESS':legacy.quote(tmp_path/'task-accessed.json'),
         'RECORD':legacy.quote(record),'INSTALLER':legacy.quote(installer),
         'CONFIG':legacy.quote(config),'PYTHON':legacy.quote(python),'TASK':task}.items():
         code=code.replace(key,value)
@@ -150,6 +153,12 @@ def test_renewal_install_is_separate_create_only_and_preflight_never_mints(tmp_p
     assert task['settings']['RestartCount']==0 and task['settings']['ExecutionTimeLimit']=='PT1H'
     assert '-RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' in task['action']
     assert '-CheckOnly' not in task['action']
+
+
+def test_unsupported_renewal_namespace_refuses_before_task_access_or_preflight(tmp_path):
+    result, _config, _python, child, record = invoke(tmp_path, 'renew-production-namespace')
+    assert result.returncode != 0 and not child.exists() and not record.exists()
+    assert not (tmp_path/'task-accessed.json').exists()
 
 
 @pytest.mark.parametrize('case',['missing-name','historical-name','unsafe-name','missing-python',
