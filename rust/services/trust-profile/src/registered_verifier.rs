@@ -4,8 +4,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Serialize;
 
 use crate::{
     ComplianceStatus, TrustProfile, TrustProfileApplicationError, TrustProfileStatus, TrustPurpose,
@@ -35,16 +34,7 @@ pub struct RegisteredVerifierAuthority {
     pub registration: RegisteredVerifier,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegisteredVerifier {
-    pub client_id: String,
-    pub request_key_id: String,
-    pub public_jwk: Value,
-    pub response_uris: Vec<String>,
-    pub valid_from: DateTime<Utc>,
-    pub valid_until: DateTime<Utc>,
-}
+pub use marty_oid4vp_contract::wallet_verifier::RegisteredVerifier;
 
 pub(crate) fn validate_profile_policy(
     profile: &TrustProfile,
@@ -199,60 +189,8 @@ pub(crate) fn registration(
     crate::reject_private_custody_metadata(value)?;
     let registration: RegisteredVerifier =
         serde_json::from_value(value.clone()).map_err(|_| invalid())?;
-    if !text(&registration.client_id)
-        || registration.client_id.contains(':')
-        || !text(&registration.request_key_id)
-        || registration.valid_until <= registration.valid_from
-        || registration.valid_from.timestamp_subsec_nanos() != 0
-        || registration.valid_until.timestamp_subsec_nanos() != 0
-        || registration.response_uris.is_empty()
-        || registration.response_uris.len() > 8
-        || serde_json::to_vec(&registration.public_jwk)
-            .map_err(|_| invalid())?
-            .len()
-            > 2048
-    {
-        return Err(invalid());
-    }
-    validate_public_request_key(&registration.public_jwk, &registration.request_key_id)?;
-    let mut recipients = BTreeSet::new();
-    for uri in &registration.response_uris {
-        let url = url::Url::parse(uri).map_err(|_| invalid())?;
-        if !text(uri)
-            || url.scheme() != "https"
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-            || !recipients.insert(uri)
-        {
-            return Err(invalid());
-        }
-    }
+    registration.validate().map_err(|_| invalid())?;
     Ok(registration)
-}
-
-pub(crate) fn validate_public_request_key(
-    public_jwk: &Value,
-    request_key_id: &str,
-) -> Result<(), TrustProfileApplicationError> {
-    crate::reject_private_custody_metadata(public_jwk)?;
-    if serde_json::to_vec(public_jwk).map_err(|_| invalid())?.len() > 2048 {
-        return Err(invalid());
-    }
-    let jwk = public_jwk.as_object().ok_or_else(invalid)?;
-    if jwk.keys().any(|key| {
-        !["kty", "crv", "x", "y", "kid", "alg", "use", "key_ops"].contains(&key.as_str())
-    }) || jwk
-        .get("kid")
-        .is_some_and(|kid| kid.as_str() != Some(request_key_id))
-        || marty_oid4vp_contract::trust_authority::issuer_public_key_algorithm(public_jwk)
-            .map_err(|_| invalid())?
-            != "ES256"
-    {
-        return Err(invalid());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

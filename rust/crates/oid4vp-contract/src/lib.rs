@@ -21,6 +21,7 @@ mod types;
 mod validation;
 mod validity;
 pub mod wallet_issuance;
+pub mod wallet_verifier;
 
 pub use callback::build_verification_callback_payload;
 pub use digest::*;
