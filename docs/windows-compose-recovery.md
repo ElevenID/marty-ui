@@ -167,6 +167,116 @@ or host reboot, and does not provide pre-logon availability.
 Normal recovery does not renew or repair expired generations or resume an
 uncertain earlier attempt.
 
+### Prepare an ordinary selected generation with expired certificates
+
+The explicit Python owner has a bounded `--expired-current prepare-selected`
+phase for an ordinary selected generation with expired leaf certificates and no
+existing recovery, renewal-staging, model, continuation or product guard. The
+PowerShell recovery/task wrappers do not dispatch this phase, and scheduled
+renewal never falls through to it. Initial `adopted-current` generations,
+including an initial generation retained after rollback, are excluded from this
+first implementation.
+
+This patch adds a source capability; it does not implement a Python-owner source
+upgrade or scheduled-runner migration command. Generation `adopt` and native
+operator successor admission do not upgrade the Python owner. The existing
+`install-marty-boot-recovery.ps1` installer uses `TASK_CREATE` and refuses an
+existing managed task, so it is not an in-place source-upgrade mechanism.
+
+Before host use, identify the exact reviewed source commit and export its complete
+bundle/local import closure, including `selfhost_windows_expired_origin.py`, to a
+new private versioned directory. Bind the new runner to that export's exact file
+hashes, qualify its imports and real Windows tests in isolation, and verify that
+it reads the original retained selection anchor and predecessor history. Preserve
+the old source directory, runner, hash inventory, configuration and evidence.
+Do not replace accepted source bytes in place or edit the old runner's hash list
+to make the new code load. Portable contract tests and synthetic NTFS tests do
+not establish production custody, fresh authority or successful recovery.
+
+The source transition must also coordinate active scheduled callers and supported
+explicit entrypoints before this phase emits its new origin. Older source cannot consume the
+new origin or replay a successor that contains it; a later run of an old scheduled
+reader will refuse. Historical inactive callers and source copies stay preserved
+and must fail closed; they are not rewritten. Merely running one new script while leaving the old task
+bound to its old reader is insufficient. That versioned-source/runner handoff is
+separate work required before live use, and is not performed by this command.
+
+After those source and runner requirements are satisfied, the explicit command shape is:
+
+```powershell
+& $QualifiedPython "$QualifiedTooling/scripts/selfhost_windows_recovery.py" `
+  --configuration $ManagedRecoveryConfiguration `
+  --expired-current prepare-selected `
+  --attempt-directory $EmptyOwnedAttemptDirectory `
+  --logical-project $EnrolledLogicalTlsProject
+```
+
+The attempt directory must already be empty and privately owned, beside the
+selected generations, with the exact `windows-renewal-<32 lowercase hex>` name.
+The logical project must be the retained `marty-selfhost-*` enrollment. This
+phase accepts neither an operator successor nor a source journal, and cannot be
+combined with engine waiting, check-only, or ordinary renewal.
+
+The operation holds the existing selected-input lease and shared project lock.
+It verifies the exact retained configuration, model, selected bytes, engine,
+container and storage identities with the existing strict `ForeignContext`.
+Readiness is not claimed. A changing restart count, PID, start time, protected
+container state, mount, or custody witness still refuses. The operation does not
+stop or quiesce containers, broaden the protected set, or retry a changing
+snapshot after mutation.
+
+Before obtaining authority it parses all 19 public certificate files in the
+retained `RENEWED_CERT_FILES` allowlist, including both Keycloak certificates and
+the workload CA. It binds each complete file hash and its parsed validity dates
+to a recorded UTC observation, requires at least one expired leaf, rejects every
+future-dated certificate, and requires the CA to meet the retained minimum TTL.
+No token, key, subject, issuer, SAN or raw certificate is printed. Reader replay
+rederives those dates from the same held files; a hash beside invented dates is
+insufficient. Future observation timestamps and clock rollback refuse.
+
+A new `marty.windows-selected-expired-origin/v1` staging guard is durable before
+fresh scoped reauthentication. The owner then calls a separate signed
+`activation-certificates` inspection using the held binary/build identity,
+exact control-mirror bytes, and fresh successful `authority-check`. This is a
+current-certificate subcheck. It does **not** perform `activation-tokens` and
+never claims a completed or failed whole-current proof.
+
+The signed operator returns semantic errors in an exit-zero JSON envelope. Its
+generic `KMS operator input refused` also covers network, HTTP and parse failure,
+so that envelope alone cannot qualify recovery. Only the exact, reviewed
+`activation-certificates` lifetime-overlap refusal qualifies this origin.
+The native result establishes a lifetime refusal; the separate held offline
+observation establishes which leaves were expired. The native refusal can also
+mean insufficient overlap or another certificate lifetime problem. It does not
+prove token validity, all certificate signatures, retained key custody, or
+successful credential admission.
+
+| Outcome | Durable evidence and next state |
+| --- | --- |
+| Exact certificate-lifetime refusal after authority success | Origin-specific pending refusal; usable only after all selected-input exits and a fresh strict reproof, followed by verified no-overwrite promotion. |
+| Unexpected certificate success | `current-certificates.completed.json` records certificate-only success with `tokens_examined=false`; preparation refuses and retains the guard. |
+| Generic/unknown refusal, timeout, nonzero exit, malformed/duplicate/oversized output, or binary/mirror mismatch | Guard and genuine started boundaries remain; no qualifying refusal receipt and no automatic replay. |
+| Input/custody exit failure before promotion | The pending receipt remains unusable. |
+| Rename followed by a failed postcheck | Publication is uncertain; fresh complete inspection is required before any later phase. |
+
+Ordinary `current.started`/`current.completed` receipts and all producer and
+activation outputs remain empty. The only successful preparation proof schema
+is `marty.windows-selected-expired-certificate-proof/v1`, with
+`tokens_examined=false`, `whole_current_proof=false` and
+`credential_admission=false`. An old generic failed-current history cannot be
+relabeled as this origin. A callback is sealed after its first invocation even
+when the caller catches an exception. There is no public retry or pending-receipt
+promotion shortcut, and the staging guard remains present.
+
+Once the typed origin is inspectable, the existing explicit expired-current
+`stage`, `publish`, `activate`, `select` and `finalize` owners remain mandatory.
+They retain fresh authority, signed recovery capability/admission, retained
+certificate and key custody, new credential production, full candidate native
+proofs, exact configuration/storage checks, renewed-current readiness and native
+admission, immutable successor evidence, and final guard archival. This prepare
+phase mints only its scoped authority session; it produces no replacement TLS,
+Keycloak or leaf credentials and admits neither activation nor expired rollback.
+
 For a failed staging attempt whose producer phases all completed and whose
 Windows files are fully materialized, the explicit library operation
 `selfhost_windows_selection.reconcile_materialized(selection_config_path)`

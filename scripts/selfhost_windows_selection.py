@@ -47,6 +47,7 @@ class SelectedInputs:
     continue_journal: Callable = field(repr=False, compare=False)
     transition_product: Callable = field(repr=False, compare=False)
     check_website_composition: Callable = field(repr=False, compare=False)
+    prepare_expired_current: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -1112,6 +1113,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     """
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
+    expired_completion=[];expired_started=False
     with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is None:
             require(not renewal.recovery_pending(_config))
@@ -1148,14 +1150,14 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         lease_lock = threading.Lock();active = True
         def check_current(authority_file=None):
             with lease_lock:
-                require(active and not model_completion and not continuation_started and not product_started)
+                require(active and not model_completion and not continuation_started and not product_started and not expired_started)
                 with ExitStack() as proof_stack:
                     return _prove(cfg, choice, values, proof_stack,
                                   expected_data=record['data_sha256'], authority_file=authority_file,
                                   initial_current=_initial_current_record(record))
         def check_configuration():
             with lease_lock:
-                require(active and not model_completion and not continuation_started and not product_started)
+                require(active and not model_completion and not continuation_started and not product_started and not expired_started)
                 with ExitStack() as proof_stack:
                     observed=_inspect(cfg,choice,values,proof_stack,
                         expected_data=record['data_sha256'],require_ready=False)
@@ -1166,7 +1168,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                             'native_admission':False,'runtime_readiness':False}
         def recover_existing(output_dir, authority_file=None, *, preparation_sha256=None, fresh_authority=False):
             with lease_lock:
-                require(active and not completion and not staging and not model_completion and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                require(active and not completion and not staging and not model_completion and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 from selfhost_windows_recovery import start_existing
                 with ExitStack() as proof_stack:
                     pending = start_existing(cfg, choice, values, record, output_dir, proof_stack,
@@ -1176,7 +1178,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 return decode(packed(pending['result']))
         def stage_renewal(output_dir,logical_project):
             with lease_lock:
-                require(active and not completion and not staging and not model_completion and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                require(active and not completion and not staging and not model_completion and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 with ExitStack() as proof_stack:
                     pending=_stage(cfg,choice,values,record,output_dir,logical_project,proof_stack)
                 staging.append(pending)
@@ -1184,7 +1186,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         def repair_model(new_model, output_dir):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
-                        and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                        and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 from selfhost_windows_model import repair
                 with ExitStack() as proof_stack:
                     pending = repair(cfg, choice, values, record, intent, raw, _root,
@@ -1195,7 +1197,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             nonlocal continuation_started
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
-                        and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                        and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 require(not _initial_current_record(record))
                 continuation_started=True
                 from selfhost_windows_continuation import start
@@ -1207,7 +1209,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             nonlocal product_started
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
-                        and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                        and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 require(not _initial_current_record(record))
                 product_started=True
                 from selfhost_windows_product_deploy import start
@@ -1219,12 +1221,26 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         def check_website_composition(assets, *, gh, cosign, registry_config):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
-                        and not continuation_started and not product_started and terminal_guard_sha256 is None)
+                        and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 from selfhost_windows_website import inspect_composition
                 # Inspection uses only config/inspect reads. In particular it
                 # must not call the kernel-witness or native custody producers.
                 return inspect_composition(cfg, choice, values, record, assets,
                     gh=gh, cosign=cosign, registry_config=registry_config)
+        def prepare_expired_current(output_dir,logical_project):
+            nonlocal expired_started
+            with lease_lock:
+                require(active and not completion and not staging and not model_completion
+                        and not continuation_started and not product_started and not expired_started
+                        and terminal_guard_sha256 is None)
+                # Even a caller-caught failure cannot invoke another callback or
+                # retry within this lease after the prepare-only operation starts.
+                expired_started=True
+                from selfhost_windows_expired_origin import start
+                with ExitStack() as proof_stack:
+                    pending=start(cfg,choice,values,record,output_dir,logical_project,proof_stack)
+                expired_completion.append(pending)
+                return decode(packed(pending['result']))
         from selfhost_windows_continuation import CHECKPOINT, checkpoint
         generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
         try:
@@ -1232,7 +1248,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
                 digest(packed(selected)), _root, generation_sequence,
                 check_configuration, check_current, recover_existing, stage_renewal, repair_model,
-                continue_journal, transition_product, check_website_composition)
+                continue_journal, transition_product, check_website_composition, prepare_expired_current)
         finally:
             with lease_lock:
                 active = False;values.clear()
@@ -1250,6 +1266,9 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         from selfhost_windows_product_journal import finish
         pending=product_completion[0]
         finish(config_path,pending['marker'],pending['phases'],authority_file=pending['authority_file'])
+    if expired_completion:
+        from selfhost_windows_expired_origin import finish
+        finish(config_path,expired_completion[0])
 
 
 @contextmanager

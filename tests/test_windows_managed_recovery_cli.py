@@ -154,13 +154,15 @@ def test_invalid_renewal_mode_refuses_before_private_inputs(monkeypatch,capsys,e
     out=capsys.readouterr();assert not out.out and 'PRIVATE_SENTINEL' not in out.err
 
 
-@pytest.mark.parametrize('phase',['inspect','stage','publish','activate','select','finalize'])
+@pytest.mark.parametrize('phase',['prepare-selected','inspect','stage','publish','activate','select','finalize'])
 def test_expired_current_dispatch_never_calls_ordinary_recovery(monkeypatch,capsys,phase):
     import selfhost_windows_staging_recovery as staging
+    import selfhost_windows_expired_origin as origin
     import selfhost_windows_recovery_activation as activation
     import selfhost_windows_recovery_finish as finish
     with configured(monkeypatch) as (root,config,value,calls):
-        owners={'inspect':(staging,'inspect_failed_current'),'stage':(staging,'stage_recovery_generation'),
+        owners={'prepare-selected':(origin,'prepare_selected'),
+            'inspect':(staging,'inspect_failed_current'),'stage':(staging,'stage_recovery_generation'),
             'publish':(staging,'publish_recovery_candidate'),'activate':(activation,'activate_recovery_candidate'),
             'select':(finish,'finish'),'finalize':(finish,'finalize')}
         seen=[]
@@ -170,11 +172,31 @@ def test_expired_current_dispatch_never_calls_ordinary_recovery(monkeypatch,caps
         module,name=owners[phase];monkeypatch.setattr(module,name,invoke)
         args=['--configuration',str(config),'--expired-current',phase]
         if phase!='inspect':args+=['--attempt-directory',str(root/'attempt')]
-        if phase=='stage':args+=['--logical-project','marty-selfhost-synthetic']
+        if phase in ('prepare-selected','stage'):args+=['--logical-project','marty-selfhost-synthetic']
         if phase in ('select','finalize'):args+=['--source-journal',str(root/'source')]
         assert recovery.main(args)==0
         assert len(seen)==1 and not calls
         assert json.loads(capsys.readouterr().out)['phase']==phase
+
+
+@pytest.mark.parametrize('fault',['missing-logical','missing-attempt','bad-logical','source-journal',
+    'operator-successor','check-only','renew-once','wait-for-engine'])
+def test_selected_expired_preparation_is_explicit_and_cannot_mix_modes(monkeypatch,capsys,fault):
+    import selfhost_windows_expired_origin as origin
+    with configured(monkeypatch) as (root,config,_value,calls):
+        def forbidden(*_args,**_kwargs):pytest.fail('Invalid prepare-selected reached the owner')
+        monkeypatch.setattr(origin,'prepare_selected',forbidden)
+        args=['--configuration',str(config),'--expired-current','prepare-selected']
+        if fault!='missing-logical':
+            args+=['--logical-project','PRIVATE_SENTINEL' if fault=='bad-logical' else 'marty-selfhost-synthetic']
+        if fault!='missing-attempt':args+=['--attempt-directory',str(root/'unused')]
+        if fault=='source-journal':args+=['--source-journal','PRIVATE_SENTINEL']
+        elif fault=='operator-successor':args+=['--operator-successor-file','PRIVATE_SENTINEL']
+        elif fault in ('check-only','renew-once','wait-for-engine'):args+=['--'+fault]
+        assert recovery.main(args)==1
+        output=capsys.readouterr()
+        assert not output.out and 'PRIVATE_SENTINEL' not in output.err and not calls
+        assert not (root/'unused').exists()
 
 
 @pytest.mark.parametrize('extra',[['--check-only'],['--wait-for-engine'],['--renew-once'],

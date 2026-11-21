@@ -166,6 +166,7 @@
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",
     "scripts/selfhost_windows_staging_recovery.py",
+    "scripts/selfhost_windows_expired_origin.py",
     "scripts/selfhost_windows_recovery_activation.py",
     "scripts/selfhost_windows_recovery_journal.py",
     "scripts/selfhost_windows_recovery_operator.py",
