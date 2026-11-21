@@ -82,7 +82,10 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory, bun = false }
   const substitutions = packageInputs.map((name) => `ui/${name}`).map((name) => ({ path: name,
     baseline: record(name, readFileSync(path.join(ROOT, name))),
     selected: sourceFiles.get(`ui/profiles/application/${path.basename(name)}`) }));
-  const manifest = { fixture: true, ...(bun ? { schema: 'marty.application-source-package/v2', dependency_profile: { package_manager: manager } } : {}), source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
+  const contractPath = bun ? 'contracts/application-source-export.json' : 'contracts/legacy/application-source-export.v1.json';
+  const manifest = { fixture: true, schema: `marty.application-source-package/${bun ? 'v2' : 'v1'}`,
+    contract: { sha256: digest(readFileSync(path.join(ROOT, contractPath))) },
+    ...(bun ? { dependency_profile: { package_manager: manager } } : {}), source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
     files: selected, route_contract: routeContract, test_profile: testProfile, substitutions,
     source_inventory_sha256: identity(selected) };
   const plan = { schema: `marty.application-source-closure-plan/${bun ? 'v7' : 'v5'}`, ...(bun ? { package_manager: manager } : {}),

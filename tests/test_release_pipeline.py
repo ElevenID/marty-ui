@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -74,7 +75,6 @@ class FakeGitHub:
             ".github/workflows/nightly-release.yml": ["admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"],
             ".github/workflows/cd.yml": ["official-gate-evidence", "qualify-release", "publish-manifest"],
             pipeline.PUBLISHER: ["intake", "publish"],
-            ".github/workflows/production-web-release.yml": ["compose" if payload["inputs"].get("mode") == "compose" else "release"],
         }[workflow]
         run_id = self.next_id
         self.next_id += 1
@@ -115,7 +115,7 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.github = FakeGitHub()
-        self.plan = pipeline.configuration("both", PINS, "full", "true")
+        self.plan = pipeline.configuration("both", PINS, "full", "false")
         self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
         self.github.add(60, ".github/workflows/cd.yml", jobs=["official-gate-evidence", "qualify-release", "publish-manifest"])
 
@@ -125,13 +125,13 @@ class PipelineTests(unittest.TestCase):
         self.addCleanup(lambda: None if value.stream.closed else value.stream.close())
         return value
 
-    def run_main(self, *, name="cli-journal.json", context_error=None) -> tuple[int, str, Path]:
+    def run_main(self, *, name="cli-journal.json", context_error=None, production_web="false") -> tuple[int, str, Path]:
         journal = self.root / name
         parent = {"status": "in_progress", "created_at": self.github.created.strftime("%Y-%m-%dT%H:%M:%SZ")}
         output = io.StringIO()
         with mock.patch.object(sys, "argv", ["release_pipeline.py", "qualify", "--journal", str(journal)]), \
                 mock.patch.dict(pipeline.os.environ, {"RELEASE_CHANNEL": "both", "SELFHOST_EXTERNAL_IMAGES_JSON": PINS,
-                                "SELFHOST_PUBLIC_PROFILE": "full", "PRODUCTION_WEB": "true",
+                                "SELFHOST_PUBLIC_PROFILE": "full", "PRODUCTION_WEB": production_web,
                                 "GITHUB_OUTPUT": str(self.root / "outputs")}), \
                 mock.patch.object(pipeline.transport, "exact_context", return_value=(123, SOURCE), side_effect=context_error), \
                 mock.patch.object(pipeline.transport, "git", return_value=SOURCE), \
@@ -366,12 +366,6 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(self.github.posts), 1)
         self.assertEqual(listings, sum("/workflows/publish-stable-candidate.yml/runs?" in path for path in self.github.reads))
 
-    def test_web_continuation_admits_the_exact_dispatched_publisher(self) -> None:
-        self.publisher(event="workflow_dispatch")
-        output = self.driver("web-application").execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70)
-        self.assertEqual(output, {"application_run_id": 200})
-        self.assertEqual(self.github.posts[0][1]["inputs"]["mode"], "combined")
-
     def test_main_drift_and_stage_deadline_cannot_select_new_source_or_extend_a_wait(self) -> None:
         driver = self.driver("qualify")
         self.github.main_sha = "b" * 40
@@ -543,44 +537,56 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(diagnostic["code"], "github_read_failed")
         self.assertEqual(diagnostic["http_status"], 503)
 
-    def test_web_composition_uses_exact_original_producer_ids_and_attempts(self) -> None:
-        self.publisher()
-        self.github.add(80, pipeline.WEB, title=f"Production web combined from {SOURCE}", jobs=["release"])
-        self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
-        driver = self.driver("web-compose")
-        self.assertEqual(driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70,
-                                        application_run_id=80, website_run_id=81), {"composition_run_id": 200})
-        self.assertEqual(self.github.posts[0][1]["inputs"], {"mode": "compose", "application_run_id": "80",
-                         "application_run_attempt": "1", "website_run_id": "81", "website_run_attempt": "1",
-                         "expected_source_sha": SOURCE})
+    def test_retired_web_option_fails_before_configuration_reads_or_github_dispatch(self) -> None:
+        for channel in ("nightly", "stable", "both"):
+            with self.subTest(channel=channel), \
+                    mock.patch.object(pipeline.transport, "bounded_file", side_effect=AssertionError("unexpected source read")), \
+                    self.assertRaises(pipeline.PipelineError) as caught:
+                pipeline.configuration(channel, "", "full", "true", root=self.root)
+            self.assertEqual(caught.exception.code, "retired_production_web")
+        status, output, journal = self.run_main(
+            production_web="true", context_error=AssertionError("retired request reached context validation"))
+        self.assertEqual(status, 1)
+        self.assertIn('"code":"retired_production_web"', output)
+        self.assertIn("ElevenID/website", output)
+        self.assertIn("production-web-release.yml", output)
+        self.assertFalse(journal.exists())
+        self.assertEqual(self.github.reads, [])
+        self.assertEqual(self.github.posts, [])
 
-    def test_every_web_dispatch_binds_the_child_before_a_main_advance_can_select_new_source(self) -> None:
+    def test_legacy_true_plan_cannot_create_a_current_stage_journal(self) -> None:
+        for phase in pipeline.PHASE_MINUTES:
+            with self.subTest(phase=phase):
+                self.plan["production_web"] = True
+                journal = self.root / f"legacy-{phase}.json"
+                with self.assertRaises(pipeline.PipelineError) as caught:
+                    self.driver(phase, name=journal.name)
+                self.assertEqual(caught.exception.code, "retired_production_web")
+                self.assertFalse(journal.exists())
+        self.assertEqual(self.github.reads, [])
+        self.assertEqual(self.github.posts, [])
+
+    def test_retired_web_stage_and_dispatch_names_fail_without_io(self) -> None:
         for phase in ("web-application", "web-website", "web-compose"):
             with self.subTest(phase=phase):
-                self.github = FakeGitHub()
-                self.github.add(50, ".github/workflows/ci.yml", jobs=["CI Gate"])
-                self.github.add(60, ".github/workflows/cd.yml", jobs=["official-gate-evidence", "qualify-release", "publish-manifest"])
-                self.publisher()
-                self.github.add(80, pipeline.WEB, title=f"Production web combined from {SOURCE}", jobs=["release"])
-                self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
-                # main can advance after current() but before GitHub resolves
-                # ref=main. The child receives S before it starts, and its own
-                # initial source guard can reject S2 before any publication.
-                self.github.after_post = lambda run: run.update(head_sha="b" * 40, conclusion="failure")
-                driver = self.driver(phase, name=f"source-race-{phase}.json")
-                with self.assertRaises(ValueError):
-                    driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70,
-                                   application_run_id=80, website_run_id=81)
-                self.assertEqual(len(self.github.posts), 1)
-                self.assertEqual(self.github.posts[0][1]["inputs"]["expected_source_sha"], SOURCE)
-
-    def test_wrong_web_mode_cannot_be_composed(self) -> None:
-        self.publisher()
-        self.github.add(80, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
-        self.github.add(81, pipeline.WEB, title=f"Production web website from {SOURCE}", jobs=["release"])
-        driver = self.driver("web-compose")
-        with self.assertRaises(ValueError):
-            driver.execute(ci_run_id=50, stable_run_id=60, publisher_run_id=70, application_run_id=80, website_run_id=81)
+                self.assertNotIn(phase, pipeline.PHASE_MINUTES)
+                self.assertNotIn(phase, pipeline.DISPATCH)
+                with self.assertRaises(pipeline.PipelineError):
+                    self.driver(phase, name=f"{phase}.json")
+                self.assertFalse((self.root / f"{phase}.json").exists())
+                driver = self.driver("qualify", name=f"dispatch-{phase}.json")
+                with self.assertRaises(pipeline.PipelineError):
+                    driver.dispatch(phase, {})
+                self.assertEqual(driver.record["steps"], [])
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts/release_pipeline.py"), phase,
+                     "--journal", str(self.root / f"cli-{phase}.json")],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid choice", result.stderr)
+                self.assertFalse((self.root / f"cli-{phase}.json").exists())
+        self.assertEqual(self.github.reads, [])
         self.assertEqual(self.github.posts, [])
 
 
@@ -593,8 +599,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(workflow["permissions"], {})
         self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")
-        self.assertEqual(set(workflow["jobs"]), {"full-ci", "nightly", "stable", "stable-publish",
-                                                "web-application", "web-website", "web-compose"})
+        self.assertEqual(set(workflow["jobs"]), {"full-ci", "nightly", "stable", "stable-publish"})
+        self.assertNotIn("production_web", workflow["on"]["workflow_dispatch"]["inputs"])
+        self.assertNotIn("PRODUCTION_WEB", workflow["env"])
+        self.assertEqual(set(pipeline.PHASE_MINUTES), {"qualify", "nightly", "stable", "stable-publish"})
         for name, job in workflow["jobs"].items():
             with self.subTest(job=name):
                 self.assertLess(int(job["timeout-minutes"]), 360)

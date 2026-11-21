@@ -1,5 +1,8 @@
 name: Release pipeline
 
+# Website publication belongs to ElevenID/website; application publication and
+# signed composition use production-web-release.yml with independent sources.
+
 run-name: Release ${{ inputs.channel }} from ${{ github.sha }}
 
 on:
@@ -21,11 +24,6 @@ on:
         options: [full, tester]
         default: full
         required: true
-      production_web:
-        description: After stable publication, publish the application, website and signed composition
-        type: boolean
-        default: false
-        required: true
 
 permissions: {}
 
@@ -37,7 +35,6 @@ env:
   RELEASE_CHANNEL: ${{ inputs.channel }}
   SELFHOST_EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
   SELFHOST_PUBLIC_PROFILE: ${{ inputs.selfhost_public_profile }}
-  PRODUCTION_WEB: ${{ inputs.production_web }}
 
 jobs:
   full-ci:
@@ -181,126 +178,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: release-pipeline-publisher-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-pipeline.json
-          if-no-files-found: warn
-          retention-days: 90
-
-  web-application:
-    needs: [full-ci, stable, stable-publish]
-    if: inputs.production_web
-    runs-on: ubuntu-24.04
-    timeout-minutes: 110
-    permissions:
-      contents: read
-      actions: write
-    outputs:
-      application_run_id: ${{ steps.run.outputs.application_run_id }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: '3.12'
-      - id: run
-        name: Publish the application against the completed stable backend
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
-          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
-          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
-        run: >-
-          python scripts/release_pipeline.py web-application
-          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
-          --journal "$RUNNER_TEMP/release-pipeline.json"
-      - name: Preserve stage results and any uncertain dispatch
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: release-pipeline-application-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-pipeline.json
-          if-no-files-found: warn
-          retention-days: 90
-
-  web-website:
-    needs: [full-ci, stable, stable-publish]
-    if: inputs.production_web
-    runs-on: ubuntu-24.04
-    timeout-minutes: 110
-    permissions:
-      contents: read
-      actions: write
-    outputs:
-      website_run_id: ${{ steps.run.outputs.website_run_id }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: '3.12'
-      - id: run
-        name: Publish the independent production website
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
-          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
-          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
-        run: >-
-          python scripts/release_pipeline.py web-website
-          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
-          --journal "$RUNNER_TEMP/release-pipeline.json"
-      - name: Preserve stage results and any uncertain dispatch
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: release-pipeline-website-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-pipeline.json
-          if-no-files-found: warn
-          retention-days: 90
-
-  web-compose:
-    needs: [full-ci, stable, stable-publish, web-application, web-website]
-    if: inputs.production_web
-    runs-on: ubuntu-24.04
-    timeout-minutes: 50
-    permissions:
-      contents: read
-      actions: write
-    outputs:
-      composition_run_id: ${{ steps.run.outputs.composition_run_id }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: '3.12'
-      - id: run
-        name: Compose the exact successful website and application producers
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
-          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
-          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
-          APPLICATION_RUN_ID: ${{ needs.web-application.outputs.application_run_id }}
-          WEBSITE_RUN_ID: ${{ needs.web-website.outputs.website_run_id }}
-        run: >-
-          python scripts/release_pipeline.py web-compose
-          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
-          --application-run-id "$APPLICATION_RUN_ID" --website-run-id "$WEBSITE_RUN_ID"
-          --journal "$RUNNER_TEMP/release-pipeline.json"
-      - name: Preserve stage results and any uncertain dispatch
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: release-pipeline-composition-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-pipeline.json
           if-no-files-found: warn
           retention-days: 90

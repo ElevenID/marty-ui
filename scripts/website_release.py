@@ -412,6 +412,8 @@ def main() -> None:
     for name in ("image-digest", "run-id", "run-attempt"):
         parser.add_argument("--" + name)
     args = parser.parse_args()
+    if args.command in {"plan", "record"}:
+        ui.require_legacy_build_target(args.root, "website")
     options = dict(production_pages=args.production_pages, commerce_source_sha=args.commerce_source_sha)
     if args.command in {"check-application", "compatibility"}:
         ui.require(args.application_marker is not None, "application marker required")

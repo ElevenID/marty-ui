@@ -5,25 +5,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 from beta_release_metadata import marker_maps, gateway_metadata_model, ui_metadata_model
 from bind_deployed_demo_manifest import bind_manifest
+from operator_demo_catalog import git_blob, source_demo_template
 from scoped_native_runtime import read_ref, ref, require, save_exclusive
 
 
 def load(value):
     return json.loads(read_ref(value).read_bytes())
-
-
-def git_blob(repository, revision, filename):
-    result = subprocess.run(
-        ["git", "-C", str(repository), "show", revision + ":" + filename],
-        capture_output=True,
-        timeout=30,
-        check=True,
-    )
-    require(len(result.stdout) <= 4 * 1024 * 1024, "SOURCE_BLOB_TOO_LARGE")
-    return result.stdout
 
 
 def prepare(config):
@@ -50,9 +39,7 @@ def prepare(config):
         and read_ref(config["cargoLock"]).read_bytes() == cargo,
         "CARGO_LOCK_NOT_COMMITTED_PRODUCT",
     )
-    template_bytes = git_blob(
-        repository, source, "ui/public/demos/manifests/2026.08.0.json"
-    )
+    template_bytes = source_demo_template(repository, source)
     require(
         read_ref(config["template"]).read_bytes() == template_bytes,
         "TEMPLATE_NOT_COMMITTED_PRODUCT",

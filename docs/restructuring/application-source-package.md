@@ -35,25 +35,26 @@ members including the manifest. The manifest records all payload paths, source m
 counts, hashes, Git identities and modes. An independently supplied manifest
 must have exactly the same bytes as the archive's copy.
 
-The package omits the existing 72 application exclusions, unselected tests and
-unused test support, unselected package configuration, migration diagnostics,
-Git metadata, installed dependencies and build state.
-These are package selections, not source deletions or additions to the
-exclusive website ownership roster.
+The current checkout physically removes the original 72 application exclusions
+and nine obsolete marketing tests. Those 72 source paths remain a fixed
+forbidden roster in source planning and every export. The current source map
+contains 332 present omissions, including the renamed application nginx test;
+it no longer claims deleted files are present source inputs. Other unselected
+tests and support, package configuration, migration diagnostics, Git metadata,
+installed dependencies and build state remain outside the source package.
 
 ### Retained inactive source
 
-Three existing boundaries remain explicit:
+Two existing boundaries remain explicit:
 
-- `ui/src/components/pages/index.js` retains twelve re-exports of already
-  omitted website modules. The selected application and test graphs do not
-  import this legacy barrel.
 - `ui/src/utils/analytics.example.js` retains its pre-existing unresolved
   example import. It is outside the selected application, build and test graphs.
 - `ui/src/wasm/biometricsWasm.js` retains its inactive optional bridge. That
   optional feature is not qualified by this source package.
 
-The package preserves these source bytes and records their limited scope.
+The pages barrel's twelve marketing re-exports are removed from current source;
+historical archives retain their original bytes and recorded scope. The package
+preserves the two remaining inactive sources and records their limited scope.
 The supported application entries and selected test/build graphs have no
 unresolved local static import edge in the reviewed inventory.
 
@@ -62,7 +63,13 @@ unresolved local static import edge in the reviewed inventory.
 Bun v2 source, producer and consumer schemas explicitly bind the selected
 manager and Bun lock. The full/profile source rehearsals use v6/v7. Original
 npm v1 package evidence and v4/v5 rehearsals retain separate validation; they
-are not relabeled as Bun evidence. Node.js 24 and Vitest remain the runtime and
+are not relabeled as Bun evidence. The exact npm v1 source contract and the
+Bun v2 contract from `b1095e8c86389929cf1a93c4ed04d9eb784f3a6d` are frozen in
+`contracts/legacy/`. A closed registry of approved contract SHA-256 digests
+selects the current or historical map before manifest validation. The original
+24-file/296-test npm policy and 25-file/308-test Bun policy remain fixed when
+current source changes. Unknown contract digests and schema/digest mismatches
+are rejected. Node.js 24 and Vitest remain the runtime and
 test runner used by the package scripts.
 
 The archive and its canonical source manifest depend on the clean source

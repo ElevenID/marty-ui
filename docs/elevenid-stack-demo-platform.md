@@ -10,6 +10,11 @@ Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tes
 
 ## Public Routes
 
+These marketing routes and their public catalog assets are owned by the separate
+[`ElevenID/website`](https://github.com/ElevenID/website) checkout. The application
+repository retains source-bound deployment templates and operator validation;
+its application images do not contain the public demo website.
+
 ```text
 /demos
 /demos/{version}
@@ -42,7 +47,7 @@ For D05 synthetic applicant fixtures, the Keycloak user ID is the login subject,
 
 ## Promotion Gates
 
-1. Validate the manifest with `python scripts/validate_demo_manifests.py`.
+1. From `marty-ui`, validate the website-owned catalog and its actual poster files with `python scripts/validate_demo_manifests.py ../website/ui/public/demos/manifests`. The no-argument command checks only the retained operator catalog and does not qualify public website assets.
 2. Build and deploy the coordinated ElevenID LLC platform release from pinned revisions and digests.
 3. Require the deployed release probe to match the ElevenID LLC platform version, MIP version, marker, and every image digest.
 4. Record required impacted scenarios with no skipped outcomes or unexplained browser/network failures.
@@ -55,6 +60,24 @@ For D05 synthetic applicant fixtures, the Keycloak user ID is the login subject,
 11. Set release coverage to `COMPLETE` only when all six required scenarios are public and independent-wallet evidence passes.
 
 Run the pinned public browser gate from `tests` with `npm run test:demo-platform`. This avoids selecting a different Playwright installation from another workspace package.
+
+### Publication after the website split
+
+`scripts/publish_passport_beta_demo.py` is restricted to the original signed
+combined beta UI and its public demo catalog. It preserves aggregate attestation,
+exact source checkout and reviewed-script checks, then verifies the combined
+producer, demo page inputs and catalog from that same immutable Git commit.
+Application-only sources are refused before browser or OAuth setup, recorder
+publication, or deployment work. Copying an old catalog into a current checkout
+does not change that source admission.
+
+The next publication implementation belongs to `ElevenID/website`: it must bind
+catalog/index changes and rendered demo pages to the website source and image,
+select the website deployment target, and qualify its rollback and public-page
+smoke. The old wrapper selects the beta `ui-prod` application container, so it
+cannot be reused as a standalone website deployer. This remains a required gate
+before publishing new demo content with a split release; ordinary application
+and customer builds do not perform demo publication.
 
 ## Current Blockers
 
@@ -75,4 +98,4 @@ The version-controlled `marty-demo-recorder` tooling provides credential-safe st
 
 The current external Google OAuth app is configured for testing. Google documents that refresh tokens issued to external testing apps with non-basic scopes expire after seven days. Move the app through production readiness before unattended publication depends on a durable token; until then, reauthorization is an expected local maintenance action. Channel phone verification is separate and was completed by an owner before custom-thumbnail publication.
 
-`npm run youtube:status -- --manifest ../marty-ui/ui/public/demos/manifests/2026.07.0.json` reports the next setup action without printing OAuth values. Upload results can only bind to an exact `VALIDATED` scenario revision. `youtube:approve-scenario` then requires complete assertion evidence and an eight-check editorial approval artifact before public scenario promotion. `youtube:approve-release` separately requires technical release readiness and updates the release manifest and latest-approved version index together with rollback on write failure.
+From the `marty-demo-recorder` checkout, `npm run youtube:status -- --manifest ../website/ui/public/demos/manifests/2026.07.0.json` reports the next setup action without printing OAuth values. Upload results can only bind to an exact `VALIDATED` scenario revision. `youtube:approve-scenario` then requires complete assertion evidence and an eight-check editorial approval artifact before public scenario promotion. `youtube:approve-release` separately requires technical release readiness and updates the release manifest and latest-approved version index together with rollback on write failure.

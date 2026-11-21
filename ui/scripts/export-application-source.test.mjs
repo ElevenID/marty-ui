@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   APPLICATION_SOURCE_MANIFEST_PATH, exportApplicationSourcePackage, parseApplicationSourceJson,
+  applicationSourcePackageTestPolicy,
   planApplicationSourceExport, restoreApplicationSourcePackage, validateApplicationSourceBaseline,
   validateApplicationSourceInventory, validateApplicationSourcePackageManifest, validateApplicationSourceProducerReceipt,
 } from './export-application-source.mjs';
@@ -120,6 +121,37 @@ function artifacts(directory, suffix = '') {
   return { archivePath: path.join(directory, `source${suffix}.zip`), manifestPath: path.join(directory, `source${suffix}.json`),
     reportPath: path.join(directory, `producer${suffix}.json`) };
 }
+
+test('approved historical source maps retain the original npm and Bun test policies', () => {
+  for (const [filename, schema, generation, expectedTests, expectedFiles, expectedDigest] of [
+    ['contracts/legacy/application-source-export.v1.json', 'v1', 'npm-v1', 296, 24,
+      'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad'],
+    ['contracts/legacy/application-source-export.v2.json', 'v2', 'bun-v2-b1095e8c', 308, 25,
+      'sha256:05e544fb9289f5a4fc1af8f6cf72d8eec6e472151a527766a84d02d9397b9e65'],
+  ]) {
+    const bytes = readFileSync(path.join(ROOT, filename));
+    assert.equal(digest(bytes), expectedDigest);
+    const policy = applicationSourcePackageTestPolicy({ schema: `marty.application-source-package/${schema}`,
+      contract: { sha256: expectedDigest } });
+    assert.equal(policy.generation, generation);
+    assert.equal(policy.expected_tests, expectedTests);
+    assert.equal(policy.files.length, expectedFiles);
+    assert.deepEqual(policy.files, JSON.parse(bytes).test_profile.files);
+  }
+});
+
+test('source map selection rejects unknown digests, schema swaps and an unreviewed override', () => {
+  const bytes = readFileSync(path.join(ROOT, CONTRACT));
+  const manifest = { schema: 'marty.application-source-package/v2', contract: { sha256: digest(bytes) } };
+  assert.equal(applicationSourcePackageTestPolicy(manifest).generation, 'application-only');
+  assert.throws(() => applicationSourcePackageTestPolicy({ ...manifest,
+    contract: { sha256: `sha256:${'f'.repeat(64)}` } }), /unapproved contract digest/);
+  assert.throws(() => applicationSourcePackageTestPolicy({ ...manifest,
+    schema: 'marty.application-source-package/v1' }), /unapproved contract digest/);
+  const contract = JSON.parse(bytes);
+  contract.omitted.pop();
+  assert.throws(() => validateApplicationSourcePackageManifest(manifest, { contract }), /not an approved current or historical map/);
+});
 
 test('stored source ZIP is deterministic, round-trips binary bytes, and preserves executable modes', () => {
   const entries = [{ path: 'ui/start.sh', bytes: Buffer.from('#!/bin/sh\n'), mode: 0o755 },

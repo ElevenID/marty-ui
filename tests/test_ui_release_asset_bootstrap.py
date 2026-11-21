@@ -30,7 +30,6 @@ def test_every_ui_release_bootstrap_uses_the_verified_retry_helper() -> None:
         "fast-feedback",
         "test-credential-lifecycle-browser",
         "test-ui",
-        "test-ui-crawler-artifacts",
         "test-website",
     ]
     for _, step in bootstrap_steps:

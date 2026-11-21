@@ -24,21 +24,30 @@ test('full production binds the exact private source and requires it in the emit
       repository: 'ElevenID/marty-subscriptions', source_sha: sourceSha,
     }));
     const args = { pages: 'full', extensionPath: entry, sourceSha };
-    assert.equal(productionBuildContract(args), entry);
+    assert.throws(() => productionBuildContract(args), /application commerce adapter is missing/);
     assert.throws(() => productionBuildContract({ ...args, sourceSha: 'b'.repeat(40) }), /identity differs/);
-    for (const surface of ['website', 'application']) {
-      assert.throws(() => productionBuildContract({ ...args, surface }), /adapter is missing/);
-      const adapter = path.join(root, 'src', `${surface}.jsx`);
-      writeFileSync(adapter, 'export const commerceExtensionEnabled = true;\n');
-      assert.equal(productionBuildContract({ ...args, surface }), adapter);
+    const adapter = path.join(root, 'src', 'application.jsx');
+    writeFileSync(adapter, 'export const commerceExtensionEnabled = true;\n');
+    assert.equal(productionBuildContract(args), adapter);
+    assert.equal(productionBuildContract({ ...args, surface: 'application' }), adapter);
+    for (const surface of ['combined', 'website']) {
+      assert.throws(() => productionBuildContract({ ...args, surface }), /Only the application/);
     }
-    const plugin = productionBuildContractPlugin(entry);
-    plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [entry]: {} } } });
-    plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [entry.replaceAll('\\', '/') + '?version=1']: {} } } });
+    const plugin = productionBuildContractPlugin(adapter);
+    plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [adapter]: {} } } });
+    plugin.generateBundle({}, { 'main.js': { type: 'chunk', modules: { [adapter.replaceAll('\\', '/') + '?version=1']: {} } } });
     assert.throws(() => plugin.generateBundle({}, {
       'main.js': { type: 'chunk', modules: { '/src/extensions/commerce/publicStub.jsx': {} } },
     }), /omitted/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('retired production surfaces fail before accepting public or private page inputs', () => {
+  for (const surface of ['combined', 'website', 'unknown']) {
+    for (const pages of ['public', 'full']) {
+      assert.throws(() => productionBuildContract({ surface, pages }), /Only the application/);
+    }
   }
 });

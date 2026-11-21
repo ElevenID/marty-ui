@@ -8,8 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES, APPLICATION_LEGACY_TEST_FILES,
-  APPLICATION_EXPECTED_TESTS, APPLICATION_LEGACY_EXPECTED_TESTS } from './application-test-profile.mjs';
+import { applicationSourcePackageTestPolicy } from './export-application-source.mjs';
 import { APPLICATION_RETAINED_PUBLIC_FILES } from './application-public-assets.mjs';
 import { prepareApplicationInstall, runOwnedInstallCommand } from './application-dependency-install.mjs';
 import { APPLICATION_BUN_PACKAGE_MANAGER } from './application-dependency-profile.mjs';
@@ -97,8 +96,9 @@ function reportMessages(error) {
 export function validateApplicationPackageBaseline(baseline, manifest) {
   const bun = manifest.schema === 'marty.application-source-package/v2';
   const version = bun ? 'v7' : 'v5'; const mode = bun ? 'fresh-bun-frozen' : 'fresh-npm-ci';
-  const selectedTests = bun ? APPLICATION_TEST_FILES : APPLICATION_LEGACY_TEST_FILES;
-  const expectedTests = bun ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS;
+  const testPolicy = applicationSourcePackageTestPolicy(manifest);
+  const selectedTests = testPolicy.files;
+  const expectedTests = testPolicy.expected_tests;
   require(baseline?.schema === `marty.application-source-closure-rehearsal/${version}` && baseline.status === 'passed'
     && baseline.fixture !== true
     && baseline.plan?.schema === `marty.application-source-closure-plan/${version}`, 'Consumer requires a passed application baseline');
@@ -130,7 +130,7 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   assert.deepEqual(baseline.plan.route_contract, manifest.route_contract, 'Consumer route contract differs');
   assert.deepEqual(baseline.plan.test_profile, manifest.test_profile, 'Consumer selected test contract differs');
   assert.deepEqual(manifest.test_profile.files, [...selectedTests], 'Consumer test roster changed');
-  require(manifest.test_profile.config === APPLICATION_TEST_CONFIG && selectedTests.length === (bun ? 25 : 24)
+  require(manifest.test_profile.config === testPolicy.config && selectedTests.length === (bun ? 25 : 24)
     && baseline.tests?.result?.test_count === expectedTests, 'Consumer requires the complete versioned selected assertion suite');
   assert.deepEqual([...baseline.tests.result.completed_files].sort(), [...selectedTests].sort(), 'Baseline selected tests are incomplete');
   require(baseline.plan.dependency_profile?.name === 'application' && baseline.dependency_profile?.name === 'application'
@@ -380,7 +380,7 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
       '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')], buildEnvironment, 20 * 60_000);
     readFile(path.join(temporary, 'application-tests.json'));
     report.tests = verifyApplicationTestResult(temporary, restored, manifest.test_profile.files);
-    require(report.tests.test_count === (packageManager === 'bun' ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS),
+    require(report.tests.test_count === applicationSourcePackageTestPolicy(manifest).expected_tests,
       'Consumer did not complete the selected assertion suite');
     phase = 'output-comparison';
     report.output = verifyApplicationClosureOutput(restored, baseline.plan);

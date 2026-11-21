@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { pruneSelfhostDist } from './prune-selfhost-dist.mjs';
 
 const surface = process.argv[2];
-if (!['website', 'application'].includes(surface)) throw new Error('Expected website or application surface');
+if (surface !== 'application') throw new Error('Expected application surface; build the marketing website from ElevenID/website');
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const binDir = path.join(projectRoot, 'node_modules', '.bin');
 const env = { ...process.env, MARTY_UI_SURFACE: surface };
@@ -32,9 +32,6 @@ function run(command, args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-// Demo catalog and wallet projections are consumed by the website DemoPages
-// entry. Application builds must not require the website's demo source inputs.
-if (surface === 'website') run(process.execPath, [path.join(projectRoot, 'scripts/generate-demo-manifest-module.mjs')]);
 run(localBin('tsc'), ['-p', 'tsconfig.build.json']);
 run(localBin('vite'), ['build']);
-if (surface === 'application') pruneSelfhostDist(path.join(projectRoot, 'dist-application'));
+pruneSelfhostDist(path.join(projectRoot, 'dist-application'));

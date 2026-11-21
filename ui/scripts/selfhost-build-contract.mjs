@@ -1,4 +1,4 @@
-import { WEBSITE_SOURCE_OWNERSHIP, isWebsiteOwnedModule, validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
+import { isWebsiteOwnedModule, assertWebsiteSourceRemoved } from './website-source-ownership.mjs';
 
 const marketingPageNames = [
   'LandingPage', 'ProductPage', 'StandardsPage', 'ProtocolPage', 'IdentityGuidePage', 'FromIDVPage',
@@ -23,7 +23,7 @@ export function isProductionMarketingModule(moduleId) {
 // Check module identities, not minified strings or chunk names: tree-shaking
 // and changes to manual chunking must not hide a production marketing import.
 export function selfhostBuildContractPlugin() {
-  validateWebsiteSourceOwnership(WEBSITE_SOURCE_OWNERSHIP);
+  assertWebsiteSourceRemoved();
   return {
     name: 'selfhost-build-contract',
     transformIndexHtml(html) {

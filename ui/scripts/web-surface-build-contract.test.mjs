@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { WEBSITE_SOURCE_OWNERSHIP, validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
+import { WEBSITE_SOURCE_OWNERSHIP, assertWebsiteSourceRemoved, validateWebsiteSourceOwnership, validateWebsiteSourceOwnershipSchema } from './website-source-ownership.mjs';
 import { selfhostBuildContractPlugin } from './selfhost-build-contract.mjs';
 import { forbiddenWebSurfaceModule, websiteBuildRevision, webSurfaceBuildContractPlugin } from './web-surface-build-contract.mjs';
 import { WEB_ROUTE_CONTRACT } from './web-surface-contract.mjs';
@@ -13,7 +13,7 @@ const sourceSha = 'a'.repeat(40);
 const commerceSha = 'b'.repeat(40);
 const chunk = (id) => ({ main: { type: 'chunk', modules: { [id]: {} } } });
 
-test('every website-owned module is rejected from emitted application and customer bundles', () => {
+test('every retired website module is rejected from emitted application and customer bundles', () => {
   for (const entry of WEBSITE_SOURCE_OWNERSHIP.modules) {
     const id = `/repo/${entry}`;
     assert.throws(() => selfhostBuildContractPlugin().generateBundle({}, chunk(id)), /marketing/, entry);
@@ -22,30 +22,58 @@ test('every website-owned module is rejected from emitted application and custom
   assert.equal(forbiddenWebSurfaceModule('application', '/repo/ui/src/apps/public/PublicApp.jsx'), false);
 });
 
-test('website ownership has a closed schema, unique exact paths, and existing regular files', () => {
+test('the retained website roster has a closed schema and unique exact paths', () => {
   for (const value of [
     { ...WEBSITE_SOURCE_OWNERSHIP, unknown: true },
     { ...WEBSITE_SOURCE_OWNERSHIP, schema_version: 2 },
     { schema_version: 1, modules: [] },
     { schema_version: 1, modules: [WEBSITE_SOURCE_OWNERSHIP.modules[0], WEBSITE_SOURCE_OWNERSHIP.modules[0]] },
     { schema_version: 1, modules: ['ui/src/../package.json'] },
-    { schema_version: 1, modules: ['ui/src/does-not-exist.jsx'] },
-  ]) assert.throws(() => validateWebsiteSourceOwnership(value));
+  ]) assert.throws(() => validateWebsiteSourceOwnershipSchema(value));
+  assert.strictEqual(assertWebsiteSourceRemoved(), WEBSITE_SOURCE_OWNERSHIP);
 });
 
-test('application classifies absent website sources while other builds still require them', async (t) => {
+test('retired source cannot return as a file, directory, or dangling symlink', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'marty-retired-website-source-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const entry = WEBSITE_SOURCE_OWNERSHIP.modules[0];
+  const target = path.join(root, entry);
+  mkdirSync(path.dirname(target), { recursive: true });
+  for (const create of [
+    () => writeFileSync(target, 'export default null;\n'),
+    () => mkdirSync(target),
+    () => symlinkSync(path.join(root, 'missing-target'), target),
+  ]) {
+    assert.doesNotThrow(() => assertWebsiteSourceRemoved(WEBSITE_SOURCE_OWNERSHIP, root));
+    create();
+    assert.throws(() => assertWebsiteSourceRemoved(WEBSITE_SOURCE_OWNERSHIP, root), /must remain absent/);
+    rmSync(target, { recursive: true });
+  }
+});
+
+test('historical source validation still requires an existing ordinary file', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'marty-historical-website-source-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const roster = { schema_version: 1, modules: [WEBSITE_SOURCE_OWNERSHIP.modules[0]] };
+  const target = path.join(root, roster.modules[0]);
+  mkdirSync(path.dirname(target), { recursive: true });
+  assert.throws(() => validateWebsiteSourceOwnership(roster, root), { code: 'ENOENT' });
+  writeFileSync(target, 'export default null;\n');
+  assert.strictEqual(validateWebsiteSourceOwnership(roster, root), roster);
+  rmSync(target);
+  symlinkSync(path.join(root, 'missing-target'), target);
+  assert.throws(() => validateWebsiteSourceOwnership(roster, root), /not a regular file/);
+});
+
+test('application and customer build contracts work after website source removal', async (t) => {
   const repositoryRoot = path.resolve(import.meta.dirname, '../..');
   const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-absent-website-source-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   for (const relativePath of [
-    'contracts/website-source-ownership.json',
-    'contracts/web-surface-routes.json',
-    'ui/scripts/website-source-ownership.mjs',
-    'ui/scripts/selfhost-build-contract.mjs',
-    'ui/scripts/web-surface-build-contract.mjs',
-    'ui/scripts/web-surface-contract.mjs',
-    'ui/src/application/routing/webSurfaceContract.mjs',
-    'ui/src/utils/hasAsciiControlCharacters.js',
+    'contracts/website-source-ownership.json', 'contracts/web-surface-routes.json',
+    'ui/scripts/website-source-ownership.mjs', 'ui/scripts/selfhost-build-contract.mjs',
+    'ui/scripts/web-surface-build-contract.mjs', 'ui/scripts/web-surface-contract.mjs',
+    'ui/src/application/routing/webSurfaceContract.mjs', 'ui/src/utils/hasAsciiControlCharacters.js',
   ]) {
     const destination = path.join(directory, relativePath);
     mkdirSync(path.dirname(destination), { recursive: true });
@@ -57,18 +85,19 @@ test('application classifies absent website sources while other builds still req
   const { selfhostBuildContractPlugin: exportedSelfhostPlugin } = await import(pathToFileURL(
     path.join(directory, 'ui/scripts/selfhost-build-contract.mjs'),
   ).href);
-
   const applicationPlugin = exportedWebPlugin({ surface: 'application' });
+  const customerPlugin = exportedSelfhostPlugin();
   for (const entry of WEBSITE_SOURCE_OWNERSHIP.modules) {
-    assert.throws(() => applicationPlugin.generateBundle({}, chunk(path.join(directory, entry))), /forbidden/, entry);
+    const bundle = chunk(path.join(directory, entry));
+    assert.throws(() => applicationPlugin.generateBundle({}, bundle), /forbidden/, entry);
+    assert.throws(() => customerPlugin.generateBundle({}, bundle), /marketing/, entry);
   }
   for (const surface of ['combined', 'website']) {
-    assert.throws(() => exportedWebPlugin({ surface }), { code: 'ENOENT' }, surface);
+    assert.throws(() => exportedWebPlugin({ surface }), /Only the application/, surface);
   }
-  assert.throws(() => exportedSelfhostPlugin(), { code: 'ENOENT' });
 });
 
-test('website output rejects application services, contexts, consoles and private application modules', () => {
+test('historical website module classification still rejects application and private contexts', () => {
   for (const id of [
     '/repo/ui/node_modules/@elevenid/marty-api-core/index.js',
     '/repo/ui/src/apps/public/PublicApp.jsx', '/repo/ui/src/apps/console/ConsoleApp.jsx',
@@ -78,13 +107,7 @@ test('website output rejects application services, contexts, consoles and privat
     '/repo/commerce-extension/src/contexts/PaymentContext.jsx',
     '/repo/commerce-extension/src/application.jsx', '/repo/commerce-extension/src/extension.jsx',
     '/repo/commerce-extension/src/components/billing/SubscriptionCheckout.jsx',
-  ]) {
-    const plugin = webSurfaceBuildContractPlugin({ surface: 'website', commerceEntry: '/repo/commerce-extension/src/website.jsx' });
-    assert.throws(() => plugin.generateBundle({}, chunk(id)), /forbidden/, id);
-  }
-  for (const id of ['/repo/ui/src/apps/website/WebsiteApp.jsx', '/repo/ui/src/components/LandingPageContent.jsx']) {
-    assert.equal(Boolean(forbiddenWebSurfaceModule('website', id, '/repo/commerce-extension/src/website.jsx')), false, id);
-  }
+  ]) assert.equal(Boolean(forbiddenWebSurfaceModule('website', id, '/repo/commerce-extension/src/website.jsx')), true, id);
 });
 
 test('application rejects private marketing modules in the final host bundle', () => {
@@ -94,7 +117,7 @@ test('application rejects private marketing modules in the final host bundle', (
   assert.equal(forbiddenWebSurfaceModule('application', '/private/src/data/pricingPlans.js', '/private/src/application.jsx'), true);
 });
 
-test('revision identifies all source inputs and cannot be supplied independently', () => {
+test('historical website revisions retain exact source input binding', () => {
   assert.equal(websiteBuildRevision({ sourceSha }), sourceSha);
   assert.equal(websiteBuildRevision({ sourceSha, commerceSha, pages: 'full' }), `${sourceSha}-${commerceSha}`);
   assert.equal(websiteBuildRevision(), 'development');
@@ -105,38 +128,24 @@ test('revision identifies all source inputs and cannot be supplied independently
   ]) assert.throws(() => websiteBuildRevision(options));
 });
 
-test('surface metadata preserves exact source inputs and the common route contract', () => {
-  for (const surface of ['combined', 'application', 'website']) {
-    const emitted = [];
-    const plugin = webSurfaceBuildContractPlugin({ surface, sourceSha, pages: 'full', commerceSha });
-    plugin.generateBundle.call({ emitFile: (file) => emitted.push(file) }, {}, {});
-    assert.equal(emitted.length, 1);
-    const metadata = JSON.parse(emitted[0].source);
-    assert.deepEqual(metadata.route_contract, WEB_ROUTE_CONTRACT);
-    assert.equal(metadata.source_sha, sourceSha);
-    assert.equal(metadata.surface, surface);
-    if (surface === 'website') {
-      assert.equal(emitted[0].fileName, 'marty-website-release.json');
-      assert.deepEqual(metadata, {
-        schema: 'marty.website-image/v1', audience: 'production', surface,
-        repository: 'ElevenID/marty-ui', source_sha: sourceSha, revision: `${sourceSha}-${commerceSha}`,
-        production_pages: 'full', route_contract: WEB_ROUTE_CONTRACT,
-        commerce_extension: { repository: 'ElevenID/marty-subscriptions', source_sha: commerceSha },
-      });
-    } else {
-      assert.equal(emitted[0].fileName, 'marty-web-routes.json');
-      assert.deepEqual(Object.keys(metadata).sort(), ['route_contract', 'schema', 'source_sha', 'surface']);
-    }
-  }
+test('application metadata preserves exact source input and the common route contract', () => {
+  const emitted = [];
+  const plugin = webSurfaceBuildContractPlugin({ sourceSha });
+  plugin.generateBundle.call({ emitFile: (file) => emitted.push(file) }, {}, {});
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].fileName, 'marty-web-routes.json');
+  assert.deepEqual(JSON.parse(emitted[0].source), {
+    schema: 'marty.application-web-compatibility/v1', surface: 'application', source_sha: sourceSha,
+    route_contract: WEB_ROUTE_CONTRACT,
+  });
 });
 
-
-test('every delivered surface rejects private pricing in static and lazy chunks', () => {
+test('private pricing remains forbidden in historical classifiers and current lazy application chunks', () => {
   for (const surface of ['combined', 'website', 'application']) {
     const entry = `/private/src/${surface === 'combined' ? 'extension' : surface}.jsx`;
     for (const name of ['components/PricingPage.jsx', 'data/pricingPageContent.js', 'data/pricingContent.js', 'data/pricingPlans.js']) {
       assert.equal(Boolean(forbiddenWebSurfaceModule(surface, `/private/src/${name}`, entry)), true);
-      const plugin = webSurfaceBuildContractPlugin({ surface, commerceEntry: entry });
+      const plugin = webSurfaceBuildContractPlugin({ commerceEntry: '/private/src/application.jsx' });
       assert.throws(() => plugin.generateBundle({}, {
         'entry.js': { type: 'chunk', modules: {}, dynamicImports: ['hidden.js'] },
         'hidden.js': { type: 'chunk', modules: { [`/private/src/${name}`]: {} } },

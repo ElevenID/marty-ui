@@ -125,15 +125,15 @@ def test_passport_simulator_draft_matches_recorder_evidence_boundary() -> None:
 
 def test_current_draft_retires_provider_demo_without_rewriting_archives():
     from scripts import create_demo_manifest_draft as generator
-    from scripts.validate_demo_manifests import load_manifests
+    from scripts.operator_demo_catalog import load_operator_demo_template
     manifest = generator.build_manifest()
     assert manifest["stack_version"] == "2026.08.1"
     assert all(item.get("demo_id") not in {"D-07", "D-08"} and "lti-1.3" not in item["protocols"]
                for item in manifest["scenarios"])
     assert "canvas" not in json.dumps(manifest).lower()
-    index, archives = load_manifests(generator.ROOT / "ui/public/demos/manifests", generator.ROOT / "VERSION")
-    assert index["latest_available_stack_version"] == "2026.08.0"
-    assert any(item["slug"] == "canvas-learning-achievement" for item in archives["2026.08.0"]["scenarios"])
+    archive = load_operator_demo_template("2026.08.0")
+    assert archive["stack_version"] == "2026.08.0"
+    assert any(item["slug"] == "canvas-learning-achievement" for item in archive["scenarios"])
 
 
 def test_generator_refuses_to_overwrite_an_existing_edition(tmp_path, monkeypatch):

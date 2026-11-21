@@ -103,6 +103,7 @@ jobs:
         run: python scripts/check_rust_ownership.py
 
   test-website:
+    # Preserve the existing required check identity for application/customer boundaries.
     name: Website Surface
     needs: [changes, release-preflight]
     if: needs.changes.outputs.website == 'true'
@@ -113,8 +114,6 @@ jobs:
         working-directory: ui
     env:
       MARTY_UI_SHA: ${{ github.sha }}
-      MARTY_PRODUCTION_PAGES: public
-      PRERENDER_CONCURRENCY: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -159,25 +158,33 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
-          bun x --no-install puppeteer browsers install
+          for attempt in 1 2 3; do
+            if timeout 180s bun x --no-install puppeteer browsers install; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Puppeteer browser installation failed after three attempts" >&2
+              exit 1
+            fi
+            sleep 2
+          done
       - name: Qualify application browser startup and WASM recovery
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome
       - name: Qualify restored application browser startup and WASM recovery
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-package-browser-startup.json" --browser-channel chrome
       - name: Build and qualify the production application recipe
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-image-check.json" --check-container --build-release-image --browser-startup --browser-report "$RUNNER_TEMP/application-image-browser.json" --browser-channel chrome
-      - name: Test website routing and all surface boundary guards
+      - name: Test application and customer surface boundaries
         run: |
-          bun run test:website
           bun run test:application
-      - name: Build and check crawlable website output
+          node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs
+      - name: Prove default application and customer outputs exclude marketing modules
         run: |
-          bun run build:website
-          node scripts/assert-website-dist.mjs dist-website
-      - name: Prove application and customer outputs exclude marketing modules
-        run: |
+          bun run build
           bun run build:application
           bun run build:selfhost
+      - name: Test application and customer routes against the pinned Nginx image
+        run: python3 scripts/test_nginx_application_routes.py
       - name: Upload application source boundary report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -323,85 +330,6 @@ jobs:
       - name: Test standalone Northstar demo
         working-directory: demo-apps/northstar-admissions
         run: npm test
-
-  test-ui-crawler-artifacts:
-    name: UI Crawler Build Artifacts
-    needs: [changes, release-preflight]
-    if: needs.changes.outputs.ui == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: ui
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with:
-          bun-version: "1.4.4"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: "24"
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.12"
-      - name: Bootstrap released UI dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
-          bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
-          bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-          PUPPETEER_SKIP_DOWNLOAD=true bun install
-          for attempt in 1 2 3; do
-            if timeout 180s bun x --no-install puppeteer browsers install; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "Puppeteer browser installation failed after three attempts" >&2
-              exit 1
-            fi
-            sleep 2
-          done
-      - name: Verify crawler and production build contracts
-        run: |
-          node --test scripts/crawler-config.test.mjs scripts/production-build-contract.test.mjs
-          python3 scripts/test_crawler_artifacts.py
-      - name: Build and validate the normal public site
-        env:
-          PRERENDER_CONCURRENCY: "1"
-          CRAWLER_URLS_NORMAL: ${{ runner.temp }}/crawler-normal-urls.txt
-        run: |
-          bun run build
-          python3 scripts/check_crawler_artifacts.py dist "$CRAWLER_URLS_NORMAL"
-      - name: Build and validate the production-image public site
-        env:
-          DISABLE_PRERENDER: "1"
-          CRAWLER_URLS_NORMAL: ${{ runner.temp }}/crawler-normal-urls.txt
-          CRAWLER_URLS_DISABLED: ${{ runner.temp }}/crawler-disabled-urls.txt
-        run: |
-          bun run build
-          python3 scripts/check_crawler_artifacts.py dist "$CRAWLER_URLS_DISABLED"
-          cmp --silent "$CRAWLER_URLS_NORMAL" "$CRAWLER_URLS_DISABLED"
-
-  test-ui-crawler-nginx:
-    name: UI Crawler Nginx Integration
-    needs: [changes, release-preflight]
-    if: needs.changes.outputs.ui == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Prefer cached Docker Hub images without restarting the runner daemon
-        run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.12"
-      - name: Test both configs against the pinned production Nginx image
-        run: python3 ui/scripts/test_nginx_crawler_routes.py
 
   test-ui:
     name: UI Tests (${{ matrix.shard }}/4)
@@ -3338,7 +3266,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, release-preflight, lint, test-website, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, release-preflight, lint, test-website, fast-feedback, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -3363,8 +3291,6 @@ jobs:
       LINT_RESULT: ${{ needs.lint.result }}
       PREFLIGHT_RESULT: ${{ needs.release-preflight.result }}
       FAST_FEEDBACK_RESULT: ${{ needs.fast-feedback.result }}
-      CRAWLER_ARTIFACTS_RESULT: ${{ needs.test-ui-crawler-artifacts.result }}
-      CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
       UI_RESULT: ${{ needs.test-ui.result }}
       SERVICES_RESULT: ${{ needs.test-services.result }}
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
@@ -3386,7 +3312,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 20 ]]
+          [[ "${#results[@]}" -eq 18 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3414,6 +3340,7 @@ jobs:
                "$VERIFICATION_SELECTED" == false && "$SECURITY_SELECTED" == false ]]
           fi
           [[ "$ROLLBACK_TEST_ONLY" == false ]]
+          [[ "$WEBSITE_ONLY" == false ]]
           # The aggregate matrix result alone cannot prove all required lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
@@ -3422,7 +3349,7 @@ jobs:
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
-          if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then
+          if [[ "${{ github.event_name }}" == merge_group ]]; then
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
                "$RUST_MATRIX" == '["contracts","flow","selfhost"]' ]]
@@ -3435,8 +3362,6 @@ jobs:
             require_result release-preflight "$PREFLIGHT_RESULT" success
             require_selected test-website "$WEBSITE_RESULT" "$WEBSITE_SELECTED"
             require_selected fast-feedback "$FAST_FEEDBACK_RESULT" "$UI_SELECTED"
-            require_selected test-ui-crawler-artifacts "$CRAWLER_ARTIFACTS_RESULT" "$UI_SELECTED"
-            require_selected test-ui-crawler-nginx "$CRAWLER_NGINX_RESULT" "$UI_SELECTED"
             require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
             require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
             require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"

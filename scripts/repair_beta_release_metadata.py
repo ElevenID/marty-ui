@@ -26,7 +26,7 @@ from scoped_native_runtime import (
 )
 from beta_release_metadata import TARGET, marker_maps, gateway_metadata_model, ui_metadata_model
 from bind_deployed_demo_manifest import bind_manifest
-from prepare_beta_release_metadata import git_blob
+from prepare_beta_release_metadata import git_blob, source_demo_template
 
 ROLES = ("ui-prod", "gateway")
 GUARD_SHA = "9b1ac1ad73588d12c1115e9fc15c3424836b6c6a519b9debdfddf913a8e28224"
@@ -49,6 +49,7 @@ SOURCE_FILES = frozenset(
         "beta_release_metadata.py",
         "bind_deployed_demo_manifest.py",
         "prepare_beta_release_metadata.py",
+        "operator_demo_catalog.py",
         "scoped_native_runtime.py",
         "validate_demo_manifests.py",
         "demo_asset_hashes.py",
@@ -190,11 +191,7 @@ def static_contract(c):
         "PUBLIC_IMAGE_MAP_CHANGED",
     )
 
-    template_bytes = git_blob(
-        c["productRepository"],
-        c["productRevision"],
-        "ui/public/demos/manifests/2026.08.0.json",
-    )
+    template_bytes = source_demo_template(c["productRepository"], c["productRevision"])
     require(
         template_bytes == read_ref(c["template"]).read_bytes(),
         "TEMPLATE_NOT_COMMITTED_PRODUCT",

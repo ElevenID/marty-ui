@@ -1,15 +1,21 @@
 # Customer UI and production website releases
 
-The customer application and the ElevenID production website use the same UI
-source tree, with separate build targets and signed image identities.
+The marketing website is built and released from `ElevenID/website`.
+Current `marty-ui` source builds the application, customer application and
+independent console. The ordinary Docker default is the explicit `application`
+target; the old `public` and `website` targets are retired.
 
-| Release | Docker target | UI variant | Image | Included web content |
-| --- | --- | --- | --- | --- |
-| Stable customer stack | `selfhost` | `selfhost` | `ghcr.io/elevenid/marty-ui-oss/ui` | Customer application and console |
-| Customer installer | `selfhost` | `selfhost` | `ghcr.io/elevenid/marty-ui-oss/ui-selfhost` | Customer application and console |
-| Independent console | `console` | `selfhost` | `ghcr.io/elevenid/marty-console/ui` | Customer application and console, with its configured API origin |
-| Public website without private commerce | `public` | `public` | `ghcr.io/elevenid/marty-ui-oss/ui-public` | Production homepage, marketing pages, public resources and crawler artifacts |
-| Full production website | `public` with the authenticated commerce context | `public` | `ghcr.io/elevenid/marty-subscriptions/ui-production` | All public pages, pricing, subscription checkout and billing console UI |
+| Release | Build owner / target | Image | Included web content |
+| --- | --- | --- | --- |
+| Stable customer stack | `marty-ui` / `selfhost` | `ghcr.io/elevenid/marty-ui-oss/ui` | Customer application and console |
+| Customer installer | `marty-ui` / `selfhost` | `ghcr.io/elevenid/marty-ui-oss/ui-selfhost` | Customer application and console |
+| Independent console | `marty-ui` / `console` | `ghcr.io/elevenid/marty-console/ui` | Customer application and console, with its configured API origin |
+| Independent application | Verified portable package / `docker/application.Dockerfile` | `ghcr.io/elevenid/marty-ui-oss/application` | Application and console; publication and backend compatibility retain their own gates |
+| Public marketing website | `ElevenID/website` / `Dockerfile.website` | `ghcr.io/elevenid/website` | Public marketing pages, demos, SEO and crawler resources |
+
+Original combined images and private full-audience releases keep their exact
+historical identities. Their source is retained in Git; current source must not
+be relabeled as a combined image. See the [source-removal checkpoint](restructuring/website-source-removal.md).
 
 Customer builds exclude production marketing routes and assets at build time.
 The retained `full` and `tester` profile names are compatible customer settings;
@@ -61,13 +67,13 @@ is enabled. Application flows under `/apply` require both sections. Console
 aliases redirect only when the console is enabled; the independent console's
 API proxy remains available even when both web sections are excluded.
 
-The required CI command `python3 ui/scripts/test_nginx_crawler_routes.py` executes
+The required CI command `python3 ui/scripts/test_nginx_application_routes.py` executes
 the actual startup hooks against the pinned Nginx Docker image and checks all
 four modes for both server configurations over HTTP. Developers without Docker
 can run the same section assertions with an explicit local Nginx executable:
 
 ```sh
-python3 ui/scripts/test_nginx_crawler_routes.py --local-nginx /absolute/path/to/nginx
+python3 ui/scripts/test_nginx_application_routes.py --local-nginx /absolute/path/to/nginx
 ```
 
 That optional adapter changes only fixture paths, listener ports, and the test
@@ -94,15 +100,23 @@ is unchanged: configuring an ID enables analytics on normal origins; this change
 does not add a consent-management system. The consent-gated demo player remains
 independent.
 
-## Public-only production pipeline
+## Current independent production paths
 
-The existing workflow now has `combined` (default), `website`, and `compose`
-operations. The section below describes the compatible combined path. For
-independent marketing publication, original-producer composition, retained-slot
-deployment, product adoption, and Windows reboot handling, follow
-[Independent website releases](independent-website-release.md). Website mode has
-no stable backend/tag prerequisite; composition selects existing successful
-website and combined producer attempts and builds no image.
+Use `production-website-release.yml` in `ElevenID/website` for marketing.
+`production-web-release.yml` in `ElevenID/marty-ui` exposes `application` and
+`compose`; composition selects original successful producer attempts and builds
+no image. The stack release coordinator does not dispatch web producers.
+
+Follow [Independent website releases](independent-website-release.md) for
+source-bound publication and retained-slot activation. The current CLI refuses
+legacy `plan`/`record` commands when their Docker target is absent. Historical
+receipt validators remain available without changing their original grammar.
+
+## Historical combined producer reference
+
+The following commands describe retained historical source checkouts only.
+They are not current-main release instructions. The private companion freezes
+legacy builds to reviewed immutable source/tag pairs.
 
 Run **Production website release** (`production-web-release.yml`) on `main`:
 

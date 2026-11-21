@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import re
 import unittest
@@ -8,13 +9,17 @@ from scripts.validate_demo_manifests import MIP_VERSION, ManifestValidationError
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.07.0.json"
-PORTFOLIO_MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.08.0.json"
+MANIFEST_PATH = ROOT / "tests/fixtures/demo-manifests/2026.07.0.json"
+PORTFOLIO_MANIFEST_PATH = ROOT / "deploy-config/catalog/operator-demos/2026.08.0.json"
 
 
 class DemoManifestValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Original b1095e8c public manifest bytes, retained solely as a validator fixture.
+        assert hashlib.sha256(MANIFEST_PATH.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == (
+            "6dad5711fee0adf41004ad74959886c83c88f990078c70ae8123e10757c611bd"
+        )
         cls.manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     def test_current_preview_is_valid(self):

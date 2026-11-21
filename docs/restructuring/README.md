@@ -1,48 +1,48 @@
 # Repository restructuring foundation
 
-Status: standalone website publication and signed cross-owner composition are
-qualified. Application source, test, asset and dependency separation is in progress. Production
-cutover remains a separate gate.
+Status: the standalone website owns marketing builds and publication. The
+current removal change switches `marty-ui` to application/customer builds and
+removes the first audited marketing source batch. Independent application
+publication and actual host adoption remain separately qualified operations.
 
 ## Current development priorities
 
-The November 20 regression audit changes the next implementation order. The
-accepted historical runs below remain evidence for their original source; they
-do not qualify the current repair branch.
+The November 20 regression audit and free AWS qualification set this order.
+Use the [source-removal checkpoint](website-source-removal.md) for the current
+implementation, exact source bindings and verification limits.
 
-1. **Repair behavior and restore the established toolchain.** Complete the
-   Bun 1.4.4 frozen-install path in the standalone website and portable
-   application, including actual dependency identities, lifecycle patches,
-   SDK/WASM, deterministic package restoration and explicit release metadata.
-   Preserve validation of original npm evidence. Include the audited login,
-   invitation navigation, apply-return destination, loading-style and website
-   development-resource fixes in the same regression milestone. Validate
-   locally before requesting hosted checks; do not start chargeable CI work.
-2. **Remove the owned marketing source.** Resolve the old combined/default
-   build entries, website Docker/CI targets and release consumers. The private
-   commerce publisher still builds a selected historical `marty-ui` source:
-   migrate that path or explicitly constrain legacy modes to a supported
-   historical source before deleting their current-source inputs. Convert
-   migration checks that require old files into checks against reintroduction,
-   then delete the owned modules, assets and obsolete tests. Recheck application
-   and customer builds. The 34-module ownership roster is the starting point;
-   the portable package's complete omission list is not a deletion manifest.
-3. **Adopt the independently published application.** Carry the selected Bun
-   identity through publication, intake and backend qualification. Reconcile
-   the pending intake/backend-preparation work with the new evidence schemas.
-   Authenticate the actual first publication and select a backend supporting
-   the application's current endpoints before composition adoption.
-4. **Complete runtime adoption and ownership closure.** Exercise the real
-   authentication/OIDC journey and isolated-host promotion, rollback and
-   recovery before live adoption. Complete the remaining source/release
-   ownership work before repository renaming. Production activation retains
-   its separate acceptance decision.
+1. **Finish the repaired split under real browser/container checks.** Bun 1.4.4
+   is restored in the standalone website and portable application. Preserve
+   frozen installs, actual dependency identities, lifecycle patches, SDK/WASM,
+   archive restoration and original npm evidence. Qualify the exact repair
+   sources on the existing AWS Free plan host and run normal required public
+   CI with paid Actions spending blocked by the organization zero-dollar budget.
+2. **Switch current producers and remove the audited source.** Marketing builds
+   and publication use `ElevenID/website`. Current application/customer defaults
+   preserve `dist`, `dist-application` and `dist-selfhost`; the old combined and
+   website targets fail clearly. The private legacy source policy is adopted in
+   [PR #112](https://github.com/ElevenID/marty-subscriptions/pull/112). Remove the
+   72 audited original UI paths, obsolete marketing tests and producer/crawler
+   jobs together, retaining reintroduction guards and required-check identities.
+   Preserve operator demo metadata and historical source-package compatibility.
+3. **Publish and adopt the independent application.** Carry the selected Bun
+   identity through original publication, intake and backend qualification.
+   Authenticate the actual signed publication and select a backend supporting
+   the application's current endpoints before composition adoption. The accepted
+   historical composition keeps its original pins until that gate passes.
+4. **Qualify the selected public deployment and complete ownership closure.**
+   The user has requested switchover after testing. Identify the actual public
+   deployment owner, then exercise OIDC, promotion, rollback and recovery before
+   changing its routes. The existing AWS customer installer stack is a test host,
+   not the public marketing target. Complete remaining dependency/ownership work
+   before repository renaming.
 
-Steps 2 and 3 have different gates. Fresh installation and standalone
-application/container evidence already justify beginning bounded source
-cleanup. OIDC, host deployment and production activation are not blanket
-prerequisites for removing unused marketing files. A source-removal change
-must still preserve or deliberately retire every remaining supported consumer.
+Source removal and host activation have different gates. Fresh installation,
+restored-source parity, runtime/container checks and the build/release consumer
+switch justify bounded removal. Actual host and authenticated journey evidence
+must still describe the selected deployment; it cannot be inferred from source
+or package tests. Do not delete the portable package's entire omission list:
+only the audited 72-path union is the first source-removal roster.
 
 ## Current continuation checkpoint
 
@@ -78,8 +78,9 @@ host/OIDC qualification.
 
 The [dependency and runtime boundary](application-dependency-boundary.md) retains
 the current full-lock baseline and immutable release selections. The explicit
-application profile is a separate selection; the root manifest, both root locks
-and default website/combined build behavior remain the baseline. Both fresh
+application profile is a separate selection; the root dependency manifest and both root locks
+remain the comparison baseline. Current default builds select the application;
+the website/combined build adapters are retired. Both fresh
 installations run before CI bootstrap changes the root package manifest, and both
 container checks exercise the unchanged production nginx/startup files. Removing
 the four audited roots is a bounded dependency reduction. The [portable source-package milestone](application-source-package.md) carries this

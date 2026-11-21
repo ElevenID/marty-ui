@@ -1,6 +1,6 @@
 import { isProductionMarketingModule } from './selfhost-build-contract.mjs';
 import { WEB_ROUTE_CONTRACT } from './web-surface-contract.mjs';
-import { WEBSITE_SOURCE_OWNERSHIP, validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
+import { assertWebsiteSourceRemoved } from './website-source-ownership.mjs';
 
 export function websiteBuildRevision({ sourceSha = 'development', commerceSha, pages = 'public', revision } = {}) {
   if (!['public', 'full'].includes(pages)) throw new Error('Unknown production page set');
@@ -30,10 +30,9 @@ export function forbiddenWebSurfaceModule(surface, moduleId, commerceEntry) {
     || (privateRoot && id.startsWith(privateRoot) && /^(?:application\/|contexts\/|application\.jsx|extension\.jsx|index\.js|components\/(?:billing\/|PaymentCheckout\.jsx))/.test(id.slice(privateRoot.length)));
 }
 
-export function webSurfaceBuildContractPlugin({ surface, sourceSha = 'development', revision, pages = 'public', commerceSha, commerceEntry }) {
-  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface');
-  if (surface !== 'application') validateWebsiteSourceOwnership(WEBSITE_SOURCE_OWNERSHIP);
-  const websiteRevision = surface === 'website' ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision }) : null;
+export function webSurfaceBuildContractPlugin({ surface = 'application', sourceSha = 'development', commerceEntry }) {
+  if (surface !== 'application') throw new Error('Only the application UI surface is available');
+  assertWebsiteSourceRemoved();
   return {
     name: 'web-surface-build-contract',
     generateBundle(_options, bundle) {
@@ -43,16 +42,11 @@ export function webSurfaceBuildContractPlugin({ surface, sourceSha = 'developmen
           if (forbiddenWebSurfaceModule(surface, id, commerceEntry)) throw new Error(`${surface} output includes forbidden module: ${id}`);
         }
       }
-      const metadata = surface === 'website' ? {
-        schema: 'marty.website-image/v1', audience: 'production', surface,
-        repository: 'ElevenID/marty-ui', source_sha: sourceSha, revision: websiteRevision,
-        production_pages: pages, route_contract: WEB_ROUTE_CONTRACT,
-        commerce_extension: pages === 'full' ? { repository: 'ElevenID/marty-subscriptions', source_sha: commerceSha } : null,
-      } : {
+      const metadata = {
         schema: 'marty.application-web-compatibility/v1', surface, source_sha: sourceSha,
         route_contract: WEB_ROUTE_CONTRACT,
       };
-      this.emitFile({ type: 'asset', fileName: surface === 'website' ? 'marty-website-release.json' : 'marty-web-routes.json', source: `${JSON.stringify(metadata)}\n` });
+      this.emitFile({ type: 'asset', fileName: 'marty-web-routes.json', source: `${JSON.stringify(metadata)}\n` });
     },
   };
 }

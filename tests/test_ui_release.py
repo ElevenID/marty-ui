@@ -6,13 +6,8 @@ import copy
 import json
 import os
 import re
-import shutil
-import socket
-import struct
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -21,7 +16,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import ui_release as release  # noqa: E402
-import website_release as website  # noqa: E402
 
 SOURCE = "a" * 40
 IMAGE_DIGEST = "sha256:" + "b" * 64
@@ -161,7 +155,11 @@ def test_manifest_rejects_mutable_or_invalid_producer_identity(source, field, va
         record(source, plan, **{field: value})
 
 
-def test_cli_round_trip_records_the_exact_emitted_plan_bytes(source):
+def test_retained_cli_grammar_records_exact_plan_bytes_for_a_synthetic_legacy_target(source):
+    # This unit fixture proves retained plan/receipt grammar, not a current
+    # production build. Current-source producer refusal has its own CLI tests.
+    dockerfile = source / "docker/ui.Dockerfile"
+    dockerfile.write_text(dockerfile.read_text() + "\nFROM scratch AS public\n")
     plan_path, metadata_path, output_path = (source / name for name in ("plan.json", "metadata.json", "manifest.json"))
     command = [sys.executable, str(ROOT / "scripts/ui_release.py")]
     subprocess.run(command + ["plan", "--root", str(source), "--source-sha", SOURCE,
@@ -176,7 +174,7 @@ def test_cli_round_trip_records_the_exact_emitted_plan_bytes(source):
     assert release.read(output_path)["build_plan_sha256"] == release.digest(plan_path.read_bytes())
 
 
-def test_website_workflow_separates_source_build_signature_and_deployment():
+def test_current_workflow_preserves_application_publication_and_original_release_composition():
     workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers) == {"workflow_dispatch", "push"}
@@ -185,46 +183,38 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
         "paths": [".github/release-inputs/website-composition.json"],
     }
     assert workflow["permissions"] == {"contents": "read"}
-    assert release.PUBLIC_IMAGE in workflow["env"]["IMAGE"]
-    dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
-    assert dispatch["mode"]["default"] == "combined"
-    assert dispatch["mode"]["options"] == ["combined", "website", "application", "compose"]
-    job = workflow["jobs"]["release"]
-    steps = job["steps"]
-    # A reviewed manifest push can compose originals but cannot publish an image.
-    assert job["if"] == ("github.repository == 'ElevenID/marty-ui' && "
-                          "github.event_name == 'workflow_dispatch' && (inputs.mode == 'combined' || inputs.mode == 'website')")
-    assert job["permissions"]["contents"] == "read"
-    checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
-    assert checkout["with"]["ref"] == "${{ github.sha }}"
-    guard = next(index for index, step in enumerate(steps) if "Require the exact protected-main" in step.get("name", ""))
-    login = next(index for index, step in enumerate(steps) if step.get("uses", "").startswith("docker/login-action@"))
-    assert guard < login
-    assert 'test "$GITHUB_REF" = refs/heads/main' in steps[guard]["run"]
-    assert 'git rev-parse' in steps[guard]["run"] and 'git merge-base --is-ancestor' in steps[guard]["run"]
-    build = next(step["with"] for step in steps if step.get("id") == "build")
-    assert build["file"] == "docker/ui.Dockerfile" and build["target"] == "${{ steps.plan.outputs.target }}"
-    assert "push-by-digest=true" in build["outputs"]
-    assert "tags" not in build
+    assert "env" not in workflow
+    dispatch = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch["mode"]["default"] == "application"
+    assert dispatch["mode"]["options"] == ["application", "compose"]
+    assert dispatch["website_repository"]["default"] == "ElevenID/website"
+    # Original Marty receipts remain selectable without a current Marty website producer.
+    assert dispatch["website_repository"]["options"] == ["ElevenID/marty-ui", "ElevenID/website"]
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"request", "application", "compose"}
+    assert jobs["request"]["permissions"] == {"contents": "read"}
+    assert len(jobs["request"]["steps"]) == 1
+    assert "uses" not in jobs["request"]["steps"][0]
+    assert "if" not in jobs["request"]
+    for name in ("application", "compose"):
+        assert jobs[name]["needs"] == ["request"]
+        steps = jobs[name]["steps"]
+        assert steps[0]["with"] == {
+            "ref": "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": False,
+        }
+        guard = steps[1]
+        assert "Require the exact protected-main" in guard["name"]
+        assert 'test "$GITHUB_REF" = refs/heads/main' in guard["run"]
+        assert "git rev-parse" in guard["run"] and "git merge-base --is-ancestor" in guard["run"]
+    application = jobs["application"]
+    assert "inputs.mode == 'application'" in application["if"]
+    assert "github.event_name == 'workflow_dispatch'" in application["if"]
+    build = next(step["with"] for step in application["steps"] if step.get("id") == "build")
+    assert build["file"] == "docker/application.Dockerfile"
+    assert "push-by-digest=true" in build["outputs"] and "tags" not in build
     assert build["provenance"] == "mode=max" and build["sbom"] is True
-    shell = "\n".join(step.get("run", "") for step in steps)
-    assert "check-image --audience production" in shell
-    assert '"$cosign" sign --yes' in shell and '"$cosign" sign-blob --yes' in shell
-    attestations = [step["with"] for step in steps if step.get("uses", "").startswith("actions/attest-build-provenance@")]
-    assert len(attestations) == 2
-    assert any(item.get("subject-path") == "${{ steps.record.outputs.subject_paths }}" for item in attestations)
-    assert "subjects=(production-web-release.json application-web-compatibility.json deployment/production-deployment.json deployment/production-openbao.zip)" in shell
-    assert "subjects=(website-release.json)" in shell
-    prerequisite = next(index for index, step in enumerate(steps) if "combined backend prerequisite" in step.get("name", ""))
-    assert steps[prerequisite]["if"] == "env.MODE == 'combined'" and prerequisite < login
-    assert shell.index("stable_installer_assets.py --phase verify-published") < shell.index("package_production_deployment.py")
-    verifier = (ROOT / "scripts/install_web_verifiers.sh").read_text()
-    assert "gh_2.103.2_linux_amd64.tar.gz" in verifier
-    assert "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8" in verifier
-    assert '"$RUNNER_TEMP/web-verifiers/gh"' in shell
-    assert '--gh "$(command -v gh)"' not in shell
-    assert not any(command in shell for command in ("kubectl", "helm upgrade", "gh release create", "ssh "))
-    compose = workflow["jobs"]["compose"]
+    # A reviewed manifest push only composes authenticated original receipts.
+    compose = jobs["compose"]
     assert compose["if"] == (
         "github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' && "
         "((github.event_name == 'workflow_dispatch' && inputs.mode == 'compose') || "
@@ -236,11 +226,61 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     assert "web_release_intake.py website" in compose_shell and "web_release_intake.py application" in compose_shell
     assert "--producer-source-sha" in compose_shell and "package_web_composition.py" in compose_shell
     assert not any(step.get("uses", "").startswith("docker/build-push-action") for step in compose["steps"])
-    for step in [*steps, *compose["steps"]]:
-        if "uses" in step:
-            assert re.fullmatch(r"[^\s]+@[0-9a-f]{40}", step["uses"])
-        if "run" in step:
-            subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True, capture_output=True)
+    verifier = (ROOT / "scripts/install_web_verifiers.sh").read_text()
+    assert "gh_2.103.2_linux_amd64.tar.gz" in verifier
+    assert "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8" in verifier
+    assert '"$RUNNER_TEMP/web-verifiers/gh"' in compose_shell
+    for job in jobs.values():
+        assert "continue-on-error" not in job
+        for step in job["steps"]:
+            assert "continue-on-error" not in step
+            if "uses" in step:
+                assert re.fullmatch(r"[^\s]+@[0-9a-f]{40}", step["uses"])
+            if "run" in step:
+                assert not any(command in step["run"] for command in (
+                    "kubectl", "helm upgrade", "gh release create", "ssh ",
+                    "ui_release.py plan --audience production", "website_release.py plan",
+                ))
+                subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("changes,allowed", [
+    ({}, True),
+    ({"RELEASE_MODE": "compose"}, True),
+    ({"RELEASE_EVENT": "push", "RELEASE_MODE": "", "RELEASE_PUSH_DELETED": "false"}, True),
+    ({"RELEASE_MODE": "combined"}, False),
+    ({"RELEASE_MODE": "website"}, False),
+    ({"RELEASE_MODE": "unknown"}, False),
+    ({"RELEASE_MODE": "application\n"}, False),
+    ({"RELEASE_MODE": ""}, False),
+    ({"RELEASE_EVENT": "push"}, False),
+    ({"RELEASE_EVENT": "pull_request"}, False),
+    ({"RELEASE_EVENT": "push", "RELEASE_MODE": "", "RELEASE_PUSH_DELETED": "true"}, False),
+    ({"RELEASE_EVENT": "push", "RELEASE_MODE": "", "RELEASE_PUSH_DELETED": ""}, False),
+    ({"RELEASE_REPOSITORY": "fork/marty-ui"}, False),
+    ({"RELEASE_REPOSITORY_ID": "1140864198"}, False),
+    ({"RELEASE_REF": "refs/heads/topic"}, False),
+    ({"RELEASE_REF_PROTECTED": "false"}, False),
+])
+def test_current_release_request_fails_before_any_publisher_for_retired_or_invalid_modes(tmp_path, changes, allowed):
+    workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
+    guard = workflow["jobs"]["request"]["steps"][0]
+    marker = tmp_path / "publisher-reachable"
+    environment = {
+        **os.environ, "RELEASE_MODE": "application", "RELEASE_EVENT": "workflow_dispatch",
+        "RELEASE_REPOSITORY": "ElevenID/marty-ui", "RELEASE_REPOSITORY_ID": "1140864197",
+        "RELEASE_REF": "refs/heads/main", "RELEASE_REF_PROTECTED": "true", "RELEASE_PUSH_DELETED": "",
+        "NEXT_PUBLISHER_MARKER": str(marker), **changes,
+    }
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc"],
+        input=guard["run"] + '\nprintf reached > "$NEXT_PUBLISHER_MARKER"\n',
+        env=environment, text=True, capture_output=True, check=False,
+    )
+    assert (result.returncode == 0) is allowed, result.stderr
+    assert marker.exists() is allowed
+    if changes.get("RELEASE_MODE") in {"combined", "website"}:
+        assert "producers are retired" in result.stderr
 
 
 def test_full_production_binds_both_sources_and_the_private_producer(source):
@@ -276,140 +316,3 @@ def test_all_customer_producers_check_the_image_audience():
         steps = workflow["jobs"][job]["steps"]
         assert any("check-image --audience customer" in step.get("run", "") for step in steps)
         assert not any(release.PUBLIC_IMAGE in str(step) for step in steps)
-
-
-@pytest.mark.parametrize("case", ["valid", "bare-spa", "customer-portal", "wrong-product-page",
-                                  "unrendered-product", "unprerendered-home",
-                                  "startup-reset", "persistent-reset", "incompatible-marker"])
-def test_production_smoke_requires_rendered_marketing_pages(tmp_path, case):
-    workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
-    smoke = next(step["run"] for step in workflow["jobs"]["release"]["steps"]
-                 if step.get("name") == "Verify the production image and prerendered homepage")
-    fixtures = tmp_path / "fixtures"
-    fixtures.mkdir()
-    marker = '<meta name="prerender-status-code" content="200" />'
-    schema = '<script type="application/ld+json" data-seo-jsonld="true">{}</script>'
-    homepage = ('<title>ElevenID</title>' + marker + schema
-                + '<link rel="canonical" href="https://elevenidllc.com/">')
-    product = (marker + schema + '<link rel="canonical" href="https://elevenidllc.com/product">'
-               + '<h1 class="heading">Product catalog</h1>')
-    if case == "bare-spa":
-        homepage = '<title>ElevenID</title><div id="root"></div>'
-    elif case == "customer-portal":
-        homepage = '<title>ElevenID Application Portal</title><h1>Application portal</h1>'
-    elif case == "wrong-product-page":
-        product = homepage + '<h1>Website</h1>'
-    elif case == "unrendered-product":
-        product = product.replace('<h1 class="heading">Product catalog</h1>', '')
-    elif case == "unprerendered-home":
-        homepage = homepage.replace(marker, '')
-    (fixtures / "homepage.html").write_text(homepage)
-    (fixtures / "product.html").write_text(product)
-    (fixtures / "metadata.json").write_bytes(release.canonical({
-        "component": "ui", "release_version": "1.2.3", "marty_ui_sha": SOURCE,
-        "audience": "production", "ui_variant": "public",
-    }))
-    application_marker = website.application_marker(ROOT, SOURCE)
-    if case == "incompatible-marker":
-        application_marker["route_contract"]["sha256"] = "sha256:" + "9" * 64
-    (fixtures / "application-marker.json").write_bytes(release.canonical(application_marker))
-
-    # Execute the real workflow smoke step; replace only registry/container/HTTP
-    # access with deterministic fixture delivery. The image identity checker and
-    # content gates themselves run unchanged.
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    (binaries / "python").symlink_to(sys.executable)
-    mocks = {
-        "docker": "import sys\nif sys.argv[1] == 'inspect': print('production')\n",
-        "curl": """import os, sys
-from pathlib import Path
-from urllib.parse import urlsplit
-url = next(arg for arg in sys.argv if arg.startswith('http://'))
-name = {'/': 'homepage.html', '/product/': 'product.html',
-        '/marty-ui-release.json': 'metadata.json', '/marty-web-routes.json': 'application-marker.json'}[urlsplit(url).path]
-output = sys.argv[sys.argv.index('--output') + 1]
-Path(output).write_bytes((Path(os.environ['SMOKE_FIXTURES']) / name).read_bytes())
-""",
-    }
-    listener = None
-    server = None
-    stopped = threading.Event()
-    requests = []
-    if case in ("startup-reset", "persistent-reset"):
-        # Use real curl so this reproduces Docker's accepted-then-reset startup
-        # connection, rather than simulating the retry options in a curl stub.
-        curl = shutil.which("curl")
-        assert curl is not None, "the production readiness regression requires curl"
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.settimeout(0.1)
-        origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
-        mocks["curl"] = f"""import os, sys
-args = [arg.replace('http://127.0.0.1:18080', {origin!r}) for arg in sys.argv[1:]]
-os.execv({curl!r}, [{curl!r}, *args])
-"""
-
-        def serve():
-            while not stopped.is_set():
-                try:
-                    connection, _ = listener.accept()
-                except socket.timeout:
-                    continue
-                with connection:
-                    connection.settimeout(2)
-                    request = b""
-                    while b"\r\n\r\n" not in request:
-                        chunk = connection.recv(4096)
-                        if not chunk:
-                            break
-                        request += chunk
-                    path = request.split(b" ")[1].decode("ascii")
-                    requests.append(path)
-                    if case == "persistent-reset" or len(requests) == 1:
-                        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
-                                              struct.pack("ii", 1, 0))
-                        continue
-                    name = {"/": "homepage.html", "/product/": "product.html",
-                            "/marty-ui-release.json": "metadata.json", "/marty-web-routes.json": "application-marker.json"}[path]
-                    body = (fixtures / name).read_bytes()
-                    headers = (f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
-                               "Connection: close\r\n\r\n").encode("ascii")
-                    connection.sendall(headers + body)
-
-        server = threading.Thread(target=serve, daemon=True)
-        server.start()
-    for name, body in mocks.items():
-        executable = binaries / name
-        executable.write_text(f"#!{sys.executable}\n" + body)
-        executable.chmod(0o755)
-    (tmp_path / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
-    (tmp_path / "production-web").mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    started = time.monotonic()
-    try:
-        result = subprocess.run(["bash", "-c", smoke], cwd=tmp_path, text=True, capture_output=True,
-            timeout=45,
-            env={"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-                 "RUNNER_TEMP": str(runtime), "SMOKE_FIXTURES": str(fixtures),
-                 "IMAGE": release.PUBLIC_IMAGE, "DIGEST": IMAGE_DIGEST,
-                 "VERSION": "1.2.3", "GITHUB_SHA": SOURCE, "MODE": "combined"})
-    finally:
-        stopped.set()
-        if server is not None:
-            server.join(timeout=3)
-            assert not server.is_alive()
-        if listener is not None:
-            listener.close()
-    elapsed = time.monotonic() - started
-    assert (result.returncode == 0) == (case in ("valid", "startup-reset")), result.stderr
-    if case == "startup-reset":
-        assert requests == ["/", "/", "/product/", "/marty-ui-release.json", "/marty-web-routes.json"]
-        assert "curl: (56)" in result.stderr
-        assert (runtime / "production-homepage.html").read_bytes() == (fixtures / "homepage.html").read_bytes()
-    elif case == "persistent-reset":
-        assert result.returncode == 56, result.stderr
-        assert len(requests) > 1 and set(requests) == {"/"}
-        assert 25 <= elapsed < 40

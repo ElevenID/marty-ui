@@ -28,10 +28,10 @@ def environment(event="pull_request"):
             "BASE_SHA": "b" * 40 if event in {"pull_request", "merge_group"} else ""}
 
 
-def plan(event="pull_request", website=False):
+def plan(event="pull_request", ui=False):
     flags = {f: "false" for f in CI.FLAGS}
-    if website:
-        flags.update(website="true", website_only="true")
+    if ui:
+        flags.update(ui="true", website="true", security="true")
     else:
         flags.update({f: "true" for f in ("all", "ui", "website", "python", "rust", "rust_runtime",
                                         "openbao", "release", "verification", "security")})
@@ -54,10 +54,11 @@ def test_exact_full_plan_satisfies_every_known_job(event):
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-def test_website_plan_requires_only_source_and_website_checks(event):
-    value = plan(event, website=True)
-    assert value["selected_jobs"] == ["changes", "lint", "release-preflight", "test-website"]
-    CI.check_results(value, results(value), environment(event))
+def test_retired_website_only_plan_cannot_narrow_current_qualification(event):
+    flags = {f: "false" for f in CI.FLAGS}
+    flags.update(website="true", website_only="true")
+    with pytest.raises(ValueError, match="retired website-only"):
+        CI.make_plan({**flags, "rust_matrix": json.dumps(CI.FULL_MATRIX)}, environment(event))
 
 
 @pytest.mark.parametrize("key", ["event", "source_sha", "base_sha", "head_sha"])
@@ -68,9 +69,9 @@ def test_plan_cannot_be_replayed_for_another_event_or_tree(key):
         CI.check_results(value, results(value), environment())
 
 
-@pytest.mark.parametrize("mutation", ["extra", "missing", "bool-version", "flag", "flag-type", "roster", "matrix", "mixed-website", "full-omission"])
+@pytest.mark.parametrize("mutation", ["extra", "missing", "bool-version", "flag", "flag-type", "roster", "matrix", "retired-website", "full-omission"])
 def test_plan_is_closed_and_self_consistent(mutation):
-    value = plan(website=mutation == "mixed-website")
+    value = plan()
     if mutation == "extra": value["unexpected"] = True
     elif mutation == "missing": del value["head_sha"]
     elif mutation == "bool-version": value["schema_version"] = True
@@ -78,7 +79,7 @@ def test_plan_is_closed_and_self_consistent(mutation):
     elif mutation == "flag-type": value["flags"]["rust"] = "true"
     elif mutation == "roster": value["selected_jobs"].remove("test-rust-services")
     elif mutation == "matrix": value["rust_matrix"] = ["contracts"]
-    elif mutation == "mixed-website": value["flags"]["ui"] = True
+    elif mutation == "retired-website": value["flags"]["website_only"] = True
     elif mutation == "full-omission": value["flags"]["security"] = False
     with pytest.raises(ValueError): CI.validate_plan(value, environment())
 
@@ -94,7 +95,7 @@ def test_selected_jobs_must_complete_successfully(job, result):
 
 @pytest.mark.parametrize("mutation", ["extra-job", "missing-job", "unexpected-success", "flag-output", "matrix-output"])
 def test_result_roster_and_outputs_match_the_plan(mutation):
-    value = plan(website=True)
+    value = plan(ui=True)
     needs = results(value)
     if mutation == "extra-job": needs["unreviewed"] = {"result": "success"}
     elif mutation == "missing-job": del needs["security"]
@@ -116,18 +117,30 @@ def test_duplicate_json_keys_are_rejected():
         CI.load_json('{"schema_version":1,"schema_version":1}')
 
 
-def test_exact_roster_members_and_dedicated_modules_have_one_surface_owner():
-    roster = json.loads((ROOT / "contracts/website-source-ownership.json").read_text())
-    for path in roster["modules"]:
-        assert CI.website_only(ROOT, path.encode() + b"\0"), path
-    for path in ["ui/src/App.jsx", "ui/src/components/LandingPage.jsx", "ui/src/auth/AuthProvider.jsx",
+def test_retired_marketing_ownership_never_authorizes_a_current_fast_lane(tmp_path):
+    repo, _, _ = fixture_repo(tmp_path)
+    for path in ["ui/src/components/Marketing.jsx", "ui/src/website.jsx", "ui/src/apps/website/App.jsx",
+                 "ui/scripts/test_crawler_artifacts.py", "ui/src/App.jsx", "ui/src/components/LandingPage.jsx", "ui/src/auth/AuthProvider.jsx",
                  "ui/src/locales/en.json", "ui/public/favicon.svg", "ui/package-lock.json",
                  "ui/vite.config.ts", "contracts/website-source-ownership.json",
                  "ui/scripts/web-surface-build-contract.mjs", "new-unowned-input"]:
-        assert not CI.website_only(ROOT, path.encode() + b"\0"), path
-    first = roster["modules"][0].encode()
+        assert not CI.website_only(repo, path.encode() + b"\0"), path
+    first = b"ui/src/components/Marketing.jsx"
     for data in [b"", first, first + b"\0" + first + b"\0", first + b"\0ui/src/App.jsx\0"]:
-        assert not CI.website_only(ROOT, data)
+        assert not CI.website_only(repo, data)
+
+
+@pytest.mark.parametrize("job", ["test-ui-crawler-artifacts", "test-ui-crawler-nginx"])
+@pytest.mark.parametrize("location", ["plan", "results"])
+def test_retired_crawler_job_evidence_is_rejected(job, location):
+    value = plan()
+    needs = results(value)
+    if location == "plan":
+        value["selected_jobs"] = sorted([*value["selected_jobs"], job])
+    else:
+        needs[job] = {"result": "success"}
+    with pytest.raises(ValueError, match="roster"):
+        CI.check_results(value, needs, environment())
 
 
 def fixture_repo(tmp_path):
@@ -157,8 +170,8 @@ def fixture_repo(tmp_path):
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-@pytest.mark.parametrize("change", ["marketing", "shared", "rename", "delete", "symlink", "newline"])
-def test_real_git_diff_narrows_only_regular_owned_marketing(tmp_path, event, change):
+@pytest.mark.parametrize("change", ["marketing", "crawler", "shared", "rename", "delete", "symlink", "newline"])
+def test_real_git_diff_never_restores_the_retired_marketing_fast_lane(tmp_path, event, change):
     repo, git, base = fixture_repo(tmp_path)
     source = repo / "ui/src/components/Marketing.jsx"
     if change == "marketing": source.write_text("updated\n")
@@ -168,6 +181,10 @@ def test_real_git_diff_narrows_only_regular_owned_marketing(tmp_path, event, cha
     elif change == "symlink":
         source.unlink()
         source.symlink_to("../App.jsx")
+    elif change == "crawler":
+        path = repo / "ui/scripts/test_crawler_artifacts.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("# restored retired crawler test\n")
     else:
         path = repo / "ui/src/apps/website/bad\nmodule.jsx"
         path.parent.mkdir(parents=True)
@@ -184,14 +201,16 @@ def test_real_git_diff_narrows_only_regular_owned_marketing(tmp_path, event, cha
     raw = dict(line.split("=", 1) for line in output.read_text().splitlines())
     value = json.loads(raw.pop("plan"))
     CI.validate_plan(value, env)
-    assert value["flags"]["website_only"] is (change == "marketing")
-    if event == "merge_group" and change != "marketing": assert value["flags"]["all"]
+    assert value["flags"]["website_only"] is False
+    assert value["flags"]["ui"] and value["flags"]["website"]
+    assert {"test-website", "test-ui", "fast-feedback"} <= set(value["selected_jobs"])
+    if event == "merge_group": assert value["flags"]["all"]
     scope_file = tmp_path / "codeql.json"
     subprocess.run([sys.executable, "scripts/ci/codeql_scope.py"], cwd=repo,
                    env={**env, "CODEQL_SCOPE_FILE": str(scope_file)}, check=True, capture_output=True)
     scope = json.loads(scope_file.read_text())
     assert scope["source_sha"] == sha and scope["base_sha"] == base
-    assert scope["website_only"] is (change == "marketing")
+    assert scope["website_only"] is False
     if change == "rename":
         assert {item["filename"] for item in scope["files"]} == {
             "ui/src/components/Marketing.jsx", "ui/src/components/Moved.jsx"}
@@ -229,10 +248,12 @@ def test_codeql_diff_is_complete_and_preserves_status_without_api_limits():
 
 
 @pytest.mark.parametrize("language", ["actions", "rust"])
-@pytest.mark.parametrize("event,website,expected", [("merge_group", True, "false"),
+@pytest.mark.parametrize("event,website,expected", [("merge_group", True, None),
+                                                   ("pull_request", True, None),
+                                                   ("schedule", True, None),
                                                    ("merge_group", False, "true"),
                                                    ("schedule", False, "true")])
-def test_codeql_required_check_skips_only_proved_website_merge_groups(language, event, website, expected):
+def test_codeql_required_check_rejects_retired_website_scope_and_qualifies_every_merge_group(language, event, website, expected):
     workflow = yaml.safe_load((ROOT / f".github/workflows/codeql-{language}.yml").read_text())
     steps = workflow["jobs"][f"analyze-{language}"]["steps"]
     scope = next(step for step in steps if step.get("id") == "scope")["with"]["script"]
@@ -249,24 +270,35 @@ new AsyncFunction('core','context','require','process',payload.script)(
   {eventName:payload.event},fakeRequire,{env:{CODEQL_SCOPE_FILE:'verified.json'}}
 ).then(()=>process.stdout.write(JSON.stringify(output))).catch(error=>{console.error(error);process.exit(1)});
 """
-    response = subprocess.run(["node", "-e", harness], text=True, capture_output=True, check=True,
+    response = subprocess.run(["node", "-e", harness], text=True, capture_output=True, check=False,
                               input=json.dumps({"script": scope, "event": event,
                                                 "record": {"event": event, "website_only": website, "files": []}}))
-    assert json.loads(response.stdout)["analyze"] == expected
+    if expected is None:
+        assert response.returncode != 0 and "Retired website-only" in response.stderr
+        assert response.stdout == ""
+    else:
+        assert response.returncode == 0, response.stderr
+        assert json.loads(response.stdout)["analyze"] == expected
 
 
-def test_workflow_closes_the_same_roster_and_builds_every_surface():
+def test_workflow_closes_the_same_roster_and_qualifies_current_application_and_customer_surfaces():
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     assert set(jobs["ci-gate"]["needs"]) == set(CI.JOB_FLAGS)
+    assert len(CI.JOB_FLAGS) == 18
+    assert not {"test-ui-crawler-artifacts", "test-ui-crawler-nginx"} & set(jobs)
+    assert jobs["test-website"]["name"] == "Website Surface"
     assert jobs["test-website"]["needs"] == ["changes", "release-preflight"]
     assert jobs["test-website"]["if"] == "needs.changes.outputs.website == 'true'"
     commands = "\n".join(step.get("run", "") for step in jobs["test-website"]["steps"])
-    for command in ("bun run test:website", "bun run test:application", "bun run build:website", "bun run build:application",
-                    "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website",
-                    'node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"',
+    for retired in ("test:website", "build:website", "assert-website-dist.mjs", "test_crawler_artifacts.py", "test_nginx_crawler_routes.py"):
+        assert retired not in commands
+    for command in ("bun run test:application", "bun run build\n", "bun run build:application", "bun run build:selfhost",
+                    "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs",
+                    "python3 scripts/test_nginx_application_routes.py",
+                    'node scripts/application-source-closure.mjs --fresh-install --package-manager bun --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"',
                     'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container',
                     'python3 scripts/ci/audit-application-dependencies.py',
-                    'node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"',
+                    'node scripts/application-source-closure.mjs --fresh-install --package-manager bun --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"',
                     'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container',
                     'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome',
                     'node scripts/export-application-source.mjs --archive "$RUNNER_TEMP/application-source-package.zip" --manifest "$RUNNER_TEMP/application-source-origin.json" --report "$RUNNER_TEMP/application-source-package.json" --baseline-report "$RUNNER_TEMP/application-profile-source-closure.json"',
@@ -275,7 +307,7 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
                     'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-package-browser-startup.json" --browser-channel chrome'):
         assert command in commands
     steps = jobs["test-website"]["steps"]
-    closure = next(step for step in steps if "application-source-closure.mjs --fresh-install --runtime-context" in step.get("run", ""))
+    closure = next(step for step in steps if "application-source-closure.mjs --fresh-install --package-manager bun --runtime-context" in step.get("run", ""))
     runtime = next(step for step in steps if 'application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context"' in step.get("run", ""))
     profile_audit = next(step for step in steps if "audit-application-dependencies.py" in step.get("run", ""))
     profile = next(step for step in steps if "--dependency-profile application" in step.get("run", ""))

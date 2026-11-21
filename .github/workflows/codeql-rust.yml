@@ -60,8 +60,9 @@ jobs:
             const { readFileSync } = require('node:fs');
             const scope = JSON.parse(readFileSync(process.env.CODEQL_SCOPE_FILE, 'utf8'));
             if (scope.event !== context.eventName) throw new Error('CodeQL event mismatch');
+            if (scope.website_only !== false) throw new Error('Retired website-only CodeQL selection');
             if (context.eventName !== 'pull_request') {
-              core.setOutput('analyze', String(!(context.eventName === 'merge_group' && scope.website_only)));
+              core.setOutput('analyze', 'true');
               return;
             }
             const files = scope.files;

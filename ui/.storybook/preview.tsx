@@ -6,7 +6,7 @@ import { I18nextProvider } from 'react-i18next'
 import { setupWorker } from 'msw/browser'
 import { mswLoader } from 'msw-storybook-addon/csf3'
 import { handlers } from '../src/test/mocks/handlers'
-import i18n from '../src/test/i18nTestSetup'
+import i18n from '../src/test/i18nApplicationTestSetup'
 
 // Create MUI theme (match your app's theme)
 const theme = createTheme({

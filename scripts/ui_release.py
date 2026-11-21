@@ -42,6 +42,20 @@ def digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def require_legacy_build_target(root: Path, target: str) -> None:
+    """Permit historical producer replay only from a source that owns its target.
+
+    Internal validators retain the original release grammar. Current command-line
+    producers must not label an application image as a legacy combined website.
+    """
+    stages = re.findall(r"^\s*FROM\s+[^\r\n]+\s+AS\s+([A-Za-z0-9_-]+)\s*$",
+                        (root / "docker/ui.Dockerfile").read_text(), re.MULTILINE | re.IGNORECASE)
+    require(target in stages,
+            "Legacy " + target + " producer is retired in this source; use ElevenID/website "
+            "for marketing or scripts/application_release.py for the application. "
+            "Historical replay requires its exact retained source checkout.")
+
+
 def build_profile(audience: str, profile: str = "tester") -> tuple[str, dict[str, str]]:
     """The marketing audience can only select the public Docker target."""
     require(audience in {"customer", "production"}, "unknown UI audience")
@@ -170,6 +184,8 @@ def main() -> int:
     parser.add_argument("--commerce-source-sha")
     args = parser.parse_args()
     page_inputs = dict(production_pages=args.production_pages, commerce_source_sha=args.commerce_source_sha)
+    if args.command in {"plan", "record"}:
+        require_legacy_build_target(args.root, "public")
     if args.command == "plan":
         result = production_plan(args.root, args.source_sha, **page_inputs)
     elif args.command == "record":

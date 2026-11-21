@@ -8,14 +8,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   parseApplicationSourceJson, planApplicationSourceExport, restoreApplicationSourcePackage,
-  validateApplicationSourceBaseline, validateApplicationSourceProducerReceipt,
+  validateApplicationSourceBaseline, validateApplicationSourceProducerReceipt, applicationSourcePackageTestPolicy,
 } from '../ui/scripts/export-application-source.mjs';
 import {
   compareApplicationPackageOutput, validateApplicationPackageBaseline,
 } from '../ui/scripts/application-package-consumer.mjs';
 import { validateApplicationRuntimeContext, verifyApplicationBrowserResult } from '../ui/scripts/application-runtime-context.mjs';
 import { APPLICATION_BUN_PACKAGE_MANAGER } from '../ui/scripts/application-dependency-profile.mjs';
-import { APPLICATION_EXPECTED_TESTS, APPLICATION_LEGACY_EXPECTED_TESTS } from '../ui/scripts/application-test-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '');
 const FILES = Object.freeze({
@@ -106,7 +105,7 @@ export function validateApplicationReleaseConsumer(consumer, { manifest, baselin
     assert.equal(consumer.environment?.npm_configuration, 'explicit-empty-user-and-global');
   }
   assert.equal(consumer.environment?.cache_mode, 'new-temporary-cache');
-  assert.equal(consumer.tests?.test_count, bun ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS);
+  assert.equal(consumer.tests?.test_count, applicationSourcePackageTestPolicy(manifest).expected_tests);
   assert.deepEqual([...consumer.tests.completed_files].sort(), [...manifest.test_profile.files].sort());
   assert.equal(consumer.dependency_install?.sdk?.initialized_in_node, true);
   assert.equal(consumer.dependency_install?.postinstall?.verified, true);

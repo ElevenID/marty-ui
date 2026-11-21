@@ -5,6 +5,7 @@ set -euo pipefail
 all=false
 ui=false
 website=false
+# Reserved false-only field in the v1 plan; marketing has a separate repository.
 website_only=false
 python=false
 rust=false
@@ -51,12 +52,9 @@ if [[ "$EVENT_NAME" == pull_request || "$EVENT_NAME" == merge_group ]]; then
   git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
   mapfile -d '' -t changed_files < "$changed_paths_file"
   report_historical_input_shadow "$EVENT_NAME" proved "${changed_files[@]}"
-  website_only=$(python3 scripts/ci/affected_components.py website-only --paths-file "$changed_paths_file")
 fi
 
-if [[ "$website_only" == true ]]; then
-  website=true
-elif [[ "$EVENT_NAME" != pull_request ]]; then
+if [[ "$EVENT_NAME" != pull_request ]]; then
   all=true
 else
   # These exact DIDComm policy tests are collected by root release

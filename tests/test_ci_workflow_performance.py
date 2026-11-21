@@ -184,10 +184,8 @@ def test_optional_secret_root_report_requires_executed_passing_cases(
     assert (result.returncode == 0) is passes, result.stderr
 
 
-def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
-    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
-        "test-ui-crawler-artifacts"
-    ]
+def test_application_browser_gate_uses_the_locally_installed_puppeteer_browser_cli() -> None:
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]["test-website"]
     bootstrap = next(
         step["run"]
         for step in job["steps"]
@@ -257,7 +255,7 @@ def test_off_path_ci_qualifies_full_platform_without_weakening_pr_gates() -> Non
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     )
-    assert 'elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true' in (ROOT / "scripts/ci/affected_components.sh").read_text()
+    assert 'if [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true' in (ROOT / "scripts/ci/affected_components.sh").read_text()
     assert (
         "github.event.pull_request.base.sha || github.event.merge_group.base_sha || ''"
         in (classifier["env"]["BASE_SHA"])
@@ -1442,8 +1440,6 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-website",
         "fast-feedback",
         "test-ui",
-        "test-ui-crawler-artifacts",
-        "test-ui-crawler-nginx",
         "test-services",
         "test-rust-feature-probe",
         "test-rust-services",
@@ -1489,8 +1485,6 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "website": {"test-website"},
         "ui": {
             "fast-feedback",
-            "test-ui-crawler-artifacts",
-            "test-ui-crawler-nginx",
             "test-ui",
             "test-credential-lifecycle-browser",
         },
@@ -1762,6 +1756,11 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         != 0
     )
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
+    for event in ("pull_request", "merge_group"):
+        assert exercise(
+            tuple(selections.values()), event=event,
+            selection_overrides={"WEBSITE_ONLY": "true"},
+        ).returncode != 0
     assert (
         exercise(
             ("release", "security"),

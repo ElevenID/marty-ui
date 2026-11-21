@@ -11,16 +11,28 @@ import {
   APPLICATION_SOURCE_ZIP_LIMITS, applicationSourcePath, decodeApplicationSourceZip, encodeApplicationSourceZip,
 } from './application-source-zip.mjs';
 import { APPLICATION_BUN_PACKAGE_MANAGER } from './application-dependency-profile.mjs';
+import { APPLICATION_EXPECTED_TESTS } from './application-test-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CONTRACT = 'contracts/application-source-export.json';
 const LEGACY_CONTRACT = 'contracts/legacy/application-source-export.v1.json';
+const LEGACY_BUN_CONTRACT = 'contracts/legacy/application-source-export.v2.json';
 export const APPLICATION_SOURCE_MANIFEST_PATH = 'application-source-origin.json';
 const MANIFEST_SCHEMA = 'marty.application-source-package/v2';
 const LEGACY_MANIFEST_SCHEMA = 'marty.application-source-package/v1';
 const RECEIPT_SCHEMA = 'marty.application-source-package-producer/v2';
 const LEGACY_RECEIPT_SCHEMA = 'marty.application-source-package-producer/v1';
+// Manifest grammar stays versioned separately from the reviewed source map.
+// Only these exact contract bytes may select current or historical semantics.
+const APPROVED_CONTRACTS = Object.freeze([
+  Object.freeze({ generation: 'application-only', path: CONTRACT, schema: MANIFEST_SCHEMA,
+    sha256: 'sha256:de826e005a6ceece4353892bc7d514471b87afa9e8d25e11f6151b31a08a328d', expected_tests: APPLICATION_EXPECTED_TESTS }),
+  Object.freeze({ generation: 'bun-v2-b1095e8c', path: LEGACY_BUN_CONTRACT, schema: MANIFEST_SCHEMA,
+    sha256: 'sha256:05e544fb9289f5a4fc1af8f6cf72d8eec6e472151a527766a84d02d9397b9e65', expected_tests: 308 }),
+  Object.freeze({ generation: 'npm-v1', path: LEGACY_CONTRACT, schema: LEGACY_MANIFEST_SCHEMA,
+    sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad', expected_tests: 296 }),
+]);
 const MAX_JSON = 8 * 1024 * 1024;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const OID = /^[0-9a-f]{40}$/;
@@ -146,7 +158,36 @@ function sourceState(root) {
   return { commit, tree, files };
 }
 
+function approvedContract(contract) {
+  const digest = hash(Buffer.from(`${JSON.stringify(contract, null, 2)}\n`));
+  const approval = APPROVED_CONTRACTS.find((entry) => entry.sha256 === digest);
+  require(approval, 'Application source contract is not an approved current or historical map');
+  return approval;
+}
+function readApprovedContract(approval) {
+  const value = read(ROOT, approval.path, MAX_JSON);
+  require(hash(value.bytes) === approval.sha256, 'Reviewed application source contract bytes changed');
+  return validateContract(parseApplicationSourceJson(value.bytes));
+}
+function manifestContractApproval(manifest) {
+  const approval = APPROVED_CONTRACTS.find((entry) => entry.sha256 === manifest?.contract?.sha256
+    && entry.schema === manifest?.schema);
+  require(approval, 'Application source manifest selects an unapproved contract digest or schema');
+  return approval;
+}
+export function applicationSourcePackageTestPolicy(manifest) {
+  const approval = manifestContractApproval(manifest);
+  const contract = readApprovedContract(approval);
+  return { generation: approval.generation, expected_tests: approval.expected_tests,
+    config: contract.test_profile.config, files: [...contract.test_profile.files] };
+}
+function acceptedExclusions(contract) {
+  const reviewed = approvedContract(contract).generation === 'application-only'
+    ? readApprovedContract(APPROVED_CONTRACTS.find((entry) => entry.generation === 'bun-v2-b1095e8c')) : contract;
+  return reviewed.omitted.filter((row) => row.role === 'accepted-application-exclusion').map((row) => row.source);
+}
 function validateContract(contract) {
+  approvedContract(contract);
   const bun = contract.schema === 'marty.application-source-export/v2';
   keys(contract, ['schema', 'repository', 'source_boundary', 'manifest_path', 'inputs', 'omission_categories', 'omitted',
     'generated_state', 'test_profile', 'public_files', 'shared_contracts', 'retained_inactive_inputs', 'scope'], 'source export contract');
@@ -220,6 +261,8 @@ function dataRecord(row) {
 export async function planApplicationSourceExport({ repositoryRoot = ROOT } = {}) {
   const root = ordinaryDirectory(path.resolve(repositoryRoot)); const state = sourceState(root);
   const { contract } = contractInput(root);
+  require(approvedContract(contract).generation === 'application-only',
+    'New source packages require the current application-only contract');
   const universe = [...state.files.keys()].filter((name) => name.startsWith('ui/') || contract.source_boundary.additional_files.includes(name)).sort();
   const selected = new Set(contract.inputs.map((row) => row.source));
   const omitted = new Set(contract.omitted.map((row) => row.source));
@@ -232,7 +275,7 @@ export async function planApplicationSourceExport({ repositoryRoot = ROOT } = {}
   require(plan.source.commit === state.commit && plan.source.working_tree_dirty === false, 'Source changed while the package was planned');
   assert.deepEqual(plan.test_profile, contract.test_profile, 'The selected application test contract drifted');
   assert.deepEqual([...plan.boundary.retained_public_files].sort(), [...contract.public_files].sort(), 'The selected public inventory drifted');
-  assert.deepEqual(plan.boundary.omitted, contract.omitted.filter((row) => row.role === 'accepted-application-exclusion').map((row) => row.source),
+  assert.deepEqual(plan.boundary.omitted, acceptedExclusions(contract),
     'The accepted 72 application exclusions changed');
   for (const row of plan.source.files) {
     const input = inputs.get(row.path);
@@ -270,8 +313,10 @@ function validateRecord(row, label) {
 }
 export function validateApplicationSourcePackageManifest(manifest, { contract } = {}) {
   const bun = manifest.schema === MANIFEST_SCHEMA;
-  contract ??= bun ? contractInput().contract : validateContract(parseApplicationSourceJson(read(ROOT, LEGACY_CONTRACT, MAX_JSON).bytes));
+  const approval = manifestContractApproval(manifest);
+  contract ??= readApprovedContract(approval);
   validateContract(contract);
+  require(approvedContract(contract).sha256 === approval.sha256, 'Application source contract selection differs');
   keys(manifest, ['schema', 'fixture', 'source', 'archive', 'contract', 'files', 'source_inventory_sha256', 'route_contract', 'test_profile',
     'contracts', 'dependency_profile', 'substitutions', 'omission_policy', 'retained_inactive_inputs', 'qualification'], 'source manifest');
   require((bun || manifest.schema === LEGACY_MANIFEST_SCHEMA) && typeof manifest.fixture === 'boolean'

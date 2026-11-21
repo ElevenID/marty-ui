@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
+import { validateWebsiteSourceOwnershipSchema } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES, APPLICATION_LEGACY_TEST_FILES } from './application-test-profile.mjs';
 import { APPLICATION_INSTALL_INPUTS, installApplicationDependencies } from './application-dependency-install.mjs';
@@ -28,8 +28,8 @@ const CONTRACTS = ['contracts/website-source-ownership.json', 'contracts/web-sur
 const RUNTIME_ROOT_INPUTS = ['scripts/ui-production-start.sh', 'scripts/load-secrets-env.sh'];
 const RUNTIME_INPUTS = ['ui/nginx.prod.conf', 'ui/scripts/application-runtime.Dockerfile', ...RUNTIME_ROOT_INPUTS];
 
-// These fixed omissions describe application build/test inputs. They do not
-// expand the exclusive-website ownership roster used by the combined build.
+// These retired application build/test inputs remain forbidden even after
+// physical removal. The original website ownership roster stays separate.
 export const OMITTED_DEMO_INPUTS = Object.freeze([
   'ui/public/demos/manifests/2026.07.0.json',
   'ui/public/demos/manifests/2026.08.0.json',
@@ -158,7 +158,7 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, fr
   require(realpathSync(git(root, ['rev-parse', '--show-toplevel']).trim()) === root, 'Select the actual repository root');
   const sourceSha = git(root, ['rev-parse', 'HEAD']).trim();
   require(/^[0-9a-f]{40}$/.test(sourceSha), 'Source checkout requires an exact commit');
-  const ownership = validateWebsiteSourceOwnership(JSON.parse(readInput(root, CONTRACTS[0]).bytes.toString('utf8')), root);
+  const ownership = validateWebsiteSourceOwnershipSchema(JSON.parse(readInput(root, CONTRACTS[0]).bytes.toString('utf8')));
   const routes = validateWebSurfaceContract(JSON.parse(readInput(root, CONTRACTS[1]).bytes.toString('utf8')));
   const extraInputs = runtimeContext ? RUNTIME_ROOT_INPUTS : [];
   const paths = sourcePaths(root, extraInputs);
@@ -166,10 +166,12 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, fr
   const modeInputs = [...(runtimeContext ? RUNTIME_INPUTS : []),
     ...(freshInstall ? APPLICATION_INSTALL_INPUTS.map((entry) => `ui/${entry}`) : []),
     ...(dependencyProfile === 'application' ? applicationDependencyProfileInputs(packageManager) : [])];
-  for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS, ...selectedTests.map((entry) => `ui/${entry}`), ...modeInputs]) {
+  for (const entry of [...CONTRACTS, ...REQUIRED_INPUTS, ...selectedTests.map((entry) => `ui/${entry}`), ...modeInputs]) {
     require(paths.includes(entry), `Required reviewed source input is missing: ${entry}`);
   }
   for (const entry of RETAINED_SHARED_INPUTS) require(!omitted.has(entry), `Shared input cannot be omitted: ${entry}`);
+  requireOmittedInputsAbsent({ boundary: { omitted: [...omitted] } }, root);
+  for (const entry of omitted) require(!paths.includes(entry), `Retired input remains tracked in the source checkout: ${entry}`);
   const files = paths.map((entry) => readInput(root, entry).record);
   const status = sourceStatus(root);
   return {

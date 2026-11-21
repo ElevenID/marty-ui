@@ -23,7 +23,8 @@ def test_reviewed_publisher_uses_beta_environment_and_checks_production(
     video = tmp_path / "reviewed.mp4"
     video.write_bytes(b"reviewed")
     monkeypatch.setattr(publisher, "require_beta_deploy_config", lambda _: None)
-    monkeypatch.setattr(publisher, "require_signed_ui_source", lambda *_: None)
+    monkeypatch.setattr(publisher, "require_signed_ui_source", lambda *_: "a" * 40)
+    monkeypatch.setattr(publisher, "require_legacy_demo_layout", lambda *_: None)
     monkeypatch.setattr(publisher, "require_node24", lambda: None)
     monkeypatch.setattr(publisher, "require_browser", lambda *_: None)
     monkeypatch.setattr(publisher, "require_oauth_files", lambda: None)
@@ -82,7 +83,7 @@ def test_publisher_requires_scripts_from_signed_aggregate_source(tmp_path, monke
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr(publisher.subprocess, "run", run)
-    publisher.require_signed_ui_source(artifact_dir, tmp_path)
+    assert publisher.require_signed_ui_source(artifact_dir, tmp_path) == "a" * 40
     assert seen[-1] == ["git", "diff", "--quiet", "a" * 40, "--",
                         *publisher.REVIEWED_UI_FILES]
 

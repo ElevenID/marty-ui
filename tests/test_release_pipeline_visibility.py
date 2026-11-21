@@ -445,7 +445,8 @@ class InitialVisibilityTests(unittest.TestCase):
                         self.driver.phase = "stable"
                         self.driver.execute(ci_run_id=200)
                     else:
-                        self.driver.wait_publisher(200, 150)
+                        self.driver.wait(200, pipeline.PUBLISHER, {"intake", "publish"},
+                                         event="workflow_run", title="Publish stable candidate 150")
                 self.assertEqual(len(self.http.child_reads), 1)
                 self.assertEqual(self.clock.sleeps, [])
                 self.assertEqual(self.http.posts, [])

@@ -34,8 +34,9 @@ The package keeps the existing `marty-ui` npm name, SDK coordinates and selected
 dependency versions. `ui/profiles/application/` retains the original selected
 manifest, Bun lock and npm reference lock; their bytes match the three
 materialized files at `ui/`. `package-lock.json` remains a reviewed dependency
-reference and audit input. The v2 package selects Bun for installation; older
-npm v1 evidence retains its original meaning and separate validation.
+reference and audit input. The v2 package selects Bun for installation. The
+consumer selects the exact reviewed source map by its contract digest; original
+npm v1 and earlier Bun v2 packages retain their original maps and test policies.
 
 ## Layout and supported scope
 
@@ -51,9 +52,10 @@ The output is the existing static application surface. Authentication and
 application requests use the configured platform gateway. Platform release
 selection and deployment supply that runtime integration.
 
-Shared development source is retained byte for byte. The legacy pages barrel
-and analytics example remain outside the configured application and selected
-test graphs. The optional biometrics bridge is also outside this qualification.
+Shared development source is retained byte for byte from this source revision.
+The pages barrel has no retired marketing re-exports. The analytics example
+remains outside the configured application and selected test graphs. The
+optional biometrics bridge is also outside this qualification.
 The source manifest records these retained boundaries. The selected tests are
 the supported package suite; the original repository retains the broader test
 and migration tooling.
@@ -71,6 +73,13 @@ modes, the selected contracts and test roster, and the three package-profile
 materializations. The separate producer receipt binds the archive and manifest
 digests to its validation evidence. Check those digests against the producer
 record when consuming a package.
+
+The original 72 retired marketing and combined-surface paths must be absent
+from the current source checkout and every application export. They remain a
+fixed forbidden roster after physical removal. Present but unselected source
+files have separate omission records; removed files are no longer represented
+as present source inputs. Historical package manifests keep their original
+omission records and are validated against their frozen approved contracts.
 
 Source files use their reviewed Git modes. The external consumer qualification
 accounts explicitly for the public files whose private rehearsal mode was

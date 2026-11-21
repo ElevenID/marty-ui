@@ -1,5 +1,24 @@
 # Fork and protocol development checkpoint — 7 November 2026
 
+## Consumer integration follow-up
+
+[Credentials 350](https://github.com/ElevenID/marty-credentials/pull/350)
+merged at `76ab8642` after the Windows executable-launch regression passed.
+[Verifier 201](https://github.com/ElevenID/marty-verifier/pull/201)
+merged at `9158ffb0` with the accepted JWT 11 graph. This UI change updates
+both service and standalone feature-probe graphs to Core 446 and SD-JWT 43.
+Both locked graphs resolve jsonwebtoken 11.1.0. The service check rejects
+both built-in JWT crypto providers and tests the single registry identity.
+
+[Wallet 57](https://github.com/ElevenID/marty-authenticator/pull/57)
+remains draft. Its device harness and packaging evidence at `fb0be1e7`
+precede the coordinated Core 446 and Verifier 201 pins at `212b1490`.
+GitHub marked workflow permission alerts 51 and 52 fixed on `e1f3f8ba`.
+The wallet needs qualification on its new graph, including installed
+device, paired-service and interoperability evidence. Verifier's Quinn,
+RSA and license findings have separate acceptance work. The broader work
+package status below remains historical.
+
 ## Current recovered state — 20 November 2026
 
 This section records the recovered development state and takes precedence over
