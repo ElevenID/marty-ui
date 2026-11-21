@@ -17,6 +17,7 @@ const PUBLIC_FIELDS: &[&str] = &[
     "doctype",
     "credential_payload_format",
     "jwt_vc_profile",
+    "verification_prerequisite",
     "issuance_protocol",
     "application_template_id",
     "trust_profile_id",
@@ -56,6 +57,7 @@ const CREATE_FIELDS: &[&str] = &[
     "schema_uri",
     "credential_payload_format",
     "jwt_vc_profile",
+    "verification_prerequisite",
     "issuance_protocol",
 ];
 
@@ -329,6 +331,14 @@ fn validate_explicit_profile(
     if let Some(profile) = value.get("jwt_vc_profile") {
         serde_json::from_value::<marty_jwt_vc_issuance::JwtVcTemplatePolicy>(profile.clone())
             .map_err(|_| CredentialTemplateContractError)?;
+    }
+    if let Some(policy) = value.get("verification_prerequisite") {
+        serde_json::from_value::<
+            marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1,
+        >(policy.clone())
+        .map_err(|_| CredentialTemplateContractError)?
+        .validate()
+        .map_err(|_| CredentialTemplateContractError)?;
     }
     Ok(())
 }

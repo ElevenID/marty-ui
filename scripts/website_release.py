@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import ui_release as ui
+import website_producer_policy as policy
 from product_package_plan import console_dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,24 @@ PLAN_FIELDS = {"schema", "repository", "source_sha", "revision", "production_pag
                "dockerfile_sha256", "dependency_lock_sha256", "route_contract", "build_args"}
 RELEASE_FIELDS = {"schema", "source_sha", "revision", "production_pages", "commerce_extension",
                   "producer", "image", "build_plan", "build_plan_sha256", "image_metadata"}
+STANDALONE_PLAN_SCHEMA = "marty.website-build-plan/v2"
+STANDALONE_RELEASE_SCHEMA = "marty.website-release/v2"
+STANDALONE_IMAGE_SCHEMA = "marty.website-image/v2"
+STANDALONE_REPOSITORY = policy.STANDALONE_REPOSITORY
+STANDALONE_WORKFLOW = policy.STANDALONE_WORKFLOW
+STANDALONE_IMAGE = policy.STANDALONE_IMAGE
+STANDALONE_BASE_IMAGE = "nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8"
+STANDALONE_INPUTS = (
+    "package.json", "package-lock.json", "Dockerfile.website", ROUTE_PATH,
+    "scripts/build-website-image.mjs", "scripts/prerender-website.mjs",
+    "scripts/website-prerender-plan.mjs", "ui/nginx.website.conf", "ui/nginx.website.headers.conf",
+    "ui/scripts/render-website-nginx.mjs", "ui/vite.config.mjs",
+)
+STANDALONE_PLAN_FIELDS = {
+    "schema", "repository", "source_sha", "revision", "production_pages", "commerce_extension",
+    "workflow", "image", "platform", "dockerfile", "build_kind", "dependency_lock",
+    "input_sha256", "output", "base_image", "route_contract", "build_args",
+}
 
 
 def object_keys(value: object, keys: set[str], label: str) -> None:
@@ -126,6 +145,8 @@ def plan(root: Path, source_sha: str, *, production_pages: str = "public",
 
 
 def validate_plan(value: dict) -> dict:
+    if isinstance(value, dict) and value.get("schema") == STANDALONE_PLAN_SCHEMA:
+        return validate_standalone_plan(value)
     object_keys(value, PLAN_FIELDS, "website plan")
     source_sha = full_sha(value["source_sha"])
     extension = value["commerce_extension"]
@@ -161,6 +182,11 @@ def validate_plan(value: dict) -> dict:
 
 def image_metadata(build_plan: dict) -> dict:
     validate_plan(build_plan)
+    if build_plan["schema"] == STANDALONE_PLAN_SCHEMA:
+        return {"schema": STANDALONE_IMAGE_SCHEMA, "audience": "production", "surface": "website",
+                "repository": STANDALONE_REPOSITORY, "source_sha": build_plan["source_sha"],
+                "revision": build_plan["revision"], "production_pages": "public",
+                "route_contract": build_plan["route_contract"], "commerce_extension": None}
     return {"schema": IMAGE_SCHEMA, "audience": "production", "surface": "website",
             "repository": ui.REPOSITORY, "source_sha": build_plan["source_sha"],
             "revision": build_plan["revision"], "production_pages": build_plan["production_pages"],
@@ -181,8 +207,11 @@ def record(root: Path, build_plan: dict, *, source_sha: str, metadata: dict, dig
 
 
 def validate_release(value: dict, *, source_sha: str | None = None, commerce_source_sha: str | None = None) -> dict:
+    if isinstance(value, dict) and value.get("schema") == STANDALONE_RELEASE_SCHEMA:
+        return validate_standalone_release(value, source_sha=source_sha, commerce_source_sha=commerce_source_sha)
     object_keys(value, RELEASE_FIELDS, "website release")
     build_plan = validate_plan(value["build_plan"])
+    ui.require(build_plan["schema"] == PLAN_SCHEMA, "legacy website release requires its original plan schema")
     expected_producer = value["producer"]
     object_keys(expected_producer, {"repository", "workflow", "ref", "source_sha", "run_id", "run_attempt"}, "producer")
     expected = {"schema": RELEASE_SCHEMA, "source_sha": build_plan["source_sha"], "revision": build_plan["revision"],
@@ -197,6 +226,107 @@ def validate_release(value: dict, *, source_sha: str | None = None, commerce_sou
         ui.require(value["source_sha"] == full_sha(source_sha), "website source differs from expected source")
         ui.require(value["commerce_extension"] == ui.commerce_identity(
             "public" if commerce_source_sha is None else "full", commerce_source_sha), "website commerce source differs")
+    return value
+
+
+def standalone_producer(source_sha: str, run_id: str, run_attempt: str) -> dict:
+    """Describe the reserved standalone identity; this is not a verified proof."""
+    return policy.validate_producer({
+        "repository": STANDALONE_REPOSITORY, "workflow": STANDALONE_WORKFLOW,
+        "ref": REF, "source_sha": full_sha(source_sha), "run_id": run_id, "run_attempt": run_attempt,
+    }, role="website")
+
+
+def standalone_plan(source_sha: str, *, input_sha256: dict, output: dict, route_contract: dict) -> dict:
+    """Describe supplied immutable inputs, without importing application source.
+
+    A producer must compute these fingerprints from its verified clean checkout
+    and final output. This pure contract builder does not authenticate a source,
+    an unsigned qualification receipt, or a published container.
+    """
+    source_sha = full_sha(source_sha)
+    value = {
+        "schema": STANDALONE_PLAN_SCHEMA, "repository": STANDALONE_REPOSITORY,
+        "source_sha": source_sha, "revision": source_sha, "production_pages": "public",
+        "commerce_extension": None, "workflow": STANDALONE_WORKFLOW, "image": STANDALONE_IMAGE,
+        "platform": "linux/amd64", "dockerfile": "Dockerfile.website", "build_kind": "prebuilt-static",
+        "dependency_lock": "package-lock.json", "input_sha256": input_sha256, "output": output,
+        "base_image": STANDALONE_BASE_IMAGE, "route_contract": route_contract,
+        "build_args": {"WEBSITE_SOURCE_SHA": source_sha, "WEBSITE_REVISION": source_sha,
+                       "WEBSITE_ROUTE_CONTRACT_SHA256": route_contract.get("sha256") if isinstance(route_contract, dict) else None},
+    }
+    return validate_standalone_plan(value)
+
+
+def validate_standalone_plan(value: dict) -> dict:
+    object_keys(value, STANDALONE_PLAN_FIELDS, "standalone website plan")
+    source = full_sha(value["source_sha"])
+    expected = {
+        "schema": STANDALONE_PLAN_SCHEMA, "repository": STANDALONE_REPOSITORY,
+        "revision": source, "production_pages": "public", "commerce_extension": None,
+        "workflow": STANDALONE_WORKFLOW, "image": STANDALONE_IMAGE, "platform": "linux/amd64",
+        "dockerfile": "Dockerfile.website", "build_kind": "prebuilt-static",
+        "dependency_lock": "package-lock.json", "base_image": STANDALONE_BASE_IMAGE,
+    }
+    ui.require(all(value[key] == item for key, item in expected.items()), "standalone website build identity differs")
+    object_keys(value["input_sha256"], set(STANDALONE_INPUTS), "standalone website input fingerprints")
+    for fingerprint in value["input_sha256"].values():
+        image_digest(fingerprint)
+    output = value["output"]
+    object_keys(output, {"directory", "inventory_sha256", "file_count", "total_bytes"}, "standalone website output")
+    ui.require(output["directory"] == "ui/dist-website", "standalone website output directory differs")
+    image_digest(output["inventory_sha256"])
+    ui.require(type(output["file_count"]) is int and 0 < output["file_count"] <= 10000
+               and type(output["total_bytes"]) is int and 0 < output["total_bytes"] <= 512 * 1024 * 1024,
+               "standalone website output bounds differ")
+    validate_route_identity(value["route_contract"])
+    ui.require(value["build_args"] == {
+        "WEBSITE_SOURCE_SHA": source, "WEBSITE_REVISION": source,
+        "WEBSITE_ROUTE_CONTRACT_SHA256": value["route_contract"]["sha256"],
+    }, "standalone website build arguments differ")
+    return value
+
+
+def standalone_record(build_plan: dict, *, metadata: dict, digest: str, run_id: str, run_attempt: str) -> dict:
+    """Build a v2 receipt to be signed only by the original hosted producer."""
+    validate_standalone_plan(build_plan)
+    source = build_plan["source_sha"]
+    value = {
+        "schema": STANDALONE_RELEASE_SCHEMA, "source_sha": source, "revision": source,
+        "production_pages": "public", "commerce_extension": None,
+        "producer": standalone_producer(source, run_id, run_attempt),
+        "image": {"uri": STANDALONE_IMAGE, "digest": image_digest(digest), "platform": "linux/amd64"},
+        "build_plan": build_plan, "build_plan_sha256": ui.digest(ui.canonical(build_plan)),
+        "image_metadata": metadata,
+    }
+    return validate_standalone_release(value)
+
+
+def validate_standalone_release(value: dict, *, source_sha: str | None = None,
+                                commerce_source_sha: str | None = None) -> dict:
+    object_keys(value, RELEASE_FIELDS, "standalone website release")
+    ui.require(value["schema"] == STANDALONE_RELEASE_SCHEMA, "standalone website release schema differs")
+    build_plan = validate_standalone_plan(value["build_plan"])
+    source = build_plan["source_sha"]
+    selected = policy.validate_producer(value["producer"], role="website")
+    object_keys(value["image"], {"uri", "digest", "platform"}, "standalone website image")
+    object_keys(value["image_metadata"], {
+        "schema", "audience", "surface", "repository", "source_sha", "revision",
+        "production_pages", "route_contract", "commerce_extension",
+    }, "standalone website image metadata")
+    validate_route_identity(value["image_metadata"]["route_contract"])
+    expected = {
+        "schema": STANDALONE_RELEASE_SCHEMA, "source_sha": source, "revision": source,
+        "production_pages": "public", "commerce_extension": None,
+        "producer": standalone_producer(source, selected["run_id"], selected["run_attempt"]),
+        "image": {"uri": STANDALONE_IMAGE, "digest": image_digest(value["image"]["digest"]), "platform": "linux/amd64"},
+        "build_plan": build_plan, "build_plan_sha256": ui.digest(ui.canonical(build_plan)),
+        "image_metadata": image_metadata(build_plan),
+    }
+    ui.require(value == expected, "standalone website release differs from its original build and producer")
+    ui.require(commerce_source_sha is None, "standalone website cannot claim a commerce source")
+    if source_sha is not None:
+        ui.require(source == full_sha(source_sha), "website source differs from expected source")
     return value
 
 

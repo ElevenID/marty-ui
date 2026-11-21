@@ -30,7 +30,9 @@ async fn retention_purge_preserves_tenant_and_recent_event_ownership() {
         "CREATE SCHEMA issuance_service",
         "CREATE TABLE issuance_service.applications (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.issuance_transactions (
-            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB, issuance_intent JSONB,id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL,
+            status text NOT NULL DEFAULT 'issued', expires_at timestamptz NOT NULL DEFAULT now())",
+        "CREATE TABLE issuance_service.issuance_prerequisite_continuations (transaction_id text PRIMARY KEY REFERENCES issuance_service.issuance_transactions(id), organization_id text NOT NULL, expires_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.authorization_sessions (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.issued_credentials (id text PRIMARY KEY, organization_id text NOT NULL, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id))",
         "CREATE TABLE issuance_service.credential_delivery_records (id text PRIMARY KEY, organization_id text NOT NULL, credential_id text NOT NULL REFERENCES issuance_service.issued_credentials(id) ON DELETE CASCADE, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id) ON DELETE CASCADE)",

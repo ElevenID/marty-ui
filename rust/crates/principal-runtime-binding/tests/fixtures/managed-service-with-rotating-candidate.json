@@ -1,0 +1,104 @@
+{
+  "configuration": {
+    "profile": "urn:marty:principal-runtime-binding-configuration:v1",
+    "organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+    "deployment_profile_id": "0191898c-6561-48e6-ab98-eecb7d8c053d",
+    "principal": {
+      "type": "SERVICE_ACCOUNT",
+      "id": "urn:application-test:service:document-worker"
+    },
+    "authentication_source": {
+      "issuer": "https://login.application-tests.invalid/workloads",
+      "subject": "document-worker/isolated-pool-b"
+    },
+    "allowed_audiences": [
+      "https://documents.application-tests.invalid/prepare",
+      "https://audit.application-tests.invalid/bindings"
+    ],
+    "runtime": {
+      "kind": "MANAGED",
+      "instance_ref": "urn:application-test:runtime:document-worker-16",
+      "machine_identity_id": "f0e98613-f8a9-4b3b-a4f2-d2c5e8624a77",
+      "active_key_id": "document-worker-active",
+      "stored_thumbprint_encoding": "MIP_SHA256_BASE64URL"
+    },
+    "expected_key_thumbprint": {
+      "basis": "JWK_RFC7638_SHA256",
+      "encoding": "BASE64URL_SHA256",
+      "value": "-rEJ7d0Gi6bZDOnuRkY1YJoCP8vkvKwGLnWR8rsH2zQ"
+    },
+    "expected_key_algorithm": "EdDSA",
+    "shared_runtime": false
+  },
+  "record": {
+    "profile": "urn:marty:principal-runtime-binding:v1",
+    "organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+    "principal": {
+      "type": "SERVICE_ACCOUNT",
+      "id": "urn:application-test:service:document-worker"
+    },
+    "authentication": {
+      "issuer": "https://login.application-tests.invalid/workloads",
+      "subject": "document-worker/isolated-pool-b",
+      "audience": "https://documents.application-tests.invalid/prepare",
+      "key_algorithm": "EdDSA",
+      "key_thumbprint": {
+        "basis": "JWK_RFC7638_SHA256",
+        "encoding": "BASE64URL_SHA256",
+        "value": "-rEJ7d0Gi6bZDOnuRkY1YJoCP8vkvKwGLnWR8rsH2zQ"
+      }
+    },
+    "runtime": {
+      "kind": "MANAGED",
+      "instance_ref": "urn:application-test:runtime:document-worker-16",
+      "machine_identity_id": "f0e98613-f8a9-4b3b-a4f2-d2c5e8624a77"
+    }
+  },
+  "machine_identity": {
+    "id": "f0e98613-f8a9-4b3b-a4f2-d2c5e8624a77",
+    "organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+    "machine_id": "urn:application-test:machine:document-worker-16",
+    "display_name": "Application test document worker",
+    "description": "Synthetic consistency input; no workload authentication or host isolation is asserted.",
+    "machine_type": "SECURE_PROCESSING_RUNTIME",
+    "status": "ACTIVE",
+    "assignments": {
+      "deployment_profile_id": "0191898c-6561-48e6-ab98-eecb7d8c053d",
+      "operator_organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+      "site_id": "test-lab-west"
+    },
+    "created_at": "2024-02-12T09:30:00Z",
+    "updated_at": "2024-02-12T10:00:00Z",
+    "identity_keys": [
+      {
+        "key_id": "document-worker-active",
+        "algorithm": "EdDSA",
+        "status": "ACTIVE",
+        "thumbprint": "sha256:-rEJ7d0Gi6bZDOnuRkY1YJoCP8vkvKwGLnWR8rsH2zQ",
+        "public_key_jwk": {
+          "crv": "Ed25519",
+          "kty": "OKP",
+          "x": "unPJ9ULpvU0f_1lwt90H2wh0Suyy7V-ebOWJUv3ihQo",
+          "kid": "document-worker-active",
+          "use": "sig",
+          "key_ops": [
+            "verify"
+          ]
+        },
+        "valid_from": "2024-02-12T09:30:00Z"
+      },
+      {
+        "key_id": "document-worker-next",
+        "algorithm": "ES256",
+        "status": "ROTATING",
+        "thumbprint": "sha256:b1PMhKP50BAJQhrPxRh6q-nf0ozLfPut_OZIywKSmFY",
+        "public_key_jwk": {
+          "crv": "P-256",
+          "kty": "EC",
+          "x": "Mr8wdupwl-l2jw8i1g1ViOXIDXEJbI-eBo2-SR9_c_g",
+          "y": "pmqaOrU2U7bmC5SrvlxPuug_F8cFZmPkqZ9IHeu2w2E"
+        }
+      }
+    ]
+  }
+}

@@ -91,6 +91,7 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
 
     let template = CredentialTemplate {
         jwt_vc_profile: None,
+        verification_prerequisite: None,
         id: template_id.clone(),
         organization_id: "org-rust-contract".to_owned(),
         name: "Rust Contract Credential".to_owned(),

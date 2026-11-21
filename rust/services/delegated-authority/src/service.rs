@@ -83,6 +83,14 @@ pub struct ResolvedDelegationGrant {
     pub consent_valid_until: DateTime<Utc>,
 }
 
+/// Sealed service preparation shared by legacy lifecycle calls and P03 command
+/// persistence. No public constructor or deserialization accepts a grant snapshot.
+pub(crate) struct PreparedLifecycleMutation {
+    pub(crate) previous: Option<DelegationGrant>,
+    pub(crate) grant: DelegationGrant,
+    pub(crate) activation: Option<ActivationCommitGuard>,
+}
+
 /// Managed lifecycle application service. Callers must authenticate the tenant,
 /// authorize the requested lifecycle action before invoking this port. It does not itself expose an HTTP authorization boundary.
 #[derive(Clone)]
@@ -135,11 +143,8 @@ impl DelegationAuthorityService {
         organization_id: Uuid,
         terms: GrantTerms,
     ) -> Result<DelegationGrant, ServiceError> {
-        let now = self.clock.now();
-        let grant = DelegationGrant::pending(organization_id, self.authority.clone(), terms, now)?;
-        grant.validate()?;
-        self.repository.insert(grant.clone()).await?;
-        Ok(grant)
+        let prepared = self.prepare_propose(organization_id, terms).await?;
+        self.persist_prepared(prepared).await
     }
 
     pub async fn approve(
@@ -150,6 +155,111 @@ impl DelegationAuthorityService {
         authenticated_approver: &Principal,
         evidence: ApprovalEvidence,
     ) -> Result<DelegationGrant, ServiceError> {
+        let prepared = self
+            .prepare_approve(
+                organization_id,
+                grant_id,
+                expected_revision,
+                authenticated_approver,
+                evidence,
+            )
+            .await?;
+        self.persist_prepared(prepared).await
+    }
+
+    pub async fn suspend(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+        expected_revision: u64,
+    ) -> Result<DelegationGrant, ServiceError> {
+        let prepared = self
+            .prepare_suspend(organization_id, grant_id, expected_revision)
+            .await?;
+        self.persist_prepared(prepared).await
+    }
+
+    pub async fn reinstate(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+        expected_revision: u64,
+    ) -> Result<DelegationGrant, ServiceError> {
+        let prepared = self
+            .prepare_reinstate(organization_id, grant_id, expected_revision)
+            .await?;
+        self.persist_prepared(prepared).await
+    }
+
+    pub async fn revoke(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+        expected_revision: u64,
+    ) -> Result<DelegationGrant, ServiceError> {
+        let prepared = self
+            .prepare_revoke(organization_id, grant_id, expected_revision)
+            .await?;
+        self.persist_prepared(prepared).await
+    }
+
+    async fn persist_prepared(
+        &self,
+        prepared: PreparedLifecycleMutation,
+    ) -> Result<DelegationGrant, ServiceError> {
+        if let Some(previous) = prepared.previous {
+            self.persist_guarded(&previous, prepared.grant, prepared.activation)
+                .await
+        } else {
+            self.repository.insert(prepared.grant.clone()).await?;
+            Ok(prepared.grant)
+        }
+    }
+
+    pub(crate) fn repository(&self) -> &Arc<dyn DelegationGrantRepository> {
+        &self.repository
+    }
+
+    pub(crate) fn command_clock(&self) -> Arc<dyn DelegationClock> {
+        self.clock.clone()
+    }
+
+    pub(crate) fn trusted_now(&self) -> DateTime<Utc> {
+        self.clock.now()
+    }
+
+    pub(crate) async fn command_grant(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+    ) -> Result<DelegationGrant, ServiceError> {
+        self.load_scoped(organization_id, grant_id, self.clock.now())
+            .await
+    }
+
+    pub(crate) async fn prepare_propose(
+        &self,
+        organization_id: Uuid,
+        terms: GrantTerms,
+    ) -> Result<PreparedLifecycleMutation, ServiceError> {
+        let now = self.clock.now();
+        let grant = DelegationGrant::pending(organization_id, self.authority.clone(), terms, now)?;
+        grant.validate()?;
+        Ok(PreparedLifecycleMutation {
+            previous: None,
+            grant,
+            activation: None,
+        })
+    }
+
+    pub(crate) async fn prepare_approve(
+        &self,
+        organization_id: Uuid,
+        grant_id: Uuid,
+        expected_revision: u64,
+        authenticated_approver: &Principal,
+        evidence: ApprovalEvidence,
+    ) -> Result<PreparedLifecycleMutation, ServiceError> {
         let now = self.clock.now();
         let previous = self
             .load_current(organization_id, grant_id, expected_revision, now)
@@ -177,16 +287,19 @@ impl DelegationAuthorityService {
             .await?;
         grant.updated_at = self.check_freshness(&grant, verified, now)?;
         let activation = ActivationCommitGuard::for_verified(&grant, verified, self.clock.clone());
-        self.persist_guarded(&previous, grant, Some(activation))
-            .await
+        Ok(PreparedLifecycleMutation {
+            previous: Some(previous),
+            grant,
+            activation: Some(activation),
+        })
     }
 
-    pub async fn suspend(
+    pub(crate) async fn prepare_suspend(
         &self,
         organization_id: Uuid,
         grant_id: Uuid,
         expected_revision: u64,
-    ) -> Result<DelegationGrant, ServiceError> {
+    ) -> Result<PreparedLifecycleMutation, ServiceError> {
         let now = self.clock.now();
         let previous = self
             .load_current(organization_id, grant_id, expected_revision, now)
@@ -195,15 +308,19 @@ impl DelegationAuthorityService {
             return Err(ServiceError::InvalidTransition);
         }
         let grant = next_snapshot(&previous, GrantStatus::Suspended, now)?;
-        self.persist(&previous, grant).await
+        Ok(PreparedLifecycleMutation {
+            previous: Some(previous),
+            grant,
+            activation: None,
+        })
     }
 
-    pub async fn reinstate(
+    pub(crate) async fn prepare_reinstate(
         &self,
         organization_id: Uuid,
         grant_id: Uuid,
         expected_revision: u64,
-    ) -> Result<DelegationGrant, ServiceError> {
+    ) -> Result<PreparedLifecycleMutation, ServiceError> {
         let now = self.clock.now();
         let previous = self
             .load_current(organization_id, grant_id, expected_revision, now)
@@ -219,22 +336,29 @@ impl DelegationAuthorityService {
             .await?;
         grant.updated_at = self.check_freshness(&grant, verified, now)?;
         let activation = ActivationCommitGuard::for_verified(&grant, verified, self.clock.clone());
-        self.persist_guarded(&previous, grant, Some(activation))
-            .await
+        Ok(PreparedLifecycleMutation {
+            previous: Some(previous),
+            grant,
+            activation: Some(activation),
+        })
     }
 
-    pub async fn revoke(
+    pub(crate) async fn prepare_revoke(
         &self,
         organization_id: Uuid,
         grant_id: Uuid,
         expected_revision: u64,
-    ) -> Result<DelegationGrant, ServiceError> {
+    ) -> Result<PreparedLifecycleMutation, ServiceError> {
         let now = self.clock.now();
         let previous = self
             .load_current(organization_id, grant_id, expected_revision, now)
             .await?;
         let grant = next_snapshot(&previous, GrantStatus::Revoked, now)?;
-        self.persist(&previous, grant).await
+        Ok(PreparedLifecycleMutation {
+            previous: Some(previous),
+            grant,
+            activation: None,
+        })
     }
 
     pub async fn expire(

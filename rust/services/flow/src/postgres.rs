@@ -1,3 +1,5 @@
+#[path = "postgres_issuance_prerequisite.rs"]
+mod issuance_prerequisite;
 #[path = "postgres_public_retention.rs"]
 mod public_retention;
 
@@ -447,7 +449,25 @@ impl PostgresFlowRepository {
     ) -> Result<bool, RepositoryError> {
         reject_delegation_context(instance)?;
         validate_instance_record(instance)?;
-        let result = sqlx::query(
+        // Generic persistence can advance an existing owner-bound request, but
+        // cannot create, replace or remove its issuance intent.
+        let owner_bound = instance
+            .context
+            .get(marty_oid4vp_contract::issuance_prerequisite::ISSUANCE_PREREQUISITE_CONTEXT_V1)
+            .is_some();
+        let statement = if owner_bound {
+            "UPDATE flow_service.flow_instances SET flow_definition_id=$2, organization_id=$3, \
+             status=$4, current_step_id=$5, context=$6, step_history=$7, state_history=$8, \
+             subject_id=$9, subject_type=$10, external_reference=$11, application_flow_key_hash=$12, \
+             started_at=$13, completed_at=$14, expires_at=$15, result=$16, error=$17, \
+             created_at=$18, updated_at=$19 WHERE id=$1 \
+             AND status NOT IN ('completed','failed','cancelled','expired') \
+             AND context::jsonb->'_marty_issuance_prerequisite_v1' = \
+                 $6::jsonb->'_marty_issuance_prerequisite_v1' \
+             AND created_at=$18 AND expires_at IS NOT DISTINCT FROM $15 \
+             AND NOT (context::jsonb ? '_marty_delegation_oid4vp_v1') \
+             AND NOT (context::jsonb ? '_marty_delegation_verifier_client_id_v1')"
+        } else {
             "INSERT INTO flow_service.flow_instances (id, flow_definition_id, organization_id, \
              status, current_step_id, context, step_history, state_history, subject_id, subject_type, \
              external_reference, application_flow_key_hash, started_at, completed_at, expires_at, \
@@ -462,31 +482,33 @@ impl PostgresFlowRepository {
              completed_at=EXCLUDED.completed_at, expires_at=EXCLUDED.expires_at, \
              result=EXCLUDED.result, error=EXCLUDED.error, updated_at=EXCLUDED.updated_at \
              WHERE flow_instances.status NOT IN ('completed','failed','cancelled','expired') \
+             AND NOT (flow_instances.context::jsonb ? '_marty_issuance_prerequisite_v1') \
              AND NOT (flow_instances.context::jsonb ? '_marty_delegation_oid4vp_v1') \
-             AND NOT (flow_instances.context::jsonb ? '_marty_delegation_verifier_client_id_v1')",
-        )
-        .bind(&instance.id)
-        .bind(&instance.flow_definition_id)
-        .bind(&instance.organization_id)
-        .bind(instance.status.to_string())
-        .bind(&instance.current_step_id)
-        .bind(&instance.context)
-        .bind(json(&instance.step_history)?)
-        .bind(json(&instance.state_history)?)
-        .bind(&instance.subject_id)
-        .bind(&instance.subject_type)
-        .bind(&instance.external_reference)
-        .bind(&instance.application_flow_key_hash)
-        .bind(instance.started_at)
-        .bind(instance.completed_at)
-        .bind(instance.expires_at)
-        .bind(&instance.result)
-        .bind(&instance.error)
-        .bind(instance.created_at)
-        .bind(instance.updated_at)
-        .execute(&self.pool)
-        .await
-        .map_err(storage)?;
+             AND NOT (flow_instances.context::jsonb ? '_marty_delegation_verifier_client_id_v1')"
+        };
+        let result = sqlx::query(statement)
+            .bind(&instance.id)
+            .bind(&instance.flow_definition_id)
+            .bind(&instance.organization_id)
+            .bind(instance.status.to_string())
+            .bind(&instance.current_step_id)
+            .bind(&instance.context)
+            .bind(json(&instance.step_history)?)
+            .bind(json(&instance.state_history)?)
+            .bind(&instance.subject_id)
+            .bind(&instance.subject_type)
+            .bind(&instance.external_reference)
+            .bind(&instance.application_flow_key_hash)
+            .bind(instance.started_at)
+            .bind(instance.completed_at)
+            .bind(instance.expires_at)
+            .bind(&instance.result)
+            .bind(&instance.error)
+            .bind(instance.created_at)
+            .bind(instance.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(storage)?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -497,7 +519,7 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         artifact: Option<&FlowArtifactRecord>,
     ) -> Result<bool, RepositoryError> {
-        self.save_started_instance_with_intent(instance, artifact, None, None, None)
+        self.save_started_instance_with_intent(instance, artifact, None, None, None, None)
             .await
     }
 
@@ -515,6 +537,7 @@ impl PostgresFlowRepository {
             .map_err(|_| record("delegation admission"))?;
         self.save_started_instance_with_intent(
             prepared.instance(),
+            None,
             None,
             None,
             None,
@@ -538,6 +561,7 @@ impl PostgresFlowRepository {
             Some((key_hash, claim_token)),
             None,
             None,
+            None,
         )
         .await
     }
@@ -554,7 +578,7 @@ impl PostgresFlowRepository {
         {
             return Err(record("public_verification_session"));
         }
-        self.save_started_instance_with_intent(instance, None, None, Some(limits), None)
+        self.save_started_instance_with_intent(instance, None, None, Some(limits), None, None)
             .await
     }
 
@@ -564,14 +588,26 @@ impl PostgresFlowRepository {
         artifact: Option<&FlowArtifactRecord>,
         physical_intent: Option<(&str, Uuid)>,
         public_limits: Option<crate::PublicVerificationLimits>,
+        issuance_intent: Option<
+            &marty_oid4vp_contract::issuance_prerequisite::IssuanceIntentBindingV1,
+        >,
         delegated: Option<&crate::delegation_start::PreparedDelegatedVerificationStart>,
     ) -> Result<bool, RepositoryError> {
         if delegated.is_none() {
             reject_delegation_context(instance)?;
-        } else if artifact.is_some() || physical_intent.is_some() || public_limits.is_some() {
+        } else if artifact.is_some()
+            || physical_intent.is_some()
+            || public_limits.is_some()
+            || issuance_intent.is_some()
+        {
             return Err(record("delegation start composition"));
         }
         validate_instance_record(instance)?;
+        if let Some(intent) = issuance_intent {
+            crate::issuance_prerequisite::validate_bound_instance(instance, intent)?;
+        } else {
+            crate::issuance_prerequisite::reject_supplied_intent(&instance.context)?;
+        }
         if let Some(artifact) = artifact {
             validate_artifact_record(artifact)?;
             if artifact.flow_instance_id != instance.id {
@@ -579,6 +615,12 @@ impl PostgresFlowRepository {
             }
         }
         let mut transaction = self.pool.begin().await.map_err(storage)?;
+        if let Some(intent) = issuance_intent {
+            if !issuance_prerequisite::admit_start(&mut transaction, instance, intent).await? {
+                transaction.rollback().await.map_err(storage)?;
+                return Ok(false);
+            }
+        }
         if let Some(prepared) = delegated {
             let definition = sqlx::query(
                 "SELECT * FROM flow_service.flow_definitions \
@@ -780,6 +822,7 @@ impl PostgresFlowRepository {
             return Err(RepositoryError::InvalidReplayDigest);
         }
         for candidate in planned {
+            crate::issuance_prerequisite::reject_supplied_intent(&candidate.instance.context)?;
             reject_delegation_context(&candidate.instance)?;
             validate_instance_record(&candidate.instance)?;
             if candidate
@@ -956,6 +999,10 @@ impl PostgresFlowRepository {
              completed_at=$13, expires_at=$14, result=$15, error=$16, updated_at=$17 \
              WHERE id=$18 AND status=$19 AND updated_at=$20 \
              AND status NOT IN ('completed','failed','cancelled','expired') \
+             AND (context::jsonb->'_marty_issuance_prerequisite_v1') IS NOT DISTINCT FROM \
+                 ($5::jsonb->'_marty_issuance_prerequisite_v1') \
+             AND (NOT (context::jsonb ? '_marty_issuance_prerequisite_v1') \
+                  OR expires_at IS NOT DISTINCT FROM $14) \
              AND (context::jsonb->'_marty_delegation_oid4vp_v1') IS NOT DISTINCT FROM \
                  ($5::jsonb->'_marty_delegation_oid4vp_v1') \
              AND (context::jsonb->'_marty_delegation_verifier_client_id_v1') IS NOT DISTINCT FROM \
@@ -1023,6 +1070,8 @@ impl PostgresFlowRepository {
              AND NOT (context::jsonb ? '_marty_delegation_oid4vp_v1') \
              AND NOT (context::jsonb ? '_marty_delegation_verifier_client_id_v1') \
              AND NOT (context::jsonb ? '_marty_managed_oid4vp_evidence_v2') \
+             AND (context::jsonb->'_marty_issuance_prerequisite_v1') IS NOT DISTINCT FROM \
+                 ($1::jsonb->'_marty_issuance_prerequisite_v1') \
              AND NOT (COALESCE(result, '{}'::json)::jsonb ?| \
                       ARRAY['verification_receipt', 'managed_policy_evidence_digest'])",
         )
@@ -1357,6 +1406,7 @@ impl PostgresFlowRepository {
         } else {
             validate_instance_record(instance)?;
         }
+        crate::issuance_prerequisite::validate_preserved_intent(expected, instance)?;
         if !valid_sha256(nonce_digest) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
@@ -1393,6 +1443,7 @@ impl PostgresFlowRepository {
         .map_err(storage)?;
         let stored = row.as_ref().map(instance_from_row).transpose()?;
         if let Some(stored) = stored.as_ref() {
+            crate::issuance_prerequisite::validate_preserved_intent(stored, instance)?;
             if reject_delegation_context(stored).is_err() {
                 transaction.rollback().await.map_err(storage)?;
                 return Err(record("delegation final-use integration required"));
@@ -1982,6 +2033,7 @@ fn reject_delegation_context(instance: &FlowInstanceRecord) -> Result<(), Reposi
 }
 
 fn validate_instance_shape(instance: &FlowInstanceRecord) -> Result<(), RepositoryError> {
+    crate::issuance_prerequisite::bound_intent(instance)?;
     checked_public_record(instance)?;
     instance.kernel()?;
     if instance

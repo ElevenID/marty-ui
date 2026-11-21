@@ -28,6 +28,9 @@
     "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs && node scripts/patch-checker-worker-cleanup.mjs",
     "build:website": "node scripts/build-web-surface.mjs website",
     "build:application": "node scripts/build-web-surface.mjs application",
+    "test:application": "node --test scripts/application-config.test.mjs scripts/application-source-closure.test.mjs scripts/application-resource-smoke.test.mjs scripts/application-dependency-install.test.mjs scripts/application-runtime-context.test.mjs scripts/application-dependency-profile.test.mjs scripts/website-build-tools.test.mjs scripts/application-browser-startup.test.mjs scripts/export-application-source.test.mjs scripts/application-package-consumer.test.mjs && vitest run --config vitest.application.config.ts",
+    "check:application-source-closure": "node scripts/application-source-closure.mjs",
+    "check:application-dependency-profile": "node scripts/application-dependency-profile.mjs --check",
     "test:website": "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs scripts/crawler-config.test.mjs && vitest run src/application/routing/appHandoff.test.ts src/application/routing/loginEntry.test.ts src/application/routing/publicEntry.test.ts src/components/__tests__/LandingPage.test.tsx src/apps/shared/WebSurfaceBoundary.test.tsx"
   },
   "dependencies": {

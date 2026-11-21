@@ -112,7 +112,7 @@ fn terms_projection(document: &Value) -> Result<Value, GrantWireError> {
     Ok(Value::Object(projection))
 }
 
-fn read_document(raw: &[u8]) -> Result<Value, GrantWireError> {
+pub(crate) fn read_document(raw: &[u8]) -> Result<Value, GrantWireError> {
     if raw.len() > MAX_GRANT_WIRE_BYTES {
         return Err(GrantWireError::DocumentTooLarge);
     }

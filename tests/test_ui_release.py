@@ -178,15 +178,22 @@ def test_cli_round_trip_records_the_exact_emitted_plan_bytes(source):
 
 def test_website_workflow_separates_source_build_signature_and_deployment():
     workflow = yaml.safe_load((ROOT / release.WORKFLOW).read_text())
-    assert set(workflow.get("on", workflow.get(True))) == {"workflow_dispatch"}
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"workflow_dispatch", "push"}
+    assert triggers["push"] == {
+        "branches": ["main"],
+        "paths": [".github/release-inputs/website-composition.json"],
+    }
     assert workflow["permissions"] == {"contents": "read"}
     assert release.PUBLIC_IMAGE in workflow["env"]["IMAGE"]
     dispatch = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
     assert dispatch["mode"]["default"] == "combined"
-    assert dispatch["mode"]["options"] == ["combined", "website", "compose"]
+    assert dispatch["mode"]["options"] == ["combined", "website", "application", "compose"]
     job = workflow["jobs"]["release"]
     steps = job["steps"]
-    assert job["if"] == "github.repository == 'ElevenID/marty-ui' && inputs.mode != 'compose'"
+    # A reviewed manifest push can compose originals but cannot publish an image.
+    assert job["if"] == ("github.repository == 'ElevenID/marty-ui' && "
+                          "github.event_name == 'workflow_dispatch' && (inputs.mode == 'combined' || inputs.mode == 'website')")
     assert job["permissions"]["contents"] == "read"
     checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "${{ github.sha }}"
@@ -218,7 +225,12 @@ def test_website_workflow_separates_source_build_signature_and_deployment():
     assert '--gh "$(command -v gh)"' not in shell
     assert not any(command in shell for command in ("kubectl", "helm upgrade", "gh release create", "ssh "))
     compose = workflow["jobs"]["compose"]
-    assert compose["if"] == "github.repository == 'ElevenID/marty-ui' && inputs.mode == 'compose'"
+    assert compose["if"] == (
+        "github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' && "
+        "((github.event_name == 'workflow_dispatch' && inputs.mode == 'compose') || "
+        "(github.event_name == 'push' && github.ref == 'refs/heads/main' && "
+        "github.ref_protected && !github.event.deleted))"
+    )
     assert compose["permissions"]["packages"] == "read" and compose["permissions"]["actions"] == "read"
     compose_shell = "\n".join(step.get("run", "") for step in compose["steps"])
     assert "web_release_intake.py website" in compose_shell and "web_release_intake.py application" in compose_shell

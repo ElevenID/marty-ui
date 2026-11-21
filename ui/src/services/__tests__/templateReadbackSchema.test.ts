@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
 import { normalizeCredentialTemplate } from '../presentationPolicyApi';
 
-const required = Object.keys(properties).filter((field) => field !== 'jwt_vc_profile');
+const required = Object.keys(properties).filter((field) => !['jwt_vc_profile', 'verification_prerequisite'].includes(field));
 const validate = new Ajv({ strict: false }).compile({
   type: 'object', properties, required, additionalProperties: false,
   components: { schemas },
@@ -21,6 +21,19 @@ const directProfile = {
   signature_lifetime_seconds: 600,
 };
 describe('public template configuration schema', () => {
+  it('retains a frozen prerequisite and rejects malformed or unbounded selections', () => {
+    const verification_prerequisite = {
+      profile: 'managed_sd_jwt_dcql_same_holder_v1',
+      flow_definition_id: 'flow-1', flow_definition_version: 1,
+      policy: { id: 'policy-1', version: 2, content_digest: `sha256:${'b'.repeat(64)}` },
+      verifier_issuer_did: 'did:web:verifier.example', ttl_seconds: 300,
+    };
+    expect(validate({ ...stored, verification_prerequisite }), JSON.stringify(validate.errors)).toBe(true);
+    expect(normalizeCredentialTemplate({ ...stored, verification_prerequisite }).verification_prerequisite).toEqual(verification_prerequisite);
+    for (const value of [null, { ...verification_prerequisite, ttl_seconds: 901 }, { ...verification_prerequisite, profile: 'unknown' }, { ...verification_prerequisite, policy: { ...verification_prerequisite.policy, content_digest: 'unbound' } }, { ...verification_prerequisite, evidence: {} }]) {
+      expect(validate({ ...stored, verification_prerequisite: value })).toBe(false);
+    }
+  });
   it('accepts persisted non-default configuration and preserves it during UI normalization', () => {
     expect(validate(stored), JSON.stringify(validate.errors)).toBe(true);
     const normalized = normalizeCredentialTemplate({ id: 'template', ...stored });

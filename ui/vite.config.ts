@@ -1,10 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import checker from 'vite-plugin-checker'
-import prerender from '@prerenderer/rollup-plugin'
-import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
-import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -13,7 +10,6 @@ import { productionBuildContract, productionBuildContractPlugin } from './script
 import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
 import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
 import { devServerOrigin } from './scripts/dev-server-origin.mjs'
-import { platformDemoScenarios } from './src/services/platformDemoScenarios.js'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
@@ -183,8 +179,25 @@ export default defineConfig(async ({ mode }) => {
   let authorRoutes = []
   let blogRoutes = []
   let demoRoutes = []
+  let prerender
+  let PuppeteerRenderer
+  let Sitemap
 
   if (!isSelfhostBuild && !isApplicationBuild) {
+    // Native URL loading keeps website package resolution inside this branch
+    // when Vite bundles the config. The application export omits this helper.
+    const websiteBuildTools = await import(
+      new URL('./scripts/website-build-tools.mjs', import.meta.url).href
+    )
+    prerender = websiteBuildTools.prerender
+    PuppeteerRenderer = websiteBuildTools.PuppeteerRenderer
+    Sitemap = websiteBuildTools.Sitemap
+    // Keep the website catalog helper out of application config resolution.
+    // A file URL leaves this import inside its owning branch when Vite bundles
+    // the config, so application exports can omit the demo source entirely.
+    const { platformDemoScenarios } = await import(
+      new URL('./src/services/platformDemoScenarios.js', import.meta.url).href
+    )
     const {
       BLOG_POSTS,
       BLOG_AUTHORS,
@@ -196,7 +209,7 @@ export default defineConfig(async ({ mode }) => {
       ARTICLE_META,
       getBrowseVisiblePosts,
       buildBlogTagPath,
-    } = await import('@elevenid/marty-blog/prerender-data')
+    } = websiteBuildTools
 
     const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
     const tagPaths = new Set()
@@ -300,7 +313,7 @@ export default defineConfig(async ({ mode }) => {
     define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify(assetBase) },
     resolve: {
       alias: {
-        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : 'public'}.js`, import.meta.url)),
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : isApplicationBuild ? 'application' : 'public'}.js`, import.meta.url)),
         '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : isApplicationBuild ? 'application' : 'public'}.jsx`, import.meta.url)),
         '@marty/commerce-extension': commerceExtensionPath,
         'react-router-dom': 'react-router',

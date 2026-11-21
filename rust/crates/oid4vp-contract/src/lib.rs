@@ -10,6 +10,7 @@ mod callback;
 mod digest;
 mod flow_receipt;
 pub mod haip_key;
+pub mod issuance_prerequisite;
 pub mod jwt_vc_profile;
 mod managed_evidence;
 pub mod managed_status;

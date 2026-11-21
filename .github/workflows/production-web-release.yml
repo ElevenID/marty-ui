@@ -1,14 +1,14 @@
 name: Production website release
 
-run-name: Production web ${{ inputs.mode || 'combined' }} from ${{ github.sha }}
+run-name: Production web ${{ inputs.mode || (github.event_name == 'push' && 'compose' || 'combined') }} from ${{ github.sha }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Combined legacy release, independent website, or signed composition
+        description: Combined legacy release, independent website or application, or signed composition
         type: choice
-        options: [combined, website, compose]
+        options: [combined, website, application, compose]
         default: combined
         required: true
       expected_source_sha:
@@ -23,6 +23,12 @@ on:
         description: Compose mode only; successful original website producer run
         required: false
         type: string
+      website_repository:
+        description: Compose mode only; owner of the original signed website release
+        type: choice
+        options: [ElevenID/marty-ui, ElevenID/website]
+        default: ElevenID/marty-ui
+        required: false
       website_run_attempt:
         description: Compose mode only; exact website producer attempt
         required: false
@@ -36,11 +42,16 @@ on:
         required: false
         type: string
 
+  push:
+    branches: [main]
+    paths:
+      - .github/release-inputs/website-composition.json
+
 permissions:
   contents: read
 
 concurrency:
-  group: production-web-release-${{ inputs.mode || 'combined' }}
+  group: production-web-release-${{ inputs.mode || (github.event_name == 'push' && 'compose' || 'combined') }}
   cancel-in-progress: false
 
 env:
@@ -48,7 +59,7 @@ env:
 
 jobs:
   release:
-    if: github.repository == 'ElevenID/marty-ui' && inputs.mode != 'compose'
+    if: github.repository == 'ElevenID/marty-ui' && github.event_name == 'workflow_dispatch' && (inputs.mode == 'combined' || inputs.mode == 'website')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -296,8 +307,203 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  application:
+    if: github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' && github.event_name == 'workflow_dispatch' && inputs.mode == 'application' && github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      APP_IMAGE: ghcr.io/elevenid/marty-ui-oss/application
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact protected-main application source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          BACKEND_TAG: ${{ inputs.stack_release_tag }}
+          WEBSITE_RUN: ${{ inputs.website_run_id }}
+          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt }}
+          APPLICATION_RUN: ${{ inputs.application_run_id }}
+          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -z "$BACKEND_TAG$WEBSITE_RUN$WEBSITE_ATTEMPT$APPLICATION_RUN$APPLICATION_ATTEMPT"
+          printf 'ASSETS=%s/application-release\nAPPLICATION_CONTEXT=%s/application-release-context\n' \
+            "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Configure the digest-preserving Docker Hub mirror
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Qualify the source package and its ordinary independent consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$ASSETS"
+          node ui/scripts/application-source-closure.mjs --fresh-install \
+            --runtime-context "$RUNNER_TEMP/application-full-context" \
+            --report "$ASSETS/application-source-closure.json"
+          python3 scripts/ci/audit-application-dependencies.py
+          node ui/scripts/application-source-closure.mjs --fresh-install --dependency-profile application \
+            --baseline-report "$ASSETS/application-source-closure.json" \
+            --runtime-context "$RUNNER_TEMP/application-profile-context" \
+            --report "$ASSETS/application-profile-source-closure.json"
+          node ui/scripts/export-application-source.mjs \
+            --archive "$ASSETS/application-source-package.zip" \
+            --manifest "$ASSETS/application-source-origin.json" \
+            --report "$ASSETS/application-source-package.json" \
+            --baseline-report "$ASSETS/application-profile-source-closure.json"
+          node ui/scripts/application-package-consumer.mjs \
+            --archive "$ASSETS/application-source-package.zip" \
+            --manifest "$ASSETS/application-source-origin.json" \
+            --producer-report "$ASSETS/application-source-package.json" \
+            --baseline-report "$ASSETS/application-profile-source-closure.json" \
+            --report "$ASSETS/application-package-consumer.json" \
+            --runtime-context "$APPLICATION_CONTEXT"
+          cp "$APPLICATION_CONTEXT/application-runtime-context.json" "$ASSETS/application-runtime-context.json"
+      - name: Freeze the package-built application image plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/application_release.py plan --source-sha "$GITHUB_SHA" \
+            --assets "$ASSETS" --context "$APPLICATION_CONTEXT" \
+            --output "$ASSETS/application-build-plan.json"
+          test "$(jq -er .image "$ASSETS/application-build-plan.json")" = "$APP_IMAGE"
+          {
+            echo 'build_args<<APPLICATION_BUILD_ARGS'
+            jq -r '.build_args | to_entries[] | "\(.key)=\(.value)"' "$ASSETS/application-build-plan.json"
+            echo APPLICATION_BUILD_ARGS
+          } >> "$GITHUB_OUTPUT"
+      - name: Install the committed browser tooling without rewriting source
+        working-directory: ui
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUPPETEER_SKIP_DOWNLOAD=true npm ci --no-audit --no-fund
+          npm exec --no -- puppeteer browsers install chrome
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Prepare pinned verification tools
+        run: bash scripts/install_web_verifiers.sh "$RUNNER_TEMP/web-verifiers"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push the package-built candidate by immutable digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: ${{ env.APPLICATION_CONTEXT }}
+          file: docker/application.Dockerfile
+          platforms: linux/amd64
+          build-args: ${{ steps.plan.outputs.build_args }}
+          outputs: type=image,name=${{ env.APP_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=production-application
+          cache-to: type=gha,mode=max,scope=production-application
+      - name: Qualify the exact published digest and sandboxed browser before signing
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ui/scripts/application-runtime-context.mjs --context "$APPLICATION_CONTEXT" \
+            --report "$ASSETS/application-image-check.json" --check-container \
+            --image-reference "$APP_IMAGE@$DIGEST" --browser-startup \
+            --browser-report "$ASSETS/application-image-browser.json" --browser-channel chrome
+          python3 scripts/application_release.py record --source-sha "$GITHUB_SHA" \
+            --assets "$ASSETS" --context "$APPLICATION_CONTEXT" \
+            --input-plan "$ASSETS/application-build-plan.json" \
+            --image-check "$ASSETS/application-image-check.json" \
+            --browser-report "$ASSETS/application-image-browser.json" --image-digest "$DIGEST" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$ASSETS/application-release.json"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        id: image_provenance
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Sign the qualified application image and release receipt
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          "$RUNNER_TEMP/web-verifiers/cosign" sign --yes "$APP_IMAGE@$DIGEST"
+          "$RUNNER_TEMP/web-verifiers/cosign" sign-blob --yes \
+            --bundle "$ASSETS/application-release.json.sigstore.json" "$ASSETS/application-release.json"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        id: release_provenance
+        with:
+          subject-path: ${{ env.ASSETS }}/application-release.json
+      - name: Reverify and retain the original application producer proofs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_PROVENANCE: ${{ steps.image_provenance.outputs.bundle-path }}
+          RELEASE_PROVENANCE: ${{ steps.release_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/web_producer_evidence.py --assets "$ASSETS" --subject application-release.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --release-provenance "$RELEASE_PROVENANCE" --image-provenance "$IMAGE_PROVENANCE" \
+            --image "$APP_IMAGE" --image-digest "$DIGEST" \
+            --gh "$RUNNER_TEMP/web-verifiers/gh" --cosign "$RUNNER_TEMP/web-verifiers/cosign"
+          python3 scripts/application_provenance.py --assets "$ASSETS" \
+            --source-sha "$GITHUB_SHA" --gh "$RUNNER_TEMP/web-verifiers/gh" \
+            --cosign "$RUNNER_TEMP/web-verifiers/cosign"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.ASSETS }}/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain application qualification failure evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: application-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/application-release/application-build-plan.json
+            ${{ runner.temp }}/application-release/application-runtime-context.json
+            ${{ runner.temp }}/application-release/application-source-package.json
+            ${{ runner.temp }}/application-release/application-package-consumer.json
+            ${{ runner.temp }}/application-release/application-image-check.json
+            ${{ runner.temp }}/application-release/application-image-browser.json
+          if-no-files-found: ignore
+          retention-days: 14
+
   compose:
-    if: github.repository == 'ElevenID/marty-ui' && inputs.mode == 'compose'
+    if: >-
+      github.repository == 'ElevenID/marty-ui' && github.repository_id == '1140864197' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.mode == 'compose') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.ref_protected && !github.event.deleted))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -326,6 +532,16 @@ jobs:
           fi
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Load and validate the protected-main composition manifest
+        id: composition_manifest
+        if: github.event_name == 'push'
+        env:
+          COMPOSITION_PUSH_DELETED: ${{ github.event.deleted }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/web_composition_manifest.py \
+            --manifest .github/release-inputs/website-composition.json >> "$GITHUB_OUTPUT"
       - name: Prepare pinned verification tools and dependencies
         shell: bash
         run: |
@@ -340,22 +556,48 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Authenticate exact original producers and compose their unchanged artifacts
+      - name: Authenticate the selected original website producer
         env:
           GH_TOKEN: ${{ github.token }}
-          WEBSITE_RUN: ${{ inputs.website_run_id }}
-          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt }}
-          APPLICATION_RUN: ${{ inputs.application_run_id }}
-          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt }}
+          WEBSITE_ARTIFACT_READ_TOKEN: ${{ secrets.WEBSITE_RELEASE_READ_TOKEN }}
+          WEBSITE_RUN: ${{ inputs.website_run_id || steps.composition_manifest.outputs.website_run_id }}
+          WEBSITE_ATTEMPT: ${{ inputs.website_run_attempt || steps.composition_manifest.outputs.website_run_attempt }}
+          WEBSITE_REPOSITORY: ${{ inputs.website_repository || steps.composition_manifest.outputs.website_repository || 'ElevenID/marty-ui' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$WEBSITE_REPOSITORY" in
+            ElevenID/marty-ui) ;;
+            ElevenID/website)
+              if [ -z "$WEBSITE_ARTIFACT_READ_TOKEN" ]; then
+                echo "::error::Selecting ElevenID/website requires WEBSITE_RELEASE_READ_TOKEN with read access to its Actions artifacts." >&2
+                exit 1
+              fi
+              export GH_TOKEN="$WEBSITE_ARTIFACT_READ_TOKEN"
+              ;;
+            *)
+              echo "::error::Unsupported website producer repository." >&2
+              exit 1
+              ;;
+          esac
+          unset WEBSITE_ARTIFACT_READ_TOKEN
+          gh="$RUNNER_TEMP/web-verifiers/gh"
+          cosign="$RUNNER_TEMP/web-verifiers/cosign"
+          python scripts/web_release_intake.py website --repository "$WEBSITE_REPOSITORY" \
+            --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
+            --gh "$gh" --cosign "$cosign"
+      - name: Authenticate application and backend and compose unchanged artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLICATION_RUN: ${{ inputs.application_run_id || steps.composition_manifest.outputs.application_run_id }}
+          APPLICATION_ATTEMPT: ${{ inputs.application_run_attempt || steps.composition_manifest.outputs.application_run_attempt }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           gh="$RUNNER_TEMP/web-verifiers/gh"
           cosign="$RUNNER_TEMP/web-verifiers/cosign"
-          python scripts/web_release_intake.py website --repository ElevenID/marty-ui \
-            --run-id "$WEBSITE_RUN" --run-attempt "$WEBSITE_ATTEMPT" --assets "$RUNNER_TEMP/selected-website" \
-            --gh "$gh" --cosign "$cosign"
           python scripts/web_release_intake.py application --repository ElevenID/marty-ui \
             --run-id "$APPLICATION_RUN" --run-attempt "$APPLICATION_ATTEMPT" --assets "$RUNNER_TEMP/selected-application" \
             --gh "$gh" --cosign "$cosign"

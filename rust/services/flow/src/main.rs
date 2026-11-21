@@ -54,6 +54,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     verification.callback_max_attempts = callback_config.max_attempts;
 
     let http_state = FlowHttpState {
+        issuance_prerequisite_authenticator: config
+            .issuance_prerequisite_service_token
+            .clone()
+            .map(|token| {
+                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
+            })
+            .transpose()?,
         service_authenticator: config
             .service_token
             .clone()

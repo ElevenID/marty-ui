@@ -8,11 +8,12 @@ closes the interval in which an asynchronous proof, issuer, or readiness check
 could complete against one transaction while the repository claimed a changed
 transaction under the same ID.
 
-It does not implement the complete prerequisite workflow. Canonical verified
-prerequisite evidence, binding to a prerequisite policy revision, and a durable
-single-use proof continuation remain separate planned work. The existing
-asynchronous lifecycle readiness check is still a prerequisite to the signing
-claim; it does not atomically bind a changing external policy to that claim.
+The signing fence alone does not implement the complete prerequisite workflow.
+The subsequent [verification-before-issuance profile](verification-before-issuance.md)
+adds managed evidence, the frozen Policy revision, an immutable issuance intent
+and an expiring single-use continuation consumed under this claim. The existing
+asynchronous lifecycle readiness check remains a separate prerequisite; it does
+not atomically bind a changing external policy to the claim.
 
 ## Authorization carried to the claim
 

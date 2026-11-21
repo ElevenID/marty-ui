@@ -6,10 +6,12 @@ use sqlx::{postgres::PgRow, PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
-    decode_grant_snapshot,
+    decode_delegation_command, decode_grant_snapshot,
     repository::{check_activation_guard, validate_initial},
-    validate_transition, ActivationCommitGuard, DelegationGrant, DelegationGrantRepository,
-    GrantAuditEvent, GrantStatus, RepositoryError,
+    validate_transition, ActivationCommitGuard, CommittedDelegationCommand,
+    DecodedDelegationCommand, DelegationCommandIdentity, DelegationGrant,
+    DelegationGrantRepository, GrantAuditEvent, GrantStatus, PreparedDelegationCommand, Principal,
+    RepositoryError, StoredDelegationCommandResult,
 };
 
 const MIGRATIONS: &[(i32, &str)] = &[
@@ -22,6 +24,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         3,
         include_str!("../migrations/0003_trusted_consent_evidence.sql"),
     ),
+    (4, include_str!("../migrations/0004_command_results.sql")),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;
@@ -67,6 +70,28 @@ impl PgDelegationGrantRepository {
         .execute(&mut *transaction)
         .await
         .map_err(map_database)?;
+        // A legacy 0001 writer does not participate in the migration advisory
+        // lock. Drain it before 0002's empty-table check, then hold this table
+        // lock until every guard and migration checksum commits. Do not change
+        // the historical migration bytes or manufacture a missing journal.
+        let grant_table_exists: bool = sqlx::query_scalar(
+            "SELECT to_regclass('delegated_authority_service.delegation_grants') IS NOT NULL",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(map_database)?;
+        if grant_table_exists {
+            sqlx::query("SET LOCAL lock_timeout = '5s'")
+                .execute(&mut *transaction)
+                .await
+                .map_err(map_database)?;
+            sqlx::query(
+                "LOCK TABLE delegated_authority_service.delegation_grants IN ACCESS EXCLUSIVE MODE",
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+        }
         for (version, sql) in MIGRATIONS {
             let expected_checksum = checksum(sql);
             let stored = sqlx::query_scalar::<_, String>(
@@ -111,7 +136,8 @@ impl PgDelegationGrantRepository {
                  AND to_regclass('delegated_authority_service.consent_confirmations') IS NOT NULL
                  AND to_regclass('delegated_authority_service.consent_withdrawals') IS NOT NULL
                  AND to_regclass('delegated_authority_service.representation_authority_sources') IS NOT NULL
-                 AND to_regclass('delegated_authority_service.representation_authority_assertions') IS NOT NULL",
+                 AND to_regclass('delegated_authority_service.representation_authority_assertions') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.command_results') IS NOT NULL",
         )
         .fetch_one(&self.pool)
         .await
@@ -149,12 +175,14 @@ impl PgDelegationGrantRepository {
                  OR (tgrelid = 'delegated_authority_service.representation_authority_sources'::regclass
                      AND tgname IN ('representation_authority_sources_binding','representation_authority_sources_immutable','representation_authority_sources_no_truncate'))
                  OR (tgrelid = 'delegated_authority_service.representation_authority_assertions'::regclass
-                     AND tgname IN ('representation_authority_assertions_guard','representation_authority_assertions_immutable','representation_authority_assertions_no_truncate')))",
+                     AND tgname IN ('representation_authority_assertions_guard','representation_authority_assertions_immutable','representation_authority_assertions_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.command_results'::regclass
+                     AND tgname IN ('command_results_binding','command_results_immutable','command_results_no_truncate')))",
         )
         .fetch_one(&self.pool)
         .await
         .map_err(map_database)?;
-        if triggers != 17 {
+        if triggers != 20 {
             return Err(RepositoryError::SchemaNotReady);
         }
         Ok(())
@@ -163,6 +191,124 @@ impl PgDelegationGrantRepository {
 
 #[async_trait]
 impl DelegationGrantRepository for PgDelegationGrantRepository {
+    async fn command_result(
+        &self,
+        identity: &DelegationCommandIdentity,
+    ) -> Result<Option<StoredDelegationCommandResult>, RepositoryError> {
+        load_command_result(&self.pool, identity).await
+    }
+
+    async fn commit_command(
+        &self,
+        prepared: PreparedDelegationCommand,
+    ) -> Result<CommittedDelegationCommand, RepositoryError> {
+        prepared.result.validate()?;
+        if prepared.result.grant != prepared.mutation.grant {
+            return Err(RepositoryError::CorruptData);
+        }
+        let identity = &prepared.result.identity;
+        let mut transaction = self.pool.begin().await.map_err(map_database)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+        // A hash collision serializes unrelated keys; exact typed identity still
+        // selects the row. Every command path takes this lock before grant locks.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(identity.lock_key()?)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+        if let Some(original) = load_command_result(&mut *transaction, identity).await? {
+            if original.command.digest() != prepared.result.command.digest() {
+                return Err(RepositoryError::CommandConflict);
+            }
+            transaction.commit().await.map_err(map_database)?;
+            return Ok(CommittedDelegationCommand {
+                result: original,
+                recovered: true,
+            });
+        }
+        let mutation = &prepared.mutation;
+        let grant = &mutation.grant;
+        if let Some(previous) = &mutation.previous {
+            let row = sqlx::query(
+                "SELECT id,organization_id,status,revision,terms_digest,grant_document,
+                 (created_at = (grant_document ->> 'created_at')::TIMESTAMPTZ
+                  AND updated_at = (grant_document ->> 'updated_at')::TIMESTAMPTZ) AS timestamp_columns_match
+                 FROM delegated_authority_service.delegation_grants WHERE organization_id=$1 AND id=$2 FOR UPDATE")
+                .bind(previous.organization_id).bind(previous.id).fetch_optional(&mut *transaction)
+                .await.map_err(map_database)?.ok_or(RepositoryError::NotFound)?;
+            let current = decode(row)?;
+            if &current != previous {
+                return Err(RepositoryError::RevisionConflict);
+            }
+            validate_transition(&current, grant)?;
+            check_activation_guard(grant, mutation.activation.as_ref(), None)?;
+            let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_database)?;
+            prepared.check_access(Some(database_now))?;
+            let updated = sqlx::query(
+                "UPDATE delegated_authority_service.delegation_grants
+                 SET status=$1,revision=$2,grant_document=$3,updated_at=($4::text)::TIMESTAMPTZ
+                 WHERE organization_id=$5 AND id=$6 AND revision=$7",
+            )
+            .bind(grant.status.as_str())
+            .bind(revision(grant.revision)?)
+            .bind(encode(grant)?)
+            .bind(grant.updated_at.to_rfc3339())
+            .bind(grant.organization_id)
+            .bind(grant.id)
+            .bind(revision(previous.revision)?)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+            if updated.rows_affected() != 1 {
+                return Err(RepositoryError::RevisionConflict);
+            }
+        } else {
+            validate_initial(grant)?;
+            let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_database)?;
+            prepared.check_access(Some(database_now))?;
+            sqlx::query(
+                "INSERT INTO delegated_authority_service.delegation_grants
+                 (id,organization_id,status,revision,terms_digest,grant_document,created_at,updated_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,($7::text)::TIMESTAMPTZ,($8::text)::TIMESTAMPTZ)")
+                .bind(grant.id).bind(grant.organization_id).bind(grant.status.as_str())
+                .bind(revision(grant.revision)?).bind(&grant.terms_digest).bind(encode(grant)?)
+                .bind(grant.created_at.to_rfc3339()).bind(grant.updated_at.to_rfc3339())
+                .execute(&mut *transaction).await.map_err(map_insert)?;
+        }
+        sqlx::query(
+            "INSERT INTO delegated_authority_service.command_results
+             (organization_id,actor_type,actor_id,command_id,command_digest,command_document,grant_id,grant_revision,result_document)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+            .bind(identity.organization_id).bind(actor_type(identity)?).bind(&identity.actor.id)
+            .bind(identity.command_id).bind(prepared.result.command.digest()).bind(&prepared.result.command.document)
+            .bind(grant.id).bind(revision(grant.revision)?).bind(encode(grant)?)
+            .execute(&mut *transaction).await.map_err(map_database)?;
+        // Includes waits and both lifecycle/command-result triggers. This is a
+        // final precommit observation, not an assertion of COMMIT's timestamp.
+        let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+        prepared.check_access(Some(database_now))?;
+        if mutation.activation.is_some() {
+            check_activation_guard(grant, mutation.activation.as_ref(), Some(database_now))?;
+        }
+        transaction.commit().await.map_err(map_database)?;
+        Ok(CommittedDelegationCommand {
+            result: prepared.result,
+            recovered: false,
+        })
+    }
+
     async fn insert(&self, grant: DelegationGrant) -> Result<(), RepositoryError> {
         validate_initial(&grant)?;
         let document = encode(&grant)?;
@@ -305,6 +451,77 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
         .map_err(map_database)?;
         rows.into_iter().map(decode_event).collect()
     }
+}
+
+fn actor_type(identity: &DelegationCommandIdentity) -> Result<String, RepositoryError> {
+    serde_json::to_value(identity.actor.principal_type)
+        .map_err(|_| RepositoryError::CorruptData)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or(RepositoryError::CorruptData)
+}
+
+async fn load_command_result<'e, E>(
+    executor: E,
+    identity: &DelegationCommandIdentity,
+) -> Result<Option<StoredDelegationCommandResult>, RepositoryError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let row = sqlx::query(
+        "SELECT organization_id,actor_type,actor_id,command_id,command_digest,command_document,
+                grant_id,grant_revision,result_document FROM delegated_authority_service.command_results
+         WHERE organization_id=$1 AND actor_type=$2 AND actor_id=$3 AND command_id=$4")
+        .bind(identity.organization_id).bind(actor_type(identity)?).bind(&identity.actor.id)
+        .bind(identity.command_id).fetch_optional(executor).await.map_err(map_database)?;
+    row.map(|row| {
+        let document: Value = row.try_get("command_document").map_err(corrupt)?;
+        let raw = serde_json::to_vec(&document).map_err(|_| RepositoryError::CorruptData)?;
+        let DecodedDelegationCommand::Mutation(command) =
+            decode_delegation_command(&raw).map_err(|_| RepositoryError::CorruptData)?
+        else {
+            return Err(RepositoryError::CorruptData);
+        };
+        if command.digest()
+            != row
+                .try_get::<String, _>("command_digest")
+                .map_err(corrupt)?
+        {
+            return Err(RepositoryError::CorruptData);
+        }
+        let grant_document: Value = row.try_get("result_document").map_err(corrupt)?;
+        let grant = decode_grant_snapshot(
+            &serde_json::to_vec(&grant_document).map_err(|_| RepositoryError::CorruptData)?,
+        )
+        .map_err(|_| RepositoryError::CorruptData)?;
+        if grant.id != row.try_get::<Uuid, _>("grant_id").map_err(corrupt)?
+            || revision(grant.revision)?
+                != row.try_get::<i64, _>("grant_revision").map_err(corrupt)?
+        {
+            return Err(RepositoryError::CorruptData);
+        }
+        let result = StoredDelegationCommandResult {
+            identity: DelegationCommandIdentity {
+                organization_id: row.try_get("organization_id").map_err(corrupt)?,
+                actor: Principal {
+                    principal_type: serde_json::from_value(Value::String(
+                        row.try_get("actor_type").map_err(corrupt)?,
+                    ))
+                    .map_err(|_| RepositoryError::CorruptData)?,
+                    id: row.try_get("actor_id").map_err(corrupt)?,
+                },
+                command_id: row.try_get("command_id").map_err(corrupt)?,
+            },
+            command,
+            grant,
+        };
+        if &result.identity != identity {
+            return Err(RepositoryError::CorruptData);
+        }
+        result.validate()?;
+        Ok(result)
+    })
+    .transpose()
 }
 
 fn checksum(sql: &str) -> String {
@@ -616,7 +833,9 @@ mod tests {
         // TRUNCATE bypasses row triggers. Test the statement guards inside a
         // transaction and always roll back before asserting, even if a guard broke.
         for sql in [
-            "TRUNCATE delegated_authority_service.grant_lifecycle_events",
+            // Command results reference historical lifecycle rows. CASCADE
+            // reaches the statement guard instead of stopping at the FK check.
+            "TRUNCATE delegated_authority_service.grant_lifecycle_events CASCADE",
             "TRUNCATE delegated_authority_service.delegation_grants, delegated_authority_service.grant_lifecycle_events CASCADE",
         ] {
             let mut transaction = pool.begin().await.unwrap();

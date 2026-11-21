@@ -7,8 +7,9 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    validate_transition, AuthorityMode, DelegationClock, DelegationGrant, GrantStatus,
-    GrantValidationError, VerifiedConsent,
+    validate_transition, AuthorityMode, CommittedDelegationCommand, DelegationClock,
+    DelegationCommandIdentity, DelegationGrant, GrantStatus, GrantValidationError,
+    PreparedDelegationCommand, StoredDelegationCommandResult, VerifiedConsent,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -35,6 +36,12 @@ pub enum RepositoryError {
     ActivationGuardRequired,
     #[error("activation evidence expired or clock changed before commit")]
     ActivationEvidenceExpired,
+    #[error("delegation command identity was reused with different content")]
+    CommandConflict,
+    #[error("delegation command access expired before commit")]
+    CommandAccessExpired,
+    #[error("delegation command persistence is not supported")]
+    CommandsUnsupported,
 }
 
 /// A minimal lifecycle journal entry, committed atomically with its grant revision.
@@ -149,6 +156,23 @@ pub(crate) fn check_activation_guard(
 /// supported way to create authoritative managed grants.
 #[async_trait]
 pub trait DelegationGrantRepository: Send + Sync {
+    /// Exact original-caller namespace. A missing record does not establish
+    /// that no uncommitted/read-only preparation is in progress.
+    async fn command_result(
+        &self,
+        _identity: &DelegationCommandIdentity,
+    ) -> Result<Option<StoredDelegationCommandResult>, RepositoryError> {
+        Err(RepositoryError::CommandsUnsupported)
+    }
+    /// One write boundary must own command reuse checking, lifecycle mutation,
+    /// lifecycle journal and immutable original result. Default fails closed for
+    /// existing adapters that have not implemented this stronger contract.
+    async fn commit_command(
+        &self,
+        _prepared: PreparedDelegationCommand,
+    ) -> Result<CommittedDelegationCommand, RepositoryError> {
+        Err(RepositoryError::CommandsUnsupported)
+    }
     async fn insert(&self, grant: DelegationGrant) -> Result<(), RepositoryError>;
     async fn get(
         &self,
@@ -213,6 +237,7 @@ pub(crate) fn validate_initial(grant: &DelegationGrant) -> Result<(), Repository
 struct MemoryState {
     grants: HashMap<Uuid, DelegationGrant>,
     audit: HashMap<Uuid, Vec<GrantAuditEvent>>,
+    commands: HashMap<DelegationCommandIdentity, StoredDelegationCommandResult>,
 }
 
 #[derive(Clone, Default)]
@@ -222,6 +247,76 @@ pub struct InMemoryDelegationGrantRepository {
 
 #[async_trait]
 impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
+    async fn command_result(
+        &self,
+        identity: &DelegationCommandIdentity,
+    ) -> Result<Option<StoredDelegationCommandResult>, RepositoryError> {
+        let state = self.state.read().await;
+        let result = state.commands.get(identity).cloned();
+        if let Some(result) = &result {
+            result.validate()?;
+        }
+        Ok(result)
+    }
+
+    async fn commit_command(
+        &self,
+        prepared: PreparedDelegationCommand,
+    ) -> Result<CommittedDelegationCommand, RepositoryError> {
+        prepared.result.validate()?;
+        if prepared.result.grant != prepared.mutation.grant {
+            return Err(RepositoryError::CorruptData);
+        }
+        let mut state = self.state.write().await;
+        if let Some(original) = state.commands.get(&prepared.result.identity) {
+            original.validate()?;
+            if original.command.digest() != prepared.result.command.digest() {
+                return Err(RepositoryError::CommandConflict);
+            }
+            return Ok(CommittedDelegationCommand {
+                result: original.clone(),
+                recovered: true,
+            });
+        }
+        prepared.check_access(None)?;
+        let mutation = &prepared.mutation;
+        let previous_status = if let Some(previous) = &mutation.previous {
+            let current = state
+                .grants
+                .get(&previous.id)
+                .ok_or(RepositoryError::NotFound)?;
+            if current != previous {
+                return Err(RepositoryError::RevisionConflict);
+            }
+            validate_transition(current, &mutation.grant)?;
+            check_activation_guard(&mutation.grant, mutation.activation.as_ref(), None)?;
+            Some(current.status)
+        } else {
+            validate_initial(&mutation.grant)?;
+            if state.grants.contains_key(&mutation.grant.id) {
+                return Err(RepositoryError::AlreadyExists);
+            }
+            None
+        };
+        prepared.check_access(None)?;
+        let event = GrantAuditEvent::from_grant(&mutation.grant, previous_status);
+        state
+            .audit
+            .entry(mutation.grant.id)
+            .or_default()
+            .push(event);
+        state
+            .grants
+            .insert(mutation.grant.id, mutation.grant.clone());
+        state
+            .commands
+            .insert(prepared.result.identity.clone(), prepared.result.clone());
+        Ok(CommittedDelegationCommand {
+            result: prepared.result,
+            recovered: false,
+        })
+    }
+
     async fn insert(&self, grant: DelegationGrant) -> Result<(), RepositoryError> {
         validate_initial(&grant)?;
         let mut state = self.state.write().await;

@@ -7,6 +7,7 @@
 //! and public Gateway hosting remain separate qualification milestones.
 pub mod authorization;
 pub mod challenge;
+pub mod commands;
 pub mod consent;
 pub mod consent_postgres;
 pub mod domain;
@@ -20,6 +21,7 @@ pub mod test_support;
 pub mod wire;
 pub use authorization::*;
 pub use challenge::*;
+pub use commands::*;
 pub use consent::*;
 pub use consent_postgres::*;
 pub use domain::*;

@@ -1,0 +1,32 @@
+{
+  "origin": "APPLICATION_AUTHORED",
+  "purpose": "Locally authored synthetic application regression fixtures; no upstream corpus bytes or live identity data",
+  "profile": "urn:marty:principal-runtime-binding:v1",
+  "compatibility_target_revision": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+  "status": "APPLICATION_TEST_ONLY",
+  "runtime_qualification": "NOT_ASSESSED",
+  "public_key_generation": {
+    "implementation": "Python cryptography 46.0.4",
+    "method": "Fresh Ed25519 and P-256 generation, public-key export only; private key objects were not serialized or retained",
+    "fingerprints": "SHA256 over compact key-sorted RFC7638 required public JWK members, computed with Python hashlib independently of the Rust consumer"
+  },
+  "private_protocol_corpus": "Not bundled. The explicit configured-source test reads it from a separately verified checkout.",
+  "files": {
+    "public-keys.json": {
+      "sha256": "33a63ebfd29eec610324ac99305d257ecf1315fb78f2b4bcd23412679efea9a0",
+      "scenario": "Independent public-key and RFC7638 digest inputs"
+    },
+    "external-service-account.json": {
+      "sha256": "11125781f873fe891db0fe4cff429f143352b21c1605028669501341d9bfa0f8",
+      "scenario": "External inventory reader with two configured audiences and no machine enrollment"
+    },
+    "managed-service-with-rotating-candidate.json": {
+      "sha256": "35c3f6aadf39b728bda02a311e9dbbb87aff837dd8b89217500c874e51468ba2",
+      "scenario": "Managed document worker with one active Ed25519 key and a pending P-256 rotation candidate"
+    },
+    "shared-runtime-session.json": {
+      "sha256": "5a970480eceeaeaa8177da713f66fd95aca444fb840cc771e01b1485e19fe7ed",
+      "scenario": "Shared support assistant with a separately supplied case-owner session tuple"
+    }
+  }
+}

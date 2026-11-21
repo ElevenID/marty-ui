@@ -261,9 +261,69 @@ def test_workflow_closes_the_same_roster_and_builds_every_surface():
     assert jobs["test-website"]["needs"] == ["changes", "release-preflight"]
     assert jobs["test-website"]["if"] == "needs.changes.outputs.website == 'true'"
     commands = "\n".join(step.get("run", "") for step in jobs["test-website"]["steps"])
-    for command in ("bun run test:website", "bun run build:website", "bun run build:application",
-                    "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website"):
+    for command in ("bun run test:website", "bun run test:application", "bun run build:website", "bun run build:application",
+                    "bun run build:selfhost", "node scripts/assert-website-dist.mjs dist-website",
+                    'node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container',
+                    'python3 scripts/ci/audit-application-dependencies.py',
+                    'node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-browser-startup.json" --browser-channel chrome',
+                    'node scripts/export-application-source.mjs --archive "$RUNNER_TEMP/application-source-package.zip" --manifest "$RUNNER_TEMP/application-source-origin.json" --report "$RUNNER_TEMP/application-source-package.json" --baseline-report "$RUNNER_TEMP/application-profile-source-closure.json"',
+                    'node scripts/application-package-consumer.mjs --archive "$RUNNER_TEMP/application-source-package.zip" --manifest "$RUNNER_TEMP/application-source-origin.json" --producer-report "$RUNNER_TEMP/application-source-package.json" --baseline-report "$RUNNER_TEMP/application-profile-source-closure.json" --report "$RUNNER_TEMP/application-package-consumer.json" --runtime-context "$RUNNER_TEMP/application-package-runtime-context"',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-runtime.json" --check-container',
+                    'node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-package-runtime-context" --report "$RUNNER_TEMP/application-package-browser-runtime.json" --check-container --browser-startup --browser-report "$RUNNER_TEMP/application-package-browser-startup.json" --browser-channel chrome'):
         assert command in commands
+    steps = jobs["test-website"]["steps"]
+    closure = next(step for step in steps if "application-source-closure.mjs --fresh-install --runtime-context" in step.get("run", ""))
+    runtime = next(step for step in steps if 'application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context"' in step.get("run", ""))
+    profile_audit = next(step for step in steps if "audit-application-dependencies.py" in step.get("run", ""))
+    profile = next(step for step in steps if "--dependency-profile application" in step.get("run", ""))
+    profile_runtime = next(step for step in steps if 'application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context"' in step.get("run", ""))
+    source_package = next(step for step in steps if "export-application-source.mjs --archive" in step.get("run", ""))
+    package_consumer = next(step for step in steps if "application-package-consumer.mjs --archive" in step.get("run", ""))
+    package_runtime = next(step for step in steps if '--report "$RUNNER_TEMP/application-package-runtime.json"' in step.get("run", ""))
+    bootstrap = next(step for step in steps if "download-verified-ui-release-assets.sh" in step.get("run", ""))
+    browser = next(step for step in steps if "--browser-startup" in step.get("run", ""))
+    package_browser = next(step for step in steps if '--browser-report "$RUNNER_TEMP/application-package-browser-startup.json"' in step.get("run", ""))
+    surface_tests = next(step for step in steps if "bun run test:application" in step.get("run", ""))
+    ordered = [closure, runtime, profile_audit, profile, profile_runtime, source_package,
+               package_consumer, package_runtime, bootstrap, browser, package_browser, surface_tests]
+    assert [steps.index(step) for step in ordered] == sorted(steps.index(step) for step in ordered)
+    assert profile_audit["working-directory"] == "${{ github.workspace }}"
+    for step in (closure, runtime, profile_audit, profile, profile_runtime, source_package,
+                 package_consumer, package_runtime, browser, package_browser):
+        assert "if" not in step and "continue-on-error" not in step
+        assert "--dependencies" not in step["run"] and "||" not in step["run"]
+    assert "--browser-channel chrome" in browser["run"] and "--no-sandbox" not in browser["run"]
+    assert "--browser-channel chrome" in package_browser["run"] and "--no-sandbox" not in package_browser["run"]
+    browser_upload = next(step for step in steps if step.get("with", {}).get("name") == "application-browser-${{ github.run_id }}-${{ github.run_attempt }}")
+    assert browser_upload["if"] == "always()"
+    assert browser_upload["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/application-browser-runtime.json",
+        "${{ runner.temp }}/application-browser-startup.json",
+    ]
+    assert browser_upload["with"]["retention-days"] == 14
+    source_package_upload = next(step for step in steps if step.get("with", {}).get("name") == "application-source-package-${{ github.run_id }}-${{ github.run_attempt }}")
+    assert source_package_upload["if"] == "always()"
+    assert source_package_upload["uses"] == browser_upload["uses"]
+    assert source_package_upload["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/application-source-package.zip",
+        "${{ runner.temp }}/application-source-origin.json",
+        "${{ runner.temp }}/application-source-package.json",
+        "${{ runner.temp }}/application-package-consumer.json",
+        "${{ runner.temp }}/application-package-runtime.json",
+        "${{ runner.temp }}/application-package-browser-runtime.json",
+        "${{ runner.temp }}/application-package-browser-startup.json",
+    ]
+    assert source_package_upload["with"]["retention-days"] == 14
+    package_scripts = json.loads((ROOT / "ui/package.json").read_text())["scripts"]
+    for test in ("scripts/application-config.test.mjs", "scripts/application-source-closure.test.mjs",
+                 "scripts/application-dependency-install.test.mjs", "scripts/application-runtime-context.test.mjs",
+                 "scripts/application-dependency-profile.test.mjs", "scripts/website-build-tools.test.mjs",
+                 "scripts/application-browser-startup.test.mjs", "scripts/export-application-source.test.mjs",
+                 "scripts/application-package-consumer.test.mjs"):
+        assert test in package_scripts["test:application"]
     guard = next(step for step in jobs["ci-gate"]["steps"] if "CI_PLAN" in step.get("env", {}))
     assert guard["env"]["CI_NEEDS_JSON"] == "${{ toJSON(needs) }}"
     assert "continue-on-error" not in guard and "if" not in guard

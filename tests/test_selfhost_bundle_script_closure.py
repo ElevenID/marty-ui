@@ -95,6 +95,48 @@ def test_product_imports_from_manifest_export_without_checkout_fallback(tmp_path
     assert isolated_reader(exported) == {'isolated_imports': True}
 
 
+WEBSITE_READER = r'''
+import importlib,json,pathlib,sys
+scripts=pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0,str(scripts))
+for name in ['website_release','website_provenance','web_auth',
+             'package_web_composition','website_producer_policy']:
+ module=importlib.import_module(name)
+ assert pathlib.Path(module.__file__).resolve().parent==scripts
+import website_release as release
+import website_producer_policy as policy
+selected=json.load(sys.stdin)
+assert release.validate_release(selected)==selected
+assert policy.validate_producer(selected['producer'],role='website')==selected['producer']
+for role in ['application','composition']:
+ try:policy.validate_producer(selected['producer'],role=role)
+ except ValueError:pass
+ else:raise AssertionError('Standalone website was allowed to produce '+role)
+print(json.dumps({'standalone_contract_from_bundle':True}))
+'''
+
+
+@pytest.mark.parametrize('omit_policy', [False, True])
+def test_standalone_website_contract_from_bundle_requires_its_bundled_policy(tmp_path, omit_policy):
+    exported = export_manifest_assets(tmp_path/'exported')
+    policy = exported/'scripts/website_producer_policy.py'
+    assert policy.is_file()
+    if omit_policy:
+        policy.unlink()
+    fixture = json.loads((ROOT/'tests/fixtures/standalone-website-release-v2.json').read_bytes())
+    assert fixture['purpose']=='synthetic-contract-fixture-not-release-evidence'
+    result = subprocess.run(
+        [sys.executable, '-I', '-B', '-c', WEBSITE_READER, str(exported/'scripts')],
+        cwd=exported, input=json.dumps(fixture['release']), capture_output=True, encoding='utf-8', timeout=60,
+    )
+    if omit_policy:
+        assert result.returncode != 0
+        assert "No module named 'website_producer_policy'" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)=={'standalone_contract_from_bundle': True}
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual private NTFS journal status')
 def test_ordinary_and_product_status_from_isolated_export(monkeypatch):
     # Both data roots stay private, while the child interpreter sees only the

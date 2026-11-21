@@ -168,6 +168,8 @@ pub struct CreateTemplateCommand {
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
     pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    pub verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     pub issuance_protocol: Option<String>,
     pub now: DateTime<Utc>,
 }
@@ -190,6 +192,8 @@ pub struct UpdateTemplatePatch {
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
     pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    pub verification_prerequisite:
+        Option<marty_oid4vp_contract::issuance_prerequisite::IssuancePrerequisitePolicyV1>,
     pub issuance_protocol: Option<String>,
 }
 
@@ -278,6 +282,7 @@ impl CredentialTemplateApplication {
             supported_formats: command.supported_formats,
             credential_payload_format: payload_format.canonical().to_owned(),
             jwt_vc_profile: command.jwt_vc_profile,
+            verification_prerequisite: command.verification_prerequisite,
             wallet_configs: Vec::<WalletConfig>::new(),
             compliance_profile: command.compliance_profile,
             compliance_profile_id: Some(command.compliance_profile_id),
@@ -817,6 +822,9 @@ fn apply_update(
     }
     if let Some(profile) = patch.jwt_vc_profile {
         template.jwt_vc_profile = Some(profile);
+    }
+    if let Some(policy) = patch.verification_prerequisite {
+        template.verification_prerequisite = Some(policy);
     }
     template.updated_at = now;
     Ok(template)

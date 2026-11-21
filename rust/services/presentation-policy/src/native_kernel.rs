@@ -27,6 +27,7 @@ struct DataIntegrityDocument<'a> {
 /// Resolves public signature keys through deployment-bounded transport. This does
 /// not alter the policy's trust profile or mark any issuer as trusted.
 pub struct ResolvingCredentialKernel {
+    external_status_fixture_transport: Option<crate::ExternalStatusFixtureTransport>,
     resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
     registry: Option<
         std::sync::Arc<dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver>,
@@ -34,6 +35,18 @@ pub struct ResolvingCredentialKernel {
 }
 
 impl ResolvingCredentialKernel {
+    fn deployment_context(
+        &self,
+        context: &CredentialVerificationContext,
+    ) -> CredentialVerificationContext {
+        let mut resolved = context.clone();
+        // Neither request JSON nor a supplied kernel context can expand this
+        // adapter's signature-key or private transport authority.
+        resolved.resolved_issuer_key = None;
+        resolved.external_status_fixture_transport = self.external_status_fixture_transport.clone();
+        resolved
+    }
+
     async fn prepare_document_sources(
         &self,
         context: &mut CredentialVerificationContext,
@@ -242,7 +255,16 @@ impl ResolvingCredentialKernel {
         Self {
             resolver,
             registry: None,
+            external_status_fixture_transport: None,
         }
+    }
+
+    pub fn with_external_status_fixture_transport(
+        mut self,
+        transport: crate::ExternalStatusFixtureTransport,
+    ) -> Self {
+        self.external_status_fixture_transport = Some(transport);
+        self
     }
 
     pub fn with_registry(
@@ -270,10 +292,7 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
         {
             return Ok(rejected(OB2_RETIRED));
         }
-        let mut resolved = context.clone();
-        // The public request map cannot supply this field. Clear even caller
-        // hints so this adapter only admits its own bounded resolver result.
-        resolved.resolved_issuer_key = None;
+        let mut resolved = self.deployment_context(context);
         if context.token.is_object()
             && matches!(
                 context.format,
@@ -423,9 +442,9 @@ impl CredentialVerificationKernel for RustCredentialKernel {
         match context.format {
             DetectedCredentialFormat::W3cVc => verify_vc_jwt(context, false).await,
             DetectedCredentialFormat::W3cVcdmDi => verify_data_integrity(context).await,
-            DetectedCredentialFormat::SdJwt => verify_sd_jwt(context),
+            DetectedCredentialFormat::SdJwt => verify_sd_jwt(context).await,
             DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context).await,
-            DetectedCredentialFormat::Mdoc => verify_mdoc(context),
+            DetectedCredentialFormat::Mdoc => verify_mdoc(context).await,
             DetectedCredentialFormat::Unknown => {
                 Ok(rejected("Unsupported or malformed credential presentation"))
             }
@@ -433,7 +452,7 @@ impl CredentialVerificationKernel for RustCredentialKernel {
     }
 }
 
-fn verify_mdoc(
+async fn verify_mdoc(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let mdoc_bytes = match decode_mdoc_token(token_string(&context.token)?) {
@@ -474,6 +493,9 @@ fn verify_mdoc(
         ));
     }
 
+    if !crate::mdoc_external_status::bounded_presentation(&mdoc_bytes, &session_transcript) {
+        return Ok(rejected_mdoc("mDoc presentation exceeds supported bounds"));
+    }
     let result =
         verify_mdoc_presentation(&mdoc_bytes, &session_transcript, &roots, &pinned_issuers);
     let error_kind = classify_mdoc_error(result.error.as_deref());
@@ -492,7 +514,28 @@ fn verify_mdoc(
         if result.device_authentication_valid { "True" } else { "False" },
         error_kind,
     );
-    project_mdoc_result(&mdoc_bytes, result, context)
+    let mut evidence = project_mdoc_result(&mdoc_bytes, result, context)?;
+    if evidence.verified {
+        let declared = crate::mdoc_external_status::declares_status(&mdoc_bytes);
+        let (proof, status, until) = match crate::mdoc_external_status::resolve(
+            &mdoc_bytes,
+            &session_transcript,
+            &roots,
+            &pinned_issuers,
+            declared,
+            context.external_status_fixture_transport.as_ref(),
+        )
+        .await
+        {
+            Ok(verified) => verified,
+            Err(()) => return Ok(rejected_mdoc("mDoc proof expired during status evaluation")),
+        };
+        evidence.authenticated_mdoc_presentation = Some(proof);
+        evidence.native_external_status = declared.then(|| status.clone());
+        evidence.external_status_valid_until_epoch_seconds = until;
+        evidence.status = status;
+    }
+    Ok(evidence)
 }
 
 fn project_mdoc_result(
@@ -1164,7 +1207,7 @@ fn data_integrity_evidence_for_selected(
     Ok(evidence)
 }
 
-fn verify_sd_jwt(
+async fn verify_sd_jwt(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
@@ -1267,8 +1310,52 @@ fn verify_sd_jwt(
         .get("iat")
         .and_then(Value::as_u64)
         .or_else(|| credential.and_then(issued_at));
+    let (status, external_status_valid_until_epoch_seconds) =
+        crate::external_status::sd_jwt_status(
+            &claims,
+            &issuer_key,
+            &algorithm,
+            context.external_status_fixture_transport.as_ref(),
+        )
+        .await;
+    // Network resolution must not extend either the credential or KB-JWT's
+    // verification window, including the ordinary (non-DCQL) verifier path.
+    let still_valid = if let Some(query) = &context.sd_jwt_dcql {
+        query
+            .verify(
+                &issuer_key,
+                token,
+                &sd_jwt_allowed_algorithms(context)
+                    .map_err(|_| invalid_native("SD-JWT algorithm policy changed"))?,
+            )
+            .is_ok()
+    } else {
+        let policy = marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
+            expected_issuer: issuer_key.issuer_id.clone(),
+            issuer_algorithm,
+            holder_algorithms: sd_jwt_allowed_algorithms(context)
+                .map_err(|_| invalid_native("SD-JWT algorithm policy changed"))?,
+        };
+        marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
+            token,
+            &issuer_key.public_jwk.to_string(),
+            &policy,
+            context.audience.clone(),
+            context.nonce.clone(),
+        )
+        .is_ok()
+    };
+    if !still_valid {
+        return Ok(rejected(
+            "SD-JWT credential or holder proof expired during status resolution",
+        ));
+    }
+
     let bound = context.nonce.is_some() || context.audience.is_some();
     Ok(CredentialVerificationEvidence {
+        native_external_status: status.checked_at_epoch_seconds.map(|_| status.clone()),
+        status,
+        external_status_valid_until_epoch_seconds,
         verified: true,
         authenticated_sd_jwt_query,
         authenticated_sd_jwt_presentation,
@@ -2244,6 +2331,7 @@ mod tests {
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: None,
+            external_status_fixture_transport: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
             nonce: None,
@@ -2255,6 +2343,47 @@ mod tests {
                 document,
             }),
         }
+    }
+
+    #[test]
+    fn deployment_adapter_replaces_supplied_private_transport_hints() {
+        let public: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let pem = public["certificate_pem"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        let supplied = crate::ExternalStatusFixtureTransport::new(
+            "https://supplied.invalid:8443",
+            pem.clone(),
+        )
+        .unwrap();
+        let configured =
+            crate::ExternalStatusFixtureTransport::new("https://configured.invalid:9443", pem)
+                .unwrap();
+        let kernel = ResolvingCredentialKernel::new(std::sync::Arc::new(
+            marty_issuer_key_resolution::NativeIssuerKeyResolver::new(Vec::new(), Vec::new()),
+        ));
+        let mut context = context(json!({}));
+        context.external_status_fixture_transport = Some(supplied);
+        context.verifier_context.insert(
+            "external_status_fixture_transport".into(),
+            json!({"origin":"https://supplied.invalid:8443"}),
+        );
+        assert!(kernel
+            .deployment_context(&context)
+            .external_status_fixture_transport
+            .is_none());
+        let kernel = kernel.with_external_status_fixture_transport(configured.clone());
+        assert_eq!(
+            kernel
+                .deployment_context(&context)
+                .external_status_fixture_transport,
+            Some(configured)
+        );
     }
 
     #[test]
@@ -2472,8 +2601,8 @@ mod tests {
         assert!(authenticate(optional).is_some());
     }
 
-    #[test]
-    fn sd_jwt_authenticates_the_selected_issuer_and_retains_scoped_provenance() {
+    #[tokio::test]
+    async fn sd_jwt_authenticates_the_selected_issuer_and_retains_scoped_provenance() {
         use ed25519_dalek::{Signer, SigningKey};
         let signer = SigningKey::from_bytes(&[27; 32]);
         let issuer = "did:web:issuer.example:Org:Acme";
@@ -2514,7 +2643,7 @@ mod tests {
         bind_key_profile(&mut selected, &context);
         context.resolved_issuer_key = Some(selected.clone());
         context.token = json!(signed(issuer));
-        let evidence = verify_sd_jwt(&context).unwrap();
+        let evidence = verify_sd_jwt(&context).await.unwrap();
         assert!(evidence.verified, "{:?}", evidence.failure_reason);
         let authentication = evidence.authenticated_issuer.unwrap();
         assert_eq!(evidence.issuer_id.as_deref(), Some(issuer));
@@ -2526,7 +2655,7 @@ mod tests {
         // The signature remains valid under the same key. Its authority is
         // unchanged even when a different issuer claim is signed.
         context.token = json!(signed("did:web:another-issuer.example"));
-        let rejected = verify_sd_jwt(&context).unwrap();
+        let rejected = verify_sd_jwt(&context).await.unwrap();
         assert!(!rejected.verified);
         assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
         assert!(rejected.authenticated_issuer.is_none());
@@ -2540,7 +2669,7 @@ mod tests {
                 foreign.provenance.trust_profile_id = Some(Uuid::from_u128(9));
             }
             context.resolved_issuer_key = Some(foreign);
-            let rejected = verify_sd_jwt(&context).unwrap();
+            let rejected = verify_sd_jwt(&context).await.unwrap();
             assert!(!rejected.verified);
             assert!(rejected.authenticated_issuer.is_none());
         }
@@ -2555,7 +2684,7 @@ mod tests {
                 _ => invalid.provenance.content_sha256 = Some("unknown".into()),
             }
             context.resolved_issuer_key = Some(invalid);
-            let rejected = verify_sd_jwt(&context).unwrap();
+            let rejected = verify_sd_jwt(&context).await.unwrap();
             assert!(!rejected.verified, "{malformed}");
             assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
             assert!(rejected.authenticated_issuer.is_none());

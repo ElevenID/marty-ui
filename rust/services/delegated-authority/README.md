@@ -135,6 +135,95 @@ successful observation. Final-use resolution and operation authorization must
 still recheck current evidence and status; no instantaneous global-revocation or
 bearer-permit guarantee is implied.
 
+## P03 lifecycle commands and original-result recovery
+
+`DelegationCommandService::execute` implements the lifecycle subset of the
+[versioned command contract](https://github.com/ElevenID/marty-protocol/blob/6126da7619e057be2ff58dd38a5d50f49891d1b3/protocol/delegated-authority/COMMANDS.md):
+`CREATE_GRANT`, `APPROVE_GRANT`, `SUSPEND_GRANT`, `REINSTATE_GRANT`,
+`REVOKE_GRANT`, and `RECOVER_RESULT`. `START_USE` and `FINALIZE_USE` explicitly
+return `UnsupportedCommand`; they are not composed through this service.
+
+The service accepts original request bytes. It reuses the bounded JSON reader
+before normal deserialization, rejects duplicate/unknown fields, explicit nulls,
+floats and unsafe revisions, and calculates the command digest over the complete
+validated intent. Command canonicalization supports the protocol's safe integer
+revision and preserves lexical identifiers; it does not change the number-free
+grant terms digest. This Rust adapter continues to reject noncanonical UUID/time
+spellings instead of silently normalizing them before equality checks. The
+public tests use freshly authored synthetic equality inputs. The exact upstream
+corpus is an explicitly ignored external-checkout gate documented under
+`tests/fixtures/commands/README.md`; protocol data is not redistributed here.
+
+Tenant and complete typed actor come from `DelegationCommandCaller`, a separate
+internal context with no `Deserialize` implementation. Its constructor validates
+shape only. It does not authenticate a caller, and the principal/runtime binding
+consistency validator does not establish authentication either. A qualified
+Gateway/runtime adapter must authenticate them independently before invoking
+this service; there is no new public route or capability advertisement.
+
+Every new mutation requires `DelegationCommandAuthorizer`. It receives the exact
+intent and current grant resource; access is checked before disclosing a grant
+revision/digest conflict. It returns a trusted observation and deadline, bounded
+to 30 seconds. Read-only preparation has a five-second time budget. The sealed
+preparation retains the authorization bound and its latest trusted clock sample.
+Repositories check those under their write boundary; PostgreSQL samples fresh
+database time after lock waits and after all grant/journal/result writes. An
+expired observation or regressed clock rolls the entire mutation back. These
+are bounded observations of the configured authorization owner, not a global
+revocation transaction with that owner. Deployment must qualify the source's
+freshness and revocation guarantees.
+
+Approval additionally requires a configured `DelegationConfirmationSource`,
+which resolves an immutable confirmation identifier from its trusted producer.
+A UUID alone never supplies `ApprovalEvidence`. The existing approval lifecycle
+still requires the authenticated actor to equal the complete typed grantor, and
+`ConsentEvidenceVerifier` checks consent and independent current representation
+authority. No default production authorizer or confirmation producer is supplied.
+
+The existing lifecycle APIs and command path share the same sealed preparation,
+consent verification and transition validation. PostgreSQL migration 0004 adds
+an immutable `command_results` table. One transaction serializes the exact
+`(organization, actor type, actor ID, command ID)` identity, checks any original
+result/digest, applies the revision-checked lifecycle mutation and its existing
+journal trigger, inserts the original command result, and rechecks freshness.
+A concurrent identical command recovers the original result; changed intent
+conflicts. Memory storage models the same write boundary under one lock but is
+not durable production persistence. Existing repository implementations that do
+not implement command persistence retain their old APIs and fail command calls
+closed through the new trait defaults.
+
+Recovery always obtains fresh current read authorization for the original tenant,
+typed actor and grant resource. This applies to explicit `RECOVER_RESULT` and
+mutation retries. It preserves the original grant ID, revision, terms, approval
+and timestamps, even after later revocation or expiry. An expired mutation
+permission does not prevent a separately authorized historical read; lost current
+read access does. The historical snapshot never asserts fresh authority. No
+new grant, approval, receipt or expiry is manufactured during recovery.
+
+This slice performs only read-only preparation before its local transaction and
+stores completed outcomes. It has no independently committed external work or
+pending final-use job. A missing result can overlap an uncommitted preparation;
+it is not proof that no request is running or permission to repeat a business
+operation. An ambiguous commit is reconciled using the same original command
+identity and digest. The service never retries external work and does not impose
+an application cancellation deadline on COMMIT. Future `START_USE`/`FINALIZE_USE`
+composition still needs its own durable pending/unresolved state, retained nonce
+guard, proof submission owner, managed signer and challenge/result transaction.
+
+Migration 0004 grants no privileges automatically. The request-serving role needs
+only SELECT/INSERT on `command_results`, in addition to its existing grant/journal
+privileges. Confirmation and representation-authority producers need no access
+to this table. Its insertion guard binds the committed result to the current
+snapshot and exact lifecycle event once; historical reads retain that old
+snapshot independently of later transitions. UPDATE, DELETE and TRUNCATE are
+rejected. Records are retained indefinitely in this milestone. A future retention
+implementation must preserve command reuse tombstones and reconciliation rules;
+removing a response must never permit identity reuse. The table contains actor
+and grant data and requires the same restricted handling as authoritative grants.
+
+Rifare still owns business idempotency, budgets, reservations, financial records
+and execution. The command result records a Marty lifecycle change only.
+
 ## Protocol and strict decoding
 
 The contract is based on
@@ -177,7 +266,12 @@ only; validation never dereferences them or trusts their origin.
 
 `PgDelegationGrantRepository::migrate()` applies bundled SQL under a
 transaction-scoped advisory lock, stores SHA-256 migration checksums and refuses
-changed migration content. Repeated startup is idempotent.
+changed migration content. Repeated startup is idempotent. For an existing grant table it also obtains an
+ACCESS EXCLUSIVE table lock with a five-second lock timeout before checking or
+applying migrations. A legacy writer that ignores the advisory lock must finish
+before migration 0002 checks emptiness; its committed row causes that upgrade to
+refuse without deleting the row or inventing history. Operators must still
+quiesce and drain writers before migration.
 `readiness()` checks the expected migration versions/checksums, tables and enabled
 lifecycle guards. It establishes persistence readiness only.
 
@@ -228,7 +322,9 @@ The delegated-authority PostgreSQL contract tests run when
 A configured but unavailable database fails the test; an unset variable skips
 the database-specific cases. The existing workspace contracts CI lane supplies a
 fresh database and sets this variable, so CI executes the live PostgreSQL paths.
-The test database owner must be able to create schemas and test roles.
+The test database owner must be able to create schemas, test roles and disposable
+test databases. The command migration race test uses its own temporary database;
+it never resets the shared test schema.
 
 The Flow start contract uses `FLOW_POSTGRES_TEST_URL`, pointing to the dedicated
 local `marty_atomic_test` database. It takes the existing shared schema-test

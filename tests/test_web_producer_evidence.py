@@ -10,6 +10,7 @@ import website_provenance as proof
 import website_release as web
 
 
+@pytest.mark.parametrize("candidate", ["legacy", "standalone"], indirect=True)
 def test_retained_subject_and_image_proofs_are_exact_and_reverified(candidate, tmp_path):
     kwargs, calls, _, _ = candidate
     output = tmp_path / "producer-output"
@@ -35,3 +36,17 @@ def test_producer_export_refuses_arbitrary_subject_paths(candidate, tmp_path):
                         release_provenance=kwargs["website_assets"] / "website-release.json.provenance.jsonl",
                         gh=kwargs["gh"], cosign=kwargs["cosign"])
     assert calls == []
+
+
+@pytest.mark.parametrize("names", [["production-web-release.json"], ["application-web-compatibility.json"],
+                                    ["web-composition.json", "web-composition.zip"],
+                                    ["website-release.json", "production-web-release.json"]])
+def test_standalone_export_rejects_other_roles_before_copying_provenance(candidate, tmp_path, names):
+    kwargs, calls, _, _ = candidate
+    output = tmp_path / "must-stay-empty"
+    output.mkdir(mode=0o700)
+    with pytest.raises(ValueError):
+        evidence.retain(output, names=names, producer=web.standalone_producer("a" * 40, "124", "2"),
+                        release_provenance=kwargs["website_assets"] / "website-release.json.provenance.jsonl",
+                        gh=kwargs["gh"], cosign=kwargs["cosign"])
+    assert list(output.iterdir()) == [] and calls == []

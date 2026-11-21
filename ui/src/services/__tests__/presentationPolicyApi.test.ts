@@ -10,6 +10,7 @@ import { http, HttpResponse } from 'msw'
 import { waitFor } from '@testing-library/react'
 import {
   createPresentationPolicy,
+  buildPresentationPolicyPayload,
   listPresentationPolicies,
   getPresentationPolicy,
   updatePresentationPolicy,
@@ -98,6 +99,24 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Presentation Policies', () => {
+    it('preserves the managed evidence profile while keeping the frozen revision read-only', async () => {
+      const policy_revision = { id: 'policy-1', version: 2, content_digest: `sha256:${'a'.repeat(64)}` };
+      const prerequisite_evidence_profile = 'managed_sd_jwt_dcql_v1';
+      const payload = buildPresentationPolicyPayload({ organization_id: 'org-1', name: 'Prerequisite', prerequisite_evidence_profile, policy_revision });
+      expect(payload.prerequisite_evidence_profile).toBe(prerequisite_evidence_profile);
+      expect(payload).not.toHaveProperty('policy_revision');
+      server.use(http.get('*/v1/presentation-policies/policy-1', () => HttpResponse.json({ ...mockPolicies.valid, id: 'policy-1', version: 2, prerequisite_evidence_profile, policy_revision })));
+      const result = await getPresentationPolicy('policy-1');
+      expect(result.prerequisite_evidence_profile).toBe(prerequisite_evidence_profile);
+      expect(result.policy_revision).toEqual(policy_revision);
+      let patchBody;
+      server.use(http.patch('*/v1/presentation-policies/policy-1', async ({ request }) => {
+        patchBody = await request.json();
+        return HttpResponse.json({ ...mockPolicies.valid, prerequisite_evidence_profile, policy_revision });
+      }));
+      await updatePresentationPolicy('policy-1', { organization_id: 'org-1', prerequisite_evidence_profile, policy_revision });
+      expect(patchBody).toEqual({ organization_id: 'org-1', prerequisite_evidence_profile });
+    });
     it('should create policy with correct payload', async () => {
       const newPolicy = {
         organization_id: 'org-1',

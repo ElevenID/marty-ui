@@ -1883,6 +1883,7 @@ mod tests {
         CredentialTransaction {
             jwt_vc_profile: None,
             jwt_vc_signing_timing: None,
+            issuance_intent: None,
 
             id: "transaction-1".to_owned(),
             organization_id: "org-a".to_owned(),

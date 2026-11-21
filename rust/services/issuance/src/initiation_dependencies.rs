@@ -230,6 +230,7 @@ impl InternalApplicationApprovalDependencies for NativeInitiationControlPlane {
         // This alternate writer intentionally has no explicit-profile route.
         if !template.jwt_vc_profile_json.is_empty()
             || template.credential_payload_format == "vc_jwt_direct_v1"
+            || !template.verification_prerequisite_json.is_empty()
         {
             return Err(InternalApplicationApprovalError::CredentialTemplateUnavailable);
         }
@@ -609,6 +610,13 @@ fn template_from_grpc(
         &template.jwt_vc_profile_json,
     )
     .map_err(|_| InitiationDependencyError::Invalid("invalid template JWT-VC profile".into()))?;
+    let verification_prerequisite =
+        marty_oid4vp_contract::issuance_prerequisite::parse_optional_policy_json(
+            &template.verification_prerequisite_json,
+        )
+        .map_err(|_| {
+            InitiationDependencyError::Invalid("invalid template verification prerequisite".into())
+        })?;
     let direct = template.credential_payload_format == "vc_jwt_direct_v1";
     if direct != jwt_vc_profile.is_some()
         || (direct
@@ -650,6 +658,7 @@ fn template_from_grpc(
             non_empty_or(template.credential_payload_format, "w3c_vcdm_v2_sd_jwt")
         },
         jwt_vc_profile,
+        verification_prerequisite,
         template_version: template.version,
         not_before_offset_seconds: i64::from(validity.not_before_offset_seconds),
         issuance_protocol: template.issuance_protocol,

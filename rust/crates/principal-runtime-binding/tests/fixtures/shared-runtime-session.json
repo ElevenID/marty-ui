@@ -1,0 +1,89 @@
+{
+  "configuration": {
+    "profile": "urn:marty:principal-runtime-binding-configuration:v1",
+    "organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+    "deployment_profile_id": "0191898c-6561-48e6-ab98-eecb7d8c053d",
+    "principal": {
+      "type": "SERVICE_ACCOUNT",
+      "id": "urn:application-test:service:support-assistant"
+    },
+    "authentication_source": {
+      "issuer": "https://login.application-tests.invalid/workloads",
+      "subject": "support-assistant/shared-sandbox"
+    },
+    "allowed_audiences": [
+      "https://support.application-tests.invalid/cases",
+      "https://audit.application-tests.invalid/bindings"
+    ],
+    "runtime": {
+      "kind": "EXTERNAL",
+      "instance_ref": "urn:application-test:runtime:shared-support-29"
+    },
+    "expected_key_thumbprint": {
+      "basis": "JWK_RFC7638_SHA256",
+      "encoding": "BASE64URL_SHA256",
+      "value": "_Dl-cEP89vekj4sNOQvBAq1-4S6dTCYLy6cNEhRc5Bs"
+    },
+    "expected_key_algorithm": "EdDSA",
+    "shared_runtime": true
+  },
+  "record": {
+    "profile": "urn:marty:principal-runtime-binding:v1",
+    "organization_id": "0b9eb29f-0d08-4a1c-acc3-cb68b198b5a4",
+    "principal": {
+      "type": "SERVICE_ACCOUNT",
+      "id": "urn:application-test:service:support-assistant"
+    },
+    "authentication": {
+      "issuer": "https://login.application-tests.invalid/workloads",
+      "subject": "support-assistant/shared-sandbox",
+      "audience": "https://support.application-tests.invalid/cases",
+      "key_algorithm": "EdDSA",
+      "key_thumbprint": {
+        "basis": "JWK_RFC7638_SHA256",
+        "encoding": "BASE64URL_SHA256",
+        "value": "_Dl-cEP89vekj4sNOQvBAq1-4S6dTCYLy6cNEhRc5Bs"
+      }
+    },
+    "runtime": {
+      "kind": "EXTERNAL",
+      "instance_ref": "urn:application-test:runtime:shared-support-29"
+    },
+    "session_binding": {
+      "represented_subject": {
+        "type": "USER",
+        "id": "urn:application-test:pairwise:case-owner-juniper"
+      },
+      "principal": {
+        "type": "SERVICE_ACCOUNT",
+        "id": "urn:application-test:service:support-assistant"
+      },
+      "runtime_instance_ref": "urn:application-test:runtime:shared-support-29",
+      "key_thumbprint": {
+        "basis": "JWK_RFC7638_SHA256",
+        "encoding": "BASE64URL_SHA256",
+        "value": "_Dl-cEP89vekj4sNOQvBAq1-4S6dTCYLy6cNEhRc5Bs"
+      },
+      "session_ref": "urn:application-test:session:support-case-804",
+      "establishment_evidence_ref": "urn:application-test:evidence:session-establishment-558"
+    }
+  },
+  "expected_session": {
+    "represented_subject": {
+      "type": "USER",
+      "id": "urn:application-test:pairwise:case-owner-juniper"
+    },
+    "principal": {
+      "type": "SERVICE_ACCOUNT",
+      "id": "urn:application-test:service:support-assistant"
+    },
+    "runtime_instance_ref": "urn:application-test:runtime:shared-support-29",
+    "key_thumbprint": {
+      "basis": "JWK_RFC7638_SHA256",
+      "encoding": "BASE64URL_SHA256",
+      "value": "_Dl-cEP89vekj4sNOQvBAq1-4S6dTCYLy6cNEhRc5Bs"
+    },
+    "session_ref": "urn:application-test:session:support-case-804",
+    "establishment_evidence_ref": "urn:application-test:evidence:session-establishment-558"
+  }
+}

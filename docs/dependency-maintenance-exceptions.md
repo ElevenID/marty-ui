@@ -23,39 +23,49 @@ another reviewed policy decision through the normal protected source workflow.
 Sources: [RustSec advisory](https://github.com/RustSec/advisory-db/blob/main/crates/chrono/RUSTSEC-2026-0543.md)
 and [upstream maintenance announcement](https://github.com/chronotope/chrono/issues/1768).
 
-## Temporary frontend development risk disposition
+## Retired frontend development risk disposition
 
-GHSA-fc5q-39xc-vjpf reports repeated-extglob regular-expression CPU denial in
-picomatch through 4.0.7; no patched version is listed. The reviewed graph contains
-picomatch 2.3.2 and 4.0.7 only under development tooling. Its production dependency
-graph contains no picomatch. Static delivery and absent direct imports support
-limited production exposure; they do not prove bundle absence or non-exploitability.
-CI/development CPU-denial risk remains. Keep existing process and job limits.
+On November 19, 2026, the source review for
+[UI #2001](https://github.com/ElevenID/marty-ui/pull/2001) rechecked the
+[primary GitHub advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
+GitHub marks GHSA-fc5q-39xc-vjpf withdrawn on November 18 and updated on
+November 19, with the stated reason that it is not a security issue.
+The temporary picomatch acceptance introduced in
+[UI #1987](https://github.com/ElevenID/marty-ui/pull/1987) is retired.
+This records an advisory withdrawal; it does not establish a patched package
+version, bundle absence or general non-exploitability.
 
-Owner: Marty platform maintainers. Tracking: [UI #1987](https://github.com/ElevenID/marty-ui/pull/1987).
-This exact advisory disposition expires **2026-11-24 00:00 UTC**. The audit script
-binds it to the exact reviewed dependency files, both installed versions/paths,
-dev-only metadata, frontend source/scripts, Vite configuration and production
-image/edge inputs. Changed context or expiry refuses admission while the finding
-remains. Actual UTC is sampled after scans and again at final admission after context
-validation. There is no CLI/environment clock override. A new graph or source change
-requires a new explicit review, rather than inheriting this assessment.
+The review confirmed actual clean scanner results before removing admission:
 
-Bun and npm still run and every other finding, including low severity, is refused.
-The existing optional-prerenderer braces disposition remains scoped as before.
-Npm still audits nonoptional dev dependencies with its existing low threshold;
-no omit-dev or severity relaxation is introduced. Indirect npm chains must resolve
-to the exact reviewed advisory, remain dev-only and include an actual advisory
-root; cycles alone cannot authorize acceptance. Malformed reports, unknown causes
-and scanner failures refuse. Clean audits after real remediation need no extension.
+- The [Security Scanning job](https://github.com/ElevenID/marty-ui/actions/runs/44575464897/job/135741771895)
+  ran both real scanners successfully on November 19. Its PR source was
+  `89bd5c6712f6739f5c1196b66d3de13980c00618`, checked out through integration
+  commit `1fd80fcaffb9fc65fd1216974288eddba8c9bfa9`. The audit explicitly
+  reported success without using the temporary disposition.
+- Fresh local scans on the same candidate used Bun `1.4.4+38afee6c8` and the
+  same scanner commands shown below. Both exited zero; Bun returned `{}`
+  and npm returned an empty vulnerability map with every severity count zero.
+  The raw JSON SHA-256 values were
+  `ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356`
+  for Bun and `c9a500aa694ae53fd484f38ec7ecf58c3036df89e88fd9dc13f39347f07a0f09`
+  for npm. The policy retirement changes no dependency versions or lockfiles.
 
-TODO (Marty platform maintainers, before November 24): adopt a verified upstream
-security release, or a separately reviewed pinned patch for both installed major
-versions with compatibility/adversarial checks. Remove this temporary disposition
-after remediation. No working patch or fixed release was established here, and
-this exception does not claim either. Production connector work remains outside
-the Canvas cleanup; this disposition preserves a protected source integration gate.
+The entrypoint still runs these exact scopes:
 
-Sources: [GitHub advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf).
-The linked [upstream PR 194](https://github.com/micromatch/picomatch/pull/194)
-addresses different wildcard behavior and is not treated as a security fix.
+```sh
+bun audit --json --ignore GHSA-vfj7-8cjw-p6xm
+npm audit --json --omit=optional --package-lock-only --audit-level=low
+```
+
+Every returned finding now fails, including the historical picomatch fixture
+reports. The obsolete source-hash and expiry acceptance path is removed, so a
+source change cannot inherit or renew that acceptance. There is no new ignore,
+source-hash approval or deadline extension. The existing optional-prerenderer
+braces ignore remains unchanged; npm continues to include nonoptional development
+dependencies at its existing low threshold.
+
+Duplicate JSON fields, malformed or incomplete reports, inconsistent vulnerability
+counts, scanner errors and inconsistent exit statuses refuse admission. Both
+scanner processes retain their timeout and noninteractive execution. The CLI
+accepts no arguments and does not echo untrusted scanner documents. Regression
+tests preserve these refusals and reject both historical advisory reports.

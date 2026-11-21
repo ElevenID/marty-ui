@@ -87,7 +87,12 @@ METADATA_IDENTITY_LINES = {
     ),
     "scripts/website_provenance.py": (
         '    if repository == ui.COMMERCE_REPOSITORY:',
-        '    ui.require(producer["repository"] == (ui.COMMERCE_REPOSITORY if private_image else ui.REPOSITORY),',
+    ),
+    "scripts/website_producer_policy.py": (
+        'LEGACY_REPOSITORIES = {ui.REPOSITORY: "1140864197", ui.COMMERCE_REPOSITORY: "1207411806"}',
+        '    workflows = {ui.REPOSITORY: ui.WORKFLOW, ui.COMMERCE_REPOSITORY: ui.COMMERCE_WORKFLOW,',
+        '                    LEGACY_COMMERCE_WEBSITE_IMAGE: ui.COMMERCE_REPOSITORY,',
+        '        "application": {ui.PUBLIC_IMAGE: ui.REPOSITORY, ui.COMMERCE_IMAGE: ui.COMMERCE_REPOSITORY},',
     ),
 }
 IGNORED_PARTS = {"__pycache__", "node_modules", "dist", "build", "artifacts"}

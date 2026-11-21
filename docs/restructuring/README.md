@@ -1,6 +1,71 @@
 # Repository restructuring foundation
 
-Status: destination repository bootstrap and extraction preparation; no production cutover authorized.
+Status: standalone website publication and signed cross-owner composition are
+qualified. Application source, test, asset and dependency separation is in progress. Production
+cutover remains a separate gate.
+
+## Current continuation checkpoint
+
+Latest recorded evidence, November 20, 2026 (America/Denver):
+
+| Workstream | Completed evidence | Next gate |
+| --- | --- | --- |
+| Standalone website producer | Successful signed `ElevenID/website` run [`44449706828`, attempt 2](https://github.com/ElevenID/website/actions/runs/44449706828/attempts/2), source `7ec0707aa348939a0e48e6a26b24fb1af8671b9b` | Preserve this exact original release selection for composition; newer source requires a newly qualified release |
+| Cross-owner composition | [PR #1999](https://github.com/ElevenID/marty-ui/pull/1999) merged as `6daf2a21`; protected-main [run `44594894023`, attempt 1](https://github.com/ElevenID/marty-ui/actions/runs/44594894023/attempts/1) signed and verified the composition; its six-file artifact and original evidence bytes were independently inspected | Qualify the actual application/OIDC flow and isolated-host promotion, rollback and recovery with this exact composition |
+| Application source preparation | [PR #2001](https://github.com/ElevenID/marty-ui/pull/2001) merged as `cf333d61e4cc406d0fdaa870829396291d887ea7`; clean local and hosted builds passed with 37 audited inputs absent, and [normal queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44635771801) completed with 27 successful jobs and one intended skip | Preserve the accepted source boundary while expanding application test, asset and dependency qualification |
+| Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002) merged normally as `780b531a22a89ed75442e71ed51ce4cb727c08ec`. Clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses. Both [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) and [merge-queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44647472085) completed with 27 successful jobs and one intended skip; all queue output bytes match the accepted PR rehearsal | Preserve the merged boundary and its exact diagnostic evidence while extending independent application qualification |
+| Independent application packages and browser startup | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) merged normally as `d1cf7bf93460344eaf78bbf5496eb949835138f6`. Its accepted source `83a59f65902a6691f46d2051773313f7e2b5ff3b` passed [CI `44657507012/1`](https://github.com/ElevenID/marty-ui/actions/runs/44657507012): 27 successful jobs and one intended skip. Both fresh profiles passed 296 tests across 24 files and emitted identical 88-file output. Hosted nginx/browser execution observed the SDK WASM, public/console rendering, unavailable-session Retry and aborted-WASM recovery; owned cleanup passed | Preserve the accepted package/runtime boundary while qualifying independent publication; actual authentication/OIDC and host acceptance remain separate |
+| Portable application source package | [PR #2007](https://github.com/ElevenID/marty-ui/pull/2007) merged normally as `6fd59c730a28e413cec3855037ad600f8e2dabf3`. Its source `316afe12b21ee8ece006406ab510917f2c470574` passed [CI `44677296614/1`](https://github.com/ElevenID/marty-ui/actions/runs/44677296614); all six original artifacts were independently verified against the exact integration tree `18f67468ade76f527136fcc906a7d8c2af4deeb3`. The 575-file source package plus manifest restores outside Git; all three installations pass 296 tests and produce identical 88-file output and a normalized 92-file runtime payload. Real restored-package container/browser gates and cleanup passed | Preserve the merged source boundary, archive and original hosted evidence while qualifying independent application publication |
+| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | Qualify the integration with current main through required CI and normal merge, then inspect the first actual protected-main publication. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
+
+Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
+and the exact run/artifact records in those PRs. The application source/test
+rehearsal separately classifies combined adapters, demo projections and test
+setup as application omissions. Shared application inputs, assets and
+dependencies remain retained in the baseline. The accepted source/asset rehearsals
+reused installed dependencies; PR #2004 separately establishes fresh locked
+installation. These earlier qualifications do not establish source deletion, signed application
+publication or an actual host/OIDC journey. The separate application-image
+producer records its own evidence before publication can be accepted.
+
+The [public asset audit](application-assets-audit.md) records the 26 additional
+application omissions and the retained locale/runtime resources. The completed
+71-input rehearsal binds 54 retained public resources to their original bytes,
+with actual local HTTP and translation-fallback checks. Its exact committed
+source and independently verified hosted artifact are recorded in PR #2002. A local
+resource probe cannot replace production server, browser startup or actual
+host/OIDC qualification.
+
+The [dependency and runtime boundary](application-dependency-boundary.md) retains
+the current full-lock baseline and immutable release selections. The explicit
+application profile is a separate selection; the root manifest, both root locks
+and default website/combined build behavior remain the baseline. Both fresh
+installations run before CI bootstrap changes the root package manifest, and both
+container checks exercise the unchanged production nginx/startup files. Removing
+the four audited roots is a bounded dependency reduction. The [portable source-package milestone](application-source-package.md) carries this
+accepted profile into an independently restored source tree. The
+[application image producer](application-image-release.md) builds from that
+consumer context and retains independent publication evidence. Complete package
+graph minimization, final source extraction and isolated-host/OIDC qualification
+remain subsequent gates.
+
+The browser increment replays the immutable application-profile context after the
+existing UI bootstrap makes diagnostic browser tooling available. It keeps all
+five fresh-install, audit and container gates before bootstrap. The browser probe
+must observe actual application rendering and the exact SDK WASM response under
+production nginx/CSP, then independently fail startup when that WASM is blocked.
+No identity provider or deployment account is needed for this bounded startup
+check. Successful authentication and the actual host/OIDC journey remain separate.
+The console entrypoint also carries the existing startup recovery shell, so a
+module failure can offer the same reload action as the public entrypoint. Both
+documents use the unchanged startup script, and their recovery regression cases
+are included in the selected application test suite.
+
+The bootstrap status and initial sequence below preserve the November 15
+foundation. Use the checkpoint above for the current execution stage. Actual
+host promotion, rollback/recovery and OIDC qualification remain distinct from
+publication and packaging; production changes and repository renaming require
+their later acceptance gates.
 
 ## Adopted repository names
 
@@ -29,7 +94,7 @@ Existing independently maintained backend services remain independently owned. D
 - Private subscription/commerce code remains in `subscriptions`.
 - The Canvas source split is merged into the existing [`canvas-integration`](https://github.com/ElevenID/canvas-integration) repository. Provider protocols, credentials, administration, workers and storage remain connector-owned; the public Common Gateway is its sole platform interface. Core retains canonical identity, ownership, evidence, approval, signing and audit. Existing licenses/provenance remain with their owners; production adapters and deployment/cutover qualification are separate owned TODOs, with unsupported flows disabled.
 
-## Execution status
+## Bootstrap execution status (November 15, 2026)
 
 | Workstream | Status | Next gate |
 | --- | --- | --- |
@@ -78,7 +143,7 @@ Introduce a signed product release manifest consumed by `platform`. It must iden
 
 Website and application producers should publish independently. Product composition selects already-published compatible artifacts and preserves original producer evidence. The installer verifies the complete release before deployment.
 
-## Next execution sequence
+## Original execution sequence
 
 1. Continue from the merged website route-contract foundation and its enforced `Website contracts` check. Refresh the destination branch before starting each subsequent batch.
 2. Finish website import, asset, route, build and workflow closure audit. The 79-file static observation is not a qualified export manifest.

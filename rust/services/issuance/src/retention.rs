@@ -214,10 +214,24 @@ impl PostgresRetentionRepository {
 }
 
 const SNAPSHOT_SQL: &str = r#"
-WITH transaction_records AS (
-    SELECT COUNT(*) FILTER (WHERE created_at < $2)::bigint AS expired,
-           MIN(created_at) FILTER (WHERE created_at >= $2) AS retained
-    FROM issuance_service.issuance_transactions WHERE organization_id = $1
+WITH retention_clock AS MATERIALIZED (SELECT clock_timestamp() AS observed_at),
+transaction_selection AS (
+    SELECT t.id, t.created_at, t.issuance_intent,
+           COALESCE(t.created_at < $2 AND (t.issuance_intent IS NULL OR (
+               t.status IN ('pending','authorized','issued','failed','expired','revoked')
+               AND t.expires_at <= clock.observed_at
+               AND (t.issuance_intent->>'expires_at_epoch_micros')::numeric = extract(epoch FROM t.expires_at) * 1000000
+               AND (t.issuance_intent->>'expires_at_epoch_micros')::numeric <= extract(epoch FROM clock.observed_at) * 1000000
+               AND (continuation.transaction_id IS NULL OR (
+                   continuation.expires_at <= clock.observed_at
+                   AND t.status IN ('issued','failed','expired','revoked'))))), false) AS purgeable
+    FROM issuance_service.issuance_transactions t CROSS JOIN retention_clock clock
+    LEFT JOIN issuance_service.issuance_prerequisite_continuations continuation ON continuation.transaction_id=t.id
+    WHERE t.organization_id=$1
+), transaction_records AS (
+    SELECT COUNT(*) FILTER (WHERE purgeable)::bigint AS expired,
+           MIN(created_at) FILTER (WHERE NOT purgeable) AS retained
+    FROM transaction_selection
 ), application_records AS (
     SELECT COUNT(*) FILTER (WHERE created_at < $2)::bigint AS expired,
            MIN(created_at) FILTER (WHERE created_at >= $2) AS retained
@@ -227,8 +241,12 @@ WITH transaction_records AS (
            MIN(created_at) FILTER (WHERE created_at >= $2) AS retained
     FROM issuance_service.authorization_sessions WHERE organization_id = $1
 ), event_records AS (
-    SELECT COUNT(*) FILTER (WHERE e.created_at < $2)::bigint AS expired,
-           MIN(e.created_at) FILTER (WHERE e.created_at >= $2) AS retained
+    SELECT COUNT(*) FILTER (WHERE e.created_at < $2 AND NOT EXISTS (
+               SELECT 1 FROM transaction_selection t WHERE t.id=e.transaction_id
+                   AND t.issuance_intent IS NOT NULL AND NOT t.purgeable))::bigint AS expired,
+           MIN(e.created_at) FILTER (WHERE e.created_at >= $2 OR EXISTS (
+               SELECT 1 FROM transaction_selection t WHERE t.id=e.transaction_id
+                   AND t.issuance_intent IS NOT NULL AND NOT t.purgeable)) AS retained
     FROM issuance_service.issuance_events e
     WHERE e.organization_id = $1 OR (e.organization_id IS NULL AND (
         EXISTS (SELECT 1 FROM issuance_service.issuance_transactions t
@@ -239,8 +257,8 @@ WITH transaction_records AS (
 ), credential_records AS (
     SELECT COUNT(*)::bigint AS expired
     FROM issuance_service.issued_credentials c
-    JOIN issuance_service.issuance_transactions t ON t.id = c.transaction_id
-    WHERE c.organization_id = $1 AND t.organization_id = $1 AND t.created_at < $2
+    JOIN transaction_selection t ON t.id = c.transaction_id
+    WHERE c.organization_id = $1 AND t.purgeable
 )
 SELECT t.expired AS issuance_transactions,
        a.expired AS applications,
@@ -287,6 +305,42 @@ impl RetentionRepository for PostgresRetentionRepository {
         cutoff_at: DateTime<Utc>,
     ) -> Result<RetentionRecordCounts, sqlx::Error> {
         let mut transaction = self.pool.begin().await?;
+        // Serialize retention with admission/signing before sampling its clock.
+        // A signing operation may already have reached a remote KMS, so retain
+        // that state even when the short prerequisite has since expired.
+        sqlx::query_scalar::<_, String>(
+            "SELECT id FROM issuance_service.issuance_transactions
+             WHERE organization_id=$1 AND created_at<$2 ORDER BY id FOR UPDATE",
+        )
+        .bind(organization_id)
+        .bind(cutoff_at)
+        .fetch_all(&mut *transaction)
+        .await?;
+        let observed_at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await?;
+        let eligible: Vec<String> = sqlx::query_scalar(
+            "SELECT t.id FROM issuance_service.issuance_transactions t
+             LEFT JOIN issuance_service.issuance_prerequisite_continuations continuation ON continuation.transaction_id=t.id
+             WHERE t.organization_id=$1 AND t.created_at<$2 AND (t.issuance_intent IS NULL OR (
+                 t.status IN ('pending','authorized','issued','failed','expired','revoked') AND t.expires_at<=$3
+                 AND (t.issuance_intent->>'expires_at_epoch_micros')::numeric=extract(epoch FROM t.expires_at)*1000000
+                 AND (t.issuance_intent->>'expires_at_epoch_micros')::numeric<=extract(epoch FROM $3::timestamptz)*1000000
+                 AND (continuation.transaction_id IS NULL OR (continuation.expires_at<=$3 AND t.status IN ('issued','failed','expired','revoked')))))",
+        )
+        .bind(organization_id)
+        .bind(cutoff_at)
+        .bind(observed_at)
+        .fetch_all(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "DELETE FROM issuance_service.issuance_prerequisite_continuations
+             WHERE organization_id=$1 AND transaction_id=ANY($2)",
+        )
+        .bind(organization_id)
+        .bind(&eligible)
+        .execute(&mut *transaction)
+        .await?;
         // Persist ownership before deleting a parent whose FK uses SET NULL.
         sqlx::query(
             r#"UPDATE issuance_service.issuance_events e SET organization_id = $1
@@ -302,7 +356,11 @@ impl RetentionRepository for PostgresRetentionRepository {
         .await?;
         let events = sqlx::query(
             r#"DELETE FROM issuance_service.issuance_events e
-               WHERE e.created_at < $2 AND (e.organization_id = $1 OR
+               WHERE e.created_at < $2 AND NOT EXISTS (
+                   SELECT 1 FROM issuance_service.issuance_transactions protected
+                   WHERE protected.id=e.transaction_id AND protected.organization_id=$1
+                     AND protected.issuance_intent IS NOT NULL AND NOT (protected.id=ANY($3)))
+               AND (e.organization_id = $1 OR
                    (e.organization_id IS NULL AND (
                        EXISTS (SELECT 1 FROM issuance_service.issuance_transactions t
                                WHERE t.id = e.transaction_id AND t.organization_id = $1)
@@ -311,6 +369,7 @@ impl RetentionRepository for PostgresRetentionRepository {
         )
         .bind(organization_id)
         .bind(cutoff_at)
+        .bind(&eligible)
         .execute(&mut *transaction)
         .await?
         .rows_affected();
@@ -338,19 +397,19 @@ impl RetentionRepository for PostgresRetentionRepository {
             r#"DELETE FROM issuance_service.issued_credentials c
                USING issuance_service.issuance_transactions t
                WHERE c.transaction_id = t.id AND c.organization_id = $1
-                 AND t.organization_id = $1 AND t.created_at < $2"#,
+                 AND t.organization_id = $1 AND t.id=ANY($2)"#,
         )
         .bind(organization_id)
-        .bind(cutoff_at)
+        .bind(&eligible)
         .execute(&mut *transaction)
         .await?
         .rows_affected();
         let transactions = sqlx::query(
             "DELETE FROM issuance_service.issuance_transactions \
-             WHERE organization_id = $1 AND created_at < $2",
+             WHERE organization_id = $1 AND id=ANY($2)",
         )
         .bind(organization_id)
-        .bind(cutoff_at)
+        .bind(&eligible)
         .execute(&mut *transaction)
         .await?
         .rows_affected();

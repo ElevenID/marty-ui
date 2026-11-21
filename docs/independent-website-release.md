@@ -1,8 +1,9 @@
 # Independent website releases and retained-slot deployment
 
 The marketing website can be built and promoted independently of the login,
-consoles, backend, and OpenBao. The two existing production producer workflows
-remain the entry points. Each has three operations:
+consoles, backend, and OpenBao. The existing public and private production
+producer workflows retain these three operations. The extracted public website
+also has its own publisher in `ElevenID/website`:
 
 | Operation | Builds or selects | Prerequisites | Result |
 | --- | --- | --- | --- |
@@ -50,6 +51,45 @@ slim application requires a separately qualified cutover; changing a marker valu
 does not authorize it.
 
 ## Produce a website
+
+### Standalone website owner contract
+
+The extracted `ElevenID/website` repository now has an additive public producer
+contract. Its exact identity is:
+
+| Field | Standalone public website |
+| --- | --- |
+| Repository / numeric ID | `ElevenID/website` / `1459542519` |
+| Reserved workflow | `.github/workflows/production-website-release.yml` |
+| Ref | `refs/heads/main` |
+| Image | `ghcr.io/elevenid/website` |
+| Plan / receipt / image marker | `marty.website-build-plan/v2` / `marty.website-release/v2` / `marty.website-image/v2` |
+| Audience / pages / platform | production / public / `linux/amd64` |
+
+The v2 plan describes `Dockerfile.website`, the root `package-lock.json`, eleven
+fixed source-input fingerprints and the final static output inventory. It does
+not reuse the legacy Docker build target or dependency graph. Its revision is
+the exact website source SHA, and commerce identity must be null. The shared
+synthetic fixture in `tests/fixtures/standalone-website-release-v2.json` verifies
+the same closed schema and canonical build-plan hash as the JavaScript producer.
+The [website contract specification](https://github.com/ElevenID/website/blob/main/docs/standalone-release-contract.md)
+defines the input paths, output hashing and publisher requirements.
+
+`website_producer_policy.py` admits this repository only for website receipts and
+its own image. Application, stable backend and outer composition authorities
+remain with their existing producers. Original public/private v1 evidence and
+retained rollback slots remain supported. A receipt cannot select or widen its
+own role, workflow, image coordinate, credential access or executable tooling.
+
+The standalone publisher is now implemented and has completed a real signed
+public release. The [composition checkpoint](restructuring/website-composition-checkpoint.md)
+records the original successful attempt and archive identity selected for the
+first cross-owner composition. The website's unsigned
+`web-qualification-RUN-ATTEMPT` artifact is not a release receipt. Its local
+Docker image/config ID is not an OCI registry manifest digest. Signed composition
+and live application/host qualification remain separate gates.
+
+### Existing public and private producers
 
 For public marketing, dispatch the existing public workflow on `main`:
 
@@ -99,10 +139,13 @@ image provenance. Existing `production-web-VERSION-RUN-ATTEMPT` and private
 
 ## Compose with an existing product
 
-Select successful original **website** and **combined** runs in the same producer
-repository. The two sources can differ; their route contracts and production
-audiences must match. The selected application determines the original stable
-backend source and tag.
+Select successful original **website** and **combined** runs. Public composition
+defaults to website evidence from `ElevenID/marty-ui`. After the standalone
+publisher is live-qualified, select `website_repository=ElevenID/website` to use
+its original v2 evidence. The application remains from `ElevenID/marty-ui` and
+determines the original stable backend source and tag. The sources can differ;
+their route contracts and production page sets must match. The private full
+producer continues to select its original private website/application evidence.
 
 ```sh
 gh workflow run production-web-release.yml --repo ElevenID/marty-ui --ref main \
@@ -110,6 +153,73 @@ gh workflow run production-web-release.yml --repo ElevenID/marty-ui --ref main \
   -f website_run_id="$website_run" -f website_run_attempt="$website_attempt" \
   -f application_run_id="$application_run" -f application_run_attempt="$application_attempt"
 ```
+
+The optional `website_repository` choice affects only the website intake. It does
+not transfer application, backend or composition signing authority, and it does
+not accept unsigned qualification artifacts. Omitting it retains the existing
+public producer selection.
+
+### Reviewed protected-main composition manifest
+
+When interactive workflow dispatch is unavailable, the public workflow also
+accepts a reviewed change to
+`.github/release-inputs/website-composition.json`. Only a push changing that path
+on protected `main` in repository `ElevenID/marty-ui` (numeric ID `1140864197`)
+can select this path. It runs the composition job; the image-producing release
+job remains manual. A pull request, merge-group run, fork, branch deletion or
+unprotected branch cannot select the composition job through this trigger.
+
+The manifest contains exactly six string fields: `expected_parent_sha`,
+`website_repository`, `website_run_id`, `website_run_attempt`,
+`application_run_id` and `application_run_attempt`. This entry point fixes the
+website owner to `ElevenID/website`. It rejects duplicate or additional JSON
+keys, oversized input, non-regular files, noncanonical positive run/attempt IDs,
+and invalid source hashes before installing tools, authenticating, or requesting
+any release artifacts.
+
+The checkout's commit must equal the Actions source SHA and belong to current
+main lineage. Its first parent must equal `expected_parent_sha`. Prepare the
+manifest against the current `main` commit and use the normal required checks
+and merge queue. The required release preflight checks changed manifests against
+the actual integration commit's first parent, including merge-group changes
+from the queue's base. It uses the tested Git history rather than a potentially
+stale pull request base field. Unrelated later changes skip manifest validation
+when the file is unchanged.
+
+If another change advances `main` before this manifest lands, or the merge queue
+combines it with a later commit, the stale selection fails closed. Refresh the
+manifest's expected parent in a reviewed change and rerun the normal checks.
+The main-push check repeats the binding before any artifact access. Do not
+remove the parent check, force an old source into main, or reuse a failed
+attempt as release evidence.
+
+The accepted manifest supplies only the five original-producer selections to
+the same intake and composition steps used by manual dispatch. Original website
+and application runs must still be successful `workflow_dispatch` runs on their
+own protected main branches. Archive bounds and hashes, original signatures and
+attestations, route/audience compatibility, backend identity and outer
+composition signing remain required. Merging the manifest authorizes artifact
+composition; it does not promote a website or modify a host.
+
+### Cross-repository artifact access
+
+Cross-repository artifact download requires a separate credential authorized for
+`ElevenID/website` with **Actions: read**. Before live standalone composition,
+configure the `WEBSITE_RELEASE_READ_TOKEN` Actions secret using an authorized
+token restricted to that repository and permission (for example, a GitHub App
+installation token or fine-grained personal access token). GitHub's
+[`GITHUB_TOKEN` is scoped to its workflow repository](https://docs.github.com/en/actions/concepts/security/github_token);
+public artifact metadata access does not establish permission to
+[download its archive](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
+
+The workflow supplies that credential only to the standalone website-intake
+step. It rejects a missing credential before any intake request and does not
+fall back to the application job token. The next application/backend/composition
+step receives the original job token, and legacy website selection continues to
+use it. The CLI already accepts an explicitly selected `GH_TOKEN` for its fixed
+Actions GET endpoints. A real standalone composition must demonstrate that the
+configured credential can download the exact selected original archive. A
+passing source test or a repository secret name does not establish that result.
 
 For full production, use `production-ui-release.yml` in
 `ElevenID/marty-subscriptions` and also supply `ui_source_sha` for the reviewed

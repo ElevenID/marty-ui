@@ -248,7 +248,7 @@ fn completed(fixture: &Fixture) -> (ManagedOid4vpEvidenceProjectionV2, Value) {
     };
     let result = json!({
         "policy_revision":candidate.policy,"evaluation_result":"passed","decision":"allow",
-        "verified_claims":candidate.selected_claims,"evaluation_timestamp":"1970-01-01T00:01:40.000000Z",
+        "verified_claims":candidate.selected_claims,"evaluation_timestamp":fixture.result["evaluation_timestamp"],
         "credential_results":fixture.result["credential_results"],"submission_digest":request.submission_digest,
         "evaluation_validity":candidate.validity,MANAGED_POLICY_EVIDENCE_DIGEST_V2:candidate.evidence_digest,
     });
@@ -262,8 +262,8 @@ fn completed(fixture: &Fixture) -> (ManagedOid4vpEvidenceProjectionV2, Value) {
         nonce_digest: request.flow_nonce_digest.clone(),
         result_digest: flow_result_digest(&result).unwrap(),
         callback_payload_digest: digest("callback"),
-        policy_evaluated_at_epoch_micros: 100_000_000,
-        policy_valid_until_epoch_micros: Some(130_000_007),
+        policy_evaluated_at_epoch_micros: candidate.validity.evaluated_at_epoch_micros,
+        policy_valid_until_epoch_micros: Some(candidate.validity.valid_until_epoch_micros),
         nonce_consumed_at_epoch_micros: 102_123_456,
         nonce_retention_expires_at_epoch_micros: 400_000_000,
         receipt_digest: String::new(),
@@ -396,10 +396,96 @@ fn managed_v2_keeps_exclusive_microsecond_deadlines() {
     assert!(evidence.receipt.recompute_digest().is_err());
     let mut candidate = fixture.candidate.clone();
     candidate.validity.evaluated_at_epoch_micros += 1;
-    assert!(candidate.recompute_digest().is_err());
+    candidate.evidence_digest = candidate.recompute_digest().unwrap();
+    assert!(candidate
+        .validate_for_request(&fixture.request(), &fixture.result)
+        .is_err());
     let mut candidate = fixture.candidate.clone();
     candidate.status.checked_at_epoch_seconds = 101;
     assert!(candidate.recompute_digest().is_err());
+}
+
+#[test]
+fn managed_v2_binds_precise_policy_observation_to_result_and_recovery() {
+    let mut fixture = fixture();
+    let evaluated = 100_307_582;
+    fixture.result["evaluation_timestamp"] = json!("1970-01-01T00:01:40.307582Z");
+    fixture.candidate.validity = PolicyEvaluationValidityV1::bind(
+        &fixture.request(),
+        &fixture.result,
+        evaluated,
+        130_000_007,
+    )
+    .unwrap();
+    fixture.candidate.evidence_digest = fixture.candidate.recompute_digest().unwrap();
+    fixture
+        .candidate
+        .validate_for_request(&fixture.request(), &fixture.result)
+        .unwrap();
+    assert_eq!(
+        fixture.candidate.policy_result["evaluation_time_epoch_seconds"],
+        100
+    );
+    assert_eq!(
+        fixture.candidate.validity.evaluated_at_epoch_micros,
+        evaluated
+    );
+    let (evidence, result) = completed(&fixture);
+    let recovered =
+        ManagedOid4vpEvidenceProjectionV2::from_json(&serde_json::to_string(&evidence).unwrap())
+            .unwrap();
+    assert_eq!(
+        recovered.receipt.policy_evaluated_at_epoch_micros,
+        evaluated
+    );
+    recovered.validate_for_stored_result(&result).unwrap();
+
+    let mut retimed = fixture.candidate.clone();
+    retimed.validity.evaluated_at_epoch_micros += 1;
+    retimed.evidence_digest = retimed.recompute_digest().unwrap();
+    assert_eq!(
+        retimed.validate_for_request(&fixture.request(), &fixture.result),
+        Err(Oid4vpContractError::BindingMismatch)
+    );
+    for false_time in [
+        "1970-01-01T00:01:40Z",
+        "1970-01-01T00:01:40.307583Z",
+        "1970-01-01T00:01:40.3075820Z",
+        "1970-01-01T00:01:40.307582001Z",
+        "1970-01-01T00:01:40.3075820001Z",
+        "invalid-time",
+    ] {
+        let mut changed_result = fixture.result.clone();
+        changed_result["evaluation_timestamp"] = json!(false_time);
+        let mut candidate = fixture.candidate.clone();
+        // Even a recomputed unkeyed result binding does not make a relabeled
+        // timestamp correspond to the retained Policy observation.
+        candidate.validity = PolicyEvaluationValidityV1::bind(
+            &fixture.request(),
+            &changed_result,
+            evaluated,
+            130_000_007,
+        )
+        .unwrap();
+        candidate.evidence_digest = candidate.recompute_digest().unwrap();
+        assert_eq!(
+            candidate.validate_for_request(&fixture.request(), &changed_result),
+            Err(Oid4vpContractError::BindingMismatch)
+        );
+    }
+    let mut changed_result = result.clone();
+    changed_result["evaluation_timestamp"] = json!("1970-01-01T00:01:40.307583Z");
+    let mut changed_evidence = evidence;
+    changed_evidence.receipt.result_digest = flow_result_digest(&changed_result).unwrap();
+    changed_evidence.receipt.receipt_digest = changed_evidence.receipt.recompute_digest().unwrap();
+    changed_evidence.evidence_digest = changed_evidence.recompute_digest().unwrap();
+    assert_eq!(
+        changed_evidence.validate_for_stored_result(&changed_result),
+        Err(Oid4vpContractError::BindingMismatch)
+    );
+    let mut wrong_seconds = fixture.candidate.clone();
+    wrong_seconds.policy_result["evaluation_time_epoch_seconds"] = json!(101);
+    assert!(wrong_seconds.recompute_digest().is_err());
 }
 
 #[test]

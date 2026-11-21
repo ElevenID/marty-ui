@@ -8,14 +8,14 @@ pub const GRANT_PROFILE: &str = "urn:marty:delegation-grant:v1";
 pub const MAX_GRANT_REVISION: u64 = 9_007_199_254_740_991;
 pub const MAX_GRANT_DOCUMENT_BYTES: usize = 65_536;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Principal {
     #[serde(rename = "type")]
     pub principal_type: PrincipalType,
     pub id: String,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PrincipalType {
     User,

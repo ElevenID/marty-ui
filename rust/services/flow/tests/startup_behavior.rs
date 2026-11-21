@@ -191,6 +191,26 @@ fn wallet_owner_https_is_default_off_and_requires_nonexportable_tls_and_workload
             .port(),
         9443
     );
+    assert!(FlowServiceConfig::from_values(values.clone())
+        .unwrap()
+        .issuance_prerequisite_service_token
+        .is_none());
+    let mut issuance = values.clone();
+    issuance.insert("FLOW_ISSUANCE_SERVICE_TOKEN".into(), "p".repeat(32));
+    let configured = FlowServiceConfig::from_values(issuance.clone()).unwrap();
+    assert!(configured.issuance_prerequisite_service_token.is_some());
+    assert!(!format!("{configured:?}").contains(&"p".repeat(32)));
+    issuance.insert(
+        "FLOW_ISSUANCE_SERVICE_TOKEN".into(),
+        values["GRPC_SERVICE_TOKEN"].clone(),
+    );
+    assert!(FlowServiceConfig::from_values(issuance).is_err());
+    let mut short = values.clone();
+    short.insert("FLOW_ISSUANCE_SERVICE_TOKEN".into(), "short".into());
+    assert!(FlowServiceConfig::from_values(short).is_err());
+    let mut without_https = baseline("development");
+    without_https.insert("FLOW_ISSUANCE_SERVICE_TOKEN".into(), "p".repeat(32));
+    assert!(FlowServiceConfig::from_values(without_https).is_err());
     values.remove("GRPC_SERVICE_TOKEN");
     assert!(FlowServiceConfig::from_values(values).is_err());
 }
