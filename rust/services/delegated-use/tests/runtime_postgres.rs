@@ -10,11 +10,14 @@ use std::sync::atomic::Ordering;
 
 use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{Duration, Utc};
 use marty_delegated_authority::{
-    use_http::DelegationUseHttpApplication, DelegationGrant, DelegationUseCommandError,
-    DelegationUseCommandResponse, DelegationUseCommandResult, PgTrustedConsentWriter,
-    RetainedUseChallenge, DELEGATION_COMMAND_PROFILE,
+    use_http::DelegationUseHttpApplication, use_receipt_http::DelegationUseReceiptHttpApplication,
+    DelegationGrant, DelegationUseCommandError, DelegationUseCommandResponse,
+    DelegationUseCommandResult, PgTrustedConsentWriter, RetainedUseChallenge,
+    DELEGATION_COMMAND_PROFILE,
 };
+use marty_delegated_receipt_consumer as consumer;
 use marty_delegated_use::{
     database::DatabasePools,
     runtime::{DelegatedUseRuntime, DelegatedUseRuntimeError},
@@ -29,6 +32,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use support::{
+    crypto::{public_jwk, RECEIPT_KEY},
     database::Database,
     host::{configuration, context},
     owned::{
@@ -90,9 +94,18 @@ async fn challenge(
     db: &Database,
     grant: &DelegationGrant,
 ) -> TestResult<RetainedUseChallenge> {
+    Ok(challenge_with_response(runtime, owned, db, grant).await?.1)
+}
+
+async fn challenge_with_response(
+    runtime: &DelegatedUseRuntime,
+    owned: &Owned,
+    db: &Database,
+    grant: &DelegationGrant,
+) -> TestResult<(DelegationUseCommandResponse, RetainedUseChallenge)> {
     let response = execute(runtime, owned, &start(grant)).await?;
     assert!(!response.recovered);
-    let DelegationUseCommandResult::Challenge { challenge_id, .. } = response.result else {
+    let DelegationUseCommandResult::Challenge { challenge_id, .. } = &response.result else {
         panic!("START_USE did not retain a challenge");
     };
     let document: Value = sqlx::query_scalar(
@@ -103,7 +116,7 @@ async fn challenge(
     .bind(challenge_id)
     .fetch_one(&db.admin)
     .await?;
-    Ok(serde_json::from_value(document)?)
+    Ok((response, serde_json::from_value(document)?))
 }
 
 fn verify_jws(compact: &str, key: &VerifyingKey) -> TestResult<Value> {
@@ -152,7 +165,7 @@ async fn actual_owner_host_round_trip_retains_crypto_audit_and_original_result()
         .is_err());
 
     let grant = owned.grant(&db).await?;
-    let retained = challenge(&runtime, &owned, &db, &grant).await?;
+    let (started, retained) = challenge_with_response(&runtime, &owned, &db, &grant).await?;
     assert_eq!(retained.verifier_id, VERIFIER_CLIENT_ID);
     assert_eq!(retained.grant.id, grant.id);
     assert_eq!(retained.grant.revision, 2);
@@ -206,6 +219,126 @@ async fn actual_owner_host_round_trip_retains_crypto_audit_and_original_result()
     assert!(authorization_expires_at > recorded_at);
     assert_eq!(owned.receipts.calls.load(Ordering::SeqCst), 1);
 
+    // The consumer obtains bytes through current-authorized artifact recovery.
+    // Its trust/context come from bootstrap, the authenticated grant/START_USE,
+    // the independently verified original request, and FINAL_USE. It neither
+    // reads Marty storage nor copies expectations from the submitted receipt.
+    let recovered_receipt = DelegationUseReceiptHttpApplication::recover_receipt(
+        runtime.commands().as_ref(),
+        &context(&owned)?,
+        &recovery(&completed),
+    )
+    .await?;
+    assert_eq!(recovered_receipt.semantics(), "EVIDENCE_ONLY");
+    assert!(recovered_receipt.original_response().recovered);
+    assert_eq!(recovered_receipt.receipt_ref(), receipt_ref);
+    assert_eq!(recovered_receipt.receipt_digest(), receipt_digest);
+    assert_eq!(
+        serde_json::to_value(&recovered_receipt.original_response().result)?,
+        serde_json::to_value(&completed.result)?
+    );
+    let compact = recovered_receipt.compact_jws().to_owned();
+    let key = consumer::PinnedReceiptKey::new(
+        owned.organization,
+        serde_json::from_value(serde_json::to_value(&owned.receipts.issuer)?)?,
+        consumer::Algorithm::Es256,
+        RECEIPT_KEY.into(),
+        &serde_json::to_vec(&public_jwk(&owned.receipts.key))?,
+    )?;
+    let DelegationUseCommandResult::Challenge {
+        created_at,
+        expires_at,
+        ..
+    } = &started.result
+    else {
+        unreachable!()
+    };
+    let expected_context = consumer::ReceiptContext {
+        organization_id: owned.organization,
+        grant: consumer::GrantReference {
+            id: grant.id,
+            revision: grant.revision,
+            terms_digest: grant.terms_digest.clone(),
+        },
+        actor: serde_json::from_value(serde_json::to_value(&owned.principal)?)?,
+        subject: serde_json::from_value(serde_json::to_value(&grant.terms.subject)?)?,
+        binding: consumer::Binding::Key {
+            key_thumbprint: owned.machine_thumbprint.clone(),
+        },
+        operation: consumer::Operation {
+            action: ACTION.into(),
+            resource_id: RESOURCE.into(),
+            audience: AUDIENCE.into(),
+            request_profile: OPERATION_PROFILE.into(),
+            request_digest: operation_digest(),
+        },
+        challenge: request_claims["nonce"].as_str().unwrap().into(),
+        status_issuer: serde_json::from_value(serde_json::to_value(&owned.authority.issuer)?)?,
+        status_state: consumer::StatusState::Active,
+        policy: consumer::PolicyExpectation {
+            id: format!(
+                "urn:marty:delegation-use-policy:{}:{}",
+                owned.organization, owned.delegated_policy
+            ),
+            version_digest: None,
+        },
+        domain_evidence: None,
+        context_created_at: *created_at,
+        context_expires_at: *expires_at,
+    };
+    let retention = consumer::RetainedReceiptBinding {
+        receipt_ref: receipt_ref.clone(),
+        receipt_digest: receipt_digest.clone(),
+        decision: consumer::Decision::Permit,
+        recorded_at: *recorded_at,
+        authorization_expires_at: *authorization_expires_at,
+    };
+    let expectation =
+        consumer::ReceiptExpectation::new(expected_context.clone(), retention.clone())?;
+    let fresh = consumer::verify_fresh(
+        compact.as_bytes(),
+        &key,
+        &expectation,
+        Utc::now(),
+        consumer::FreshnessPolicy::new(120, 120)?,
+    )?;
+    assert_eq!(fresh.decision(), consumer::Decision::Permit);
+    assert_eq!(fresh.semantics(), "EVIDENCE_ONLY");
+    assert_eq!(fresh.expires_at(), *authorization_expires_at);
+    assert_eq!(fresh.receipt_digest(), receipt_digest);
+    let mut different_operation = expected_context.clone();
+    different_operation.operation.request_digest = format!("sha256:{}", "c7".repeat(32));
+    assert_eq!(
+        consumer::verify_fresh(
+            compact.as_bytes(),
+            &key,
+            &consumer::ReceiptExpectation::new(different_operation, retention)?,
+            Utc::now(),
+            consumer::FreshnessPolicy::new(120, 120)?,
+        )
+        .unwrap_err(),
+        consumer::ReceiptVerificationError::ContextMismatch
+    );
+    let historical_at = *authorization_expires_at + Duration::seconds(1);
+    assert_eq!(
+        consumer::verify_fresh(
+            compact.as_bytes(),
+            &key,
+            &expectation,
+            historical_at,
+            consumer::FreshnessPolicy::new(120, 120)?,
+        )
+        .unwrap_err(),
+        consumer::ReceiptVerificationError::Expired
+    );
+    let historical =
+        consumer::verify_historical(compact.as_bytes(), &key, &expectation, historical_at)?;
+    assert_eq!(historical.expires_at(), fresh.expires_at());
+    assert_eq!(historical.receipt_digest(), fresh.receipt_digest());
+    assert_eq!(owned.receipts.calls.load(Ordering::SeqCst), 1);
+
+    // Independent owner-side assertions may inspect retained storage to prove
+    // exact persistence and audit linkage; they are not verifier inputs.
     let receipt = sqlx::query(
         "SELECT compact_jws,receipt_document,receipt_digest FROM delegated_authority_service.use_receipts
          WHERE organization_id=$1 AND challenge_id=$2",
@@ -214,7 +347,7 @@ async fn actual_owner_host_round_trip_retains_crypto_audit_and_original_result()
     .bind(retained.challenge_id)
     .fetch_one(&db.admin)
     .await?;
-    let compact: String = receipt.try_get("compact_jws")?;
+    assert_eq!(receipt.try_get::<String, _>("compact_jws")?, compact);
     let document: Value = receipt.try_get("receipt_document")?;
     assert_eq!(
         verify_jws(&compact, owned.receipts.key.verifying_key())?,
@@ -311,6 +444,21 @@ async fn actual_owner_host_round_trip_retains_crypto_audit_and_original_result()
         serde_json::to_value(&recovered.result)?,
         serde_json::to_value(&completed.result)?
     );
+    let after_revoke = DelegationUseReceiptHttpApplication::recover_receipt(
+        runtime.commands().as_ref(),
+        &context(&owned)?,
+        &recovery(&completed),
+    )
+    .await?;
+    assert_eq!(after_revoke.compact_jws(), compact);
+    assert_eq!(after_revoke.receipt_digest(), receipt_digest);
+    let historical = consumer::verify_historical(
+        after_revoke.compact_jws().as_bytes(),
+        &key,
+        &expectation,
+        historical_at,
+    )?;
+    assert_eq!(historical.expires_at(), *authorization_expires_at);
 
     // Current access revocation also closes historical result reads. Neither
     // revoked authority nor denied reads erase the original receipt or proof.
@@ -321,6 +469,16 @@ async fn actual_owner_host_round_trip_retains_crypto_audit_and_original_result()
         execute(&runtime, &owned, &recovery(&completed))
             .await
             .unwrap_err(),
+        DelegationUseCommandError::AccessDenied
+    );
+    assert_eq!(
+        DelegationUseReceiptHttpApplication::recover_receipt(
+            runtime.commands().as_ref(),
+            &context(&owned)?,
+            &recovery(&completed),
+        )
+        .await
+        .unwrap_err(),
         DelegationUseCommandError::AccessDenied
     );
     let preserved: String = sqlx::query_scalar(

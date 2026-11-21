@@ -338,6 +338,10 @@ pub struct DelegationUseCommandResponse {
     pub result: DelegationUseCommandResult,
 }
 
+#[path = "use_receipt.rs"]
+mod receipt_recovery;
+pub use receipt_recovery::RecoveredDelegatedUseReceipt;
+
 pub(crate) fn check_access(
     access: &VerifiedDelegationCommandAccess,
     started: DateTime<Utc>,

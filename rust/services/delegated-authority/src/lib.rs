@@ -63,6 +63,7 @@ pub mod use_http;
 pub mod use_ingress;
 pub mod use_mtls;
 pub mod use_postgres;
+pub mod use_receipt_http;
 pub use use_commands::*;
 pub use use_ingress::*;
 pub use use_postgres::{delegated_use_receipt_ref, PgDelegationUseRepository};

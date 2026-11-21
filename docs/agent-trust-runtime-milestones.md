@@ -18,6 +18,10 @@ certificate-authenticated transport and protected original request/proof ingress
 The explicit default-off serving executable now assembles these owners with
 fourteen restricted database connections and readiness before mandatory mTLS
 listen. Public delegated execution and production deployment remain gated.
+The next consumer slice adds protected recovery of the exact original signed
+receipt and a standalone verifier with separate fresh and historical evidence
+types. Actual-executable startup/readiness qualification now has a disposable
+OpenBao/Redis harness with explicit metadata wire fixtures.
 
 ## Implemented in this application slice
 
@@ -40,6 +44,8 @@ listen. Public delegated execution and production deployment remain gated.
 | P03 authenticated request/proof ingress | Mandatory mTLS listener with exact leaf certificate binding; protected Flow request retrieval and immutable proof retention, durable one-sign request claims and original deadline checks through COMMIT | Selected by the explicit host; production CA/pin management and public wallet contracts remain unqualified |
 | P03 explicit serving candidate | Default-off `marty-delegated-use` executable, fourteen actual restricted database identities, concrete local-owner and protected-provider assembly, bounded read-only readiness and mandatory mTLS before serving | Selected managed organization / full-machine / KEY / EXACT_OPERATION profile; production network, custody, roles and public consumers remain separate gates |
 | Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Selected by the default-off host; deployed outer HTTPS adapter and production custody/credentials remain pending |
+| P03 original receipt delivery | Protected read-only recovery of exact FINAL_USE compact JWS bytes, current RECOVER_RESULT access checked around awaited reads, original response/digest/timestamps retained | Internal mTLS host; recovery preserves original evidence under current read access and supplies no renewed grant authority; no additional permission or migration |
+| Independent receipt consumer | Standalone ES256/EdDSA verification with independently pinned trust, exact request context, retained original-byte digest and explicit clock/freshness policy | Sealed fresh/history evidence types; no service, database or Core dependency; public client packaging and business execution remain separate |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -87,8 +93,8 @@ administration paths. The next application packages still need:
   qualification beyond the passing disposable gate, and a separately reviewed
   pending-claim reconciliation design.
   Ordinary Flow finalization remains guarded.
-- Public delegated-use hosting, packaged public clients, independent consumer
-  verification and explicit capability qualification. Human lifecycle commands,
+- Public delegated-use hosting, packaged public clients, deployed integration of
+  the implemented independent verifier and explicit capability qualification. Human lifecycle commands,
   directory, enrollment and approval hosting are opt-in candidates.
 - Rifare adoption of those public features after the corresponding runtime
   gates pass. This checkpoint changes no Rifare business execution behavior.
@@ -686,3 +692,148 @@ and selects mTLS only; actual mTLS transport is exercised separately by the
 Delegated Authority suite. These tests do not qualify a deployed remote CA/KMS,
 fresh production credential issuance, public wallets or a Rifare business commit.
 Publication uses `[skip ci]` without dispatching a hosted workflow.
+
+
+## Current receipt recovery, verification and executable qualification follow-on
+
+The follow-on to `3d1f699` closes the missing internal delivery path for signed
+receipts and adds an independently usable verifier. It also qualifies a bounded
+startup/readiness slice of the actual executable with disposable remote custody.
+The three workstreams were implemented in parallel. Receipt recovery and the
+consumer are joined in actual local-owner acceptance; the executable has a
+separate startup/readiness gate.
+
+### Protected original artifacts
+
+The explicit internal host now mounts
+`POST /internal/v1/organizations/{organization}/delegated-use/receipts/recover`.
+It accepts the existing strict RECOVER_RESULT intent and uses the existing
+current recovery right. The response contains the original FINAL_USE response
+with `recovered=true`, exact compact JWS, reference, digest and EVIDENCE_ONLY
+semantics. Original command/result DTOs, migrations and permission catalogs are
+unchanged.
+
+The service scopes the read by tenant, complete typed actor and original command,
+checks the expected command digest and validates the receipt against its retained
+result and admission. Bounded read-only repeatable snapshots perform no signing,
+evaluation, mutation or pending-claim retry. Current access is checked before
+and after the artifact read; the first authentication and access deadlines remain
+binding across waits. Expired or revoked grants remain recoverable as history
+while current recovery access survives. Revoked access closes the read without
+erasing the original evidence.
+
+### Independent consumer evidence
+
+The new [`marty-delegated-receipt-consumer`](../rust/crates/delegated-receipt-consumer/README.md)
+crate has no service, database, Core, signing-grant or network dependency. The
+caller independently supplies a tenant/typed-issuer/algorithm/key pin, original
+request context, an authenticated FINAL_USE reference and original-byte digest,
+and an explicit observation time. ES256 and Ed25519 verification authenticate
+the exact compact bytes; strict bounded parsing rejects ambiguous JSON, unknown
+members, unsafe numbers, unsupported encodings and noncanonical identifiers.
+
+The context includes the grant revision/terms, typed actor/subject, complete
+binding and operation, nonce, selected policy, status issuer and original time
+window. Generated evidence references and unpinned policy versions remain
+signed issuer assertions; optional independent pins can constrain them. The
+signature covers the nonce, while the command UUID, Flow challenge UUID and
+proof-submission UUID remain external retained-workflow correlations.
+
+Fresh positive evidence and historical evidence are separate sealed types.
+Fresh verification rejects signed DENY and applies the caller's bounded lifetime
+and evidence-age policy. Its exclusive `fresh_until()` may precede the original
+signed expiry. Historical verification preserves original decisions and dates
+without converting them into fresh evidence. Neither type conveys business
+permission, current revocation status or replay consumption.
+
+A recovered receipt can still satisfy the offline freshness window after its
+grant is revoked. That temporal result does not observe the revocation or
+restore authority; callers must separately enforce their current authorization
+and business rules.
+
+The joined owner test recovers the artifact through the actual current-access
+application boundary, then verifies it using independently known bootstrap and
+workflow inputs. Database inspection is reserved for separate persistence and
+audit-linkage assertions. The test also rejects a different operation, preserves
+expired history, recovers after actual grant revocation, and denies recovery
+after actual machine-use access revocation.
+
+### Actual executable qualification boundary
+
+The new live target invokes the real binary, configuration and production
+`connect()` path. It uses all fourteen restricted PostgreSQL identities, native
+TLS OpenBao, password-protected nonpersistent Redis, the real Signing Keys HTTPS
+router and managed receipt-key resolution, and actual remote keyless server and
+client TLS. It observes provider audit calls to distinguish TLS signatures from
+request/receipt signing or signing-grant minting.
+
+Template and presentation-policy metadata are explicitly read-only authenticated
+gRPC wire fixtures. Reference origins expose authenticated health fixtures. The
+gate verifies mapped-client health/readiness, unlisted/missing certificates,
+identity-header spoofing, wrong pins, actual privilege drift, and startup refusal
+for invalid remote credentials, workload identity, availability and public-key
+selection. It establishes no full request/proof/receipt lifecycle through real
+catalog owners and does not qualify a production deployment.
+
+The native wrapper provisions only disposable provider state and scoped keys,
+propagates child failures, and removes its providers and temporary credentials.
+For this run, OpenBao 2.5.5's archive and checksum-file signatures were verified
+against its documented primary fingerprint
+`66D15FDD87287219C8E15478D200CD702853E6D0`; the archive SHA-256 is
+`2c5577707e97fc95c2086950f39880ead5e45b356c94388e5cb606f5a5c2b697`.
+Redis 7.4.12's source matches the separately published official SHA-256
+`56588ee1648539556f2b6cf4e873e3734afbbe40fa952fec2fcd6b6d7dae2924` and was
+built locally. The [OpenBao verification instructions](https://openbao.org/docs/2.5.x/install/)
+and [Redis release checksums](https://github.com/redis/redis-hashes) are the
+upstream provenance sources; runtime version checks alone do not authenticate
+a release.
+
+### Receipt-consumer and executable validation
+
+Validation completed locally on November 21, 2026, using Rust 1.95 and disposable
+PostgreSQL 17.12. The views below overlap; they are not an additive test total.
+The actual executable gate also used the independently verified native OpenBao
+and Redis builds described above. No hosted workflow was used.
+
+| Check | Result |
+| --- | --- |
+| Independent consumer | 21 passed in the standalone dependency graph and the same 21 passed under full host/service feature unification; both ES256 and Ed25519, strict JSON/numeric/time handling, exact context/retention, DENY, history and exclusive freshness bounds |
+| Full Delegated Authority library | 235 passed, zero failures or ignores, with disposable PostgreSQL and actual mTLS enabled; one independently supplied private Protocol corpus explicitly filtered |
+| New recovery cases within the service suite | Five PostgreSQL cases passed: PERMIT/DENY history, tenant/typed-actor/digest/pending/START rejection, blocked-read revocation and original-deadline races, eleven corruption cases including oversized metadata, and bounded cancellation; four HTTP cases and the escaped-header compatibility case also passed |
+| Joined local-owner acceptance | 3 passed, zero failures or ignores; includes actual approval-to-proof-to-receipt flow, protected recovery into the independent verifier, grant/access revocation, consent withdrawal and actual restricted-role/storage checks |
+| Actual executable over disposable remote custody | 1 passed, zero failures or ignores, in 13.44 seconds; actual production startup/readiness, keyless mTLS, Signing Keys HTTPS key resolution, protected receipt routing and fail-closed dependency/role/pin cases |
+| Host unit and executable smoke | 12 unit tests and 3 smoke tests passed |
+| Sealed evidence contracts | 4 compile-fail doctests passed: existing authenticated machine proof, recovered receipt, fresh receipt evidence and historical receipt evidence |
+| Combined compilation | Library and test targets passed for Delegated Authority, the independent consumer and the delegated-use host, including the actual executable and both acceptance targets |
+| Native fixture lifecycle | Successful and failing child exits propagated; provider provisioning and scoped-key denials passed; the live run left zero owned provider processes or temporary credential directories |
+| Dependency and migration preservation | All 813 existing package identities/versions/sources/checksums and all 62 repository SQL migrations retain their prior values/bytes; the only added package is the local receipt consumer |
+| Consumer dependency boundary | Normal dependency closure contains no Marty service/Core/signing-grant, MMF, database or network-client package |
+| Hygiene | Formatting of 22 Rust files, Python syntax, local documentation links, diff checks and OSS commerce boundary passed |
+
+The positive owner lifecycle and the live startup target remain separate
+qualification views. Actual template/presentation-policy service owners, managed
+fresh credential issuance, complete network request/receipt signing and a
+production or public consumer rollout are not established by this batch. Public
+MIP 0.5.0, the Protocol pin, capability discovery, the default-off host flag and
+Rifare's business-execution boundary remain unchanged. Publication uses
+`[skip ci]` and does not dispatch a workflow.
+
+### Remaining next milestones
+
+1. Replace the named metadata wire fixtures in a separate full-lifecycle gate
+   with actual template/presentation-policy owners, reviewed workload rights,
+   fresh managed credential issuance and managed request/receipt HTTPS signing.
+   Exercise protected recovery over that complete network composition.
+2. Qualify the public request/response and wallet routing contract, package the
+   public transport/client integration, and connect the independent verifier
+   without exposing internal storage or private service APIs to Rifare.
+3. Qualify production CA issuance/revocation, certificate/key pin rotation,
+   separately provisioned roles, custody and outage/restart behavior. Pending
+   claim reconciliation still requires a reviewed design; no automatic takeover
+   or re-signing is introduced.
+4. Add separately selected required-attestation, external-authority/domain and
+   represented-subject SESSION profiles. Their data shapes do not establish
+   qualified runtime adapters.
+5. Promote public support only after the relevant gates pass, then integrate
+   Rifare's own domain permission, budget, replay/idempotency and business-commit
+   boundary. Marty evidence does not perform or attest a business outcome.

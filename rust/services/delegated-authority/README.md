@@ -640,6 +640,41 @@ use host is installed. See the
 [application checkpoint](../../../docs/delegated-use-runtime-candidate.md) for
 the measured verification and remaining deployment work.
 
+### Protected original receipt recovery
+
+The separately assembled `delegated_use_receipt_router` exposes
+`POST /internal/v1/organizations/{organization_id}/delegated-use/receipts/recover`.
+It uses the same configured workload authenticator as retained-use commands.
+Its request is the existing strictly decoded `RECOVER_RESULT` document, containing
+`profile`, `command`, `original_command_id`, and `expected_command_digest`.
+The path accepts no query parameters, receipt-reference lookup, listing or new
+command form. The ordinary command router and its P03 response are unchanged.
+
+`DelegationUseCommandService::recover_receipt_before` requires the authenticated
+context's original observation and expiry. Current `RECOVER_RESULT` access is
+checked before and after fetching the artifact; the second check cannot extend
+the original authentication or first access deadline. Both lookups use bounded,
+read-only PostgreSQL transactions. The reader binds tenant, full typed actor,
+original command and digest, retained admission and result, receipt reference,
+SHA-256 digest, and decoded compact-JWS payload. It preserves the signed timestamp
+precision while checking the corresponding PostgreSQL timestamp representation.
+No new database permission, migration, signer call, evaluation or mutation is
+required.
+
+Only a completed `FINAL_USE` original returns a receipt. The sealed,
+Serialize-only response contains `original_response` with `recovered: true`,
+`receipt_ref`, `receipt_digest`, the exact stored `compact_jws`, and
+`semantics: EVIDENCE_ONLY`. Debug output redacts its identifiers and artifact.
+Every HTTP response carries `Cache-Control: no-store`, `Pragma: no-cache`, and
+`X-Content-Type-Options: nosniff`.
+
+An original PERMIT or DENY can still be recovered after its grant, proof or
+receipt expires or the grant is revoked, provided the actor retains current
+identity and recovery access. Recovery neither renews that evidence nor changes
+the decision. A consumer must independently verify the receipt against its pinned
+key and expected context, then apply the appropriate fresh-use or historical
+policy and its own operation idempotency and business commit rules.
+
 ## Optional organization approval producer
 
 The `marty-delegation-approval` binary hosts an explicitly enabled approval

@@ -1,9 +1,10 @@
 //! Explicit internal transport for retained P03 use commands.
 //!
-//! A dedicated service credential authenticates the forwarding workload. That
-//! trusted workload supplies the complete typed actor and a bounded observation;
-//! the application still independently authorizes the actor and verifies proof.
-//! This router is not installed by a production executable or public Gateway.
+//! The explicit default-off delegated-use host selects mandatory mutual TLS.
+//! A separately composed trusted forwarder can instead supply the complete typed
+//! actor and a bounded observation using its dedicated service credential. The
+//! application independently authorizes the actor and verifies proof in either
+//! composition. No public Gateway installs this router.
 
 use std::{sync::Arc, time::Duration};
 
@@ -234,7 +235,7 @@ pub fn delegated_use_command_router(state: DelegationUseHttpState) -> Router {
         .layer(middleware::from_fn(no_store))
 }
 
-async fn no_store(request: Request, next: Next) -> Response {
+pub(crate) async fn no_store(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response
         .headers_mut()
@@ -340,7 +341,10 @@ fn authenticate_forwarded(
     Ok(context)
 }
 
-fn single_header<'a>(headers: &'a HeaderMap, name: &'static str) -> Result<&'a str, UseHttpError> {
+pub(crate) fn single_header<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<&'a str, UseHttpError> {
     let mut values = headers.get_all(name).iter();
     let value = values
         .next()

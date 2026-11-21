@@ -11,6 +11,8 @@ struct Access {
     mutation: AtomicBool,
     read: AtomicBool,
     lifetime_ms: std::sync::atomic::AtomicI64,
+    recovery_calls: AtomicUsize,
+    recovery_lifetime_ms: std::sync::atomic::AtomicI64,
 }
 #[async_trait]
 impl DelegationUseCommandAuthorizer for Access {
@@ -38,6 +40,7 @@ impl DelegationUseCommandAuthorizer for Access {
         g: &DelegationGrant,
         now: DateTime<Utc>,
     ) -> Result<VerifiedDelegationCommandAccess, DelegationUseCommandError> {
+        self.recovery_calls.fetch_add(1, Ordering::SeqCst);
         if !self.read.load(Ordering::SeqCst)
             || c.organization_id() != g.organization_id
             || c.actor() != &g.terms.delegate
@@ -46,7 +49,8 @@ impl DelegationUseCommandAuthorizer for Access {
         }
         Ok(VerifiedDelegationCommandAccess {
             observed_at: now,
-            valid_until: now + Duration::seconds(10),
+            valid_until: now
+                + Duration::milliseconds(self.recovery_lifetime_ms.load(Ordering::SeqCst)),
         })
     }
 }
@@ -400,6 +404,8 @@ impl Fixture {
             mutation: AtomicBool::new(true),
             read: AtomicBool::new(true),
             lifetime_ms: std::sync::atomic::AtomicI64::new(25_000),
+            recovery_calls: AtomicUsize::new(0),
+            recovery_lifetime_ms: std::sync::atomic::AtomicI64::new(10_000),
         });
         let proof = Arc::new(Proof {
             flow: flow.clone(),
@@ -471,6 +477,9 @@ fn result_value(r: &DelegationUseCommandResponse) -> Value {
     serde_json::to_value(r).unwrap()
 }
 
+#[path = "receipt_tests.rs"]
+mod receipt_tests;
+
 #[test]
 fn use_decoder_is_closed_and_canonical_and_does_not_enable_human_host() {
     let start = json!({"profile":DELEGATION_COMMAND_PROFILE,"command":"START_USE","command_id":"a0000000-0000-4000-8000-000000000001","grant":{"id":"b0000000-0000-4000-8000-000000000001","revision":2,"terms_digest":format!("sha256:{}","a".repeat(64))},"operation":{"action":"urn:example:action","resource_id":"urn:example:resource","audience":"https://example.invalid","request_profile":"urn:example:operation:v1","request_digest":format!("sha256:{}","b".repeat(64))}});
@@ -528,6 +537,8 @@ async fn authenticated_observation_lower_bound_rejects_regressed_mutation_and_re
             mutation: AtomicBool::new(true),
             read: AtomicBool::new(true),
             lifetime_ms: std::sync::atomic::AtomicI64::new(25_000),
+            recovery_calls: AtomicUsize::new(0),
+            recovery_lifetime_ms: std::sync::atomic::AtomicI64::new(10_000),
         });
         let bounded = AuthenticationBoundUseAuthorizer {
             inner: source,

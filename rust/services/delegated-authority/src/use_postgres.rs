@@ -32,6 +32,9 @@ pub(crate) struct RetainedUseOutcome {
     pub response: Option<DelegationUseCommandResponse>,
 }
 
+#[path = "use_receipt_postgres.rs"]
+mod receipt_reads;
+
 pub(crate) enum ClaimResult {
     New(UseClaim),
     Existing(RetainedUseOutcome),

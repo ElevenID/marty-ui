@@ -25,6 +25,7 @@ The health probes also use that exact mapping and reject HTTP identity overrides
 | Method and path | Responsibility |
 | --- | --- |
 | `POST /internal/v1/organizations/{organization}/delegated-use-commands` | Original START_USE, FINALIZE_USE and RECOVER_RESULT commands |
+| `POST /internal/v1/organizations/{organization}/delegated-use/receipts/recover` | Current-authorized recovery of the exact original FINAL_USE receipt JWS |
 | `GET /internal/v1/organizations/{organization}/delegated-use/challenges/{challenge}/request` | Current-authorized retrieval of the exact original request JWS |
 | `POST /internal/v1/organizations/{organization}/delegated-use/challenges/{challenge}/proof` | Current-authorized immutable proof-byte retention |
 | `GET /health` | Authenticated process availability; no authority decision |
@@ -34,6 +35,36 @@ Health and readiness return status only, with no-store headers. Readiness checks
 the original certificate observation again after its awaited checks. Neither a
 successful probe nor an authenticated TLS connection supplies current grant
 consent, cryptographic machine proof or a business permit.
+
+### Original signed receipt recovery
+
+Send the existing strict `RECOVER_RESULT` command body to the receipt recovery
+route, with the original command UUID and expected command digest. The route
+accepts no receipt-reference lookup, query options or mutation commands. It uses
+the same certificate identity mapping and the existing `RECOVER_RESULT` right;
+no additional role, database migration or permission is required.
+
+The response contains `original_response` with `recovered=true`, `receipt_ref`,
+`receipt_digest`, `compact_jws` and `semantics: EVIDENCE_ONLY`. The original
+FINAL_USE response format remains unchanged. The service binds the artifact to
+the original tenant, complete typed actor, command, admission and retained
+result. Reads are bounded, use read-only snapshots, and recheck current access
+after the artifact read without renewing the original authentication deadline.
+An unresolved claim or START_USE result cannot produce a receipt.
+
+An expired or revoked grant can still have an authorized historical receipt.
+An inactive caller or revoked recovery right cannot retrieve it. Recovery
+returns the original bytes, decision and dates; it does not evaluate the
+operation, sign again, extend expiry or confer current business authority.
+
+The independent [`marty-delegated-receipt-consumer`](../../crates/delegated-receipt-consumer/README.md)
+crate checks supplied public-key trust, exact original request context and an
+independently authenticated retained-result digest. It uses no service or
+database dependency. Fresh positive evidence and historical evidence have
+separate sealed types. Callers supply their clock and freshness policy; current
+revocation, domain permission, replay prevention and business commits remain
+outside that offline verification. The signed nonce is part of the receipt;
+command, challenge and proof-submission UUIDs remain external correlations.
 
 ## Startup sequence and ownership
 
@@ -289,6 +320,43 @@ The suite creates isolated databases and real restricted LOGIN roles. It is
 ignored without that explicit fixture and must not be reported as executed by
 the normal unit test command.
 
+The owner acceptance test obtains the exact signed receipt through the protected
+recovery application boundary and verifies it with the independent consumer.
+Its expected context comes from the known public key, original grant, START_USE,
+verified request nonce and FINAL_USE response. Separate database assertions
+check immutable persistence and audit linkage; storage and unverified receipt
+claims never supply the consumer's expected context.
+
+### Actual executable and remote readiness qualification
+
+`tests/live_runtime.rs` starts the actual binary through its production
+configuration and `connect` path. Supply independently verified OpenBao 2.5.5
+and Redis 7.4.12 executables and the explicit disposable loopback PostgreSQL
+fixture. Build the Rust target before provisioning the short-lived providers:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_runtime --no-run
+python3 scripts/with_disposable_delegated_use_runtime.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_runtime -- --ignored --exact actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_startup --test-threads=1
+```
+
+The wrapper starts its own TLS OpenBao and password-protected nonpersistent
+Redis, provisions nonexportable keys and scoped credentials, and removes their
+temporary state when the child exits. Version checks enforce compatibility;
+they do not replace independent release checksum/signature verification. The
+test uses the actual Signing Keys HTTPS router, its public-key resolver, real
+remote keyless server/client TLS and the fourteen restricted database roles.
+Template/presentation-policy gRPC metadata and reference health responses are
+explicit authenticated wire fixtures. A child-scoped CA file trusts only the
+fixture's public CA; peer verification remains enabled.
+
+The gate checks mapped-client health/readiness, missing or unlisted certificates,
+wrong pins, spoofed HTTP identity headers, current privilege drift and startup
+refusal for invalid remote service credentials, workload identity, availability
+or selected public key. It asserts actual remote TLS signing while request and
+receipt signing, signing-grant minting and command admission remain absent.
+It qualifies this startup/readiness boundary; the full lifecycle across actual
+template/presentation-policy owners and production custody remains separate.
+
 Stopping or disabling the process preserves every command/request claim, nonce,
 proof, source observation, evaluation and signed result. An uncertain signing
 or commit outcome is not permission to retry, delete a claim or reuse its
@@ -298,5 +366,5 @@ reviewed contract.
 
 This executable is a concrete internal serving candidate. Deployed request and
 receipt custody, production network/CA/role qualification, required attestation,
-public wallet contracts and independent consumer qualification remain separate
+public wallet contracts and public consumer integration remain separate
 exit gates. See the [runtime milestone checkpoint](../../../docs/agent-trust-runtime-milestones.md).

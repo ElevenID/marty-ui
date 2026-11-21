@@ -10,6 +10,13 @@ The explicit `marty-delegated-use` executable now assembles these owners behind
 mandatory mutual TLS. It stays disabled unless explicitly configured and does
 not install a public Gateway route.
 
+Original signed receipts now have a protected recovery route using current
+`RECOVER_RESULT` access. A separate offline consumer verifies their signatures,
+exact original request context and retained byte digest, returning distinct
+fresh and historical evidence types. The actual executable also has a disposable
+remote-custody startup/readiness gate; its metadata wire fixtures are explicitly
+separate from qualification of full deployed owner services.
+
 The human `marty-delegation-commands` executable and its Gateway surface still
 reject use commands. Each current source, transport, database role and receipt
 signer still requires explicit composition. Public MIP remains 0.5.0; support levels and
@@ -34,6 +41,8 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 | `AuditedMmfMachineAuthorizationVerifier` | Actual MMF evaluation against the concrete current Organization machine policy and retained source/evaluation evidence | Machine authentication eligibility remains distinct from delegated-use policy |
 | `OrganizationDelegationCedarPolicySource` | Concrete current Organization policy, immutable attributed revisions and exact retained source scope; real MMF compilation under a fixed context schema | Selected EXACT_OPERATION only; external-domain attributes and permissions remain separate consumer adapters |
 | `HttpManagedDelegatedReceiptSigner` | Pinned managed issuer/key, separate signing-grant origin, remote signing and independent verification of the returned signature | Explicit deployment selection, key provisioning and live provider qualification remain required |
+| `delegated_use_receipt_router` | Bounded current-authorized recovery of the exact FINAL_USE compact receipt, original result and digest, with original times preserved | Existing RECOVER_RESULT access; internal host only; no reevaluation or new signature |
+| `marty-delegated-receipt-consumer` | Independent ES256/EdDSA verification, caller-pinned trust/context/retention, strict wire checks and separate fresh/history output types | Offline evidence only; no service/storage dependency, current revocation lookup or business-execution permission |
 
 The component contracts are documented in the
 [serving-host runbook](../rust/services/delegated-use/README.md),
@@ -44,7 +53,8 @@ The component contracts are documented in the
 [current delegated-use policy](../rust/services/delegated-authority/DELEGATION_POLICY_SOURCE.md),
 [selected machine authentication](../rust/services/delegated-authority/MACHINE_AUTH.md),
 [selected credential verification](../rust/services/delegated-authority/MACHINE_CREDENTIALS.md),
-[managed receipt signing](../rust/services/delegated-authority/RECEIPT_SIGNING.md)
+[managed receipt signing](../rust/services/delegated-authority/RECEIPT_SIGNING.md),
+the [independent receipt consumer](../rust/crates/delegated-receipt-consumer/README.md),
 the [Flow delegated-use owner](../rust/services/flow/DELEGATED_USE.md), and
 [protected request/proof ingress](../rust/services/flow/DELEGATED_USE_INGRESS.md).
 
@@ -68,6 +78,25 @@ and final transaction rollback. This candidate has no lease takeover,
 automatic retry, claim deletion or reconciliation override. Recovery of an
 original result preserves its historical timestamps, decision and evidence; it
 does not refresh authority or create another challenge.
+
+### Recovering the exact signed artifact
+
+`POST /internal/v1/organizations/{organization}/delegated-use/receipts/recover`
+accepts only the existing `RECOVER_RESULT` wire. It binds the original command
+and digest to the exact tenant and typed actor, checks current recovery access,
+reads the matching FINAL_USE artifact in a bounded read-only snapshot, and
+rechecks access after awaited reads. The result adds the original compact JWS
+beside the unchanged original response, receipt reference/digest and
+`EVIDENCE_ONLY` marker. A START_USE result or pending claim cannot supply bytes.
+
+The read can recover historical evidence after grant revocation or expiry while
+the caller still has current recovery access. It does not sign, mutate the
+ledger, reevaluate the decision, refresh timestamps or renew the first access
+deadline. The independent consumer authenticates those exact original bytes
+using a separately trusted public key and context; it never derives an expected
+actor, operation, nonce or policy from an unverified receipt. Current transport
+authorization and the original command/challenge/proof correlation remain
+responsibilities of the caller's authenticated workflow.
 
 ### START_USE
 
@@ -301,7 +330,7 @@ The following are separate verification views and overlap; do not add them into
 one aggregate. Rust checks use the locked dependency graph offline. Hosted
 Actions and production deployment are outside this evidence. This table records
 the prior `085d65c` baseline; the current follow-on checks are recorded in the
-[milestone checkpoint](agent-trust-runtime-milestones.md#current-default-off-serving-host-follow-on).
+[milestone checkpoint](agent-trust-runtime-milestones.md#current-receipt-recovery-verification-and-executable-qualification-follow-on).
 
 | Check | Result |
 | --- | --- |
@@ -354,9 +383,9 @@ external HTTPS deployment remain open.
 3. Qualify deployed HTTPS and production custody/credentials beyond the passing
    disposable OpenBao/Redis gate, including the outer receipt adapter and any
    selected AWS/IAM or network-timeout profile.
-4. Qualify retained recovery, source freshness and the selected public
-   request/response and independent consumer verification contracts across the
-   deployed services. Pending command reconciliation needs its own reviewed
+4. Qualify the implemented protected receipt recovery and independent verifier
+   across deployed services, together with source freshness, public clients and
+   the selected public request/response contract. Pending command reconciliation needs its own reviewed
    design before any automatic retry or takeover is introduced.
 5. Promote public support/discovery only after those gates pass, then integrate
    Rifare through those public features with its own operation commit and

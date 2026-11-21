@@ -4156,6 +4156,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-delegated-receipt-consumer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-delegated-use"
 version = "0.1.0"
 dependencies = [
@@ -4167,6 +4183,7 @@ dependencies = [
  "hex",
  "marty-credential-template",
  "marty-delegated-authority",
+ "marty-delegated-receipt-consumer",
  "marty-flow",
  "marty-issuance-service",
  "marty-machine-credential-source",
@@ -4177,10 +4194,13 @@ dependencies = [
  "marty-service-runtime",
  "marty-signing-grant",
  "marty-signing-grant-test-support",
+ "marty-signing-keys",
  "marty-trust-profile",
+ "mmf-platform",
  "p256",
  "rand 0.9.5",
  "rcgen",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",
@@ -4188,6 +4208,9 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
  "tower",
  "url",
  "uuid",

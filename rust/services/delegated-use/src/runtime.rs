@@ -22,6 +22,7 @@ use marty_delegated_authority::{
     use_http::{
         delegated_use_command_router, DelegationUseHttpAuthenticator, DelegationUseHttpState,
     },
+    use_receipt_http::{delegated_use_receipt_router, DelegationUseReceiptHttpState},
     AuthorityMode, ConfiguredConsentEvidenceVerifier, ConstraintMode, ConstraintVerificationError,
     DelegatedDecisionReceiptIssuer, DelegatedDecisionReceiptSigner, DelegationAuthorityService,
     DelegationChallengeIssuer, DelegationCommandCaller, DelegationGrant, DelegationUseAuthorizer,
@@ -423,7 +424,7 @@ impl DelegatedUseRuntime {
         Ok(())
     }
 
-    /// Only the internal command and protected request/proof routes are mounted.
+    /// Only internal commands, original receipts and protected request/proof routes are mounted.
     /// The host installs authenticated health/readiness probes separately.
     pub fn router(&self) -> Router {
         delegated_use_command_router(DelegationUseHttpState::with_authenticator(
@@ -434,6 +435,12 @@ impl DelegatedUseRuntime {
             self.ingress.clone(),
             self.authenticator.clone(),
         )))
+        .merge(delegated_use_receipt_router(
+            DelegationUseReceiptHttpState::with_authenticator(
+                self.commands.clone(),
+                self.authenticator.clone(),
+            ),
+        ))
     }
 
     pub fn commands(&self) -> Arc<DelegationUseCommandService> {
