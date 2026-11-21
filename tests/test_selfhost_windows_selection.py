@@ -164,6 +164,24 @@ def test_initial_current_adoption_uses_real_current_proof_without_transition(mon
         with pytest.raises(ValueError):selection.adopt_current(path)
 
 
+def test_website_inspection_callback_is_scoped_to_the_real_selection_lease(monkeypatch):
+    import selfhost_windows_website as website
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, _cfg):
+        selection.adopt_current(path)
+        calls = []
+        def inspect(config, choice, _values, record, assets, **_kwargs):
+            calls.append((config['project'], choice, record['sequence'], assets))
+            return {'inspection_completed': True, 'activation_supported': False}
+        monkeypatch.setattr(website, 'inspect_composition', inspect)
+        with selection.selected_inputs(path) as lease:
+            assert lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None,
+                registry_config=None) == {'inspection_completed': True, 'activation_supported': False}
+        assert calls == [(PROJECT, 'old', 1, 'PUBLIC_ASSETS')]
+        with pytest.raises(ValueError):
+            lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None, registry_config=None)
+        assert len(calls) == 1
+
+
 def test_initial_current_pending_intent_completes_only_after_reproof(monkeypatch):
     with fixture(monkeypatch, initial_current=True) as (root, _phase, _tx, _outcome, path, cfg):
         original = selection._append
