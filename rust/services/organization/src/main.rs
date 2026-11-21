@@ -141,11 +141,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let agent_admin = if config.agent_admin_enabled {
         marty_organization::agent_directory_http::organization_agent_admin_router(
             marty_organization::agent_directory_http::AgentDirectoryHttpState::new(
-                marty_organization::agent_directory::AgentDirectoryService::new(application.store().clone()),
-                config.service_token.clone().ok_or("candidate agent administration requires service authentication")?,
+                marty_organization::agent_directory::AgentDirectoryService::new(
+                    application.store().clone(),
+                ),
+                config
+                    .service_token
+                    .clone()
+                    .ok_or("candidate agent administration requires service authentication")?,
             )?,
         )
-    } else { axum::Router::new() };
+    } else {
+        axum::Router::new()
+    };
     let grpc_service = OrganizationGrpcService::new(
         Arc::clone(&application),
         config.service_token.clone(),

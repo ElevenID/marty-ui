@@ -107,7 +107,9 @@ impl OrganizationServiceConfig {
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
         let agent_admin_enabled = boolean(&values, "MARTY_AGENT_ADMIN_ENABLED", false)?;
         if agent_admin_enabled && service_token.as_ref().is_none_or(|token| token.len() < 32) {
-            return Err(OrganizationConfigError::Missing { name: "GRPC_SERVICE_TOKEN" });
+            return Err(OrganizationConfigError::Missing {
+                name: "GRPC_SERVICE_TOKEN",
+            });
         }
         if environment.is_deployed() && service_token.is_none() {
             return Err(OrganizationConfigError::Missing {

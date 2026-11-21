@@ -23,7 +23,15 @@ fn shared_permission_catalog_is_unique_and_complete() {
     assert!(keys.contains("passport-certificate:issue-csca"));
     assert!(keys.contains("mdoc-certificate:issue-iaca"));
     assert!(keys.contains("mdoc-certificate:issue"));
-    for action in ["view", "create", "update", "suspend", "revoke", "retire", "rotate-key"] {
+    for action in [
+        "view",
+        "create",
+        "update",
+        "suspend",
+        "revoke",
+        "retire",
+        "rotate-key",
+    ] {
         assert!(keys.contains(&format!("agent-identity:{action}")));
     }
     assert!(keys.contains("delegation-grant:view"));
@@ -62,14 +70,25 @@ fn system_role_templates_preserve_intended_entitlements() {
     assert_eq!(owner.permission_keys.len(), catalog.len());
     for template in &templates {
         assert_eq!(
-            template.permission_keys.contains("delegation-grant:approve"),
+            template
+                .permission_keys
+                .contains("delegation-grant:approve"),
             matches!(template.name, "owner" | "admin"),
             "unexpected representation authority for {}",
             template.name
         );
-        for action in ["create", "update", "suspend", "revoke", "retire", "rotate-key"] {
+        for action in [
+            "create",
+            "update",
+            "suspend",
+            "revoke",
+            "retire",
+            "rotate-key",
+        ] {
             assert_eq!(
-                template.permission_keys.contains(&format!("agent-identity:{action}")),
+                template
+                    .permission_keys
+                    .contains(&format!("agent-identity:{action}")),
                 matches!(template.name, "owner" | "admin" | "access_admin"),
                 "unexpected agent administration permission for {}",
                 template.name

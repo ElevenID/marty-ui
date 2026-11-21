@@ -149,8 +149,10 @@ impl Fixture {
                 let read_tables = match purpose {
                     "consent" => &CONSENT_READ_TABLES[..],
                     "authority" => &[
-                        "delegation_grants", "representation_authority_sources",
-                        "representation_authority_assertions", "organization_authority_observations",
+                        "delegation_grants",
+                        "representation_authority_sources",
+                        "representation_authority_assertions",
+                        "organization_authority_observations",
                         "approval_storage_identity",
                     ][..],
                     _ => &EVIDENCE_READ_TABLES[..],
