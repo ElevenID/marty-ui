@@ -72,13 +72,14 @@ def inspect_failed_current(config_path):
 
 @contextmanager
 def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordination=None,
-                           _retained_root=None):
+                           _retained_root=None, _expired_pending_sha256=None):
     """Read-only held proof of the stopped phase, never credential admission.
 
     The result is published to the caller only after all input/namespace exit
     checks pass. Expired leaves are permitted as evidence, never as live TLS.
     """
     import selfhost_windows_selection as selection
+    import selfhost_windows_expired_origin as origin
     from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
     from selfhost_windows_continuation import CHECKPOINT, checkpoint
     renewal = selection.renewal
@@ -116,21 +117,27 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordina
                 if record['result_sha256'] is not None else not previous)
         guard = stack.enter_context(renewal.hold_private_input(renewal.renewal_staging_guard(config)))
         stage = selection.decode(guard)
+        if stage['schema']==origin.SCHEMA:
+            require(not selection._initial_current_record(record,records.get(1)))
         root = Path(stage['root'])
         require(root.parent == Path(config['current_secrets']).parent
                 and re.fullmatch(r'windows-renewal-[0-9a-f]{32}', root.name))
         stack.enter_context(renewal.hold_storage_namespace(root))
         stack.enter_context(selection._held_private_input(root, directory=True))
         stack.enter_context(selection._held_private_input(root/'activation', directory=True))
-        names = set(_stage_names()) | {'result.json', 'publication.pending.json', 'renewed.env', 'activation'}
+        if _expired_pending_sha256 is not None:
+            require(_coordination is not None and recovery_guard_sha256 is None and stage['schema']==origin.SCHEMA)
+        stage_names=origin.names(stage,pending=_expired_pending_sha256 is not None)
+        names = set(stage_names) | {'result.json', 'publication.pending.json', 'renewed.env', 'activation'}
         def membership(path, expected_names):
             require(set(p.name for p in path.iterdir()) == expected_names)
         membership(root, names)
         stack.callback(membership, root, names)
         receipts = {name: stack.enter_context(renewal.hold_private_input(root/name))
-                    for name in _stage_names()}
+                    for name in stage_names}
         require(receipts.pop('intent.json') == guard == packed(stage))
-        receipt_hashes = failed_current_receipts(receipts)
+        receipt_hashes=origin.receipt_hashes(stage,config,receipts,
+                                            pending_sha256=_expired_pending_sha256)
         reader_options = {}
         if _retained_root is not None:
             require(recovery_guard_sha256 is not None)
@@ -148,7 +155,7 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordina
         next_config = selection._stage_configuration(config, record['choice'], record, root, layers)
         require(next_raw == packed(next_config))
         cycle = root.name.removeprefix('windows-renewal-')
-        require(stage == {'schema': selection.STAGE_SCHEMA, 'project': config['project'],
+        expected_stage = {'schema': selection.STAGE_SCHEMA, 'project': config['project'],
             'engine_id': config['engine_id'], 'sequence': record['sequence']+1,
             'selected_sha256': selection.digest(packed(record['selected'])),
             'data_sha256': record['data_sha256'], 'root': str(root),
@@ -156,7 +163,8 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordina
             'config_sha256': selection.digest(next_raw),
             'authority_file': '/control/recovery-session-'+cycle+'/token',
             'logical_project': stage['logical_project'],
-            'services_image': observed['model']['services']['signing-keys']['image'], 'candidate_only': True})
+            'services_image': observed['model']['services']['signing-keys']['image'], 'candidate_only': True}
+        origin.validate_intent(stage,expected_stage,next_config,values[record['choice']])
         require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}', stage['logical_project']))
         paths = [Path(next_config[name]) for name in ('intent', 'result', 'new_log', 'rollback_log')]
         paths += [Path(p) for step in next_config['step_receipts'] for p in step.values()]
@@ -176,10 +184,7 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordina
         items = observed['context'].check(before_intent=True)
         require(not any((item.get('Config', {}).get('Labels') or {}).get('marty.windows.renewal') == cycle
                         for item in items))
-        result = {'schema': 'marty.windows-failed-current-proof/v1', 'project': config['project'],
-                  'sequence': record['sequence'], 'guard_sha256': selection.digest(guard),
-                  'receipt_sha256': receipt_hashes, 'data_sha256': record['data_sha256'],
-                  'guard_retained': True, 'credential_admission': False}
+        result = origin.proof(stage,record,receipt_hashes)
         yield {'proof': result, 'config': config, 'record': record, 'values': values,
                'observed': observed, 'stack': stack, 'failed_root': root}
 

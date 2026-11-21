@@ -172,7 +172,8 @@ def seed(raw,expected,current_model,marker,stack):
     """Replay held immutable recovery execution evidence, never live admission."""
     from selfhost_windows_inputs import _held_private_input
     from selfhost_windows_model import effective_config, model_binding
-    from selfhost_windows_staging_recovery import RECOVERY_RECEIPTS, recovery_phase_receipts, failed_current_receipts
+    from selfhost_windows_staging_recovery import RECOVERY_RECEIPTS, recovery_phase_receipts
+    import selfhost_windows_expired_origin as origin
     renewal=selection.renewal;require=selection.require
     require(validate_marker(raw,expected,current_model,Path(marker['source_dir']))==marker)
     intents,records=selection._parse(raw,expected)
@@ -195,16 +196,17 @@ def seed(raw,expected,current_model,marker,stack):
         and stage['rollback_to_expired'] is False)
     failure=stage['failed_proof'];failed=Path(stage['failed_root'])
     require(failed.parent==root.parent and failed!=root and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',failed.name)
-        and failure['schema']=='marty.windows-failed-current-proof/v1' and failure['sequence']==prior['sequence']
+        and failure['sequence']==prior['sequence']
         and failure['project']==expected['project'] and failure['data_sha256']==prior['data_sha256']
         and failure['credential_admission'] is False and failure['guard_retained'] is True)
     stack.enter_context(renewal.hold_storage_namespace(failed))
     stack.enter_context(_held_private_input(failed,directory=True))
     failed_intent_raw=stack.enter_context(renewal.hold_private_input(failed/'intent.json'))
     require(selection.digest(failed_intent_raw)==failure['guard_sha256'])
+    failed_intent=selection.decode(failed_intent_raw)
+    failed_names=origin.names(failed_intent)
     failed_receipts={name:stack.enter_context(renewal.hold_private_input(failed/name))
-        for name in selection._stage_names() if name!='intent.json'}
-    require(failed_current_receipts(failed_receipts)==failure['receipt_sha256'])
+        for name in failed_names if name!='intent.json'}
     # Reconstruct the only staged configuration, including admitted operator fields.
     model_raw=stack.enter_context(renewal.hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024))
     model=selection.decode(model_raw)
@@ -217,18 +219,28 @@ def seed(raw,expected,current_model,marker,stack):
     failed_config=selection._stage_configuration(old,prior['choice'],prior,failed,layers)
     failed_config_raw=stack.enter_context(renewal.hold_private_input(failed/'activation/config.private.json'))
     require(failed_config_raw==selection.packed(failed_config))
-    failed_intent=selection.decode(failed_intent_raw)
     failed_cycle=failed.name.removeprefix('windows-renewal-')
-    require(failed_intent_raw==selection.packed(failed_intent) and failed_intent=={
+    require(failed_intent_raw==selection.packed(failed_intent))
+    expected_failed_intent={
         'schema':selection.STAGE_SCHEMA,'project':expected['project'],'engine_id':expected['engine_id'],
         'sequence':prior['sequence']+1,'selected_sha256':selection.digest(selection.packed(prior['selected'])),
         'data_sha256':prior['data_sha256'],'root':str(failed),
         'config_path':str(failed/'activation/config.private.json'),'config_sha256':selection.digest(failed_config_raw),
         'authority_file':'/control/recovery-session-'+failed_cycle+'/token',
         'logical_project':failed_intent['logical_project'],
-        'services_image':model['services']['signing-keys']['image'],'candidate_only':True})
+        'services_image':model['services']['signing-keys']['image'],'candidate_only':True}
+    failed_current=None
+    if failed_intent['schema']==origin.SCHEMA:
+        require(not selection._initial_current_record(prior,records.get(1)))
+        values,snapshots=selection._inputs(old,stack,
+            initial_current=prior['sequence']==1 and prior['decision']=='adopted-current')
+        require(snapshots==prior_intent['inputs'])
+        failed_current=values[prior['choice']]
+    origin.validate_intent(failed_intent,expected_failed_intent,failed_config,failed_current)
+    hashes=origin.receipt_hashes(failed_intent,failed_config,failed_receipts)
+    require(selection.packed(failure)==selection.packed(origin.proof(failed_intent,prior,hashes)))
     require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',failed_intent['logical_project']))
-    require({p.name for p in failed.iterdir()}==set(selection._stage_names())|
+    require({p.name for p in failed.iterdir()}==set(failed_names)|
             {'result.json','publication.pending.json','renewed.env','activation'})
     failed_paths=[Path(failed_config[name]) for name in ('intent','result','new_log','rollback_log')]
     failed_paths += [Path(path) for step in failed_config['step_receipts'] for path in step.values()]
