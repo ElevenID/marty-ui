@@ -20,6 +20,18 @@ runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
+class WebsiteStageIdentityTests(unittest.TestCase):
+    def test_development_tests_do_not_inherit_the_production_revision(self):
+        plan = {stage["name"]: stage for stage in runner.stages(
+            (Path("/source/marty"), Path("/source/website"), Path("/home/marty/q/e")), {})}
+        self.assertNotIn("MARTY_WEBSITE_SOURCE_SHA", plan["website-tests"]["environment"])
+        self.assertEqual(plan["website-development-build"]["environment"]["MARTY_WEBSITE_SOURCE_SHA"], "development")
+        for name in ("website-production-prerender", "website-image", "website-image-nginx",
+                     "website-finalize", "website-release-plan"):
+            with self.subTest(stage=name):
+                self.assertEqual(plan[name]["environment"]["MARTY_WEBSITE_SOURCE_SHA"], runner.WEBSITE_SHA)
+
+
 class DotenvAdmissionTests(unittest.TestCase):
     def test_exact_baseline_is_admitted_and_other_dotenv_inputs_are_refused(self):
         # The real tracked b109 inputs previously made every AWS preflight fail.

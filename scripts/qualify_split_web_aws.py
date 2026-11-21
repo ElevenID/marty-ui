@@ -334,7 +334,11 @@ def stages(roots, tools: dict) -> list[dict]:
                 "XDG_CONFIG_HOME": str(evidence / "website-dependencies/home")}
     add("website-package-manager", website, [node, "scripts/verify-package-manager.mjs"], env=site_env)
     install("website-dependencies", website)
-    add("website-tests", website, [bun, "run", "--no-env-file", "test"], seconds=1800, env=site_env)
+    # The development-server contract intentionally exercises the default
+    # development namespace. Production identity belongs to build/evidence
+    # stages, not the unit/DOM/build-contract test process.
+    test_env = {key: value for key, value in site_env.items() if key != "MARTY_WEBSITE_SOURCE_SHA"}
+    add("website-tests", website, [bun, "run", "--no-env-file", "test"], seconds=1800, env=test_env)
     add("website-nginx-fixture-pull", website, [docker, "pull", "--platform=linux/amd64", NGINX_FIXTURE], seconds=660)
     add("website-nginx-tests", website, [bun, "run", "--no-env-file", "test:nginx"], env=site_env)
     add("website-development-build", website, [bun, "run", "--no-env-file", "build:website"],
