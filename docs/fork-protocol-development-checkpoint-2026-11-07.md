@@ -1,5 +1,53 @@
 # Fork and protocol development checkpoint — 7 November 2026
 
+## Current recovered state — 20 November 2026
+
+This section records the recovered development state and takes precedence over
+older status and next-step statements below. The historical sections are
+retained. The linked PRs remain authoritative for checks and acceptance completed
+after this dated snapshot. The original **21 work packages are not all complete**.
+
+| Scope | Recovered state and evidence |
+| --- | --- |
+| Accepted consumer foundation | [Core 445](https://github.com/ElevenID/marty-core/pull/445) merged at `64601c95`; [Verifier 199](https://github.com/ElevenID/marty-verifier/pull/199) merged at `9c51381a`. [UI 2009](https://github.com/ElevenID/marty-ui/pull/2009), `d4667e58`, consumes the accepted digest support; [UI 2008](https://github.com/ElevenID/marty-ui/pull/2008), `c1e4399a`, implements the first managed verification and same-holder prerequisite profile. |
+| Accepted JWT 11 fork | [sd-jwt-rust 43](https://github.com/ElevenID/sd-jwt-rust/pull/43) merged at `9fc75ab0befe6b7f80987acd8b740baead40ee76`, completing the coordinated JWT 11, RNG and curve migration in that fork. Consumer adoption retains independent review and qualification. |
+| Accepted Core continuation | [Core 446](https://github.com/ElevenID/marty-core/pull/446) merged through the protected queue at `11152cfb83ec47174a21ad76fd4c9e811c93602f`. Its source tree `0b39b06eef0b70fd11096b2bb77cb207b344504b` is identical to the qualified published head `9d18f45968e1a1db2f13cfc80c219a197b787598`. Both [head CI](https://github.com/ElevenID/marty-core/actions/runs/44837121221) and the full [queue run](https://github.com/ElevenID/marty-core/actions/runs/44840150222) passed; queue CI had 19 successful jobs and one expected skip. |
+| Credentials continuation | Reviewed [Credentials 350](https://github.com/ElevenID/marty-credentials/pull/350) supersedes [338](https://github.com/ElevenID/marty-credentials/pull/338), preserving the original proposal and ancestry. Head `771ac84037cc9bd58f7d356b3b33e64686acceb2`, tree `cac89812da9914d1913a71663ff5d1b6e9491a64`, pins accepted Core `11152cfb83ec47174a21ad76fd4c9e811c93602f` throughout the manifest, lockfile, guard and wheel workflows. It uses the documented [reviewed internal-branch route](https://github.com/ElevenID/marty-credentials/blob/771ac84037cc9bd58f7d356b3b33e64686acceb2/docs/private-native-builds.md) with unchanged private-fork guards and credential scope. Prior candidate `4cfab637` passed all 11 hosted jobs in [CI 44838452579](https://github.com/ElevenID/marty-credentials/actions/runs/44838452579). The final repin passed independent review, locked native/Python checks, complete native/Python/WASM graph comparison and 86 guard tests; all 573 registry lock records are unchanged. The PR is ready with normal auto-merge enabled; required checks on the new head are running in [CI 44843033247](https://github.com/ElevenID/marty-credentials/actions/runs/44843033247). |
+| Android/native wallet | [Authenticator 57](https://github.com/ElevenID/marty-authenticator/pull/57) remains draft at `c7555e6107972946a10f9b801b911cae13239f27`, tree `96f80ec1c997d1ef544854229a3ca482684f0268`. [Flutter Build](https://github.com/ElevenID/marty-authenticator/actions/runs/44837176458), [Codegen](https://github.com/ElevenID/marty-authenticator/actions/runs/44837176471) and [Flutter Quality](https://github.com/ElevenID/marty-authenticator/actions/runs/44837176760) passed. All three Android ABIs and both debug APKs passed source-to-package provenance checks; the overall check set has 15 successes and one existing scorecard skip. |
+
+Core's accepted continuation preserves the verification-only JWT provider,
+opaque remote signing, explicit digest/profile admission and strict public-key
+boundaries. Credentials has local and hosted installed-wheel and owned TLS KMS/status
+qualification; its signed status projection does not fetch endpoints or assert
+revocation authority. The wallet's green package qualification still consumes
+Core 445 and Verifier 199; it does not establish adoption of the separate
+JWT 11 continuation.
+
+W05's accepted first profile remains pre-authorized SD-JWT with managed
+single-credential DCQL. Installed Android/iOS flows, deployed-service and
+governance integration, applicable browser storage/migration and public-artifact
+checks, and independent interoperability remain open acceptance work. Earlier
+browser evidence retains its recorded revision and scope. The optional full
+browser wallet remains separately scoped; packaging success does not activate
+additional profiles or establish production rollout or certification.
+
+The historical 16 KiB emulator-startup entry has no recovered completion
+evidence or surviving runtime in this workspace. Its older APKs do not qualify
+the current candidate. Installed-device acceptance remains open; this recovery
+gap is not a demonstrated application failure.
+
+### Next order from this recovery
+
+1. Complete Credentials 350's required checks on `771ac840` and normal protected
+   acceptance. Its coordinated accepted-Core repin and local qualification are
+   complete; preceding candidate results retain their recorded revision.
+2. Complete the applicable W05/W14 installed-device, browser, deployed-stack and
+   interoperability gates, then continue the remaining scoped work in the
+   original 21-package plan. Keep Authenticator 57 draft until its applicable
+   acceptance gates are satisfied.
+
+## Historical checkpoint
+
 This checkpoint continues **ElevenID Fork and Protocol Implementation Plan,
 7 November 2026**. It recovers the development state after the reviewed private
 fork adoption and identifies the next bounded implementation work. The plan's
