@@ -122,6 +122,10 @@ pub struct GatewayConfig {
     pub mdoc_dsc_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
+    pub agent_admin_enabled: bool,
+    pub delegation_approval_enabled: bool,
+    pub delegation_commands_enabled: bool,
+    pub agent_enrollment_enabled: bool,
     pub passport_provider_ingress_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub redis_url: Option<String>,
@@ -244,6 +248,17 @@ impl GatewayConfig {
             boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?;
         let passport_provider_ingress_gateway_enabled =
             boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?;
+        let agent_admin_enabled = boolean(values, "MARTY_AGENT_ADMIN_ENABLED", false)?;
+        let delegation_approval_enabled =
+            boolean(values, "MARTY_DELEGATION_APPROVAL_ENABLED", false)?;
+        let delegation_commands_enabled =
+            boolean(values, "MARTY_DELEGATION_COMMANDS_ENABLED", false)?;
+        let agent_enrollment_enabled = boolean(values, "MARTY_AGENT_ENROLLMENT_ENABLED", false)?;
+        if agent_enrollment_enabled && !agent_admin_enabled {
+            return Err(error(
+                "MARTY_AGENT_ENROLLMENT_ENABLED requires MARTY_AGENT_ADMIN_ENABLED",
+            ));
+        }
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
         let mut service_urls = SERVICE_URLS
             .iter()
@@ -257,6 +272,45 @@ impl GatewayConfig {
         let issuance_native_url = value(values, "ISSUANCE_NATIVE_SERVICE_URL")
             .unwrap_or_else(|| service_urls["issuance"].clone());
         service_urls.insert("issuance-native".into(), issuance_native_url);
+        if delegation_approval_enabled {
+            let configured = value(values, "DELEGATED_AUTHORITY_SERVICE_URL").ok_or_else(|| {
+                error("DELEGATED_AUTHORITY_SERVICE_URL is required for candidate approval")
+            })?;
+            let parsed = url::Url::parse(&configured)
+                .map_err(|_| error("DELEGATED_AUTHORITY_SERVICE_URL is invalid"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(error(
+                    "DELEGATED_AUTHORITY_SERVICE_URL must be credential-free HTTP(S)",
+                ));
+            }
+            service_urls.insert("delegated-authority".into(), configured);
+        }
+        if delegation_commands_enabled {
+            let configured = value(values, "DELEGATED_COMMAND_SERVICE_URL").ok_or_else(|| {
+                error("DELEGATED_COMMAND_SERVICE_URL is required for candidate lifecycle commands")
+            })?;
+            let parsed = url::Url::parse(&configured)
+                .map_err(|_| error("DELEGATED_COMMAND_SERVICE_URL is invalid"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+                || parsed.path() != "/"
+            {
+                return Err(error(
+                    "DELEGATED_COMMAND_SERVICE_URL must be a credential-free HTTP(S) origin",
+                ));
+            }
+            service_urls.insert("delegated-commands".into(), configured);
+        }
         let provider_ingress_url = value(values, "PASSPORT_PROVIDER_INGRESS_SERVICE_URL");
         if passport_provider_ingress_gateway_enabled && provider_ingress_url.is_none() {
             return Err(error("PASSPORT_PROVIDER_INGRESS_SERVICE_URL is required when provider ingress routing is enabled"));
@@ -287,6 +341,16 @@ impl GatewayConfig {
         validate_service_urls(&service_urls)?;
 
         let grpc_service_token = secret(values, "GRPC_SERVICE_TOKEN")?;
+        if (agent_admin_enabled
+            || delegation_approval_enabled
+            || delegation_commands_enabled
+            || agent_enrollment_enabled)
+            && grpc_service_token
+                .as_ref()
+                .is_none_or(|token| token.len() < 32)
+        {
+            return Err(error("candidate agent administration requires GRPC_SERVICE_TOKEN of at least 32 characters"));
+        }
         if production {
             validate_production_secret("GRPC_SERVICE_TOKEN", grpc_service_token.as_deref(), 32)?;
         }
@@ -600,17 +664,32 @@ impl GatewayConfig {
         let redis_url = value(values, "REDIS_URL")
             .map(|raw| redis_database_url(&raw, redis_database))
             .transpose()?;
-        let required_ready_services = value(values, "GATEWAY_REQUIRED_READY_SERVICES").map_or_else(
-            || {
-                DEFAULT_READY_SERVICES
-                    .iter()
-                    .map(|value| (*value).into())
-                    .collect()
-            },
-            |configured| csv(&configured),
-        );
+        let mut required_ready_services = value(values, "GATEWAY_REQUIRED_READY_SERVICES")
+            .map_or_else(
+                || {
+                    DEFAULT_READY_SERVICES
+                        .iter()
+                        .map(|value| (*value).into())
+                        .collect()
+                },
+                |configured| csv(&configured),
+            );
         if required_ready_services.is_empty() {
             return Err(error("GATEWAY_REQUIRED_READY_SERVICES must not be empty"));
+        }
+        if delegation_approval_enabled
+            && !required_ready_services
+                .iter()
+                .any(|service| service == "delegated-authority")
+        {
+            required_ready_services.push("delegated-authority".into());
+        }
+        if delegation_commands_enabled
+            && !required_ready_services
+                .iter()
+                .any(|service| service == "delegated-commands")
+        {
+            required_ready_services.push("delegated-commands".into());
         }
         let hosted_pilot_auto_purge_interval_seconds =
             parse(values, "HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS", 3600_u64)?;
@@ -697,6 +776,10 @@ impl GatewayConfig {
             mdoc_dsc_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
+            agent_admin_enabled,
+            delegation_approval_enabled,
+            delegation_commands_enabled,
+            agent_enrollment_enabled,
             passport_provider_ingress_gateway_enabled,
             passport_tenant_keys,
             redis_url,
@@ -1023,7 +1106,99 @@ mod tests {
         assert!(config.passport_tenant_keys.is_none());
         assert!(!config.passport_native_gateway_enabled);
         assert!(!config.passport_provider_ingress_gateway_enabled);
+        assert!(!config.agent_admin_enabled);
+        assert!(!config.delegation_approval_enabled);
         assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn agent_administration_requires_explicit_flags_service_auth_and_approval_endpoint() {
+        let mut values = BTreeMap::from([("MARTY_AGENT_ADMIN_ENABLED".into(), "true".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("GRPC_SERVICE_TOKEN"));
+        values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.agent_admin_enabled);
+        assert!(!config.delegation_approval_enabled);
+        values.insert("MARTY_DELEGATION_APPROVAL_ENABLED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("DELEGATED_AUTHORITY_SERVICE_URL"));
+        for invalid in [
+            "file:///tmp/authority",
+            "https://user:password@authority.invalid",
+            "https://authority.invalid?token=secret",
+        ] {
+            values.insert("DELEGATED_AUTHORITY_SERVICE_URL".into(), invalid.into());
+            assert!(GatewayConfig::from_values(&values).is_err());
+        }
+        values.insert(
+            "DELEGATED_AUTHORITY_SERVICE_URL".into(),
+            "http://delegated-authority:8088".into(),
+        );
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.delegation_approval_enabled);
+        assert_eq!(
+            config.service_urls["delegated-authority"],
+            "http://delegated-authority:8088"
+        );
+        assert!(config
+            .required_ready_services
+            .iter()
+            .any(|service| service == "delegated-authority"));
+    }
+
+    #[test]
+    fn lifecycle_commands_and_enrollment_require_explicit_safe_configuration() {
+        let defaults = GatewayConfig::from_values(&BTreeMap::new()).unwrap();
+        assert!(!defaults.delegation_commands_enabled);
+        assert!(!defaults.agent_enrollment_enabled);
+        let mut values =
+            BTreeMap::from([("MARTY_DELEGATION_COMMANDS_ENABLED".into(), "true".into())]);
+        assert!(GatewayConfig::from_values(&values).is_err());
+        values.insert(
+            "DELEGATED_COMMAND_SERVICE_URL".into(),
+            "http://delegated-commands:8020".into(),
+        );
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("GRPC_SERVICE_TOKEN"));
+        values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        let config = GatewayConfig::from_values(&values).unwrap();
+        assert!(config.delegation_commands_enabled);
+        assert!(config
+            .required_ready_services
+            .iter()
+            .any(|service| service == "delegated-commands"));
+        assert_eq!(
+            config.service_urls["delegated-commands"],
+            "http://delegated-commands:8020"
+        );
+        for invalid in [
+            "file:///tmp/commands",
+            "https://user:pass@commands.invalid",
+            "https://commands.invalid?secret=a",
+            "https://commands.invalid/prefix",
+        ] {
+            let mut changed = values.clone();
+            changed.insert("DELEGATED_COMMAND_SERVICE_URL".into(), invalid.into());
+            assert!(GatewayConfig::from_values(&changed).is_err());
+        }
+        values.insert("MARTY_AGENT_ENROLLMENT_ENABLED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("MARTY_AGENT_ADMIN_ENABLED"));
+        values.insert("MARTY_AGENT_ADMIN_ENABLED".into(), "true".into());
+        assert!(
+            GatewayConfig::from_values(&values)
+                .unwrap()
+                .agent_enrollment_enabled
+        );
     }
 
     #[test]

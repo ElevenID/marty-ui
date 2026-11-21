@@ -761,7 +761,11 @@ impl SigningCompatibilityService {
                 "Signing algorithm must match the DID-resolved issuer profile binding.".into(),
             ));
         }
-        if service_id == "managed-openbao-transit" {
+        // Receipt keys use explicitly registered custody services. Re-read
+        // their provider key too; a stale DID must not authorize a rotated key.
+        if service_id == "managed-openbao-transit"
+            || profile_purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        {
             let current = self
                 .provider_public_key_for_profile(
                     &request.organization_id,
@@ -1892,6 +1896,22 @@ fn authorize_signing_binding(
         })
         .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
+    let receipt_purpose = marty_signing_grant::delegated_decision::KEY_PURPOSE;
+    if (reference_purposes.contains(&receipt_purpose)
+        && (reference_purposes != [receipt_purpose] || key_purpose != Some(receipt_purpose)))
+        || (key_purpose == Some(receipt_purpose)
+            && (reference_purposes != [receipt_purpose]
+                || key_reference.is_none_or(str::is_empty)
+                || !matches!(algorithm, Some("ES256" | "EdDSA"))
+                || !crate::domain::explicit_format_allowed(
+                    service.get("credential_formats"),
+                    marty_signing_grant::delegated_decision::WIRE_FORMAT,
+                )))
+    {
+        return Err(CompatibilityError::Conflict(
+            "Delegated receipt signing requires an exclusive key, exact algorithm and explicit service format.".into(),
+        ));
+    }
     if reference_purposes.contains(&"mdoc_iaca")
         && (reference_purposes != ["mdoc_iaca"] || key_purpose != Some("mdoc_iaca"))
     {
@@ -1907,9 +1927,10 @@ fn authorize_signing_binding(
         )));
     }
     if let Some(purpose) = clean(key_purpose) {
-        if !crate::domain::key_purposes()
-            .iter()
-            .any(|definition| definition.id == purpose)
+        if purpose != receipt_purpose
+            && !crate::domain::key_purposes()
+                .iter()
+                .any(|definition| definition.id == purpose)
         {
             return Err(CompatibilityError::Invalid(format!(
                 "Unsupported key_purpose '{purpose}'."
@@ -2712,6 +2733,85 @@ mod tests {
         assert_eq!(governed_mdoc_profile(&marker_only, &profile).unwrap(), Some(marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocDocumentSigner));
         assert!(governed_mdoc_profile(&marker_only, &changed).is_err());
         assert!(governed_mdoc_profile(&json!({"mdoc_dsc_issuance": []}), &profile).is_err());
+    }
+
+    #[test]
+    fn delegated_receipt_reference_is_exclusive_at_the_final_signing_boundary() {
+        use marty_signing_grant::delegated_decision::{KEY_PURPOSE, WIRE_FORMAT};
+        let mut registry =
+            json!({"key_reference_purposes":{"provider":{"receipt-key":[KEY_PURPOSE]}}});
+        let service = json!({"key_purposes":[KEY_PURPOSE,"vc_jwt_issuer"], "credential_formats":[WIRE_FORMAT]});
+        let check = |registry: &Value, service: &Value, purpose, algorithm, key| {
+            authorize_signing_binding(
+                registry,
+                service.as_object().unwrap(),
+                "provider",
+                key,
+                purpose,
+                algorithm,
+            )
+        };
+        for algorithm in ["ES256", "EdDSA"] {
+            assert!(check(
+                &registry,
+                &service,
+                Some(KEY_PURPOSE),
+                Some(algorithm),
+                Some("receipt-key")
+            )
+            .is_ok());
+        }
+        for purpose in [None, Some("vc_jwt_issuer"), Some("lti_tool_signing")] {
+            assert!(check(
+                &registry,
+                &service,
+                purpose,
+                Some("ES256"),
+                Some("receipt-key")
+            )
+            .is_err());
+        }
+        for algorithm in [None, Some("RS256"), Some("ES384")] {
+            assert!(check(
+                &registry,
+                &service,
+                Some(KEY_PURPOSE),
+                algorithm,
+                Some("receipt-key")
+            )
+            .is_err());
+        }
+        assert!(check(&registry, &service, Some(KEY_PURPOSE), Some("ES256"), None).is_err());
+        assert!(check(
+            &registry,
+            &service,
+            Some(KEY_PURPOSE),
+            Some("ES256"),
+            Some("other-key")
+        )
+        .is_err());
+        let mut wildcard = service.clone();
+        wildcard["credential_formats"] = json!(["*"]);
+        assert!(check(
+            &registry,
+            &wildcard,
+            Some(KEY_PURPOSE),
+            Some("ES256"),
+            Some("receipt-key")
+        )
+        .is_err());
+        registry["key_reference_purposes"]["provider"]["receipt-key"] =
+            json!([KEY_PURPOSE, "vc_jwt_issuer"]);
+        for purpose in [Some(KEY_PURPOSE), Some("vc_jwt_issuer")] {
+            assert!(check(
+                &registry,
+                &service,
+                purpose,
+                Some("ES256"),
+                Some("receipt-key")
+            )
+            .is_err());
+        }
     }
 
     #[test]

@@ -2,6 +2,76 @@
   "schema_version": 1,
   "permissions": [
     {
+      "resource": "agent-identity",
+      "action": "view",
+      "description": "View the organization's agent identity directory and administrative history"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "create",
+      "description": "Register an agent identity inventory record as an authenticated human administrator"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "update",
+      "description": "Update descriptive agent identity metadata without changing identity or authority"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "suspend",
+      "description": "Suspend an agent identity's eligibility for new access"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "revoke",
+      "description": "Permanently revoke an agent identity"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "retire",
+      "description": "Retire an agent identity while preserving its history"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "rotate-key",
+      "description": "Replace an agent identity's public key while preserving historical key bindings"
+    },
+    {
+      "resource": "agent-identity",
+      "action": "enroll",
+      "description": "Establish key-control enrollment eligibility for a managed inventory record with exact authenticated challenge proof"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "view",
+      "description": "Review exact delegated grant terms for the current organization"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "approve",
+      "description": "Explicitly approve exact grant terms on behalf of the current organization as an authenticated human"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "create",
+      "description": "Create a pending immutable delegated grant for the authenticated human grantor"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "suspend",
+      "description": "Suspend a delegated grant while retaining original evidence"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "reinstate",
+      "description": "Reinstate a suspended delegated grant only through the current authority lifecycle checks"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "revoke",
+      "description": "Permanently revoke a delegated grant while retaining original outcomes"
+    },
+    {
       "resource": "identity",
       "action": "attest",
       "description": "Attest an external account for an independently approved source and explicit canonical learner consent"
@@ -565,6 +635,66 @@
       "resource": "verification",
       "action": "execute",
       "description": "Execute verification flows"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "create",
+      "description": "Register a full machine identity with attributable ownership"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "update",
+      "description": "Replace a full machine identity revision and current key"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "view",
+      "description": "Inspect full machine identity and source history"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "suspend",
+      "description": "Suspend a full machine identity"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "revoke",
+      "description": "Revoke a full machine identity"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "retire",
+      "description": "Retire a full machine identity"
+    },
+    {
+      "resource": "machine-authentication-policy",
+      "action": "assign",
+      "description": "Assign a machine authentication policy to a registered machine deployment"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "create",
+      "description": "Create a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "update",
+      "description": "Revise a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "activate",
+      "description": "Activate a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "archive",
+      "description": "Archive a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "view",
+      "description": "Inspect machine authorization policy revisions"
     }
   ]
 }

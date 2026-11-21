@@ -1,0 +1,49 @@
+[package]
+name = "marty-delegated-authority"
+version = "0.1.0"
+description = "Marty delegated-authority grant lifecycle service"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "marty-delegation-approval"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "marty-delegation-commands"
+path = "src/command_main.rs"
+test = false
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+hex.workspace = true
+mmf-security.workspace = true
+marty-organization = { path = "../organization" }
+marty-principal-runtime-binding = { path = "../../crates/principal-runtime-binding" }
+marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
+p256 = { workspace = true, features = ["ecdsa"] }
+ed25519-dalek.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+marty-oid4vci = { workspace = true, features = ["verifier"] }
+marty-verification.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
+tokio.workspace = true
+tower.workspace = true

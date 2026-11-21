@@ -22,6 +22,7 @@ pub struct Config {
     pub internal_api_key: String,
     pub service_sign_gateway_key: String,
     pub issuer_sign_key: String,
+    pub delegated_receipt_signing_enabled: bool,
     pub integration_secret_key: Option<String>,
     pub holder_device_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
@@ -228,6 +229,16 @@ impl Config {
             return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
         }
         let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
+        let delegated_receipt_signing_enabled =
+            match value(values, "MARTY_DELEGATED_RECEIPT_SIGNING_ENABLED").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                _ => {
+                    return Err(
+                        "MARTY_DELEGATED_RECEIPT_SIGNING_ENABLED must be true or false".into(),
+                    )
+                }
+            };
         let sign_grant_verify_token_file =
             value(values, "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE").map(PathBuf::from);
         if values.iter().any(|(name, value)| {
@@ -343,6 +354,7 @@ impl Config {
             internal_api_key,
             service_sign_gateway_key,
             issuer_sign_key,
+            delegated_receipt_signing_enabled,
             integration_secret_key,
             holder_device_key,
             dsc_issue_gateway_key,
@@ -449,6 +461,34 @@ mod tests {
         assert_eq!(config.bao_addr, None);
         assert_eq!(config.bao_token, None);
         assert_eq!(config.public_domain, None);
+    }
+
+    #[test]
+    fn delegated_receipt_origin_requires_explicit_boolean_opt_in() {
+        assert!(
+            !Config::from_values(&HashMap::new())
+                .unwrap()
+                .delegated_receipt_signing_enabled
+        );
+        for (value, expected) in [("false", false), ("true", true)] {
+            let values = HashMap::from([(
+                "MARTY_DELEGATED_RECEIPT_SIGNING_ENABLED".into(),
+                value.into(),
+            )]);
+            assert_eq!(
+                Config::from_values(&values)
+                    .unwrap()
+                    .delegated_receipt_signing_enabled,
+                expected
+            );
+        }
+        for value in ["1", "yes", "TRUE"] {
+            let values = HashMap::from([(
+                "MARTY_DELEGATED_RECEIPT_SIGNING_ENABLED".into(),
+                value.into(),
+            )]);
+            assert!(Config::from_values(&values).is_err());
+        }
     }
 
     #[test]

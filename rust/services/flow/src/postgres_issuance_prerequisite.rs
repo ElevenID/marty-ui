@@ -42,7 +42,7 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         intent: &IssuanceIntentBindingV1,
     ) -> Result<bool, RepositoryError> {
-        self.save_started_instance_with_intent(instance, None, None, None, Some(intent))
+        self.save_started_instance_with_intent(instance, None, None, None, Some(intent), None)
             .await
     }
 

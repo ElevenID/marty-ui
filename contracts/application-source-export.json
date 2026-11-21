@@ -608,6 +608,13 @@
       ]
     },
     {
+      "source": "ui/src/application/agentTrustFeatures.js",
+      "path": "ui/src/application/agentTrustFeatures.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
       "source": "ui/src/application/applications/applicationFlow.js",
       "path": "ui/src/application/applications/applicationFlow.js",
       "roles": [
@@ -1520,6 +1527,27 @@
     {
       "source": "ui/src/components/console/OrgConsoleUnavailable.jsx",
       "path": "ui/src/components/console/OrgConsoleUnavailable.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/agents/AgentDirectoryPage.jsx",
+      "path": "ui/src/components/console/agents/AgentDirectoryPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/agents/AgentTrustPages.test.tsx",
+      "path": "ui/src/components/console/agents/AgentTrustPages.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/agents/DelegationApprovalPage.jsx",
+      "path": "ui/src/components/console/agents/DelegationApprovalPage.jsx",
       "roles": [
         "application-or-shared-source"
       ]
@@ -3478,6 +3506,13 @@
       ]
     },
     {
+      "source": "ui/src/services/__tests__/agentTrustApi.test.ts",
+      "path": "ui/src/services/__tests__/agentTrustApi.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
       "source": "ui/src/services/__tests__/authApi.test.ts",
       "path": "ui/src/services/__tests__/authApi.test.ts",
       "roles": [
@@ -3487,6 +3522,13 @@
     {
       "source": "ui/src/services/adminImpersonationApi.js",
       "path": "ui/src/services/adminImpersonationApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/agentTrustApi.js",
+      "path": "ui/src/services/agentTrustApi.js",
       "roles": [
         "application-or-shared-source"
       ]
@@ -4053,7 +4095,7 @@
     "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
     "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
     "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
-    "unselected-test": "Not in the exact 24-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-test": "Not in the exact 26-file selected suite and not imported by selected test/setup or retained source closure.",
     "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
     "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
   },
@@ -5744,6 +5786,8 @@
       "src/components/navigation/ConsoleHeaderBar.test.tsx",
       "src/components/navigation/SidebarNavigation.test.tsx",
       "src/components/navigation/SidebarNavigationApplicant.test.tsx",
+      "src/components/console/agents/AgentTrustPages.test.tsx",
+      "src/services/__tests__/agentTrustApi.test.ts",
       "src/services/__tests__/authApi.test.ts",
       "tests/application/surface-profile.test.tsx"
     ],
@@ -5817,7 +5861,7 @@
       "from": "ui/src/components/pages/index.js",
       "disposition": "retain byte-for-byte; inactive export barrel",
       "edges": 12,
-      "reason": "Twelve re-exports target already-omitted website modules; no path from selected public/console entrypoints or the 24 selected tests."
+      "reason": "Twelve re-exports target already-omitted website modules; no path from selected public/console entrypoints or the 26 selected tests."
     },
     {
       "from": "ui/src/utils/analytics.example.js",

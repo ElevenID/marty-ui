@@ -471,7 +471,7 @@
       "api_paths": [],
       "ui_paths": [],
       "schema_refs": [],
-      "limitations": ["No owning product route or client was found. Machine-purpose trust profiles and workload TLS are not a Machine Identity API. The schema is absent from the deployed protocol pin."]
+      "limitations": ["Separately selected agent inventory and console administration are an integration candidate, not a qualified Machine Identity profile. Managed enrollment, proof authentication and runtime qualification remain separate gates. The schema is absent from the deployed protocol pin."]
     },
     {
       "id": "machine-authentication-policy",
