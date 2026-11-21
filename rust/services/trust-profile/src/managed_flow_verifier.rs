@@ -12,18 +12,7 @@ use crate::{
 
 pub mod transport;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ManagedFlowVerifier {
-    /// Selects an operator-configured fixed owner transport; never an URL.
-    pub producer_id: String,
-    pub public_base_url: String,
-    pub verifier_did: String,
-    pub request_key_id: String,
-    pub public_jwk: Value,
-    pub valid_from: DateTime<Utc>,
-    pub valid_until: DateTime<Utc>,
-}
+pub use marty_oid4vp_contract::wallet_verifier::ManagedFlowVerifier;
 
 /// Deserialized only from the fixed workload-authenticated Flow owner response.
 #[derive(Clone, Deserialize, Serialize)]
@@ -57,22 +46,6 @@ fn text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-pub(crate) fn canonical_base(value: &str) -> bool {
-    let Ok(url) = url::Url::parse(value) else {
-        return false;
-    };
-    text(value)
-        && !value.contains('*')
-        && url.scheme() == "https"
-        && url.host_str().is_some()
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.query().is_none()
-        && url.fragment().is_none()
-        && !value.ends_with('/')
-        && url.as_str().trim_end_matches('/') == value
-}
-
 pub(crate) fn registration(
     source: &TrustSource,
 ) -> Result<ManagedFlowVerifier, TrustProfileApplicationError> {
@@ -99,39 +72,7 @@ pub(crate) fn registration(
     crate::reject_private_custody_metadata(value)?;
     let value: ManagedFlowVerifier =
         serde_json::from_value(value.clone()).map_err(|_| invalid())?;
-    if !text(&value.producer_id)
-        || value.producer_id.len() > 128
-        || !value
-            .producer_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        || !canonical_base(&value.public_base_url)
-        || !text(&value.verifier_did)
-        || !["did:web:", "did:jwk:", "did:key:"].iter().any(|prefix| {
-            value
-                .verifier_did
-                .strip_prefix(prefix)
-                .is_some_and(|value| !value.is_empty())
-        })
-        || value
-            .verifier_did
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, '?' | '#' | '/'))
-        || !text(&value.request_key_id)
-        || value
-            .request_key_id
-            .strip_prefix(&format!("{}#", value.verifier_did))
-            .is_none_or(str::is_empty)
-        || value.valid_until <= value.valid_from
-        || value.valid_from.timestamp_subsec_nanos() != 0
-        || value.valid_until.timestamp_subsec_nanos() != 0
-    {
-        return Err(invalid());
-    }
-    crate::registered_verifier::validate_public_request_key(
-        &value.public_jwk,
-        &value.request_key_id,
-    )?;
+    value.validate().map_err(|_| invalid())?;
     Ok(value)
 }
 

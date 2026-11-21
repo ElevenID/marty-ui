@@ -1906,6 +1906,7 @@ async fn proxy_handler(
 struct PairingTicketIssueRequest {
     organization_id: String,
     trust_profile_id: String,
+    verifier_trust_profile_id: Option<String>,
 }
 
 async fn pairing_ticket_issue_handler(
@@ -1930,8 +1931,22 @@ async fn pairing_ticket_issue_handler(
     if organization_id.is_empty() {
         return detail_response(422, "organization_id is required");
     }
-    if uuid::Uuid::parse_str(&input.trust_profile_id).is_err() {
+    let Ok(issuer_profile) = uuid::Uuid::parse_str(&input.trust_profile_id) else {
         return detail_response(422, "trust_profile_id is required");
+    };
+    let mut payload =
+        json!({"organization_id": organization_id, "trust_profile_id": input.trust_profile_id});
+    if let Some(verifier) = input.verifier_trust_profile_id {
+        let Ok(id) = uuid::Uuid::parse_str(&verifier) else {
+            return detail_response(422, "verifier_trust_profile_id is invalid");
+        };
+        if id.is_nil() || id == issuer_profile || id.to_string() != verifier {
+            return detail_response(
+                422,
+                "A distinct canonical verifier trust profile is required",
+            );
+        }
+        payload["verifier_trust_profile_id"] = Value::String(verifier);
     }
     let membership = match state
         .memberships
@@ -1955,7 +1970,7 @@ async fn pairing_ticket_issue_handler(
         &trusted,
         HttpMethod::Post,
         "/v1/devices/pairing-tickets",
-        json!({"organization_id": organization_id, "trust_profile_id": input.trust_profile_id}),
+        payload,
         BTreeMap::new(),
     )
     .await;
