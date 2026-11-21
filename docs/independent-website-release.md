@@ -8,7 +8,7 @@ also has its own publisher in `ElevenID/website`:
 | Operation | Builds or selects | Prerequisites | Result |
 | --- | --- | --- | --- |
 | `combined` (default) | Existing combined production UI | Exact stable backend from the same public source and version | Existing legacy package, plus signed application compatibility evidence |
-| `website` | Marketing website only; pricing is included by the private producer | Exact protected-main source and locked frontend dependencies | Digest-pinned website with original producer receipt |
+| `website` | Legacy marketing website only; private pricing and checkout remain withheld | Exact protected-main source and locked frontend dependencies | Digest-pinned website with original producer receipt |
 | `compose` | Already published website, combined application, and stable backend | Exact successful original producer run IDs and attempts | Signed composition containing unchanged original evidence |
 
 `website` never requires a new stack release, stack claim, or backend build.
@@ -24,7 +24,7 @@ checks. Merge the public PR before its private companion. The workflows retain
 `combined` as their default; merging does not activate split routing on a host.
 Protected-main admission is required for live signed production artifacts, so do
 not make that post-merge qualification a prerequisite for merging the code.
-Website activation still requires the real host and application/billing checks
+Website activation still requires the real host and application checks
 below; a source merge is not evidence that those checks passed.
 
 1. Merge the public frontend/producer/edge changes and the private adapters and
@@ -42,8 +42,11 @@ below; a source merge is not evidence that those checks passed.
    include and independent `/edge-healthz`.
 4. Produce a website, compose it with that application and backend, and rehearse
    promotion and rollback on the actual hosting configuration before production
-   cutover. Qualify the login/callback/console journey and, for the private full
-   audience, the real pricing-to-checkout/payment journey separately.
+   cutover. Qualify the login/callback/console journey and retain the private
+   authenticated usage functionality. The current full audience intentionally
+   returns 404 for `/pricing`, `/pricing/`, and `/pricing/checkout`; verify that
+   withholding and the absence of pricing in the sitemap. Enabling payments
+   would require its own separately qualified change.
 
 The slim `application` Docker target is available for later work. This migration
 accepts only signed **combined** application compatibility evidence. Activating a
@@ -63,15 +66,19 @@ contract. Its exact identity is:
 | Reserved workflow | `.github/workflows/production-website-release.yml` |
 | Ref | `refs/heads/main` |
 | Image | `ghcr.io/elevenid/website` |
-| Plan / receipt / image marker | `marty.website-build-plan/v2` / `marty.website-release/v2` / `marty.website-image/v2` |
+| Current plan / receipt / image marker | `marty.website-build-plan/v3` / `marty.website-release/v3` / `marty.website-image/v3` |
 | Audience / pages / platform | production / public / `linux/amd64` |
 
-The v2 plan describes `Dockerfile.website`, the root `package-lock.json`, eleven
-fixed source-input fingerprints and the final static output inventory. It does
+The current v3 plan binds `bun@1.4.4`, the root `bun.lock`, twelve fixed
+source-input fingerprints and the final static output inventory. It retains
+`package-lock.json` as a checked compatibility input. Historical v2 plans retain
+their original eleven inputs and npm lock identity; accepting that old evidence
+does not select npm for a new build. Both describe `Dockerfile.website` and do
 not reuse the legacy Docker build target or dependency graph. Its revision is
 the exact website source SHA, and commerce identity must be null. The shared
-synthetic fixture in `tests/fixtures/standalone-website-release-v2.json` verifies
-the same closed schema and canonical build-plan hash as the JavaScript producer.
+synthetic fixtures in `tests/fixtures/standalone-website-release-v2.json` and
+`standalone-website-release-v3.json` verify the same closed schemas and canonical
+build-plan hashes as the JavaScript producer.
 The [website contract specification](https://github.com/ElevenID/website/blob/main/docs/standalone-release-contract.md)
 defines the input paths, output hashing and publisher requirements.
 
@@ -89,6 +96,38 @@ first cross-owner composition. The website's unsigned
 Docker image/config ID is not an OCI registry manifest digest. Signed composition
 and live application/host qualification remain separate gates.
 
+### Full standalone website contract
+
+The additive v4 plan, receipt and image marker support standalone source for the
+full audience. They do not widen the public website publisher's authority:
+
+| Field | Full standalone website |
+| --- | --- |
+| Website source | Exact `ElevenID/website` commit |
+| Original producer / numeric ID | `ElevenID/marty-subscriptions` / `1207411806` |
+| Original workflow / ref | `.github/workflows/production-ui-release.yml` / `refs/heads/main` |
+| Producer source | Exact private commerce commit, also bound in `commerce_extension` |
+| Revision | `WEBSITE_SHA-PRIVATE_SHA` |
+| Image | `ghcr.io/elevenid/marty-subscriptions/website` |
+| Plan / receipt / image marker | `marty.website-build-plan/v4` / `marty.website-release/v4` / `marty.website-image/v4` |
+| Build | `bun@1.4.4`, `bun.lock`, `Dockerfile.website.full`, bounded prebuilt static output |
+
+V4 has fourteen fixed input fingerprints, including the full Dockerfile and the
+production and surface build contracts. `standalone-website-release-v4.json` is
+a shared synthetic JavaScript/Python fixture, never signed release evidence.
+The consumer requires exact private workflow, source, run and attempt proofs
+for both the receipt and image, using the existing explicit private registry
+credential path. A public v2/v3 receipt cannot be relabeled as v4; the legacy v1
+full receipt also remains a distinct historical contract.
+
+A full standalone website composes only with an independently authenticated full
+combined application whose route contract matches exactly. Original application
+and stable backend evidence remains byte-for-byte unchanged. Contract support
+alone does not establish that a v4 image has been published, that the production
+host supports its deployment, or that runtime or payment checks passed. The
+private producer and standalone build changes must be merged and qualified
+before selecting their first signed v4 release.
+
 ### Existing public and private producers
 
 For public marketing, dispatch the existing public workflow on `main`:
@@ -98,7 +137,7 @@ gh workflow run production-web-release.yml --repo ElevenID/marty-ui --ref main \
   -f mode=website
 ```
 
-For the full marketing/pricing surface, dispatch the existing private workflow:
+For the legacy full marketing surface, dispatch the existing private workflow:
 
 ```sh
 gh workflow run production-ui-release.yml --repo ElevenID/marty-subscriptions --ref main \
@@ -142,7 +181,7 @@ image provenance. Existing `production-web-VERSION-RUN-ATTEMPT` and private
 Select successful original **website** and **combined** runs. Public composition
 defaults to website evidence from `ElevenID/marty-ui`. After the standalone
 publisher is live-qualified, select `website_repository=ElevenID/website` to use
-its original v2 evidence. The application remains from `ElevenID/marty-ui` and
+its original public v2/v3 evidence. The application remains from `ElevenID/marty-ui` and
 determines the original stable backend source and tag. The sources can differ;
 their route contracts and production page sets must match. The private full
 producer continues to select its original private website/application evidence.
@@ -521,9 +560,11 @@ Docker/Nginx host and its actual public origin:
 - Exercise failed candidate startup, failed edge validation/reload, failed public
   revision checks, interruption/recovery, and host reboot. Compare actual product
   pins before and after website rollback and explicit product adoption.
-- Execute the authenticated application journey and full private billing/payment
-  journey against the intended compatible backend. Compiled page availability is
-  not a payment qualification result.
+- Execute the authenticated application journey and retain the full private
+  usage functionality against the intended compatible backend. Verify withheld
+  pricing/checkout routes stay 404 and absent from the sitemap. Any later payment
+  activation needs separate qualification; compiled page availability is not a
+  payment result.
 
 Local Python tests cover contracts, provenance boundaries, real Compose model
 merging, product/profile snapshots, retained-slot transitions, and persistence

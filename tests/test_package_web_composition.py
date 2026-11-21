@@ -42,6 +42,15 @@ def standalone_website(source_sha, routes, *, run_id="124", run_attempt="2"):
                                  run_id=run_id, run_attempt=run_attempt)
 
 
+def full_standalone_website(source_sha, routes, *, commerce_source_sha=PRIVATE, run_id="124", run_attempt="2"):
+    template = web.read(ROOT / "tests/fixtures/standalone-website-release-v4.json")["release"]["build_plan"]
+    plan = web.full_standalone_plan(source_sha, commerce_source_sha=commerce_source_sha,
+                                   input_sha256=template["input_sha256"], output=template["output"],
+                                   route_contract=web.route_identity(routes))
+    return web.full_standalone_record(plan, metadata=web.image_metadata(plan), digest="sha256:" + source_sha[0] * 64,
+                                      run_id=run_id, run_attempt=run_attempt)
+
+
 def fake_crypto(monkeypatch):
     calls = []
     def subject(path, **kwargs):
