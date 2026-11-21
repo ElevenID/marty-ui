@@ -1109,6 +1109,25 @@ Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:En
     -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
     -PreparedServicesImage $script:PreparedPassportServicesImage
 
+# Select the template from the exact product source. A local snapshot's public
+# marker is a digest prefix, while its repository head_sha is the Git identity.
+$stackVersion = (Get-Content -LiteralPath (Join-Path $script:RepoRoot "VERSION") -Raw).Trim()
+$operatorDemoProductRevision = if ($OfficialStackRelease) {
+    [string]$sourceManifest.repositories.'marty-ui'.revision
+}
+else {
+    [string]$sourceManifest.repositories.'marty-ui'.head_sha
+}
+if ($operatorDemoProductRevision -cnotmatch '^[0-9a-f]{40}$') {
+    throw "Demo template requires the exact product Git revision"
+}
+$operatorDemoSelection = Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $PSScriptRoot "operator_demo_catalog.py"),
+    "--product-root", $script:RepoRoot,
+    "--product-revision", $operatorDemoProductRevision,
+    "--stack-version", $stackVersion
+) | ConvertFrom-Json
+
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"
 Write-Host "Source ID: $sourceId"
@@ -1473,11 +1492,11 @@ if ($rehearsalExitCode -ne 0 -or
 }
 
 if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
-    Write-Step "Build marker-bearing public UI image"
+    Write-Step "Build marker-bearing application UI image"
     $uiImage = "elevenid-local/ui:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
-        "buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"),
-        "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf",
+        "buildx", "build", "--load", "--target", "application", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"),
+        "--build-arg", "UI_VARIANT=public", "--build-arg", "UI_SURFACE=application", "--build-arg", "NGINX_CONFIG=nginx.spa.conf",
         "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
         "--build-arg", "MARTY_API_CORE_VERSION=$($martyApiCore.Version)", "--build-arg", "MARTY_API_CORE_URI=$($martyApiCore.Uri)",
         "--build-arg", "MARTY_API_CORE_DIGEST=$($martyApiCore.Digest)", "--build-arg", "MARTY_BLOG_VERSION=$($martyBlog.Version)",
@@ -1743,10 +1762,21 @@ foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
 }
 
 Write-Step "Create exact deployed demo binding for qualification"
+$currentOperatorDemoSelection = Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $PSScriptRoot "operator_demo_catalog.py"),
+    "--product-root", $script:RepoRoot,
+    "--product-revision", $operatorDemoProductRevision,
+    "--stack-version", $stackVersion
+) | ConvertFrom-Json
+if ($currentOperatorDemoSelection.template_path -cne $operatorDemoSelection.template_path -or
+    $currentOperatorDemoSelection.template_sha256 -cne $operatorDemoSelection.template_sha256 -or
+    $currentOperatorDemoSelection.source.commit -cne $operatorDemoProductRevision) {
+    throw "Source-bound demo template changed during deployment"
+}
 $deployedDemoManifestPath = Join-Path $script:ArtifactDir "deployed-demo-manifest.json"
 Invoke-Checked -FilePath python -Arguments @(
     (Join-Path $script:RepoRoot "scripts\bind_deployed_demo_manifest.py"),
-    "--template", (Join-Path $script:RepoRoot "ui\public\demos\manifests\${stackVersion}.json"),
+    "--template", $operatorDemoSelection.template_path,
     "--source-manifest", $sourceManifestPath,
     "--image-digests-file", $imageDigestsPath,
     "--output", $deployedDemoManifestPath

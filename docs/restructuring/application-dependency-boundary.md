@@ -8,6 +8,24 @@ output. The shared dependency declarations, root lockfiles, source layout,
 combined/website/customer build paths and release producers remain unchanged. It creates no repository, publishes no image and selects no
 new production image.
 
+## Current package-manager contract
+
+New full/profile qualification selects Bun 1.4.4 with a frozen lock and explicit
+lifecycle permissions. The reduced application Bun lock retains the same
+reviewed package identities and removes the same four website roots. Actual
+installed packages, required patches and SDK/WASM remain checked. The selected
+manager and lock are recorded in v6/v7 rehearsal evidence and v2 source-package
+evidence. The npm lock remains the reviewed dependency reference and audit
+input; it is not the selected installer.
+
+The original npm v4/v5 evidence described below remains historical qualification
+and retains its original validation. Current commands use
+`--fresh-install --package-manager bun`; see the
+[build boundary](application-build-boundary.md#running-the-check) and
+[package instructions](application-package-README.md). No dependency version
+upgrade or new production-acceptance claim is implied by this toolchain repair.
+
+
 ## Source checkpoints
 
 The original application preparation in PR #2001 landed through the protected
@@ -151,7 +169,7 @@ execution and hosted evidence belong in the candidate PR.
 `ui/profiles/application/package.json` and `package-lock.json` are the reviewed
 application-specific inputs. The root package manifest and both root locks remain
 the normal shared defaults. The profile is materialized only into the disposable
-UI export; running `npm ci` directly from the profile directory is not its build
+UI export; running an install directly from the profile directory is not its build
 entrypoint because its scripts belong at the exported UI root.
 
 The application manifest removes exactly these four roots:

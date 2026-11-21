@@ -370,23 +370,12 @@ def test_protocol_support_schema_rejects_false_unsupported_and_extra_claims():
         validator.validate(mutated)
 
 
-def test_ai_consumer_page_uses_gateway_discovery_instead_of_unverified_cli_claims():
-    page = (ROOT / "ui/src/components/pages/AiCapabilityPage.jsx").read_text()
+def test_application_docs_use_gateway_discovery():
     docs = (ROOT / "ui/src/components/ApiDocumentation.jsx").read_text()
-    assert '/v1/protocol-support' in page
-    assert '/openapi.json' in page
     assert 'href="/v1/protocol-support"' in docs
     assert 'href="/openapi.json"' in docs
     assert 'href="/redoc"' in docs
     assert 'localhost:8000/docs' not in docs
-    for unverified_claim in (
-        '@elevenid/marty-cli',
-        'marty verify start',
-        'marty creds issue',
-        'All commands support',
-        'primary interface for AI agents',
-    ):
-        assert unverified_claim not in page
 
 
 def test_native_template_validity_extension_covers_days_and_input_aliases():

@@ -1,27 +1,37 @@
 # Independent website releases and retained-slot deployment
 
-The marketing website can be built and promoted independently of the login,
-consoles, backend, and OpenBao. The existing public and private production
-producer workflows retain these three operations. The extracted public website
-also has its own publisher in `ElevenID/website`:
+The marketing website is built and published by `ElevenID/website`, independently
+of the application, backend and OpenBao. Current `marty-ui` source owns the
+application producer and signed composition; it no longer builds marketing.
 
-| Operation | Builds or selects | Prerequisites | Result |
+| Current operation | Builds or selects | Prerequisites | Result |
 | --- | --- | --- | --- |
-| `combined` (default) | Existing combined production UI | Exact stable backend from the same public source and version | Existing legacy package, plus signed application compatibility evidence |
-| `website` | Marketing website only; pricing is included by the private producer | Exact protected-main source and locked frontend dependencies | Digest-pinned website with original producer receipt |
-| `compose` | Already published website, combined application, and stable backend | Exact successful original producer run IDs and attempts | Signed composition containing unchanged original evidence |
+| Standalone website release in `ElevenID/website` | Public marketing website | Exact protected-main website source and frozen Bun 1.4.4 dependencies | Digest-pinned website with original producer evidence |
+| `application` in `marty-ui` | Verified portable application package | Exact protected-main application source and fresh full/profile/restored qualification | Independent application image and original evidence |
+| `compose` in `marty-ui` | Already published compatible website, application and backend | Exact original successful producer runs and accepted compatibility contracts | Signed composition containing unchanged original evidence |
 
-`website` never requires a new stack release, stack claim, or backend build.
-`compose` never builds an image. These operations publish artifacts; they do not
-change a running installation. The customer/selfhost full and tester contracts
-remain separate from production marketing.
+The website producer has no stack-release prerequisite. Composition builds no
+image. These operations publish artifacts; host activation is an explicit later
+operation against a verified target. Customer/selfhost full and tester profiles
+remain separate and preserve their existing image coordinates.
 
-## First cutover
+The original combined/website Docker targets and the automatic combined-web
+release-pipeline continuation are retired from current source. Historical
+receipts, source archives and rollback evidence retain their original grammar.
+The CLI permits historical producer replay only from a source checkout that
+still owns its original Docker target; private legacy builds are constrained by
+the private producer's reviewed source policy. See the
+[source-removal checkpoint](restructuring/website-source-removal.md).
+
+## Original combined cutover (historical reference)
+
+This section records the original migration sequence for retained source and
+signed releases. Current publication follows the independent paths above.
 
 The reviewed code lands before live qualification of the new producer identities.
 Before merge, complete the source/build/contract checks and required repository
-checks. Merge the public PR before its private companion. The workflows retain
-`combined` as their default; merging does not activate split routing on a host.
+checks. Merge the public PR before its private companion. Those historical workflows retained
+`combined` as their default; merging did not activate split routing on a host.
 Protected-main admission is required for live signed production artifacts, so do
 not make that post-merge qualification a prerequisite for merging the code.
 Website activation still requires the real host and application/billing checks
@@ -45,10 +55,11 @@ below; a source merge is not evidence that those checks passed.
    cutover. Qualify the login/callback/console journey and, for the private full
    audience, the real pricing-to-checkout/payment journey separately.
 
-The slim `application` Docker target is available for later work. This migration
-accepts only signed **combined** application compatibility evidence. Activating a
-slim application requires a separately qualified cutover; changing a marker value
-does not authorize it.
+The accepted historical composition still selects its original combined
+application image. Current source now builds only the application/customer
+surfaces, but activating a new independent application requires its own original
+publication, compatible backend selection and runtime qualification. Changing a
+marker value cannot substitute for those checks.
 
 ## Produce a website
 
@@ -63,7 +74,8 @@ contract. Its exact identity is:
 | Reserved workflow | `.github/workflows/production-website-release.yml` |
 | Ref | `refs/heads/main` |
 | Image | `ghcr.io/elevenid/website` |
-| Plan / receipt / image marker | `marty.website-build-plan/v2` / `marty.website-release/v2` / `marty.website-image/v2` |
+| New Bun plan / receipt / image marker | `marty.website-build-plan/v3` / `marty.website-release/v3` / `marty.website-image/v3` |
+| Original accepted npm schemas | v2 remains supported with its original closed shape |
 | Audience / pages / platform | production / public / `linux/amd64` |
 
 The v2 plan describes `Dockerfile.website`, the root `package-lock.json`, eleven
@@ -74,6 +86,14 @@ synthetic fixture in `tests/fixtures/standalone-website-release-v2.json` verifie
 the same closed schema and canonical build-plan hash as the JavaScript producer.
 The [website contract specification](https://github.com/ElevenID/website/blob/main/docs/standalone-release-contract.md)
 defines the input paths, output hashing and publisher requirements.
+
+The additive v3 contract selects Bun 1.4.4 and `bun.lock`. Its twelve fixed
+source inputs retain the npm reference lock and add the Bun lock, binding both
+without changing the dependency versions. The companion v3 fixture covers the
+same producer/consumer canonical contract. Original v2 evidence remains
+verifiable and continues to identify the accepted composition above; it cannot
+be relabeled as a Bun build. A new v3 publication still requires the real
+protected-main producer, browser/image qualification and original signatures.
 
 `website_producer_policy.py` admits this repository only for website receipts and
 its own image. Application, stable backend and outer composition authorities

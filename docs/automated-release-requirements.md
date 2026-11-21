@@ -76,11 +76,30 @@ stable producer qualifies automatically and starts its independent tag operator
 without a person. The coordinator observes the already automatic v2 stable
 publisher, requiring both intake and publication to complete successfully.
 
-Optional production web packaging follows successful stable publication. The
-existing combined application and independent website producers feed the signed
-composition using their exact original run IDs. Customer packages continue to
-exclude production marketing pages; the separate production web package owns
-that surface.
+The coordinator finishes with the selected customer publications. It has no
+automatic `production_web` continuation and does not dispatch the retired
+`web-application`, `web-website`, or `web-compose` stages. The internal v1 plan
+retains `production_web` as false-only; a legacy true request fails before
+configuration reads or any GitHub dispatch.
+
+Web outputs have explicit independent entry points:
+
+- `ElevenID/website` owns marketing publication through
+  `production-website-release.yml`, bound to its own exact protected-main source.
+- `ElevenID/marty-ui` publishes the independent application through
+  `production-web-release.yml` in `application` mode. Its required exact source,
+  portable package/consumer, image, and sandboxed-browser checks precede signing.
+- The same Marty workflow's `compose` mode, or its reviewed composition-manifest
+  push, selects authenticated original releases by repository, run and attempt
+  and validates their backend and route compatibility.
+
+Current Marty `combined` and `website` producer modes are rejected. Historical
+receipt validation remains available: the current composition contract still
+requires an accepted original combined-application receipt and compatibility
+evidence. A new independent application publication does not automatically
+replace it. Customer packages exclude marketing pages, and website source
+ownership belongs to the standalone repository. Publication or local
+qualification alone does not change the accepted composition or deploy it.
 
 Each dispatch uses the repository's ephemeral job token and GitHub API
 `2026-03-10`, which returns the new workflow's exact ID and URLs. A stage records
@@ -92,6 +111,22 @@ continue to apply.
 
 The initial release request chooses what to publish. It is not a series of
 runtime approvals. Routine code review remains upstream of CI/CD execution.
+
+## CI ownership after the website split
+
+The existing `Website Surface` check name and `test-website` job ID now cover
+application/customer boundaries, including source-package restoration, runtime
+and browser checks, default and explicit application builds, customer builds,
+and the pinned Nginx route suite. Standalone website build and crawler checks
+run in `ElevenID/website`; the retired Marty crawler jobs are absent from the
+closed CI roster.
+
+There is no marketing-only CI or CodeQL skip. The retained `website_only` plan
+field must be false, including for restored historical marketing files. Every
+merge group runs the full qualification plan and both required CodeQL analyses.
+Existing exact Rust test-only pull-request rules retain their own proofs. See
+[CI and release execution](ci-release-execution.md) for the current job and
+local-command boundaries.
 
 ## Local development and verification
 
@@ -115,8 +150,10 @@ describe a local mocked test as a successful release.
 ## Scope of completion
 
 This contract covers unattended CI, claims, candidate qualification, tag
-reservation, release publication and selected production web packaging. It does
-not create a certification claim or silently assert that unfinished installer
+reservation, and release publication within each supported entry point.
+Independent website/application publication and signed composition retain their
+own source and evidence requirements. It does not create a certification claim
+or silently assert that unfinished installer
 journey checks have passed. Installed-system acceptance, channel admission and
 deployment have their own existing requirements. If a required installer check
 has no implementation, add that check locally or explicitly revise the product
@@ -135,6 +172,10 @@ hosts or change account permissions.
 - `scripts/release_tag_handoff.py`: one automatic operator dispatch and admission.
 - `scripts/release_pipeline.py`: exact child workflow orchestration.
 - `.github/workflows/release-pipeline.yml`: one-request release graph.
+- `.github/workflows/production-web-release.yml`: current application publication
+  and composition of authenticated original web releases.
+- `ElevenID/website`'s `.github/workflows/production-website-release.yml`:
+  standalone marketing publication and qualification.
 - The pinned integration harness's `scripts/oidf_marty_automated_assessment.py`:
   upstream reason validation and bounded API/UI observations.
 

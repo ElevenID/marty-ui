@@ -95,7 +95,13 @@ def test_application_publisher_uses_one_package_build_and_qualifies_the_pushed_d
         if "run" in step:
             subprocess.run(["bash", "-n"], input=step["run"], text=True, capture_output=True, check=True)
     commands = "\n".join(step.get("run", "") for step in steps)
-    for required in ("--fresh-install --dependency-profile application", "export-application-source.mjs",
+    bun_setup = next(index for index, step in enumerate(steps)
+                     if step.get("uses", "").startswith("oven-sh/setup-bun@"))
+    assert steps[bun_setup]["with"]["bun-version"] == "1.4.4"
+    assert bun_setup < by_name["Qualify the source package and its ordinary independent consumer"]
+    assert "bun install --frozen-lockfile" in commands
+    assert "npm ci" not in commands
+    for required in ("--fresh-install --package-manager bun --dependency-profile application", "export-application-source.mjs",
                      "application-package-consumer.mjs", "application_release.py plan",
                      "application_provenance.py", "--subject application-release.json"):
         assert required in commands

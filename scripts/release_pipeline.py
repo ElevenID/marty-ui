@@ -29,9 +29,7 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ".github/workflows/release-pipeline.yml"
 PUBLISHER = ".github/workflows/publish-stable-candidate.yml"
-WEB = ".github/workflows/production-web-release.yml"
-PHASE_MINUTES = {"qualify": 330, "nightly": 330, "stable": 330, "stable-publish": 45,
-                 "web-application": 100, "web-website": 100, "web-compose": 40}
+PHASE_MINUTES = {"qualify": 330, "nightly": 330, "stable": 330, "stable-publish": 45}
 DISPATCH = {
     "full-ci": (".github/workflows/ci.yml", set(), {"CI Gate"}),
     "nightly-claim": (".github/workflows/prepare-nightly-claim.yml", {"source_sha"}, {"claim"}),
@@ -44,10 +42,6 @@ DISPATCH = {
                         "publish_cloudflare_addon", "selfhost_external_images_json"},
                        {"official-gate-evidence", "qualify-release", "publish-manifest"}),
     "stable-publisher": (PUBLISHER, {"candidate_run_id"}, {"intake", "publish"}),
-    "web-application": (WEB, {"mode", "stack_release_tag", "expected_source_sha"}, {"release"}),
-    "web-website": (WEB, {"mode", "expected_source_sha"}, {"release"}),
-    "web-compose": (WEB, {"mode", "website_run_id", "website_run_attempt", "application_run_id",
-                          "application_run_attempt", "expected_source_sha"}, {"compose"}),
 }
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
 CHILD_VISIBILITY_SECONDS = 60.0
@@ -58,8 +52,8 @@ STOP_MESSAGES = {
     "invalid_image_pins": "Stable release requires bounded external image pins",
     "invalid_image_reference": "Every external image must be an exact registry/repository@sha256 reference",
     "invalid_channel": "Select nightly, stable or both",
-    "invalid_release_options": "Release profile or production-web selection is invalid",
-    "web_requires_stable": "Production web requires the stable release in this request",
+    "invalid_release_options": "Release profile is invalid",
+    "retired_production_web": "Combined web continuation is retired; publish the website from ElevenID/website and use production-web-release.yml for application publication or composition",
     "invalid_image_override": "External image override must be JSON text",
     "image_roster_changed": "External image override must preserve the source-controlled service and repository roster",
     "invalid_pipeline_identity": "Invalid release pipeline identity",
@@ -84,7 +78,6 @@ STOP_MESSAGES = {
     "publisher_ambiguous": "More than one automatic publisher claims this original candidate",
     "nightly_not_requested": "Nightly was not requested",
     "stable_not_requested": "Stable was not requested",
-    "web_not_requested": "Production web was not requested",
     "checkout_mismatch": "Pipeline checkout differs from its exact source",
     "pipeline_not_running": "Original release pipeline is not running",
     "github_read_failed": "GitHub read failed; no dispatch was retried",
@@ -179,11 +172,11 @@ def image_map(raw: bytes) -> dict[str, str]:
 
 def configuration(channel: str, external_images: str, profile: str, production_web: str,
                   *, root: Path = ROOT) -> dict:
+    # Preserve the v1 plan field as false-only. Reject old requests before
+    # reading source configuration or creating any GitHub transport.
+    require(production_web == "false", "retired_production_web")
     require(channel in {"nightly", "stable", "both"}, "invalid_channel")
-    require(profile in {"tester", "full"} and production_web in {"true", "false"},
-            "invalid_release_options")
-    require(production_web == "false" or channel in {"stable", "both"},
-            "web_requires_stable")
+    require(profile in {"tester", "full"}, "invalid_release_options")
     if channel in {"stable", "both"}:
         defaults_raw = transport.bounded_file(root / "release/external-images.json", maximum=8192)
         defaults = image_map(defaults_raw)
@@ -197,7 +190,7 @@ def configuration(channel: str, external_images: str, profile: str, production_w
         # These defaults remove per-release copying; they do not assert that the
         # images passed this candidate's runtime qualification.
     return {"channel": channel, "external_images": external_images, "profile": profile,
-            "production_web": production_web == "true"}
+            "production_web": False}
 
 
 class Pipeline:
@@ -208,6 +201,7 @@ class Pipeline:
         require(phase in PHASE_MINUTES and transport.positive(run_id)
                 and isinstance(source, str) and transport.SHA.fullmatch(source)
                 and isinstance(tag, str) and transport.TAG.fullmatch(tag), "invalid_pipeline_identity")
+        require(isinstance(plan, dict) and plan.get("production_web") is False, "retired_production_web")
         self.phase, self.run_id, self.source, self.tag, self.plan = phase, run_id, source, tag, plan
         self.operation = "create_stage_journal"
         self.child_run_id: int | None = None
@@ -508,17 +502,7 @@ class Pipeline:
         # Never rediscover or dispatch again after an uncertain acknowledgement.
         return self.dispatch("stable-publisher", {"candidate_run_id": str(candidate)}, title=title)
 
-    def wait_publisher(self, run_id: int, candidate: int) -> dict:
-        require(transport.positive(run_id), "invalid_child_run_id")
-        run = self.github.json(f"repos/{transport.REPOSITORY}/actions/runs/{run_id}")
-        event = run.get("event") if isinstance(run, dict) else None
-        require(event in {"workflow_run", "workflow_dispatch"}, "child_identity_mismatch")
-        return self.wait(run_id, PUBLISHER, {"intake", "publish"}, event=event,
-                         title=f"Publish stable candidate {candidate}")
-
-    def execute(self, *, ci_run_id: int | None = None, stable_run_id: int | None = None,
-                publisher_run_id: int | None = None, application_run_id: int | None = None,
-                website_run_id: int | None = None) -> dict:
+    def execute(self, *, ci_run_id: int | None = None, stable_run_id: int | None = None) -> dict:
         self.operation = "execute_stage"
         if self.phase == "qualify":
             if self.plan["channel"] == "stable":
@@ -556,33 +540,22 @@ class Pipeline:
             return {"stable_claim_run_id": claim, "stable_run_id": release, "stable_tag": self.tag}
         if self.phase == "stable-publish":
             return {"publisher_run_id": self.stable_publisher(stable_run_id)}
-        require(self.plan["production_web"], "web_not_requested")
-        self.wait(stable_run_id, DISPATCH["stable-release"][0], DISPATCH["stable-release"][2])
-        self.wait_publisher(publisher_run_id, stable_run_id)
-        if self.phase == "web-application":
-            return {"application_run_id": self.dispatch("web-application", {"mode": "combined",
-                    "stack_release_tag": self.tag, "expected_source_sha": self.source})}
-        if self.phase == "web-website":
-            return {"website_run_id": self.dispatch("web-website", {"mode": "website", "expected_source_sha": self.source})}
-        self.wait(application_run_id, WEB, {"release"}, title=f"Production web combined from {self.source}")
-        self.wait(website_run_id, WEB, {"release"}, title=f"Production web website from {self.source}")
-        return {"composition_run_id": self.dispatch("web-compose", {"mode": "compose",
-                "application_run_id": str(application_run_id), "application_run_attempt": "1",
-                "website_run_id": str(website_run_id), "website_run_attempt": "1",
-                "expected_source_sha": self.source})}
+        raise PipelineError("invalid_pipeline_identity")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=tuple(PHASE_MINUTES))
     parser.add_argument("--journal", type=Path, required=True)
-    for name in ("ci-run-id", "stable-run-id", "publisher-run-id", "application-run-id", "website-run-id"):
+    for name in ("ci-run-id", "stable-run-id"):
         parser.add_argument("--" + name, type=int)
     args = parser.parse_args()
     pipeline = None
     source = None
-    operation = "validate_context"
+    operation = "load_configuration"
     try:
+        require(os.environ.get("PRODUCTION_WEB", "false") == "false", "retired_production_web")
+        operation = "validate_context"
         run_id, source = transport.exact_context(WORKFLOW)
         operation = "validate_checkout"
         require(transport.git("rev-parse", "HEAD^{commit}") == source, "checkout_mismatch")
@@ -598,9 +571,7 @@ def main() -> int:
         operation = "create_stage_journal"
         pipeline = Pipeline(args.phase, run_id, source, parent["created_at"], "v" + preflight["stack_version"],
                             plan, args.journal, github=github)
-        outputs = pipeline.execute(ci_run_id=args.ci_run_id, stable_run_id=args.stable_run_id,
-                                   publisher_run_id=args.publisher_run_id, application_run_id=args.application_run_id,
-                                   website_run_id=args.website_run_id)
+        outputs = pipeline.execute(ci_run_id=args.ci_run_id, stable_run_id=args.stable_run_id)
         pipeline.finish(True, outputs)
         pipeline = None
         operation = "write_stage_outputs"

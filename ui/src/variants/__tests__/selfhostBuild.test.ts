@@ -1,19 +1,19 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { selfhostBuildContractPlugin } from '../../../scripts/selfhost-build-contract.mjs';
 import { pruneSelfhostDist } from '../../../scripts/prune-selfhost-dist.mjs';
+import { WEBSITE_SOURCE_OWNERSHIP } from '../../../scripts/website-source-ownership.mjs';
 
 describe('customer build exclusion', () => {
-  it('rejects every marketing page imported by the production route module', () => {
-    const productionRoutes = path.resolve('src/variants/marketingRoutes.jsx');
-    const imports = [...readFileSync(productionRoutes, 'utf8').matchAll(/import\(['"]([^'"]+)['"]\)/g)];
-    expect(imports.length).toBeGreaterThan(20);
-    for (const [, imported] of imports) {
-      const moduleId = imported.startsWith('.')
-        ? `${path.resolve(path.dirname(productionRoutes), imported)}.jsx`
-        : `/workspace/node_modules/${imported}/index.js`;
+  it('rejects every retired marketing module even when its source no longer exists', () => {
+    expect(WEBSITE_SOURCE_OWNERSHIP.modules).toHaveLength(34);
+    for (const moduleId of [
+      ...WEBSITE_SOURCE_OWNERSHIP.modules.map((entry) => `/workspace/${entry}`),
+      '/workspace/node_modules/@elevenid/marty-blog/index.js',
+      '/workspace/ui/src/variants/publicSite.public.jsx',
+    ]) {
       expect(() => selfhostBuildContractPlugin().generateBundle({}, {
         'entry.js': { type: 'chunk', modules: { [moduleId]: {} } },
       })).toThrow('Customer UI includes production marketing modules');

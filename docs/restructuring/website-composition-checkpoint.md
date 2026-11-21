@@ -130,5 +130,9 @@ remain unchanged. The full private billing journey remains separately owned.
 
 Composition deliberately records `runtime_tested: false` and
 `billing_journey_tested: false`. Packaging does not establish host or journey
-success. Production traffic changes, source deletion, slim-application
-activation and repository renaming are later gates.
+success. Production traffic changes, slim-application activation and repository
+renaming retain their later gates. Source removal follows its own reviewed
+ownership, build-consumer and release-consumer checks; host/OIDC acceptance is
+not a blanket prerequisite for deleting unused marketing source. Use the
+[current restructuring priorities](README.md#current-development-priorities)
+for the next development batch.

@@ -95,7 +95,7 @@ qualification status is documented in that guide.
 # Production deployment is environment-specific.
 # For local production-like verification, build the UI and run the backend stack:
 cd marty-ui/ui
-npm run build
+bun run build
 ```
 
 📖 **Full setup guide:** [DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)
@@ -217,8 +217,8 @@ make dev
 
 ```bash
 cd ui
-npm install
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 ### 3. Open the app
@@ -234,14 +234,18 @@ For the published Linux installer, follow the separate
 [rootless host setup](docs/linux-installer-tester.md#1-prepare-the-linux-host).
 
 - **Docker Desktop** or Docker Engine with Compose support
-- **Node.js** (optional, for native UI development)
+- **Node.js 24 and Bun 1.4.4** for native UI development. Bun is the package
+  manager; the existing Node-based build scripts and Vitest runner are retained.
 - **Sibling Marty repositories** when working in editable local mode
 
 ### macOS Installation
 
 ```bash
-# Install using Homebrew if needed
-brew install node
+# Install Node.js 24 using your preferred version manager.
+# Install Bun 1.4.4 using the versioned installation instructions:
+# https://bun.com/docs/installation
+node --version
+bun --version
 
 # Docker Desktop is recommended on macOS
 ```
@@ -250,10 +254,14 @@ brew install node
 
 ```bash
 sudo apt update
-sudo apt install docker.io docker-compose-plugin nodejs npm
+sudo apt install docker.io docker-compose-plugin
 sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
+
+Install Node.js 24 and Bun 1.4.4 separately, then verify their versions with
+`node --version` and `bun --version`. Use the committed Bun lock for UI installs;
+`package-lock.json` remains a dependency audit and historical evidence input.
 
 ## Start the development stack
 
@@ -267,8 +275,8 @@ sudo usermod -aG docker $USER
 
    ```bash
    cd ui
-   npm install
-   npm run dev
+   bun install --frozen-lockfile
+   bun run dev
    ```
 
 3. **Access the local apps:**
@@ -372,7 +380,7 @@ For an isolated worktree feedback loop, use `python scripts/dev/worktree_stack.p
 from that worktree to start its own PostgreSQL and Redis. The helper derives a
 Compose project, network, volumes, and loopback ports from the resolved worktree
 path; `config` prints its identity and `ps` shows its containers. Install UI
-dependencies in that worktree with `cd ui && npm ci`, then run
+dependencies in that worktree with `cd ui && bun install --frozen-lockfile`, then run
 `python scripts/dev/worktree_stack.py ui` from the repository root for Vite live
 reload. The UI points only at this worktree's Gateway port; until a Gateway is
 started there, API calls fail rather than reaching another local Marty stack.
@@ -393,8 +401,8 @@ make infra
 
 # frontend in another terminal
 cd ui
-npm install
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Default local Rust dev and test builds use line-table debug information. For full local-variable

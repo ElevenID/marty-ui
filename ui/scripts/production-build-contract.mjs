@@ -3,8 +3,8 @@ import path from 'node:path';
 
 export const COMMERCE_REPOSITORY = 'ElevenID/marty-subscriptions';
 
-export function productionBuildContract({ pages = 'public', selfhost = false, surface = 'combined', extensionPath, sourceSha }) {
-  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface');
+export function productionBuildContract({ pages = 'public', selfhost = false, surface = 'application', extensionPath, sourceSha }) {
+  if (surface !== 'application') throw new Error('Only the application UI surface is available');
   if (!['public', 'full'].includes(pages)) throw new Error('Unknown production page set');
   if (pages === 'public') {
     if (extensionPath || sourceSha) throw new Error('Commerce inputs require the full production page set');
@@ -25,7 +25,7 @@ export function productionBuildContract({ pages = 'public', selfhost = false, su
     || metadata.repository !== COMMERCE_REPOSITORY || metadata.source_sha !== sourceSha) {
     throw new Error('Full production commerce source identity differs');
   }
-  const surfaceEntry = surface === 'combined' ? entry : path.join(path.dirname(entry), `${surface}.jsx`);
+  const surfaceEntry = path.join(path.dirname(entry), 'application.jsx');
   if (!existsSync(surfaceEntry)) throw new Error(`Private ${surface} commerce adapter is missing`);
   return surfaceEntry;
 }

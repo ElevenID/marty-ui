@@ -12,9 +12,122 @@ export const APPLICATION_REMOVED_DEPENDENCY_ROOTS = Object.freeze([
   '@prerenderer/renderer-puppeteer', 'vite-plugin-sitemap',
 ]);
 export const APPLICATION_PROFILE_POSTINSTALL = 'node scripts/patch-checker-worker-cleanup.mjs';
+export const APPLICATION_BUN_PACKAGE_MANAGER = Object.freeze({ name: 'bun', version: '1.4.4', lock_file: 'bun.lock' });
+export const APPLICATION_TRUSTED_DEPENDENCIES = Object.freeze(['esbuild', 'fsevents', 'puppeteer']);
 export const APPLICATION_DEPENDENCY_PROFILE_INPUTS = Object.freeze([
   'ui/profiles/application/package.json', 'ui/profiles/application/package-lock.json',
 ]);
+export function applicationDependencyProfileInputs(packageManager) {
+  return [...APPLICATION_DEPENDENCY_PROFILE_INPUTS,
+    ...(packageManager === 'bun' ? ['ui/profiles/application/bun.lock'] : [])];
+}
+export function applicationPackageManager(manifest, selected) {
+  require(manifest.packageManager === undefined || manifest.packageManager === 'bun@1.4.4',
+    'Unreviewed application packageManager pin; migration must be explicit');
+  const manager = selected ?? (manifest.packageManager === 'bun@1.4.4' ? 'bun' : 'npm');
+  require(['bun', 'npm'].includes(manager), 'Unsupported application package manager');
+  if (manager === 'bun') {
+    require(manifest.packageManager === 'bun@1.4.4', 'Bun installation requires the reviewed bun@1.4.4 packageManager pin');
+    assert.deepEqual(manifest.trustedDependencies, APPLICATION_TRUSTED_DEPENDENCIES,
+      'Bun installation requires the reviewed dependency lifecycle allowlist');
+  }
+  return manager;
+}
+
+// Bun's committed text lock is JSON with trailing commas. Remove those only
+// outside strings, then reuse the bounded duplicate-key JSON parser. No source
+// evaluation, comment execution, or dependency-provided parser is involved.
+export function parseApplicationBunLock(bytes) {
+  const source = bytes.toString('utf8');
+  require(Buffer.from(source).equals(bytes) && bytes.length <= MAX_INPUT_BYTES, 'Bun lock must be bounded UTF-8');
+  let text = ''; let quoted = false; let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted) {
+      text += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') { quoted = true; text += char; }
+    else if (char !== ',' || !/^\s*[}\]]/.test(source.slice(index + 1))) text += char;
+  }
+  return document(Buffer.from(text));
+}
+
+function packageName(relative) { return relative.split('node_modules/').at(-1); }
+function bunSelector(row) {
+  require(Array.isArray(row) && [3, 4].includes(row.length) && typeof row[0] === 'string', 'Invalid Bun package record');
+  const boundary = row[0].indexOf('@', row[0].startsWith('@') ? 1 : 0);
+  require(boundary > 0, 'Invalid Bun package selector');
+  const name = row[0].slice(0, boundary); const selector = row[0].slice(boundary + 1);
+  const metadata = object(row.at(-2), 'Bun package metadata');
+  const integrity = row.at(-1);
+  require(/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity), 'Bun package requires locked SHA-512 integrity');
+  if (row.length === 4) require(row[1] === '', 'Unreviewed Bun registry override');
+  return { name, selector, metadata, integrity };
+}
+
+export function validateApplicationBunLock(manifest, npmLock, lock) {
+  require(lock.lockfileVersion === 2 && lock.configVersion === 0, 'Expected the reviewed Bun text lock format and hoisted configuration');
+  assert.deepEqual(Object.keys(lock).sort(), ['configVersion', 'lockfileVersion', ...(lock.overrides ? ['overrides'] : []), 'packages', 'trustedDependencies', 'workspaces']);
+  assert.deepEqual(lock.workspaces, { '': { name: manifest.name,
+    ...Object.fromEntries(['dependencies', 'devDependencies'].filter((field) => Object.keys(manifest[field] || {}).length)
+      .map((field) => [field, manifest[field]])) } },
+    'Bun lock root differs from the selected manifest');
+  assert.deepEqual(lock.overrides || {}, manifest.overrides || {}, 'Bun lock overrides differ from the manifest');
+  assert.deepEqual(lock.trustedDependencies, APPLICATION_TRUSTED_DEPENDENCIES, 'Bun lock lifecycle policy differs');
+  const references = Object.entries(npmLock.packages).filter(([relative]) => relative).map(([relative, row]) => ({
+    name: row.name || packageName(relative), ...row,
+  }));
+  const covered = new Set();
+  const records = [];
+  for (const [location, row] of Object.entries(object(lock.packages, 'Bun packages'))) {
+    require(location && !/[\\\x00-\x1f\x7f]/.test(location)
+      && location.split('/').every((part) => part && part !== '.' && part !== '..'), 'Unsafe Bun package location');
+    const parsed = bunSelector(row);
+    const roots = { ...manifest.dependencies, ...manifest.devDependencies };
+    const physical = `node_modules/${location.match(/@[^/]+\/[^/]+|[^/]+/g).join('/node_modules/')}`;
+    const lockedLocation = npmLock.packages[physical];
+    const locationName = (lockedLocation?.name || packageName(physical));
+    require(locationName === parsed.name, `Bun lock redirected a dependency name: ${location}`);
+    if (Object.hasOwn(roots, location)) require(lockedLocation && lockedLocation.integrity === parsed.integrity
+      && (row.length === 4 ? lockedLocation.version === parsed.selector : (lockedLocation.resolved === parsed.selector
+        || (lockedLocation.resolved?.startsWith('file:') && lockedLocation.resolved.slice(5) === parsed.selector))),
+    `Bun lock redirected a declared dependency: ${location}`);
+    const matches = references.filter((reference) => reference.name === parsed.name && reference.integrity === parsed.integrity
+      && (row.length === 4 ? reference.version === parsed.selector : (reference.resolved === parsed.selector
+        || (reference.resolved?.startsWith('file:') && reference.resolved.slice(5) === parsed.selector))));
+    require(matches.length > 0, `Bun lock changed a retained dependency identity: ${location}`);
+    // Migration may collapse duplicate physical npm records but may not change
+    // dependency edges, platform selection, executable mappings or lifecycle flags.
+    require(matches.some((reference) => {
+      const metadata = Object.fromEntries(['dependencies', 'optionalDependencies', 'peerDependencies', 'bin', 'os', 'cpu', 'hasInstallScript']
+        .filter((field) => reference[field] !== undefined).map((field) => [field, reference[field]]));
+      for (const field of ['os', 'cpu']) if (metadata[field]?.length === 1) metadata[field] = metadata[field][0];
+      // These unsupported-platform sentinels are emitted by the pinned 1.4.4
+      // npm migration. They preserve the existing Bun lock's platform policy.
+      if (['loong64', 'mips64el', 'riscv64', 'wasm32'].includes(metadata.cpu)) metadata.cpu = 'none';
+      if (['netbsd', 'openharmony'].includes(metadata.os)) metadata.os = 'none';
+      if (metadata.peerDependencies) {
+        metadata.peerDependencies = Object.fromEntries(Object.entries(metadata.peerDependencies)
+          .filter(([name]) => !Object.hasOwn(metadata.dependencies || {}, name)));
+        if (!Object.keys(metadata.peerDependencies).length) delete metadata.peerDependencies;
+      }
+      if (!reference.name.startsWith('@') && metadata.bin && typeof metadata.bin === 'object' && Object.keys(metadata.bin).length === 1
+        && Object.hasOwn(metadata.bin, reference.name.split('/').at(-1))) metadata.bin = metadata.bin[reference.name.split('/').at(-1)];
+      const optional = Object.keys(reference.peerDependenciesMeta || {}).filter((name) => reference.peerDependenciesMeta[name].optional && Object.hasOwn(metadata.peerDependencies || {}, name)).sort();
+      if (optional.length) metadata.optionalPeers = optional;
+      const actual = { ...parsed.metadata, ...(parsed.metadata.optionalPeers ? { optionalPeers: [...parsed.metadata.optionalPeers].sort() } : {}) };
+      try { assert.deepEqual(actual, metadata); return true; } catch { return false; }
+    }), `Bun lock changed retained dependency metadata: ${location}`);
+    for (const reference of matches) covered.add(JSON.stringify([reference.name, reference.version, reference.resolved, reference.integrity]));
+    records.push({ location, name: parsed.name, version: matches[0].version, resolved: matches[0].resolved, integrity: parsed.integrity });
+  }
+  require(references.every((reference) => covered.has(JSON.stringify([reference.name, reference.version, reference.resolved, reference.integrity]))),
+    'Bun lock omitted a retained dependency identity');
+  for (const name of Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })) require(lock.packages[name], `Bun lock omitted declared root ${name}`);
+  return records;
+}
 export const APPLICATION_PROFILE_SCRIPTS = Object.freeze({
   build: 'node scripts/build-web-surface.mjs application',
   'build:application': 'node scripts/build-web-surface.mjs application',
@@ -132,13 +245,14 @@ function resolveLockedPackage(packages, location, name) {
   }
 }
 
-export function validateApplicationDependencyProfile({ repositoryRoot = DEFAULT_ROOT } = {}) {
+export function validateApplicationDependencyProfile({ repositoryRoot = DEFAULT_ROOT, packageManager } = {}) {
   const root = path.resolve(repositoryRoot);
   require(realpathSync(root) === root && lstatSync(root).isDirectory(), 'Dependency profile root must have ordinary parents');
   const baseline = ['ui/package.json', 'ui/package-lock.json'].map((name) => input(root, name));
-  const selected = APPLICATION_DEPENDENCY_PROFILE_INPUTS.map((name) => input(root, name));
   const [manifest, lock] = baseline.map((entry) => document(entry.bytes));
-  const [application, applicationLock] = selected.map((entry) => document(entry.bytes));
+  packageManager = applicationPackageManager(manifest, packageManager);
+  const selected = applicationDependencyProfileInputs(packageManager).map((name) => input(root, name));
+  const [application, applicationLock] = selected.slice(0, 2).map((entry) => document(entry.bytes));
   require(lock.lockfileVersion === 3 && applicationLock.lockfileVersion === 3, 'Dependency profiles require npm lock version 3');
   object(lock.packages, 'baseline lock packages');
   object(applicationLock.packages, 'application lock packages');
@@ -200,15 +314,30 @@ export function validateApplicationDependencyProfile({ repositoryRoot = DEFAULT_
   const removedPaths = Object.keys(lock.packages).filter((name) => name && !Object.hasOwn(applicationLock.packages, name)).sort();
   require(APPLICATION_REMOVED_DEPENDENCY_ROOTS.every((name) => removedPaths.includes(`node_modules/${name}`)),
     'Application lock did not remove every reviewed website root');
+  let bunGraph;
+  if (packageManager === 'bun') {
+    baseline.push(input(root, 'ui/bun.lock'));
+    const rootBun = parseApplicationBunLock(baseline[2].bytes);
+    const selectedBun = parseApplicationBunLock(selected[2].bytes);
+    validateApplicationBunLock(manifest, lock, rootBun);
+    const retainedBun = validateApplicationBunLock(application, applicationLock, selectedBun);
+    for (const [name, row] of Object.entries(selectedBun.packages)) {
+      assert.deepEqual(row, rootBun.packages[name], `Application Bun lock changed a retained package: ${name}`);
+      require(!APPLICATION_REMOVED_DEPENDENCY_ROOTS.includes(bunSelector(row).name), 'Application Bun lock retained a website dependency');
+    }
+    bunGraph = { baseline_packages: Object.keys(rootBun.packages).length, application_packages: retainedBun.length,
+      retained_identity_changes: [], npm_reference_identities_preserved: true };
+  }
   return {
-    schema: 'marty.application-dependency-profile/v1', name: 'application',
+    schema: `marty.application-dependency-profile/${packageManager === 'bun' ? 'v2' : 'v1'}`, name: 'application',
+    ...(bunGraph ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER }, bun_lock_graph: bunGraph } : {}),
     removed_roots: [...APPLICATION_REMOVED_DEPENDENCY_ROOTS],
     baseline_inputs: baseline.map((entry) => entry.record), source_inputs: selected.map((entry) => entry.record),
     substitutions: baseline.map((entry, index) => ({ path: entry.record.path,
       baseline: entry.record, selected: selected[index].record })),
     lock_graph: { baseline_packages: Object.keys(lock.packages).length - 1,
       application_packages: retained.length, removed_package_paths: removedPaths, retained_identity_changes: [] },
-    scripts: { ...APPLICATION_PROFILE_SCRIPTS }, bun_lock_selected: false, package_graph_minimized: false,
+    scripts: { ...APPLICATION_PROFILE_SCRIPTS }, bun_lock_selected: packageManager === 'bun', package_graph_minimized: false,
   };
 }
 

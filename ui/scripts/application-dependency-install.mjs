@@ -9,8 +9,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  APPLICATION_DEPENDENCY_PROFILE_INPUTS, APPLICATION_REMOVED_DEPENDENCY_ROOTS,
-  APPLICATION_PROFILE_POSTINSTALL,
+  applicationDependencyProfileInputs, applicationPackageManager, APPLICATION_REMOVED_DEPENDENCY_ROOTS,
+  APPLICATION_PROFILE_POSTINSTALL, APPLICATION_BUN_PACKAGE_MANAGER, parseApplicationBunLock, validateApplicationBunLock,
 } from './application-dependency-profile.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
@@ -23,7 +23,7 @@ export const APPLICATION_INSTALL_INPUTS = Object.freeze([
   'scripts/patch-checker-worker-cleanup.mjs', 'scripts/checker-worker-cleanup.mjs',
 ]);
 
-// npm lifecycle scripts inherit this process group. Use files for captured
+// Package lifecycle scripts inherit this process group. Use files for captured
 // output: an orphaned descendant must not keep a spawnSync pipe open after the
 // parent deadline. Fresh installation is deliberately a Linux qualification.
 export function runOwnedInstallCommand(command, args, { cwd, env, timeout, stdoutFile, stderrFile } = {}) {
@@ -127,10 +127,10 @@ function installationEnvironment() {
 
 export { installationEnvironment as applicationInstallationEnvironment };
 
-function profileInputs(dependencyProfile) {
+function profileInputs(dependencyProfile, packageManager = 'npm') {
   require(['full', 'application'].includes(dependencyProfile), 'Unsupported dependency installation profile');
   return dependencyProfile === 'application'
-    ? [...APPLICATION_INSTALL_INPUTS, ...APPLICATION_DEPENDENCY_PROFILE_INPUTS.map((name) => name.slice('ui/'.length))]
+    ? [...APPLICATION_INSTALL_INPUTS, ...applicationDependencyProfileInputs(packageManager).map((name) => name.slice('ui/'.length))]
     : [...APPLICATION_INSTALL_INPUTS];
 }
 
@@ -143,18 +143,19 @@ function removedRootIdentity(row) {
   return row && APPLICATION_REMOVED_DEPENDENCY_ROOTS.includes(row.name);
 }
 
-function manifestContract(uiRoot, dependencyProfile) {
+function manifestContract(uiRoot, dependencyProfile, selectedManager) {
   profileInputs(dependencyProfile);
   for (const name of ['.npmrc', '.npm-extension.mjs', '.npm-extension.cjs', 'npm-shrinkwrap.json']) {
     require(absent(path.join(uiRoot, name)), `Unreviewed project install configuration: ${name}`);
   }
   const manifest = document(uiRoot, 'package.json');
+  const packageManager = applicationPackageManager(manifest, selectedManager);
   const lock = document(uiRoot, 'package-lock.json');
   require(lock.lockfileVersion === 3 && lock.packages && lock.packages[''], 'Expected the committed npm v3 lock');
   assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies, 'npm lock dependencies differ from the manifest');
   assert.deepEqual(lock.packages[''].devDependencies, manifest.devDependencies, 'npm lock development dependencies differ from the manifest');
   if (dependencyProfile === 'application') {
-    for (const name of ['package.json', 'package-lock.json']) {
+    for (const name of ['package.json', 'package-lock.json', ...(packageManager === 'bun' ? ['bun.lock'] : [])]) {
       require(input(uiRoot, name).bytes.equals(input(uiRoot, `profiles/application/${name}`).bytes),
         `Materialized application ${name} differs from the selected profile`);
     }
@@ -170,7 +171,9 @@ function manifestContract(uiRoot, dependencyProfile) {
   const sdk = lock.packages[`node_modules/${SDK}`];
   require(sdk && typeof sdk.version === 'string' && typeof sdk.resolved === 'string'
     && /^sha512-[A-Za-z0-9+/]+={0,2}$/.test(sdk.integrity), 'The SDK requires its original locked artifact integrity');
-  return { manifest, lock };
+  const bunLock = packageManager === 'bun' ? parseApplicationBunLock(input(uiRoot, 'bun.lock').bytes) : undefined;
+  const bunRecords = bunLock ? validateApplicationBunLock(manifest, lock, bunLock) : undefined;
+  return { manifest, lock, packageManager, bunLock, bunRecords };
 }
 
 function verifyRemovedPackagesAbsent(uiRoot, graph) {
@@ -233,6 +236,65 @@ function installedGraph(uiRoot, manifest, lock) {
   return { package_count: records.length, inventory_sha256: digest(JSON.stringify(records)), packages: records };
 }
 
+function installedBunGraph(uiRoot, manifest, lock, identities) {
+  const records = []; const installed = new Map(); const reviewed = new Map(identities.map((row) => [row.location, row]));
+  function visit(directory, prefix = '', depth = 0) {
+    require(depth <= 32, 'Installed Bun graph nesting exceeds its bound'); ordinaryDirectory(directory);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) {
+        require(['.bin', '.cache', '.vite', '.vite-temp', '.vitest-cache'].includes(entry.name), 'Unexpected hidden Bun install state');
+        continue;
+      }
+      require(entry.isDirectory() && !entry.isSymbolicLink(), 'Bun hoisted graph contains a nonordinary package');
+      const location = path.join(directory, entry.name);
+      if (entry.name.startsWith('@')) {
+        for (const scoped of readdirSync(location, { withFileTypes: true })) {
+          require(scoped.isDirectory() && !scoped.isSymbolicLink(), 'Bun scoped graph contains a nonordinary package');
+          check(path.join(location, scoped.name), `${prefix}${entry.name}/${scoped.name}`, depth);
+        }
+      } else check(location, `${prefix}${entry.name}`, depth);
+    }
+  }
+  function check(directory, key, depth) {
+    require(records.length < 8192 && !installed.has(key), 'Bun installed graph exceeds its bound or repeats a package');
+    ordinaryDirectory(directory);
+    const actual = document(directory, 'package.json'); const expected = reviewed.get(key);
+    require(expected && actual.name === expected.name && actual.version === expected.version,
+      `Installed Bun package differs from the committed lock: ${key}`);
+    const relative = path.relative(uiRoot, directory).split(path.sep).join('/');
+    installed.set(key, expected);
+    records.push({ path: relative, version: expected.version, resolved: expected.resolved, integrity: expected.integrity,
+      manifest_sha256: input(directory, 'package.json').record.sha256 });
+    if (!absent(path.join(directory, 'node_modules'))) visit(path.join(directory, 'node_modules'), `${key}/`, depth + 1);
+  }
+  visit(path.join(uiRoot, 'node_modules'));
+  const resolve = (key, name, packages) => {
+    const parts = key ? key.match(/@[^/]+\/[^/]+|[^/]+/g) : [];
+    while (true) {
+      const candidate = [...parts, name].join('/');
+      if (packages.has(candidate)) return candidate;
+      if (!parts.length) return undefined;
+      parts.pop();
+    }
+  };
+  for (const name of Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })) {
+    require(installed.has(name), `Bun installation omitted a declared dependency: ${name}`);
+  }
+  for (const key of installed.keys()) {
+    const metadata = lock.packages[key].at(-2);
+    for (const name of Object.keys({ ...metadata.dependencies, ...metadata.peerDependencies })) {
+      if (metadata.optionalPeers?.includes(name)) continue;
+      const expected = resolve(key, name, reviewed);
+      if (expected) require(resolve(key, name, installed) === expected, `Bun installation omitted or redirected a required dependency: ${key} -> ${name}`);
+      else require(!Object.hasOwn(metadata.dependencies || {}, name), `Bun lock omitted a required dependency: ${key} -> ${name}`);
+    }
+  }
+  require(records.length > 0, 'Fresh Bun installation has no dependency evidence');
+  records.sort((a, b) => a.path.localeCompare(b.path));
+  return { package_count: records.length, inventory_sha256: digest(JSON.stringify(records)), packages: records,
+    identity_source: 'committed-bun-lock-and-installed-manifests' };
+}
+
 function prerenderPatchEvidence(uiRoot) {
   const prefix = 'node_modules/@prerenderer';
   ordinaryDirectory(path.join(uiRoot, prefix));
@@ -262,10 +324,12 @@ function prerenderPatchEvidence(uiRoot) {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export async function inspectInstalledApplicationDependencies(directory, { dependencyProfile = 'full' } = {}) {
+export async function inspectInstalledApplicationDependencies(directory, { dependencyProfile = 'full', packageManager } = {}) {
   const uiRoot = ordinaryDirectory(directory);
-  const { manifest, lock } = manifestContract(uiRoot, dependencyProfile);
-  const graph = installedGraph(uiRoot, manifest, lock);
+  const contract = manifestContract(uiRoot, dependencyProfile, packageManager);
+  const { manifest, lock } = contract;
+  const graph = contract.packageManager === 'bun' ? installedBunGraph(uiRoot, manifest, contract.bunLock, contract.bunRecords)
+    : installedGraph(uiRoot, manifest, lock);
   const removedDependencies = dependencyProfile === 'application' ? verifyRemovedPackagesAbsent(uiRoot, graph) : undefined;
   const prerenderFiles = dependencyProfile === 'application' ? [] : prerenderPatchEvidence(uiRoot);
   const checker = await import(pathToFileURL(path.join(uiRoot, 'scripts/patch-checker-worker-cleanup.mjs')).href);
@@ -299,6 +363,7 @@ export async function inspectInstalledApplicationDependencies(directory, { depen
     require(client && typeof client.get === 'function', 'Installed SDK client could not initialize');
   } finally { globalThis.fetch = originalFetch; }
   return {
+    ...(contract.packageManager === 'bun' ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}),
     graph, ...(removedDependencies ? { removed_website_dependencies: removedDependencies } : {}),
     postinstall: { command: manifest.scripts.postinstall, verified: true, prerender_selected: dependencyProfile === 'full',
       prerender_files: prerenderFiles, checker_files: checkerFiles },
@@ -308,42 +373,58 @@ export async function inspectInstalledApplicationDependencies(directory, { depen
   };
 }
 
-export function installApplicationDependencies({ uiRoot: directory, temporaryRoot, dependencyProfile = 'full' }) {
+export function prepareApplicationInstall(temporary, packageManager) {
+  const cache = path.join(temporary, `${packageManager}-cache`);
+  require(absent(cache), 'Fresh package-manager state must be new'); mkdirSync(cache, { mode: 0o700 });
+  if (packageManager === 'bun') {
+    const home = path.join(temporary, 'bun-home'); mkdirSync(home, { mode: 0o700 });
+    const config = path.join(temporary, 'bunfig.toml'); writeFileSync(config, '', { mode: 0o600, flag: 'wx' });
+    return { environment: { ...installationEnvironment(), HOME: home, XDG_CONFIG_HOME: home, BUN_INSTALL_CACHE_DIR: cache,
+      BUN_CONFIG_REGISTRY: 'https://registry.npmjs.org' }, configuration: 'explicit-empty-home-and-config', cache,
+    versionArgs: ['--version'], args: ['install', '--frozen-lockfile', '--linker=hoisted', '--backend=copyfile',
+      '--no-env-file', `--config=${config}`, `--cache-dir=${cache}`, '--registry=https://registry.npmjs.org'] };
+  }
+  require(packageManager === 'npm', 'Unsupported package manager');
+  const userConfig = path.join(temporary, 'npm-user-config'); const globalConfig = path.join(temporary, 'npm-global-config');
+  for (const filename of [userConfig, globalConfig]) writeFileSync(filename, '', { mode: 0o600, flag: 'wx' });
+  const environment = { ...installationEnvironment(), npm_config_cache: cache, npm_config_userconfig: userConfig,
+    npm_config_globalconfig: globalConfig, npm_config_include: 'dev', npm_config_ignore_scripts: 'false',
+    npm_config_audit: 'false', npm_config_fund: 'false', npm_config_package_lock: 'true', npm_config_install_strategy: 'hoisted',
+    npm_config_legacy_peer_deps: 'false', npm_config_install_links: 'false', npm_config_registry: 'https://registry.npmjs.org' };
+  return { environment, configuration: 'explicit-empty-user-and-global', cache,
+    versionArgs: ['--version', '--userconfig', userConfig, '--globalconfig', globalConfig],
+    args: ['ci', '--include=dev', '--ignore-scripts=false', '--audit=false', '--fund=false', '--package-lock=true',
+      '--install-strategy=hoisted', '--legacy-peer-deps=false', '--install-links=false', '--registry=https://registry.npmjs.org',
+      '--cache', cache, '--userconfig', userConfig, '--globalconfig', globalConfig] };
+}
+
+export function installApplicationDependencies({ uiRoot: directory, temporaryRoot, dependencyProfile = 'full', packageManager }) {
   const uiRoot = ordinaryDirectory(directory);
   const temporary = ordinaryDirectory(temporaryRoot);
   require(uiRoot !== temporary && uiRoot.startsWith(`${temporary}${path.sep}`), 'Fresh install must remain in its disposable export');
   require(absent(path.join(uiRoot, 'node_modules')), 'Fresh install cannot borrow an existing dependency directory');
-  const selectedInputs = profileInputs(dependencyProfile);
-  manifestContract(uiRoot, dependencyProfile);
+  packageManager = manifestContract(uiRoot, dependencyProfile, packageManager).packageManager;
+  const selectedInputs = profileInputs(dependencyProfile, packageManager);
   const original = selectedInputs.map((name) => input(uiRoot, name).record);
-  const cache = path.join(temporary, 'npm-cache');
-  const userConfig = path.join(temporary, 'npm-user-config');
-  const globalConfig = path.join(temporary, 'npm-global-config');
-  require(absent(cache) && absent(userConfig) && absent(globalConfig), 'Fresh npm state must be new');
-  mkdirSync(cache, { mode: 0o700 });
-  writeFileSync(userConfig, '', { mode: 0o600, flag: 'wx' });
-  writeFileSync(globalConfig, '', { mode: 0o600, flag: 'wx' });
-  const environment = installationEnvironment();
-  const args = ['ci', '--include=dev', '--ignore-scripts=false', '--audit=false', '--fund=false',
-    '--package-lock=true', '--install-strategy=hoisted', '--legacy-peer-deps=false', '--install-links=false',
-    '--registry=https://registry.npmjs.org', '--cache', cache, '--userconfig', userConfig, '--globalconfig', globalConfig];
-  let npmVersion;
+  const { environment, args, versionArgs, configuration } = prepareApplicationInstall(temporary, packageManager);
+  let managerVersion;
   let evidence;
   try {
-    const version = runOwnedInstallCommand('npm', ['--version', '--userconfig', userConfig, '--globalconfig', globalConfig], {
-      cwd: uiRoot, env: environment, timeout: 30_000, stdoutFile: path.join(temporary, 'npm-version.txt'),
+    const version = runOwnedInstallCommand(packageManager, versionArgs, {
+      cwd: uiRoot, env: environment, timeout: 30_000, stdoutFile: path.join(temporary, `${packageManager}-version.txt`),
     });
     if (version.error) throw version.error;
-    const versionOutput = input(temporary, 'npm-version.txt').bytes;
-    require(versionOutput.length <= 64 * 1024, 'npm version output exceeds its bound');
-    npmVersion = versionOutput.toString('utf8').trim();
-    require(version.status === 0 && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(npmVersion), 'Unable to identify the npm installer');
-    const installed = runOwnedInstallCommand('npm', args, {
+    const versionOutput = input(temporary, `${packageManager}-version.txt`).bytes;
+    require(versionOutput.length <= 64 * 1024, 'Installer version output exceeds its bound');
+    managerVersion = versionOutput.toString('utf8').trim();
+    require(version.status === 0 && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(managerVersion), 'Unable to identify the installer');
+    if (packageManager === 'bun') require(managerVersion === APPLICATION_BUN_PACKAGE_MANAGER.version, 'Bun installer differs from the reviewed 1.4.4 pin');
+    const installed = runOwnedInstallCommand(packageManager, args, {
       cwd: uiRoot, env: environment, timeout: 8 * 60_000,
     });
     if (installed.error) throw installed.error;
-    require(installed.status === 0, `Frozen npm installation failed with exit code ${installed.status}`);
-    const inspected = runOwnedInstallCommand(process.execPath, [SELF, '--inspect-installed', uiRoot, dependencyProfile], {
+    require(installed.status === 0, `Frozen ${packageManager} installation failed with exit code ${installed.status}`);
+    const inspected = runOwnedInstallCommand(process.execPath, [SELF, '--inspect-installed', uiRoot, dependencyProfile, packageManager], {
       cwd: uiRoot, env: environment, timeout: 30_000,
       stdoutFile: path.join(temporary, 'dependency-inspection.json'),
     });
@@ -356,18 +437,18 @@ export function installApplicationDependencies({ uiRoot: directory, temporaryRoo
     assert.deepEqual(selectedInputs.map((name) => input(uiRoot, name).record), original,
       'Fresh installation changed a reviewed manifest, lock or postinstall source');
   }
-  return { status: 'passed', mode: 'fresh-npm-ci', dependency_profile: dependencyProfile,
-    command: ['npm', ...args], node_version: process.version,
-    npm_version: npmVersion, cache_mode: 'new-temporary-cache', npm_configuration: 'explicit-empty-user-and-global',
-    browser_download_skipped: true, bun_lock_selected: false, source_inputs: original, ...evidence,
+  return { status: 'passed', mode: packageManager === 'bun' ? 'fresh-bun-frozen' : 'fresh-npm-ci', dependency_profile: dependencyProfile,
+    command: [packageManager, ...args], node_version: process.version,
+    [`${packageManager}_version`]: managerVersion, cache_mode: 'new-temporary-cache', [`${packageManager}_configuration`]: configuration,
+    browser_download_skipped: true, bun_lock_selected: packageManager === 'bun', source_inputs: original, ...evidence,
     package_graph_minimized: false, independent_dependency_installation: true };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
   try {
-    require(process.argv.length === 5 && process.argv[2] === '--inspect-installed', 'Unsupported dependency inspection command');
+    require([5, 6].includes(process.argv.length) && process.argv[2] === '--inspect-installed', 'Unsupported dependency inspection command');
     process.stdout.write(`${JSON.stringify(await inspectInstalledApplicationDependencies(process.argv[3],
-      { dependencyProfile: process.argv[4] }))}\n`);
+      { dependencyProfile: process.argv[4], packageManager: process.argv[5] }))}\n`);
   } catch (error) {
     console.error(`Application dependency verification failed: ${error.message || error}`);
     process.exitCode = 1;

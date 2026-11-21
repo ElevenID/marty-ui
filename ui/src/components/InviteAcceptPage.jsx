@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router';
+import { useSearchParams } from 'react-router';
 import {
   Box,
   Container,
@@ -34,6 +34,7 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ErrorIcon from '@mui/icons-material/Error';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import { useAuth } from '../hooks/useAuth';
+import { useSurfaceNavigate } from '../application/routing/useSurfaceNavigate';
 import { acceptOrganizationInvitation, validateOrganizationInvitation } from '../services/organizationsApi';
 import {
   getInviteAcceptLoginReturnUrl,
@@ -44,7 +45,7 @@ import {
 
 export default function InviteAcceptPage() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const { isAuthenticated, login } = useAuth();
   
   const [state, setState] = useState(INVITE_ACCEPT_STATES.LOADING);

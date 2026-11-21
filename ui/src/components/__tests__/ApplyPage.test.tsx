@@ -46,7 +46,8 @@ describe('ApplyPage', () => {
         ...window.location,
         pathname: '/apply/mdl',
         search: '?org_id=org-1',
-        href: 'http://localhost/apply/mdl?org_id=org-1',
+        hash: '#documents',
+        href: 'http://localhost/apply/mdl?org_id=org-1#documents',
       },
     });
   });
@@ -61,13 +62,13 @@ describe('ApplyPage', () => {
     render(<ApplyPage />);
 
     await waitFor(() => {
-      expect(window.location.href).toBe('/login?return_to=%2Fapply%2Fmdl%3Forg_id%3Dorg-1');
+      expect(window.location.href).toBe('/login?return_to=%2Fapply%2Fmdl%3Forg_id%3Dorg-1%23documents');
     });
 
     expect(JSON.parse(sessionStorage.getItem('applyContext') || '{}')).toMatchObject({
       credentialType: 'mdl',
       orgId: 'org-1',
-      returnUrl: '/apply/mdl?org_id=org-1',
+      returnUrl: '/apply/mdl?org_id=org-1#documents',
     });
   });
 

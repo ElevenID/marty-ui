@@ -3,20 +3,11 @@ import react from '@vitejs/plugin-react'
 import checker from 'vite-plugin-checker'
 import { visualizer } from 'rollup-plugin-visualizer'
 import { fileURLToPath, URL } from 'node:url'
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
 import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.mjs'
 import { productionBuildContract, productionBuildContractPlugin } from './scripts/production-build-contract.mjs'
-import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
-import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
+import { webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
 import { devServerOrigin } from './scripts/dev-server-origin.mjs'
-
-const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
-const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
-
-function sanitizePrerenderedAssetUrls(html: string) {
-  return html.replace(PRERENDER_RUNTIME_ASSET_ORIGIN, '')
-}
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
@@ -66,9 +57,8 @@ function consoleEntryRewritePlugin() {
   }
 }
 
-// MUI 9 publishes icon entry points as .mjs. The current marty-blog release was
-// built against MUI 5 and its generated ESM still references the former .js
-// entry points, so translate those immutable package imports during bundling.
+// MUI 9 publishes icon entry points as .mjs. Preserve compatibility with
+// external packages compiled against the former .js icon entry points.
 function muiIconMjsCompatibilityPlugin() {
   return {
     name: 'mui-icon-mjs-compatibility',
@@ -89,62 +79,6 @@ function muiIconMjsCompatibilityPlugin() {
   }
 }
 
-function prerenderLocaleAssetsPlugin() {
-  const localeRoot = fileURLToPath(new URL('./public/locales/', import.meta.url))
-
-  return {
-    name: 'prerender-locale-assets',
-    apply: 'build' as const,
-    buildStart() {
-        const emitDirectory = (directory: string, relativeDirectory = '') => {
-          readdirSync(directory, { withFileTypes: true }).forEach((entry) => {
-            const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-            const absolutePath = resolve(directory, entry.name)
-
-            if (entry.isDirectory()) {
-              emitDirectory(absolutePath, relativePath)
-            } else if (entry.isFile() && entry.name.endsWith('.json')) {
-              this.emitFile({
-                type: 'asset',
-                fileName: `locales/${relativePath}`,
-                source: readFileSync(absolutePath),
-              })
-            }
-          })
-        }
-
-        emitDirectory(localeRoot)
-    },
-  }
-}
-
-function promotePrerenderedRootPlugin() {
-  return {
-    name: 'promote-prerendered-root',
-    apply: 'build' as const,
-    enforce: 'post' as const,
-    writeBundle(outputOptions: { dir?: string }) {
-      if (!outputOptions.dir) {
-        throw new Error('Public prerender output directory is unavailable')
-      }
-
-      const stagedPath = resolve(outputOptions.dir, PRERENDERED_ROOT_STAGING_PATH)
-      const rootPath = resolve(outputOptions.dir, 'index.html')
-      if (!existsSync(stagedPath)) {
-        throw new Error(`Prerendered root artifact is missing: ${stagedPath}`)
-      }
-
-      const html = readFileSync(stagedPath, 'utf8')
-      if (!html.includes('ElevenID') || html.includes('Welcome to nginx')) {
-        throw new Error('Prerendered root artifact failed the public homepage content contract')
-      }
-
-      writeFileSync(rootPath, html)
-      unlinkSync(stagedPath)
-    },
-  }
-}
-
 // https://vitejs.dev/config/
 export default defineConfig(async ({ mode }) => {
   // Load env file based on `mode` in the current working directory.
@@ -152,19 +86,14 @@ export default defineConfig(async ({ mode }) => {
   const isDev = mode === 'development'
   const enableBundleAnalysis = mode === 'analyze' || process.env.ANALYZE_BUNDLE === '1'
   const isSelfhostBuild = mode === 'selfhost' || env.VITE_UI_VARIANT === 'selfhost'
-  const surface = process.env.MARTY_UI_SURFACE || 'combined'
-  if (!['combined', 'website', 'application'].includes(surface)) throw new Error('Unknown UI surface')
-  if (isSelfhostBuild && surface !== 'combined') throw new Error('Customer UI cannot select a production surface')
-  const isWebsiteBuild = surface === 'website'
-  const isApplicationBuild = surface === 'application'
+  const explicitSurface = process.env.MARTY_UI_SURFACE
+  const surface = explicitSurface || 'application'
+  if (surface !== 'application') {
+    throw new Error('Only the application UI surface is available; build the marketing website from ElevenID/website')
+  }
   const sourceSha = process.env.MARTY_UI_SHA || 'development'
   const pages = process.env.MARTY_PRODUCTION_PAGES || 'public'
   const commerceSha = process.env.MARTY_COMMERCE_SOURCE_SHA
-  const websiteRevision = isWebsiteBuild ? websiteBuildRevision({ sourceSha, commerceSha, pages, revision: process.env.MARTY_WEBSITE_REVISION }) : null
-  const assetBase = isWebsiteBuild ? websiteAssetBase(websiteRevision) : '/'
-  const disablePrerender = isDev || isSelfhostBuild || isApplicationBuild || process.env.DISABLE_PRERENDER === '1'
-  const prerenderDebug = process.env.PRERENDER_DEBUG === '1'
-  const prerenderConcurrency = Number(process.env.PRERENDER_CONCURRENCY || 1)
   const port = Number(env.VITE_PORT || env.PORT || env.UI_DEV_PORT || 3000)
   const productionCommerceEntry = productionBuildContract({
     pages,
@@ -176,167 +105,30 @@ export default defineConfig(async ({ mode }) => {
   const commerceExtensionPath = productionCommerceEntry
     || fileURLToPath(new URL('./src/extensions/commerce/publicStub.jsx', import.meta.url))
   const bundleAnalysisBaseName = isSelfhostBuild ? 'bundle-analysis-selfhost' : 'bundle-analysis-public'
-  let authorRoutes = []
-  let blogRoutes = []
-  let demoRoutes = []
-  let prerender
-  let PuppeteerRenderer
-  let Sitemap
-
-  if (!isSelfhostBuild && !isApplicationBuild) {
-    // Native URL loading keeps website package resolution inside this branch
-    // when Vite bundles the config. The application export omits this helper.
-    const websiteBuildTools = await import(
-      new URL('./scripts/website-build-tools.mjs', import.meta.url).href
-    )
-    prerender = websiteBuildTools.prerender
-    PuppeteerRenderer = websiteBuildTools.PuppeteerRenderer
-    Sitemap = websiteBuildTools.Sitemap
-    // Keep the website catalog helper out of application config resolution.
-    // A file URL leaves this import inside its owning branch when Vite bundles
-    // the config, so application exports can omit the demo source entirely.
-    const { platformDemoScenarios } = await import(
-      new URL('./src/services/platformDemoScenarios.js', import.meta.url).href
-    )
-    const {
-      BLOG_POSTS,
-      BLOG_AUTHORS,
-      BLOG_POST_CONCEPT_TAGS,
-      BLOG_POST_STANDARDS_TAGS,
-      GUIDE_ARTICLE_SLUGS,
-      GUIDE_ARTICLES,
-      GUIDE_CHAPTERS,
-      ARTICLE_META,
-      getBrowseVisiblePosts,
-      buildBlogTagPath,
-    } = websiteBuildTools
-
-    const chapterById = Object.fromEntries(GUIDE_CHAPTERS.map((chapter) => [chapter.id, chapter]))
-    const tagPaths = new Set()
-
-    getBrowseVisiblePosts(BLOG_POSTS).forEach((post) => {
-      const meta = ARTICLE_META[post.slug]
-      const tags = new Set([
-        ...(BLOG_POST_STANDARDS_TAGS[post.slug] || []),
-        ...(BLOG_POST_CONCEPT_TAGS[post.slug] || []),
-        ...(meta?.topic ? [meta.topic] : []),
-      ])
-
-      tags.forEach((tag) => {
-        tagPaths.add(buildBlogTagPath(tag))
-      })
-    })
-
-    GUIDE_ARTICLES.forEach((article) => {
-      const tags = new Set([
-        ...(article.conceptTags || []),
-        ...(chapterById[article.chapterId]?.title ? [chapterById[article.chapterId].title] : []),
-      ])
-
-      tags.forEach((tag) => {
-        tagPaths.add(buildBlogTagPath(tag))
-      })
-    })
-
-    authorRoutes = ['/authors', ...Object.keys(BLOG_AUTHORS).map((authorId) => `/authors/${authorId}`)]
-    blogRoutes = Array.from(
-      new Set([
-        '/blog',
-        ...tagPaths,
-        ...BLOG_POSTS.map(({ slug }) => `/blog/${slug}`),
-        ...GUIDE_ARTICLE_SLUGS.map((slug) => `/blog/${slug}`),
-      ]),
-    )
-
-    const demoManifestDir = fileURLToPath(new URL('./public/demos/manifests/', import.meta.url))
-    const demoIndex = JSON.parse(readFileSync(`${demoManifestDir}/index.json`, 'utf8'))
-    demoRoutes = ['/demos']
-    demoIndex.releases.forEach(({ stack_version: stackVersion }) => {
-      const manifest = JSON.parse(readFileSync(`${demoManifestDir}/${stackVersion}.json`, 'utf8'))
-      demoRoutes.push(`/demos/${stackVersion}`)
-      platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/${stackVersion}/${slug}`))
-      if (demoIndex.latest_approved_stack_version === stackVersion) {
-        platformDemoScenarios(manifest.scenarios).forEach(({ slug }) => demoRoutes.push(`/demos/latest/${slug}`))
-      }
-    })
-  }
-
-  const requireUniqueRoutes = (label: string, routes: string[]) => {
-    const duplicates = routes.filter((route, index) => routes.indexOf(route) !== index)
-    if (duplicates.length > 0) {
-      throw new Error(`${label} contains duplicate routes: ${Array.from(new Set(duplicates)).join(', ')}`)
-    }
-    return routes
-  }
-  const prerenderRoutes = requireUniqueRoutes('prerender', [
-    '/',
-    '/product',
-    '/solutions',
-    '/developers',
-    '/architecture',
-    '/security',
-    '/resources',
-    ...demoRoutes,
-    '/verifiable-credential-api',
-    '/eudi-wallet-verification',
-    '/iso-18013-5-mdoc-verification',
-    '/sd-jwt-verification',
-    '/open-badges-verification',
-    '/open-badges-issuance',
-    '/trust-registry-infrastructure',
-    '/identity',
-    '/why-verifiable-identity',
-    '/from-idv-to-verifiable-identity',
-    '/what-is-verifiable-identity',
-    '/standards',
-    '/protocol',
-    '/privacy-policy',
-    '/terms-of-service',
-    ...blogRoutes,
-    ...authorRoutes,
-    ...(!isWebsiteBuild ? ['/docs'] : []),
-  ])
-  const sitemapOnlyRoutes = requireUniqueRoutes('sitemap-only', [
-    '/ai',
-    '/what-is-credential-verification',
-    '/what-is-open-badge',
-    '/what-is-digital-credential',
-    '/what-is-marty-protocol',
-  ])
-  const sitemapRoutes = requireUniqueRoutes('sitemap', [
-    ...prerenderRoutes,
-    ...sitemapOnlyRoutes,
-  ])
-  
   return {
-    publicDir: isWebsiteBuild ? false : 'public',
-    define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify(assetBase) },
+    publicDir: 'public',
+    define: { 'import.meta.env.VITE_WEBSITE_ASSET_BASE': JSON.stringify('/') },
     resolve: {
       alias: {
-        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : isWebsiteBuild ? 'website' : isApplicationBuild ? 'application' : 'public'}.js`, import.meta.url)),
-        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : isApplicationBuild ? 'application' : 'public'}.jsx`, import.meta.url)),
+        '@ui-public-config': fileURLToPath(new URL(`./src/variants/publicConfig.${isSelfhostBuild ? 'selfhost' : 'application'}.js`, import.meta.url)),
+        '@ui-public-routes': fileURLToPath(new URL(`./src/variants/publicSite.${isSelfhostBuild ? 'selfhost' : 'application'}.jsx`, import.meta.url)),
         '@marty/commerce-extension': commerceExtensionPath,
         'react-router-dom': 'react-router',
       },
-      // Force all react-* and router packages to resolve to a single copy from this
-      // project root. This prevents duplicate instances when @elevenid/marty-blog
-      // local package) carries its own node_modules with react-router – which would
-      // create a second RouterContext that has no access to the outer <BrowserRouter>.
+      // Shared and private extension packages must use the host React, router,
+      // and styling contexts instead of resolving a separate installed copy.
       dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router',
         '@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled', 'prop-types'],
     },
     optimizeDeps: {
       include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
-      exclude: isSelfhostBuild || isApplicationBuild ? [] : ['@elevenid/marty-blog'],
     },
     plugins: [
       muiIconMjsCompatibilityPlugin(),
-      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : [webSurfaceBuildContractPlugin({ surface, sourceSha, revision: websiteRevision, pages, commerceSha, commerceEntry: productionCommerceEntry })]),
-      ...(isWebsiteBuild ? [websiteAssetsPlugin(websiteRevision)] : []),
+      ...(isSelfhostBuild ? [selfhostBuildContractPlugin()] : [webSurfaceBuildContractPlugin({ surface, sourceSha, pages, commerceSha, commerceEntry: productionCommerceEntry })]),
       ...(productionCommerceEntry ? [productionBuildContractPlugin(productionCommerceEntry)] : []),
-      ...(!disablePrerender && !isWebsiteBuild ? [prerenderLocaleAssetsPlugin()] : []),
       react(),
-      ...(!isWebsiteBuild ? [consoleEntryRewritePlugin()] : []),
+      consoleEntryRewritePlugin(),
       ...(isDev ? [checker({
         // Match the production build's checked sources. The broad root config
         // includes test fixtures that do not currently type-check; Vitest owns
@@ -353,132 +145,6 @@ export default defineConfig(async ({ mode }) => {
         },
       })] : []),
       
-      // Prerendering for SEO - only in production builds
-      ...(!disablePrerender ? [
-        prerender({
-          routes: prerenderRoutes,
-          renderer: new PuppeteerRenderer({
-            injectProperty: '__ELEVENID_PRERENDER__',
-            inject: { demoManifests: true },
-            maxConcurrentRoutes: prerenderConcurrency,
-            renderAfterDocumentEvent: 'app-rendered',
-            timeout: 45000,
-            skipThirdPartyRequests: true,
-            headless: true,
-            pageHandler: prerenderDebug
-              ? (_page, route) => console.info(`[prerender] loaded ${route}`)
-              : undefined,
-            consoleHandler: prerenderDebug
-              ? (route, message) => {
-                  console.info(`[prerender] ${route} ${message.type()}: ${message.text()}`)
-                  void Promise.all(message.args().map((argument) => argument.evaluate((value) => {
-                    if (value instanceof Error) {
-                      return { name: value.name, message: value.message, stack: value.stack }
-                    }
-                    return value
-                  }).catch(() => argument.toString())))
-                    .then((values) => console.info(`[prerender] ${route} values: ${JSON.stringify(values)}`))
-                }
-              : undefined,
-          }),
-          postProcess(route) {
-            // The renderer serves the build from a loopback origin. Dynamic-import
-            // preload hints must remain origin-relative when the HTML is deployed.
-            route.html = sanitizePrerenderedAssetUrls(route.html)
-            // Add prerender status meta tag
-            route.html = route.html.replace(
-              '</head>',
-              '<meta name="prerender-status-code" content="200" /></head>'
-            );
-            // The prerender plugin removes Vite's root entry before emitting the
-            // replacement. Stage the root under a unique name so a later plugin
-            // can promote it after all bundle writes have completed.
-            if (route.route === '/') {
-              route.outputPath = PRERENDERED_ROOT_STAGING_PATH
-            }
-          },
-        }),
-      ] : []),
-
-      // Crawler files do not require a browser. Dockerfile.prod deliberately
-      // disables prerendering, but every public build still needs these files.
-      ...(!isDev && !isSelfhostBuild && !isApplicationBuild ? [
-        Sitemap({
-          outDir: isWebsiteBuild ? 'dist-website' : 'dist',
-          hostname: 'https://elevenidllc.com',
-          // The plugin also scans emitted HTML. In prerendered builds, submit
-          // only routes without an HTML artifact; in Docker's SPA build, submit
-          // every public route except the root index it always discovers.
-          dynamicRoutes: sitemapRoutes.filter((route) => (
-            route !== '/' && (disablePrerender || !prerenderRoutes.includes(route))
-          )),
-          exclude: [
-            '/console',
-            '/console/*',
-            '/applicant',
-            '/applicant/*',
-            '/admin',
-            '/admin/*',
-            '/vendor',
-            '/vendor/*',
-            '/dashboard',
-            '/test-harness',
-            '/login',
-            '/auth/*',
-          ],
-          changefreq: 'weekly',
-          priority: {
-            '/': 1.0,
-            '/product': 0.9,
-            '/solutions': 0.9,
-            '/developers': 0.9,
-            '/standards': 0.8,
-            '/resources': 0.8,
-            '/architecture': 0.8,
-            '/security': 0.8,
-            '/docs': 0.8,
-            '/ai': 0.8,
-            '/why-verifiable-identity': 0.8,
-            '/what-is-credential-verification': 0.7,
-            '/what-is-open-badge': 0.7,
-            '/what-is-digital-credential': 0.7,
-            '/what-is-marty-protocol': 0.7,
-            '*': 0.7,
-          },
-          generateRobotsTxt: true,
-          robots: [
-            {
-              userAgent: '*',
-              allow: '/',
-              disallow: [
-                '/console',
-                '/console/*',
-                '/applicant',
-                '/applicant/*',
-                '/admin',
-                '/admin/*',
-                '/vendor',
-                '/vendor/*',
-                '/dashboard',
-                '/test-harness',
-                '/auth/*',
-                '/api/*',
-                '/v1/*',
-              ],
-            },
-            // Explicitly allow AI crawlers
-            { userAgent: 'GPTBot', allow: '/' },
-            { userAgent: 'ChatGPT-User', allow: '/' },
-            { userAgent: 'Google-Extended', allow: '/' },
-            { userAgent: 'Anthropic-AI', allow: '/' },
-            { userAgent: 'ClaudeBot', allow: '/' },
-            { userAgent: 'PerplexityBot', allow: '/' },
-            { userAgent: 'Cohere-AI', allow: '/' },
-          ],
-        }),
-      ] : []),
-      ...(!disablePrerender ? [promotePrerenderedRootPlugin()] : []),
-
       ...(!isDev && enableBundleAnalysis ? [
         visualizer({
           filename: `build/${bundleAnalysisBaseName}.html`,
@@ -550,14 +216,16 @@ export default defineConfig(async ({ mode }) => {
       },
     },
     build: {
-      outDir: isSelfhostBuild ? 'dist-selfhost' : surface === 'combined' ? 'dist' : `dist-${surface}`,
-      assetsDir: isWebsiteBuild ? `${assetBase.slice(1)}assets` : 'assets',
+      // Preserve the default build location consumed by local production Compose.
+      // The explicit application command owns the portable dist-application output.
+      outDir: isSelfhostBuild ? 'dist-selfhost' : explicitSurface ? 'dist-application' : 'dist',
+      assetsDir: 'assets',
       sourcemap: !isSelfhostBuild && !productionCommerceEntry,
       chunkSizeWarningLimit: 1000, // Increase from default 500kB to 1000kB
       rollupOptions: {
         input: {
           main: fileURLToPath(new URL('./index.html', import.meta.url)),
-          ...(!isWebsiteBuild ? { console: fileURLToPath(new URL('./console/index.html', import.meta.url)) } : {}),
+          console: fileURLToPath(new URL('./console/index.html', import.meta.url)),
         },
         output: {
           manualChunks: createManualChunk,

@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   APPLICATION_SOURCE_MANIFEST_PATH, exportApplicationSourcePackage, parseApplicationSourceJson,
+  applicationSourcePackageTestPolicy,
   planApplicationSourceExport, restoreApplicationSourcePackage, validateApplicationSourceBaseline,
   validateApplicationSourceInventory, validateApplicationSourcePackageManifest, validateApplicationSourceProducerReceipt,
 } from './export-application-source.mjs';
@@ -77,6 +78,8 @@ function sourceFixture(t, sourceRoot = ROOT) {
 // the producer emit fixture-passed with every qualification flag false; no
 // installation, browser, or runtime claim comes from this synthetic baseline.
 function protocolBaseline(plan) {
+  const bun = Boolean(plan.package_manager);
+  const manager = bun ? { package_manager: plan.package_manager } : {};
   const publicResources = plan.boundary.retained_public_files.map((name) => {
     const source = plan.source.files.find((row) => row.path === `ui/public/${name}`);
     return { path: name, bytes: source.bytes, sha256: source.sha256 };
@@ -87,11 +90,12 @@ function protocolBaseline(plan) {
     .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   const inventory = digest(canonical(files));
   return {
-    schema: 'marty.application-source-closure-rehearsal/v5', status: 'passed', plan,
-    build: { dependency_mode: 'fresh-npm-ci', dependency_profile: 'application', effective_source_sha: plan.source.commit,
+    schema: `marty.application-source-closure-rehearsal/${bun ? 'v7' : 'v5'}`, status: 'passed', plan,
+    build: { ...manager, dependency_mode: bun ? 'fresh-bun-frozen' : 'fresh-npm-ci', dependency_profile: 'application', effective_source_sha: plan.source.commit,
+      ...(bun ? { dependency_lock_sha256: plan.dependency_profile.source_inputs.find((row) => row.path.endsWith('/bun.lock')).sha256 } : {}),
       package_lock_sha256: plan.dependency_profile.source_inputs.find((row) => row.path.endsWith('/package-lock.json')).sha256 },
-    dependency_install: { status: 'passed', mode: 'fresh-npm-ci', dependency_profile: 'application',
-      independent_dependency_installation: true, bun_lock_selected: false,
+    dependency_install: { ...manager, ...(bun ? { bun_version: '1.4.4' } : {}), status: 'passed', mode: bun ? 'fresh-bun-frozen' : 'fresh-npm-ci', dependency_profile: 'application',
+      independent_dependency_installation: true, bun_lock_selected: bun,
       sdk: { initialized_in_node: true, wasm: { bytes: wasm.length, sha256: digest(wasm) } } },
     qualification: Object.fromEntries([
       ...['application_build_completed', 'application_tests_completed', 'omitted_sources_absent', 'application_output_checked',
@@ -100,14 +104,14 @@ function protocolBaseline(plan) {
       ...['source_extraction_complete', 'package_graph_minimized', 'browser_startup_observed', 'container_runtime_tested',
         'oidc_journey_tested', 'host_deployment_tested', 'signed_release_produced'].map((key) => [key, false]),
     ]),
-    dependency_profile: { name: 'application', bun_lock_selected: false, output_identical_to_full_profile: true,
+    dependency_profile: { ...manager, name: 'application', bun_lock_selected: bun, output_identical_to_full_profile: true,
       materialized_inputs: plan.dependency_profile.substitutions.map((row) => ({ ...row,
         materialized: { ...row.selected, path: row.path, mode: 0o600 } })),
       baseline_comparison: { full_profile_fresh_install_passed: true, same_source_inputs: true, same_route_and_test_contracts: true,
         output_files_identical: true, public_resources_identical: true, output_inventory_sha256: inventory,
         output_files: files.length, public_resources: publicResources.length } },
     tests: { selected_files: plan.test_profile.files,
-      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 296, report_sha256: digest('Synthetic protocol fixture') } },
+      result: { completed_files: [...plan.test_profile.files].sort(), test_count: bun ? 308 : 296, report_sha256: digest('Synthetic protocol fixture') } },
     output: { files, inventory_sha256: inventory, public_resources: publicResources },
     resources: { result: { schema: 'marty.application-resource-smoke/v1', status: 'passed', preview: { closed: true },
       qualification: { resources_served: true }, public_resources: publicResources } },
@@ -117,6 +121,37 @@ function artifacts(directory, suffix = '') {
   return { archivePath: path.join(directory, `source${suffix}.zip`), manifestPath: path.join(directory, `source${suffix}.json`),
     reportPath: path.join(directory, `producer${suffix}.json`) };
 }
+
+test('approved historical source maps retain the original npm and Bun test policies', () => {
+  for (const [filename, schema, generation, expectedTests, expectedFiles, expectedDigest] of [
+    ['contracts/legacy/application-source-export.v1.json', 'v1', 'npm-v1', 296, 24,
+      'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad'],
+    ['contracts/legacy/application-source-export.v2.json', 'v2', 'bun-v2-b1095e8c', 308, 25,
+      'sha256:05e544fb9289f5a4fc1af8f6cf72d8eec6e472151a527766a84d02d9397b9e65'],
+  ]) {
+    const bytes = readFileSync(path.join(ROOT, filename));
+    assert.equal(digest(bytes), expectedDigest);
+    const policy = applicationSourcePackageTestPolicy({ schema: `marty.application-source-package/${schema}`,
+      contract: { sha256: expectedDigest } });
+    assert.equal(policy.generation, generation);
+    assert.equal(policy.expected_tests, expectedTests);
+    assert.equal(policy.files.length, expectedFiles);
+    assert.deepEqual(policy.files, JSON.parse(bytes).test_profile.files);
+  }
+});
+
+test('source map selection rejects unknown digests, schema swaps and an unreviewed override', () => {
+  const bytes = readFileSync(path.join(ROOT, CONTRACT));
+  const manifest = { schema: 'marty.application-source-package/v2', contract: { sha256: digest(bytes) } };
+  assert.equal(applicationSourcePackageTestPolicy(manifest).generation, 'application-only');
+  assert.throws(() => applicationSourcePackageTestPolicy({ ...manifest,
+    contract: { sha256: `sha256:${'f'.repeat(64)}` } }), /unapproved contract digest/);
+  assert.throws(() => applicationSourcePackageTestPolicy({ ...manifest,
+    schema: 'marty.application-source-package/v1' }), /unapproved contract digest/);
+  const contract = JSON.parse(bytes);
+  contract.omitted.pop();
+  assert.throws(() => validateApplicationSourcePackageManifest(manifest, { contract }), /not an approved current or historical map/);
+});
 
 test('stored source ZIP is deterministic, round-trips binary bytes, and preserves executable modes', () => {
   const entries = [{ path: 'ui/start.sh', bytes: Buffer.from('#!/bin/sh\n'), mode: 0o755 },
@@ -182,8 +217,8 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.deepEqual(readFileSync(first.archivePath), readFileSync(second.archivePath));
   assert.deepEqual(readFileSync(first.manifestPath), readFileSync(second.manifestPath));
   const manifest = parseApplicationSourceJson(readFileSync(first.manifestPath));
-  assert.equal(manifest.files.length, 575);
-  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 576);
+  assert.equal(manifest.files.length, manifest.schema.endsWith('/v2') ? 578 : 575);
+  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, manifest.files.length + 1);
   assert.equal(manifest.source.commit, git(root, 'rev-parse', 'HEAD').trim());
   const restore = (destination, options = {}) => restoreApplicationSourcePackage({ ...first,
     expectedArchiveSha256: receipt.archive.sha256, expectedManifestSha256: receipt.manifest.sha256, destination, ...options });
@@ -192,7 +227,7 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.equal(existsSync(path.join(destination, 'ui/scripts/application-package-consumer.mjs')), false);
   assert.deepEqual(readFileSync(path.join(destination, 'ui/package.json')),
     readFileSync(path.join(root, 'ui/profiles/application/package.json')));
-  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, 575);
+  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, manifest.files.length);
   assert.equal(lstatSync(path.join(destination, APPLICATION_SOURCE_MANIFEST_PATH)).mode & 0o777, 0o644);
 
   await t.test('restore rejects incorrect pins and existing destinations without modifying them', () => {
@@ -303,7 +338,7 @@ test('the exact source map exports deterministically and restores a closed ordin
       assert.deepEqual(readFileSync(path.join(selected.root, 'ui/bun.lock')), lockBytes);
       assert.equal(lstatSync(path.join(selected.root, 'LICENSE')).mode & 0o777, 0o644);
       const plan = await planApplicationSourceExport({ repositoryRoot: selected.root });
-      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, 575);
+      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, plan.manifest.schema.endsWith('/v2') ? 578 : 575);
       assert.equal(plan.plan.source.working_tree_dirty, false);
     } finally {
       writeFileSync(packagePath, packageBytes); writeFileSync(lockPath, lockBytes);

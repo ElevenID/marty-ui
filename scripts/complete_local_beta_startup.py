@@ -19,6 +19,7 @@ import subprocess
 from urllib.request import Request, urlopen
 
 from bind_deployed_demo_manifest import bind_manifest
+from operator_demo_catalog import load_product_demo_template
 from recover_unchanged_beta_cutover import docker, inspect, public_json, wait_healthy
 from repair_beta_issuance_alias_kms import prepare_alias_repair, apply_alias_repair
 
@@ -84,11 +85,18 @@ def verify_marker(actual, expected):
 
 def complete(root, artifacts, runtime_root, apply, passport_simulator=False, failure_proof=None):
     require(artifacts.is_relative_to(root / 'tests/artifacts'), 'Artifacts must belong to frozen source checkout')
+    stack = (root / 'VERSION').read_text(encoding='utf8').strip()
+    operator_root = Path(__file__).resolve().parents[1]
     source = load(artifacts / 'source-manifest.json')
     subprocess.run(['python', str(root / 'scripts/create_local_release_manifest.py'), '--workspace',
                     str(root.parent), '--verify-manifest', str(artifacts / 'source-manifest.json')], check=True)
     require(source['source_kind'] == 'local-worktree-snapshot' and not source['promotion_eligible'],
             'Completion is restricted to nonpromotable local developer builds')
+    # Preserve the exact template from the verified product snapshot. Its Git
+    # head differs from the local worktree-derived marty_ui_sha marker.
+    selected_template = load_product_demo_template(
+        stack, root, source['repositories']['marty-ui']['head_sha'])
+    demo_template = selected_template.manifest
     backup = load(artifacts / 'backup-manifest.json')
     require(backup['phase'] == 'maintenance_quiesced' and backup['application_writers_stopped'] is True,
             'Quiesced backup is required')
@@ -104,7 +112,6 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
                        '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}').strip(),
             'An active beta one-off job blocks completion')
     components = {row['component']: row['revision'] for row in source['component_revisions']}
-    stack = (root / 'VERSION').read_text(encoding='utf8').strip()
     expected = dict(release_version=source['release_version'], marty_ui_sha=source['marty_ui_sha'],
                     deployment_release_marker=source['release_version'], stack_version=stack,
                     mip_version='0.5.0', component_revisions=components, image_digests=images)
@@ -112,7 +119,6 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
     operator_revision = None
     prior_ids = {row['service']: row['container_id'] for row in prior}
     if passport_simulator:
-        operator_root = Path(__file__).resolve().parents[1]
         require(not subprocess.check_output(['git', '-C', str(operator_root), 'status', '--porcelain']),
                 'Simulator completion requires a clean reviewable operator checkpoint')
         operator_revision = subprocess.check_output(
@@ -209,7 +215,7 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
     ui_marker = dict(component='ui', release_version=source['release_version'], marty_ui_sha=source['marty_ui_sha'])
     for origin in ['http://127.0.0.1:3002', 'https://beta.elevenidllc.com']:
         verify_marker(public_json(origin + '/marty-ui-release.json'), ui_marker)
-    deployed = bind_manifest(load(root / 'ui/public/demos/manifests' / (stack + '.json')), source, images)
+    deployed = bind_manifest(demo_template, source, images)
     (artifacts / 'deployed-demo-manifest.json').write_text(json.dumps(deployed, indent=2) + '\n', encoding='utf8')
     records = [record(role, observe(role, images[role])) for role in sorted(images)]
     manifest = dict(schema_version=1, release_version=source['release_version'], stack_version=stack,

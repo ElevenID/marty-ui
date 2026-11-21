@@ -10,13 +10,29 @@ import { fileURLToPath } from 'node:url';
 import {
   APPLICATION_SOURCE_ZIP_LIMITS, applicationSourcePath, decodeApplicationSourceZip, encodeApplicationSourceZip,
 } from './application-source-zip.mjs';
+import { APPLICATION_BUN_PACKAGE_MANAGER } from './application-dependency-profile.mjs';
+import { APPLICATION_EXPECTED_TESTS } from './application-test-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CONTRACT = 'contracts/application-source-export.json';
+const LEGACY_CONTRACT = 'contracts/legacy/application-source-export.v1.json';
+const LEGACY_BUN_CONTRACT = 'contracts/legacy/application-source-export.v2.json';
 export const APPLICATION_SOURCE_MANIFEST_PATH = 'application-source-origin.json';
-const MANIFEST_SCHEMA = 'marty.application-source-package/v1';
-const RECEIPT_SCHEMA = 'marty.application-source-package-producer/v1';
+const MANIFEST_SCHEMA = 'marty.application-source-package/v2';
+const LEGACY_MANIFEST_SCHEMA = 'marty.application-source-package/v1';
+const RECEIPT_SCHEMA = 'marty.application-source-package-producer/v2';
+const LEGACY_RECEIPT_SCHEMA = 'marty.application-source-package-producer/v1';
+// Manifest grammar stays versioned separately from the reviewed source map.
+// Only these exact contract bytes may select current or historical semantics.
+const APPROVED_CONTRACTS = Object.freeze([
+  Object.freeze({ generation: 'application-only', path: CONTRACT, schema: MANIFEST_SCHEMA,
+    sha256: 'sha256:de826e005a6ceece4353892bc7d514471b87afa9e8d25e11f6151b31a08a328d', expected_tests: APPLICATION_EXPECTED_TESTS }),
+  Object.freeze({ generation: 'bun-v2-b1095e8c', path: LEGACY_BUN_CONTRACT, schema: MANIFEST_SCHEMA,
+    sha256: 'sha256:05e544fb9289f5a4fc1af8f6cf72d8eec6e472151a527766a84d02d9397b9e65', expected_tests: 308 }),
+  Object.freeze({ generation: 'npm-v1', path: LEGACY_CONTRACT, schema: LEGACY_MANIFEST_SCHEMA,
+    sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad', expected_tests: 296 }),
+]);
 const MAX_JSON = 8 * 1024 * 1024;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const OID = /^[0-9a-f]{40}$/;
@@ -142,14 +158,44 @@ function sourceState(root) {
   return { commit, tree, files };
 }
 
+function approvedContract(contract) {
+  const digest = hash(Buffer.from(`${JSON.stringify(contract, null, 2)}\n`));
+  const approval = APPROVED_CONTRACTS.find((entry) => entry.sha256 === digest);
+  require(approval, 'Application source contract is not an approved current or historical map');
+  return approval;
+}
+function readApprovedContract(approval) {
+  const value = read(ROOT, approval.path, MAX_JSON);
+  require(hash(value.bytes) === approval.sha256, 'Reviewed application source contract bytes changed');
+  return validateContract(parseApplicationSourceJson(value.bytes));
+}
+function manifestContractApproval(manifest) {
+  const approval = APPROVED_CONTRACTS.find((entry) => entry.sha256 === manifest?.contract?.sha256
+    && entry.schema === manifest?.schema);
+  require(approval, 'Application source manifest selects an unapproved contract digest or schema');
+  return approval;
+}
+export function applicationSourcePackageTestPolicy(manifest) {
+  const approval = manifestContractApproval(manifest);
+  const contract = readApprovedContract(approval);
+  return { generation: approval.generation, expected_tests: approval.expected_tests,
+    config: contract.test_profile.config, files: [...contract.test_profile.files] };
+}
+function acceptedExclusions(contract) {
+  const reviewed = approvedContract(contract).generation === 'application-only'
+    ? readApprovedContract(APPROVED_CONTRACTS.find((entry) => entry.generation === 'bun-v2-b1095e8c')) : contract;
+  return reviewed.omitted.filter((row) => row.role === 'accepted-application-exclusion').map((row) => row.source);
+}
 function validateContract(contract) {
+  approvedContract(contract);
+  const bun = contract.schema === 'marty.application-source-export/v2';
   keys(contract, ['schema', 'repository', 'source_boundary', 'manifest_path', 'inputs', 'omission_categories', 'omitted',
     'generated_state', 'test_profile', 'public_files', 'shared_contracts', 'retained_inactive_inputs', 'scope'], 'source export contract');
-  require(contract.schema === 'marty.application-source-export/v1' && contract.repository === 'ElevenID/marty-ui'
+  require((bun || contract.schema === 'marty.application-source-export/v1') && contract.repository === 'ElevenID/marty-ui'
     && contract.manifest_path === APPLICATION_SOURCE_MANIFEST_PATH, 'Unknown application source export contract');
   assert.deepEqual(contract.source_boundary.prefixes, ['ui/'], 'Unexpected application source boundary');
   assert.deepEqual(contract.generated_state, GENERATED, 'Unexpected generated-state exceptions');
-  require(Array.isArray(contract.inputs) && contract.inputs.length === 575, 'The reviewed application source map must contain 575 files');
+  require(Array.isArray(contract.inputs) && contract.inputs.length === (bun ? 578 : 575), 'The reviewed application source map has changed');
   require(Array.isArray(contract.omitted) && contract.omitted.length > 0 && contract.omitted.length <= 2048,
     'Invalid application source omission list');
   const destinations = new Set(); const sources = new Map(); let previous = '';
@@ -163,12 +209,14 @@ function validateContract(contract) {
   }
   const duplicated = [...sources].filter(([, targets]) => targets.length !== 1);
   assert.deepEqual(duplicated, [
+    ...(bun ? [['ui/profiles/application/bun.lock', ['ui/bun.lock', 'ui/profiles/application/bun.lock']]] : []),
     ['ui/profiles/application/package-lock.json', ['ui/package-lock.json', 'ui/profiles/application/package-lock.json']],
     ['ui/profiles/application/package.json', ['ui/package.json', 'ui/profiles/application/package.json']],
-  ], 'Only the two reviewed profile inputs may have multiple destinations');
+  ], 'Only the reviewed profile inputs may have multiple destinations');
   const mapped = contract.inputs.filter((row) => row.source !== row.path);
   assert.deepEqual(mapped.map(({ source, path: destination }) => ({ source, path: destination })), [
     { source: 'docs/restructuring/application-package-README.md', path: 'README.md' },
+    ...(bun ? [{ source: 'ui/profiles/application/bun.lock', path: 'ui/bun.lock' }] : []),
     { source: 'ui/profiles/application/package-lock.json', path: 'ui/package-lock.json' },
     { source: 'ui/profiles/application/package.json', path: 'ui/package.json' },
   ], 'The application source path substitutions changed');
@@ -180,7 +228,7 @@ function validateContract(contract) {
     previous = row.source; omitted.add(row.source);
   }
   for (const name of contract.source_boundary.additional_files) applicationSourcePath(name);
-  require(contract.test_profile.files.length === 24 && contract.public_files.length === 54 && contract.shared_contracts.length === 3,
+  require(contract.test_profile.files.length === (bun ? 25 : 24) && contract.public_files.length === 54 && contract.shared_contracts.length === 3,
     'The selected application test/public/contract boundary changed');
   for (const name of ['LICENSE', 'README.md', ...contract.shared_contracts, 'scripts/load-secrets-env.sh', 'scripts/ui-production-start.sh', 'ui/nginx.prod.conf',
     ...contract.test_profile.files.map((name) => `ui/${name}`), ...contract.public_files.map((name) => `ui/public/${name}`)]) {
@@ -213,6 +261,8 @@ function dataRecord(row) {
 export async function planApplicationSourceExport({ repositoryRoot = ROOT } = {}) {
   const root = ordinaryDirectory(path.resolve(repositoryRoot)); const state = sourceState(root);
   const { contract } = contractInput(root);
+  require(approvedContract(contract).generation === 'application-only',
+    'New source packages require the current application-only contract');
   const universe = [...state.files.keys()].filter((name) => name.startsWith('ui/') || contract.source_boundary.additional_files.includes(name)).sort();
   const selected = new Set(contract.inputs.map((row) => row.source));
   const omitted = new Set(contract.omitted.map((row) => row.source));
@@ -225,7 +275,7 @@ export async function planApplicationSourceExport({ repositoryRoot = ROOT } = {}
   require(plan.source.commit === state.commit && plan.source.working_tree_dirty === false, 'Source changed while the package was planned');
   assert.deepEqual(plan.test_profile, contract.test_profile, 'The selected application test contract drifted');
   assert.deepEqual([...plan.boundary.retained_public_files].sort(), [...contract.public_files].sort(), 'The selected public inventory drifted');
-  assert.deepEqual(plan.boundary.omitted, contract.omitted.filter((row) => row.role === 'accepted-application-exclusion').map((row) => row.source),
+  assert.deepEqual(plan.boundary.omitted, acceptedExclusions(contract),
     'The accepted 72 application exclusions changed');
   for (const row of plan.source.files) {
     const input = inputs.get(row.path);
@@ -234,14 +284,15 @@ export async function planApplicationSourceExport({ repositoryRoot = ROOT } = {}
   const files = contract.inputs.map((row) => ({ ...inputs.get(row.source).record, path: row.path, source: row.source, roles: row.roles }));
   const fixture = root !== path.resolve(ROOT);
   const manifest = {
-    schema: MANIFEST_SCHEMA, fixture,
+    schema: contract.schema.endsWith('/v2') ? MANIFEST_SCHEMA : LEGACY_MANIFEST_SCHEMA, fixture,
     source: { repository: contract.repository, commit: state.commit, tree: state.tree, object_format: 'sha1', working_tree_dirty: false },
     archive: { format: 'zip-stored', manifest_path: APPLICATION_SOURCE_MANIFEST_PATH, manifest_self_excluded: true, directory_mode: 0o755 },
     contract: inputs.get(CONTRACT).record, files, source_inventory_sha256: hash(canonical(files)),
     route_contract: plan.route_contract, test_profile: contract.test_profile,
     contracts: files.filter((row) => contract.shared_contracts.includes(row.path)),
     dependency_profile: { name: 'application', removed_roots: plan.dependency_profile.removed_roots,
-      bun_lock_selected: false, package_graph_minimized: false },
+      bun_lock_selected: Boolean(plan.package_manager), package_graph_minimized: false,
+      ...(plan.package_manager ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}) },
     substitutions: plan.dependency_profile.substitutions,
     omission_policy: { source_boundary: contract.source_boundary, categories: contract.omission_categories,
       inputs: contract.omitted.map((row) => ({ ...inputs.get(row.source).record, source: row.source, role: row.role })) },
@@ -260,11 +311,16 @@ function validateRecord(row, label) {
     && DIGEST.test(row.sha256) && ['100644', '100755'].includes(row.git_mode) && OID.test(row.blob_oid)
     && row.mode === (row.git_mode === '100755' ? 0o755 : 0o644), `Invalid ${label} byte/Git identity`);
 }
-export function validateApplicationSourcePackageManifest(manifest, { contract = contractInput().contract } = {}) {
+export function validateApplicationSourcePackageManifest(manifest, { contract } = {}) {
+  const bun = manifest.schema === MANIFEST_SCHEMA;
+  const approval = manifestContractApproval(manifest);
+  contract ??= readApprovedContract(approval);
   validateContract(contract);
+  require(approvedContract(contract).sha256 === approval.sha256, 'Application source contract selection differs');
   keys(manifest, ['schema', 'fixture', 'source', 'archive', 'contract', 'files', 'source_inventory_sha256', 'route_contract', 'test_profile',
     'contracts', 'dependency_profile', 'substitutions', 'omission_policy', 'retained_inactive_inputs', 'qualification'], 'source manifest');
-  require(manifest.schema === MANIFEST_SCHEMA && typeof manifest.fixture === 'boolean', 'Unknown application source manifest');
+  require((bun || manifest.schema === LEGACY_MANIFEST_SCHEMA) && typeof manifest.fixture === 'boolean'
+    && contract.schema === `marty.application-source-export/${bun ? 'v2' : 'v1'}`, 'Unknown application source manifest');
   keys(manifest.source, ['repository', 'commit', 'tree', 'object_format', 'working_tree_dirty'], 'source origin');
   require(manifest.source.repository === contract.repository && OID.test(manifest.source.commit) && OID.test(manifest.source.tree)
     && manifest.source.object_format === 'sha1' && manifest.source.working_tree_dirty === false, 'Application source origin must be an exact clean commit');
@@ -289,12 +345,14 @@ export function validateApplicationSourcePackageManifest(manifest, { contract = 
     'Invalid application route contract identity');
   assert.deepEqual(manifest.test_profile, contract.test_profile, 'Application source test roster changed');
   assert.deepEqual(manifest.contracts, manifest.files.filter((row) => contract.shared_contracts.includes(row.path)), 'Application source contract inventory differs');
-  keys(manifest.dependency_profile, ['name', 'removed_roots', 'bun_lock_selected', 'package_graph_minimized'], 'dependency profile');
+  keys(manifest.dependency_profile, ['name', 'removed_roots', 'bun_lock_selected', 'package_graph_minimized',
+    ...(bun ? ['package_manager'] : [])], 'dependency profile');
   assert.deepEqual(manifest.dependency_profile, { name: 'application', removed_roots: [
     '@elevenid/marty-blog', '@prerenderer/rollup-plugin', '@prerenderer/renderer-puppeteer', 'vite-plugin-sitemap',
-  ], bun_lock_selected: false, package_graph_minimized: false }, 'Application source dependency selection changed');
-  require(Array.isArray(manifest.substitutions) && manifest.substitutions.length === 2, 'Application source requires exactly two profile substitutions');
-  assert.deepEqual(manifest.substitutions.map((row) => row.path), SUBSTITUTIONS, 'Application source substitutions changed');
+  ], bun_lock_selected: bun, package_graph_minimized: false,
+  ...(bun ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}) }, 'Application source dependency selection changed');
+  require(Array.isArray(manifest.substitutions) && manifest.substitutions.length === (bun ? 3 : 2), 'Application source profile substitutions changed');
+  assert.deepEqual(manifest.substitutions.map((row) => row.path), [...SUBSTITUTIONS, ...(bun ? ['ui/bun.lock'] : [])], 'Application source substitutions changed');
   for (const row of manifest.substitutions) {
     keys(row, ['path', 'baseline', 'selected'], 'profile substitution');
     for (const item of [row.baseline, row.selected]) {
@@ -328,21 +386,29 @@ export function validateApplicationSourcePackageManifest(manifest, { contract = 
 }
 
 export function validateApplicationSourceBaseline(report, { plan } = {}) {
-  require(report?.schema === 'marty.application-source-closure-rehearsal/v5' && report.status === 'passed'
+  const bun = plan?.schema === 'marty.application-source-closure-plan/v7';
+  const version = bun ? 'v7' : 'v5'; const mode = bun ? 'fresh-bun-frozen' : 'fresh-npm-ci';
+  require(report?.schema === `marty.application-source-closure-rehearsal/${version}` && report.status === 'passed'
     && (report.fixture === undefined || report.fixture === false)
-    && report.plan?.schema === 'marty.application-source-closure-plan/v5', 'Source package requires a passed actual v5 application baseline');
-  require(plan?.schema === 'marty.application-source-closure-plan/v5' && !plan.source.working_tree_dirty, 'Source package requires a clean current profile plan');
+    && report.plan?.schema === `marty.application-source-closure-plan/${version}`, 'Source package requires a passed application baseline');
+  require(plan?.schema === `marty.application-source-closure-plan/${version}` && !plan.source.working_tree_dirty, 'Source package requires a clean current profile plan');
   assert.deepEqual(report.plan.source, plan.source, 'Source package baseline source differs');
   for (const name of ['route_contract', 'test_profile', 'boundary', 'dependency_profile']) assert.deepEqual(report.plan[name], plan[name], `Baseline ${name} differs`);
   require(report.plan.source.input_inventory_sha256 === hash(canonical(report.plan.source.files)), 'Baseline source inventory digest differs');
-  require(report.build?.dependency_mode === 'fresh-npm-ci' && report.build.dependency_profile === 'application'
+  require(report.build?.dependency_mode === mode && report.build.dependency_profile === 'application'
     && report.build.effective_source_sha === plan.source.commit
     && report.build.package_lock_sha256 === plan.dependency_profile.source_inputs.find((row) => row.path.endsWith('/package-lock.json')).sha256,
   'Baseline build did not use the current application lock/source');
-  require(report.dependency_install?.status === 'passed' && report.dependency_install.mode === 'fresh-npm-ci'
+  require(report.dependency_install?.status === 'passed' && report.dependency_install.mode === mode
     && report.dependency_install.dependency_profile === 'application' && report.dependency_install.independent_dependency_installation === true
-    && report.dependency_install.bun_lock_selected === false && report.dependency_install.sdk?.initialized_in_node === true,
+    && report.dependency_install.bun_lock_selected === bun && report.dependency_install.sdk?.initialized_in_node === true,
   'Baseline did not prove an independent application dependency install');
+  for (const value of [plan.package_manager, report.plan.package_manager, report.build.package_manager,
+    plan.dependency_profile.package_manager, report.dependency_install.package_manager, report.dependency_profile?.package_manager]) {
+    assert.deepEqual(value, bun ? APPLICATION_BUN_PACKAGE_MANAGER : undefined, 'Baseline package-manager identity differs');
+  }
+  if (bun) require(report.build.dependency_lock_sha256 === plan.dependency_profile.source_inputs.find((row) => row.path.endsWith('/bun.lock')).sha256
+    && report.dependency_install.bun_version === APPLICATION_BUN_PACKAGE_MANAGER.version, 'Baseline frozen Bun lock or installer differs');
   for (const key of ['application_build_completed', 'application_tests_completed', 'omitted_sources_absent', 'application_output_checked',
     'source_checkout_unchanged', 'public_assets_preserved', 'application_resource_smoke_completed', 'locale_fallback_observed',
     'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound', 'independent_dependency_installation']) {
@@ -352,7 +418,7 @@ export function validateApplicationSourceBaseline(report, { plan } = {}) {
     'oidc_journey_tested', 'host_deployment_tested', 'signed_release_produced']) {
     require(report.qualification?.[key] === false, 'Baseline report broadened its qualification');
   }
-  require(report.dependency_profile?.name === 'application' && report.dependency_profile.bun_lock_selected === false
+  require(report.dependency_profile?.name === 'application' && report.dependency_profile.bun_lock_selected === bun
     && report.dependency_profile.output_identical_to_full_profile === true
     && Array.isArray(report.dependency_profile.materialized_inputs), 'Baseline profile evidence is incomplete');
   assert.deepEqual(report.dependency_profile.materialized_inputs.map(({ path: name, baseline, selected }) => ({ path: name, baseline, selected })),
@@ -406,7 +472,7 @@ export function validateApplicationSourceProducerReceipt(receipt, { archiveSha25
   validateApplicationSourcePackageManifest(manifest);
   keys(receipt, ['schema', 'status', 'fixture', 'source_commit', 'source_tree', 'archive', 'manifest', 'baseline_report',
     'source_inventory_sha256', 'source_preserved', 'archive_manifest_identical', 'qualification'], 'producer receipt');
-  require(receipt.schema === RECEIPT_SCHEMA && receipt.fixture === manifest.fixture
+  require(receipt.schema === (manifest.schema === MANIFEST_SCHEMA ? RECEIPT_SCHEMA : LEGACY_RECEIPT_SCHEMA) && receipt.fixture === manifest.fixture
     && receipt.status === (receipt.fixture ? 'fixture-passed' : 'passed'), 'Invalid source producer receipt status');
   require(receipt.source_commit === manifest.source.commit && receipt.source_tree === manifest.source.tree
     && receipt.source_inventory_sha256 === manifest.source_inventory_sha256 && receipt.source_preserved === true
@@ -439,7 +505,8 @@ export async function exportApplicationSourcePackage({ repositoryRoot = ROOT, ar
   'Source archive round-trip differs');
   sourceUnchanged(prepared);
   require(readAbsolute(baselineReportPath, MAX_JSON).bytes.equals(baselineInput.bytes), 'Baseline report changed during export');
-  const receipt = { schema: RECEIPT_SCHEMA, status: prepared.manifest.fixture ? 'fixture-passed' : 'passed', fixture: prepared.manifest.fixture,
+  const receipt = { schema: prepared.manifest.schema === MANIFEST_SCHEMA ? RECEIPT_SCHEMA : LEGACY_RECEIPT_SCHEMA,
+    status: prepared.manifest.fixture ? 'fixture-passed' : 'passed', fixture: prepared.manifest.fixture,
     source_commit: prepared.state.commit, source_tree: prepared.state.tree,
     archive: { bytes: archive.length, sha256: hash(archive) }, manifest: { bytes: prepared.manifestBytes.length, sha256: hash(prepared.manifestBytes) },
     baseline_report: { bytes: baselineInput.bytes.length, sha256: hash(baselineInput.bytes) },

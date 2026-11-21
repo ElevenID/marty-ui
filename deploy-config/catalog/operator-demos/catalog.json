@@ -1,0 +1,23 @@
+{
+  "schema": "marty.operator-demo-catalog/v1",
+  "purpose": "historical-deployment-template-and-unbound-draft",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "commit": "b1095e8c86389929cf1a93c4ed04d9eb784f3a6d"
+  },
+  "default_stack_version": "2026.08.0",
+  "draft_stack_version": "2026.08.1",
+  "text_normalization": "lf",
+  "historical_manifest": {
+    "path": "2026.08.0.json",
+    "source_path": "ui/public/demos/manifests/2026.08.0.json",
+    "bytes": 87363,
+    "sha256": "3859324f5f2fb13dae158b8ff95c1e2261ae69c5ce2ce8806a2e4048e16ca494"
+  },
+  "draft_poster": {
+    "path": "2026.08.1/portfolio-draft.svg",
+    "source_path": "ui/public/images/demos/2026.08.1/portfolio-draft.svg",
+    "bytes": 1347,
+    "sha256": "d18fbcd5612007e2753abffb815ccd5f80ae8466565415daa7be7c8ce8f7aad6"
+  }
+}

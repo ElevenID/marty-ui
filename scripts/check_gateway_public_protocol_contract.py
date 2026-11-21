@@ -572,9 +572,7 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and 'rust_matrix=\'["contracts","flow","selfhost"]\'' in classifier
         and "rust_matrix='[\"contracts\"]'" in classifier
         and (
-            'if [[ "$website_only" == true ]]; then\n'
-            '  website=true\n'
-            'elif [[ "$EVENT_NAME" != pull_request ]]; then\n'
+            'if [[ "$EVENT_NAME" != pull_request ]]; then\n'
             '  all=true\nelse\n'
         ) in classifier
         and 'if [[ "$all" == true ]]; then\n  ui=true\n  python=true\n  rust=true\n' in classifier
@@ -596,7 +594,8 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and '"$RUST_MATRIX" == \'["contracts","flow","selfhost"]\' ]]' in gate
         and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
         in gate
-        and 'if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then' in gate
+        and '[[ "$WEBSITE_ONLY" == false ]]' in gate
+        and 'if [[ "${{ github.event_name }}" == merge_group ]]; then' in gate
         and "          CI_PLAN: ${{ needs.changes.outputs.plan }}\n" in gate
         and "          CI_NEEDS_JSON: ${{ toJSON(needs) }}\n" in gate
         and "        run: python3 scripts/ci/affected_components.py gate\n" in gate

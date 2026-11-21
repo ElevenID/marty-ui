@@ -1,5 +1,5 @@
 {
-  "schema": "marty.application-source-export/v1",
+  "schema": "marty.application-source-export/v2",
   "repository": "ElevenID/marty-ui",
   "source_boundary": {
     "prefixes": [
@@ -76,6 +76,13 @@
       ]
     },
     {
+      "source": "ui/profiles/application/bun.lock",
+      "path": "ui/bun.lock",
+      "roles": [
+        "application-dependency-input"
+      ]
+    },
+    {
       "source": "ui/console/index.html",
       "path": "ui/console/index.html",
       "roles": [
@@ -115,6 +122,13 @@
       "path": "ui/package.json",
       "roles": [
         "application-dependency-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/bun.lock",
+      "path": "ui/profiles/application/bun.lock",
+      "roles": [
+        "application-profile-provenance-support"
       ]
     },
     {
@@ -1296,6 +1310,13 @@
     {
       "source": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
       "path": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
+      "path": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
       "roles": [
         "selected-application-test"
       ]
@@ -4046,14 +4067,13 @@
     }
   ],
   "omission_categories": {
-    "accepted-application-exclusion": "Exact existing 72-input omission; ownership roster remains unchanged.",
+    "accepted-application-exclusion": "The original 72 retired paths remain forbidden; their frozen reviewed roster is retained separately from present source omissions.",
     "baseline-profile-substitution": "Replaced only at the same destination by the exact reviewed application profile input.",
     "migration-or-browser-diagnostic": "Producer-side migration/qualification tool; no selected package command or source dependency.",
     "platform-package-diagnostic": "Platform-owned source-package exporter, consumer, codec, contract or process guardian; absent from the portable application source and runtime.",
-    "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
-    "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
+    "unadvertised-storybook-tooling": "No Storybook command in the portable application profile. Current Storybook configuration stays producer-side; story source and shared fixture dependencies remain retained.",
     "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
-    "unselected-test": "Not in the exact 24-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-test": "Not in the exact 25-file selected suite and not imported by selected test/setup or retained source closure.",
     "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
     "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
   },
@@ -4112,7 +4132,7 @@
     },
     {
       "source": "ui/bun.lock",
-      "role": "unselected-package-manager-lock"
+      "role": "baseline-profile-substitution"
     },
     {
       "source": "ui/nginx.dev.conf",
@@ -4137,126 +4157,6 @@
     {
       "source": "ui/package.json",
       "role": "baseline-profile-substitution"
-    },
-    {
-      "source": "ui/public/blog/rss.xml",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/demos/manifests/2026.07.0.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/demos/manifests/2026.08.0.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/demos/manifests/index.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/aiko-tanaka.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/daniel-ortega.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/elena-kovacs.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/marcus-vale.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/nora-patel.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/sofia-rahman.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/authors/victor-leclerc.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/canvas-learning-achievement.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/credential-lifecycle.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/first-party-browser-wallet.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/independent-wallet-interoperability.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/membership-badge-login.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.07.0/organization-primitives.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.08.0/portfolio-draft.svg",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/demos/2026.08.1/portfolio-draft.svg",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/social/elevenid-blog-default.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/social/trust-profiles-explained.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/social/understanding-csca-certificates-v2.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/images/social/why-identity-needs-a-protocol.png",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/llms.txt",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/de/marketing.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/en/marketing.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/es/marketing.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/fr/marketing.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/ja/marketing.json",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/public/locales/nl/marketing.json",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/scripts/adopt-vitest-timings.mjs",
@@ -4363,10 +4263,6 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/scripts/crawler-config.test.mjs",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/scripts/dev-server-origin.test.mjs",
       "role": "unselected-test"
     },
@@ -4393,10 +4289,6 @@
     {
       "source": "ui/scripts/patch-prerenderer-ts-deepmerge.cjs",
       "role": "unselected-tooling"
-    },
-    {
-      "source": "ui/scripts/platform-demo-boundary.test.mjs",
-      "role": "unselected-test"
     },
     {
       "source": "ui/scripts/production-build-contract.test.mjs",
@@ -4427,7 +4319,7 @@
       "role": "unselected-tooling"
     },
     {
-      "source": "ui/scripts/test_nginx_crawler_routes.py",
+      "source": "ui/scripts/test_nginx_application_routes.py",
       "role": "unselected-tooling"
     },
     {
@@ -4443,15 +4335,7 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/scripts/website-build-tools.mjs",
-      "role": "accepted-application-exclusion"
-    },
-    {
       "source": "ui/scripts/website-build-tools.test.mjs",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/__tests__/prerenderedSeo.test.ts",
       "role": "unselected-test"
     },
     {
@@ -4611,44 +4495,8 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/apps/website/WebsiteApp.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/apps/website/WebsiteRoutes.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/FromIDVPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/IdentityGuidePage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/LandingPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/LandingPageContent.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
       "source": "ui/src/components/Navigation.selfhost.test.tsx",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/ProductPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/ProtocolPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/StandardsPage.jsx",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/src/components/__tests__/ApplicantDashboard.test.tsx",
@@ -4715,15 +4563,7 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/src/components/__tests__/JoinOrganizationPage.test.tsx",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/__tests__/LandingPage.test.tsx",
       "role": "unselected-test"
     },
     {
@@ -5191,44 +5031,12 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/components/demos/DemoVideoPlayer.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/demos/DemoVideoPlayer.test.tsx",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/src/components/identity/AssociationConsentPage.test.tsx",
       "role": "unselected-test"
     },
     {
       "source": "ui/src/components/issuance/OID4VCIInviteDisplay.test.tsx",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/landing/DeploymentModelsSection.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/landing/EndUserExperienceSection.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/landing/LandingSection.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/landing/ProductCapabilitiesSection.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/landing/ProofLabSection.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/landing/proofLabRuntime.js",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/src/components/layouts/PublicFooter.selfhost.test.tsx",
@@ -5251,84 +5059,12 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/components/pages/AiCapabilityPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/DemoPages.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/DemoPages.test.tsx",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/pages/EudiWalletVerificationPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/IsoMdocVerificationPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/LegalPages.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/MarketingProtocolSupportCatalog.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/OpenBadgesIssuancePage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/OpenBadgesIssuancePage.test.tsx",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/pages/OpenBadgesVerificationPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
       "source": "ui/src/components/pages/ProtocolSupportCatalog.test.tsx",
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/components/pages/PublicIAPages.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
       "source": "ui/src/components/pages/PublicVerificationPage.test.tsx",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/pages/SdJwtVerificationPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/TrustRegistryPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/VerifiableCredentialApiPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/WhatIsCredentialVerificationPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/WhatIsDigitalCredentialPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/WhatIsMartyProtocolPage.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/components/pages/WhatIsOpenBadgePage.jsx",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/src/components/preview/PreviewApplicationPage.test.tsx",
@@ -5413,18 +5149,6 @@
     {
       "source": "ui/src/contexts/NotificationContext.test.tsx",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/data/marketingContent.js",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/generated/demoManifests.generated.js",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/generated/demoWalletSchema.generated.json",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/src/hooks/__tests__/useAsyncData.test.ts",
@@ -5647,28 +5371,12 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/services/demoManifestService.js",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/services/demoManifestService.test.ts",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/services/platformDemoScenarios.js",
-      "role": "accepted-application-exclusion"
-    },
-    {
       "source": "ui/src/services/publicVerificationApi.test.ts",
       "role": "unselected-test"
     },
     {
       "source": "ui/src/test/focusEnvironmentBaseline.test.tsx",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/test/i18nTestSetup.js",
-      "role": "accepted-application-exclusion"
     },
     {
       "source": "ui/src/test/mocks/browser.ts",
@@ -5691,28 +5399,12 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/variants/__tests__/publicSite.public.test.tsx",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/src/variants/__tests__/publicSite.selfhost.test.tsx",
       "role": "unselected-test"
     },
     {
       "source": "ui/src/variants/__tests__/selfhostBuild.test.ts",
       "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/variants/marketingRoutes.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/variants/publicSite.public.jsx",
-      "role": "accepted-application-exclusion"
-    },
-    {
-      "source": "ui/src/website.jsx",
-      "role": "accepted-application-exclusion"
     }
   ],
   "generated_state": [
@@ -5739,6 +5431,7 @@
       "src/contexts/__tests__/PublicEntryAuth.test.tsx",
       "src/components/__tests__/AuthCallback.integration.test.tsx",
       "src/components/__tests__/AuthAvailability.integration.test.tsx",
+      "src/components/__tests__/InviteAcceptPage.test.tsx",
       "src/components/__tests__/ProtectedRoute.test.tsx",
       "src/components/__tests__/BrowserRedirect.test.tsx",
       "src/components/navigation/ConsoleHeaderBar.test.tsx",
@@ -5813,12 +5506,6 @@
     "contracts/website-source-ownership.json"
   ],
   "retained_inactive_inputs": [
-    {
-      "from": "ui/src/components/pages/index.js",
-      "disposition": "retain byte-for-byte; inactive export barrel",
-      "edges": 12,
-      "reason": "Twelve re-exports target already-omitted website modules; no path from selected public/console entrypoints or the 24 selected tests."
-    },
     {
       "from": "ui/src/utils/analytics.example.js",
       "disposition": "retain byte-for-byte; inactive example",

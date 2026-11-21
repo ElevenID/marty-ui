@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 if __package__:
-    from .demo_asset_hashes import public_asset_sha256
+    from .operator_demo_catalog import CATALOG_DIRECTORY, load_operator_demo_catalog
 else:
-    from demo_asset_hashes import public_asset_sha256
+    from operator_demo_catalog import CATALOG_DIRECTORY, load_operator_demo_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "2026.08.1"
 MIP_VERSION = "0.5.0"
 POSTER_URL = f"/images/demos/{VERSION}/portfolio-draft.svg"
-POSTER_PATH = ROOT / "ui" / "public" / POSTER_URL.lstrip("/")
+POSTER_PATH = ROOT / CATALOG_DIRECTORY / VERSION / "portfolio-draft.svg"
 CONTRACT_PATH = ROOT / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
-OUTPUT_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / f"{VERSION}.json"
+OUTPUT_PATH = ROOT / "build" / "demo-manifests" / f"{VERSION}.json"
 
 PRESENTATION = {
     "passport-pre-boarding-clearance": (
@@ -102,7 +102,7 @@ def label(value: str) -> str:
     return value.replace("_", " ").strip().capitalize()
 
 
-def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
+def draft_scenario(contract: dict[str, object], poster_sha256: str) -> dict[str, object]:
     slug = str(contract["slug"])
     title, summary, audiences, protocols = PRESENTATION[slug]
     happy = list(contract["happy_path"])
@@ -128,7 +128,7 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
         },
         "poster": {
             "src": POSTER_URL,
-            "sha256": public_asset_sha256(POSTER_PATH),
+            "sha256": poster_sha256,
             "alt": f"Draft release card for {title}; fresh recording pending",
         },
         "youtube_id": None,
@@ -322,7 +322,7 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
 
 
 def legacy_scenario(
-    slug: str, title: str, summary: str, classification: str
+    slug: str, title: str, summary: str, classification: str, poster_sha256: str
 ) -> dict[str, object]:
     return {
         "slug": slug,
@@ -338,7 +338,7 @@ def legacy_scenario(
         "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
         "poster": {
             "src": POSTER_URL,
-            "sha256": public_asset_sha256(POSTER_PATH),
+            "sha256": poster_sha256,
             "alt": f"Draft release card for {title}; historical capability preserved",
         },
         "youtube_id": None,
@@ -376,10 +376,14 @@ def legacy_scenario(
 
 
 def build_manifest() -> dict[str, object]:
+    catalog = load_operator_demo_catalog(ROOT)
+    if catalog.metadata["draft_stack_version"] != VERSION or catalog.poster_path != POSTER_PATH:
+        raise ValueError("Draft version must use its reviewed operator poster")
+    poster_sha256 = catalog.metadata["draft_poster"]["sha256"]
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
-    scenarios = [draft_scenario(item) for item in contract["scenarios"]]
+    scenarios = [draft_scenario(item, poster_sha256) for item in contract["scenarios"]]
     scenarios.extend(
-        legacy_scenario(slug, *LEGACY_PRESENTATION[slug])
+        legacy_scenario(slug, *LEGACY_PRESENTATION[slug], poster_sha256)
         for slug in contract["preserved_legacy_scenarios"]
     )
     return {
@@ -448,6 +452,7 @@ def main() -> int:
         if OUTPUT_PATH.read_text(encoding="utf-8") != contents:
             raise ValueError("Refusing to overwrite an existing demo edition; choose a new draft version")
     else:
+        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
         OUTPUT_PATH.write_text(contents, encoding="utf-8")
     print(OUTPUT_PATH)
     return 0

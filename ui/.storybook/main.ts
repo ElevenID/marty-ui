@@ -15,11 +15,6 @@ const config: StorybookConfig = {
     // Customize the Vite config here
     return {
       ...config,
-      // Storybook has its own output directory and does not publish site crawlers.
-      plugins: config.plugins?.filter((plugin) => !(
-        plugin && typeof plugin === 'object' && 'name' in plugin
-        && plugin.name === 'vite-plugin-sitemap'
-      )),
       resolve: {
         ...config.resolve,
         alias: {

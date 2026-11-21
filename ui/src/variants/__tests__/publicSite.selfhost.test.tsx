@@ -24,11 +24,6 @@ function renderCustomerRoot(isAuthenticated = false) {
   );
 }
 
-// Importing the production route module is itself a customer build regression.
-vi.mock('../publicSite.public', () => {
-  throw new Error('Customer UI must not import production marketing routes');
-});
-
 afterEach(() => {
   vi.clearAllMocks();
   delete (window as any).__MARTY_RUNTIME_CONFIG__;

@@ -9,10 +9,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_LEGACY_TEST_FILES as APPLICATION_TEST_FILES, APPLICATION_TEST_FILES as CURRENT_APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import {
   APPLICATION_LOCALE_NAMESPACES, APPLICATION_RETAINED_PUBLIC_FILES, APPLICATION_RESOURCE_MIME_TYPES,
 } from './application-public-assets.mjs';
+import { APPLICATION_BUN_PACKAGE_MANAGER } from './application-dependency-profile.mjs';
 import { APPLICATION_RUNTIME_INPUTS, createApplicationRuntimeContext } from './application-runtime-context.mjs';
 import { verifyApplicationClosureOutput } from './application-source-closure.mjs';
 import {
@@ -52,9 +53,13 @@ function allFiles(root, prefix = '') {
 // selected test/result parsers, output comparison and actual closed runtime
 // construction use the production consumer. All injected executions must stay
 // nonqualifying and remove their context, even when every assertion passes.
-function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
+function fixture(t, { beforeCommand, afterCommand, afterInventory, bun = false } = {}) {
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-package-consumer-test-'));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  const selectedTests = bun ? CURRENT_APPLICATION_TEST_FILES : APPLICATION_TEST_FILES;
+  const expectedTests = bun ? 308 : 296;
+  const manager = { ...APPLICATION_BUN_PACKAGE_MANAGER };
+  const packageInputs = ['package.json', 'package-lock.json', ...(bun ? ['bun.lock'] : [])];
   const sourceBytes = new Map();
   const sourceFiles = new Map();
   const selected = [];
@@ -70,19 +75,22 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
     if (input.path !== 'ui/scripts/application-runtime.Dockerfile') select(input.path);
     else sourceFiles.set(input.path, record(input.path, readFileSync(path.join(ROOT, input.path))));
   }
-  for (const name of ['package.json', 'package-lock.json']) select(`ui/profiles/application/${name}`, `ui/${name}`);
+  for (const name of packageInputs) select(`ui/profiles/application/${name}`, `ui/${name}`);
   const routeContract = { version: 1, sha256: `sha256:${'b'.repeat(64)}` };
-  const testProfile = { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES],
+  const testProfile = { config: APPLICATION_TEST_CONFIG, files: [...selectedTests],
     shared_contracts: ['contracts/organization-domain-behavior.json'] };
-  const substitutions = ['ui/package.json', 'ui/package-lock.json'].map((name) => ({ path: name,
+  const substitutions = packageInputs.map((name) => `ui/${name}`).map((name) => ({ path: name,
     baseline: record(name, readFileSync(path.join(ROOT, name))),
     selected: sourceFiles.get(`ui/profiles/application/${path.basename(name)}`) }));
-  const manifest = { fixture: true, source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
+  const contractPath = bun ? 'contracts/application-source-export.json' : 'contracts/legacy/application-source-export.v1.json';
+  const manifest = { fixture: true, schema: `marty.application-source-package/${bun ? 'v2' : 'v1'}`,
+    contract: { sha256: digest(readFileSync(path.join(ROOT, contractPath))) },
+    ...(bun ? { dependency_profile: { package_manager: manager } } : {}), source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
     files: selected, route_contract: routeContract, test_profile: testProfile, substitutions,
     source_inventory_sha256: identity(selected) };
-  const plan = { schema: 'marty.application-source-closure-plan/v5',
+  const plan = { schema: `marty.application-source-closure-plan/${bun ? 'v7' : 'v5'}`, ...(bun ? { package_manager: manager } : {}),
     source: { commit: COMMIT, working_tree_dirty: false, git_status: [], files: [...sourceFiles.values()] },
-    route_contract: routeContract, test_profile: testProfile, dependency_profile: { name: 'application', substitutions } };
+    route_contract: routeContract, test_profile: testProfile, dependency_profile: { name: 'application', substitutions, ...(bun ? { package_manager: manager } : {}) } };
   plan.source.input_inventory_sha256 = identity(plan.source.files);
   const baselineRoot = path.join(temporary, 'baseline');
   const outputBytes = new Map(APPLICATION_RETAINED_PUBLIC_FILES.map((name) => [name, sourceBytes.get(`ui/public/${name}`)]));
@@ -110,18 +118,19 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
   for (const input of APPLICATION_RUNTIME_INPUTS) write(baselineRoot, input.path, readFileSync(path.join(ROOT, input.path)), 0o600);
   const context = createApplicationRuntimeContext({ sourceRoot: baselineRoot, outputRoot: path.join(baselineRoot, 'ui/dist-application'),
     sourceCommit: COMMIT, destination: path.join(temporary, 'baseline-context'), outputInventory: output, resourceResult: resources });
-  const baseline = { schema: 'marty.application-source-closure-rehearsal/v5', status: 'passed', plan,
-    build: { dependency_mode: 'fresh-npm-ci', dependency_profile: 'application', effective_source_sha: COMMIT,
+  const baseline = { schema: `marty.application-source-closure-rehearsal/${bun ? 'v7' : 'v5'}`, status: 'passed', plan,
+    build: { dependency_mode: bun ? 'fresh-bun-frozen' : 'fresh-npm-ci', dependency_profile: 'application', effective_source_sha: COMMIT,
+      ...(bun ? { package_manager: manager, dependency_lock_sha256: selected.find((row) => row.path === 'ui/bun.lock').sha256 } : {}),
       package_lock_sha256: selected.find((row) => row.path === 'ui/package-lock.json').sha256 },
-    dependency_install: { status: 'passed', mode: 'fresh-npm-ci', dependency_profile: 'application',
-      independent_dependency_installation: true, sdk: { wasm: byteRecord(record(SDK, outputBytes.get(SDK))) } },
-    dependency_profile: { name: 'application', output_identical_to_full_profile: true,
+    dependency_install: { status: 'passed', mode: bun ? 'fresh-bun-frozen' : 'fresh-npm-ci', dependency_profile: 'application',
+      independent_dependency_installation: true, ...(bun ? { package_manager: manager, bun_version: '1.4.4', bun_lock_selected: true } : {}), sdk: { wasm: byteRecord(record(SDK, outputBytes.get(SDK))) } },
+    dependency_profile: { name: 'application', ...(bun ? { package_manager: manager } : {}), output_identical_to_full_profile: true,
       baseline_comparison: { output_files_identical: true, public_resources_identical: true } },
     qualification: Object.fromEntries(['application_build_completed', 'application_tests_completed', 'omitted_sources_absent',
       'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved', 'application_resource_smoke_completed',
       'locale_fallback_observed', 'runtime_context_prepared', 'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound',
       'independent_dependency_installation'].map((name) => [name, true])),
-    tests: { result: { test_count: 296, completed_files: [...APPLICATION_TEST_FILES].sort() } },
+    tests: { result: { test_count: expectedTests, completed_files: [...selectedTests].sort() } },
     output, resources: { result: resources }, runtime_context: context };
   const options = { archivePath: path.join(temporary, 'source.zip'), manifestPath: path.join(temporary, 'manifest.json'),
     baselineReportPath: path.join(temporary, 'baseline.json'), producerReportPath: path.join(temporary, 'producer.json'),
@@ -165,17 +174,17 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
   const command = async (executable, args, options) => {
     calls.push({ executable, args, ...options });
     beforeCommand?.({ executable, args, options, calls, restoredRoot });
-    writeFileSync(options.stdoutFile, options.stage === 'npm-version' ? '11.9.0\n' : '');
+    writeFileSync(options.stdoutFile, options.stage === 'npm-version' ? '11.9.0\n' : options.stage === 'bun-version' ? '1.4.4\n' : '');
     writeFileSync(options.stderrFile, '');
-    if (options.stage === 'npm-ci') mkdirSync(path.join(options.cwd, 'node_modules'));
+    if (['npm-ci', 'bun-frozen-install'].includes(options.stage)) mkdirSync(path.join(options.cwd, 'node_modules'));
     if (options.stage === 'dependency-inspection') writeFileSync(options.stdoutFile, json({
-      postinstall: { verified: true, prerender_selected: false },
+      ...(bun ? { package_manager: manager } : {}), postinstall: { verified: true, prerender_selected: false },
       sdk: { initialized_in_node: true, browser_execution_observed: false, wasm: baseline.dependency_install.sdk.wasm },
     }));
-    if (options.stage === 'npm-build') for (const [name, bytes] of outputBytes) write(restoredRoot, `ui/dist-application/${name}`, bytes);
-    if (options.stage === 'npm-test') writeFileSync(args.at(-1), json({ success: true,
-      numTotalTests: 296, numPassedTests: 296, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
-      testResults: APPLICATION_TEST_FILES.map((name, index) => ({ name: path.join(options.cwd, name), status: 'passed',
+    if (['npm-build', 'bun-build'].includes(options.stage)) for (const [name, bytes] of outputBytes) write(restoredRoot, `ui/dist-application/${name}`, bytes);
+    if (['npm-test', 'bun-test'].includes(options.stage)) writeFileSync(args.at(-1), json({ success: true,
+      numTotalTests: expectedTests, numPassedTests: expectedTests, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
+      testResults: selectedTests.map((name, index) => ({ name: path.join(options.cwd, name), status: 'passed',
         assertionResults: Array.from({ length: index === 0 ? 20 : 12 }, () => ({ status: 'passed' })) })) }));
     if (options.stage === 'resource-smoke') writeFileSync(args[args.indexOf('--report') + 1], json(resources));
     return afterCommand?.({ executable, args, options, calls, restoredRoot }) || { status: 0, signal: null };
@@ -213,6 +222,45 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(build.env.MARTY_UI_SHA, COMMIT);
   assert.equal(build.env.npm_config_cache, install.env.npm_config_cache);
   assert.equal(result.kernel_descendant_reaping_claimed, false);
+});
+
+test('Bun v2 consumer selects its frozen lock, pinned installer, isolated config and expanded suite', async (t) => {
+  const input = fixture(t, { bun: true }); const result = await input.run();
+  assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
+  assert.equal(result.schema, 'marty.application-source-package-consumer/v2');
+  assert.equal(result.tests.test_count, 308); assert.equal(result.tests.completed_files.length, 25);
+  assert.deepEqual(result.environment.package_manager, APPLICATION_BUN_PACKAGE_MANAGER);
+  assert.equal(result.environment.bun_version, '1.4.4');
+  assert.equal(result.environment.bun_configuration, 'explicit-empty-home-and-config');
+  assert.equal(result.dependency_install.mode, 'fresh-bun-frozen');
+  assert.equal(result.dependency_install.bun_version, '1.4.4');
+  assert.deepEqual(input.calls.map((call) => call.stage),
+    ['bun-version', 'bun-frozen-install', 'dependency-inspection', 'bun-build', 'bun-test', 'resource-smoke']);
+  const installed = input.calls.find((call) => call.stage === 'bun-frozen-install');
+  assert.deepEqual(installed.args.slice(0, 5), ['install', '--frozen-lockfile', '--linker=hoisted', '--backend=copyfile', '--no-env-file']);
+  assert.ok(installed.args.some((arg) => arg.startsWith('--config=') && arg.endsWith('/bunfig.toml')));
+  assert.ok(installed.env.HOME.endsWith('/bun-home')); assert.equal(installed.env.NODE_OPTIONS, undefined);
+  assert.equal(input.calls.find((call) => call.stage === 'bun-test').args[0], 'run');
+  assert.ok(Object.values(result.qualification).every((value) => value === false));
+  assert.ok(Object.values(result.cleanup).every((value) => value === true));
+});
+
+test('Bun consumer rejects an observed installer version different from the pin before installation', async (t) => {
+  const input = fixture(t, { bun: true, afterCommand: ({ options }) => {
+    if (options.stage === 'bun-version') writeFileSync(options.stdoutFile, '1.4.3\n');
+  } });
+  const result = await input.run(); assert.equal(result.status, 'failed');
+  assert.deepEqual(input.calls.map((call) => call.stage), ['bun-version']);
+  assert.match(result.failure.messages.join(' '), /pinned Bun/);
+});
+
+test('Bun source lock mutation fails preservation and cannot become a successful consumer receipt', async (t) => {
+  const input = fixture(t, { bun: true, afterCommand: ({ options, restoredRoot }) => {
+    if (options.stage === 'bun-frozen-install') write(restoredRoot, 'ui/bun.lock', 'modified');
+  } });
+  const result = await input.run(); assert.equal(result.status, 'failed');
+  assert.equal(result.failure.phase, 'bun-frozen-install'); assert.equal(result.preservation.restored_source_unchanged, false);
+  assert.ok(Object.values(result.qualification).every((value) => value === false));
 });
 
 test('consumer baseline refuses fixtures, dirty sources, duplicate inventory and incomplete selected test evidence', (t) => {

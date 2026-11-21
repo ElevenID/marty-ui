@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import sys
 
@@ -20,7 +20,6 @@ FULL_MATRIX = ["contracts", "flow", "selfhost"]
 JOB_FLAGS = {
     "changes": None, "release-preflight": None, "lint": None,
     "test-website": "website", "fast-feedback": "ui", "test-ui": "ui",
-    "test-ui-crawler-artifacts": "ui", "test-ui-crawler-nginx": "ui",
     "test-credential-lifecycle-browser": "ui", "test-services": "python",
     "test-rust-feature-probe": "rust_runtime", "test-rust-service-images": "rust_runtime",
     "test-rust-services": "rust", "test-native-operator": "rust",
@@ -62,47 +61,13 @@ def identity(env):
     return result
 
 
-def regular_path(root: Path, value: str) -> bool:
-    path = PurePosixPath(value)
-    if (not value or str(path) != value or path.is_absolute() or ".." in path.parts or "\\" in value
-            or any(ord(c) < 32 or ord(c) == 127 for c in value)):
-        return False
-    current = root
-    for part in path.parts:
-        current /= part
-        if current.is_symlink():
-            return False
-    return current.is_file()
-
-
 def website_only(root: Path, changed: bytes) -> bool:
-    """Narrow only explicit marketing modules proved absent from app outputs.
+    """Preserve the CI/CodeQL v1 interface with the retired fast lane disabled.
 
-    The required website lane builds all three surfaces and runs the emitted
-    module guards. Changes to this roster, those guards, shared UI, routing,
-    assets, dependency locks or build configuration therefore remain broad.
+    Marketing sources are owned by ElevenID/website. A historical ownership
+    roster, a restored old module or an empty diff cannot narrow current CI.
     """
-    try:
-        if not changed or not changed.endswith(b"\0"):
-            return False
-        paths = [value.decode("utf-8", "strict") for value in changed[:-1].split(b"\0")]
-        if len(set(paths)) != len(paths) or not all(regular_path(root, path) for path in paths):
-            return False
-        roster_path = "contracts/website-source-ownership.json"
-        if not regular_path(root, roster_path):
-            return False
-        roster = load_json((root / roster_path).read_text())
-        if set(roster) != {"schema_version", "modules"} or type(roster["schema_version"]) is not int or roster["schema_version"] != 1:
-            return False
-        modules = roster["modules"]
-        if not isinstance(modules, list) or not modules or not all(isinstance(p, str) for p in modules):
-            return False
-        if len(set(modules)) != len(modules) or not all(p.startswith("ui/src/") and regular_path(root, p) for p in modules):
-            return False
-        return all(path in modules or path == "ui/src/website.jsx" or
-                   path.startswith("ui/src/apps/website/") for path in paths)
-    except (OSError, UnicodeError, ValueError, TypeError, KeyError):
-        return False
+    return False
 
 
 def validate_flags(flags, matrix, event):
@@ -111,13 +76,13 @@ def validate_flags(flags, matrix, event):
     # Preserve the v1 field shape without authorizing the retired leaf mode.
     if flags["rollback_test_only"]:
         raise ValueError("retired rollback-only selection")
+    if flags["website_only"]:
+        raise ValueError("retired website-only selection")
     broad = {"ui", "website", "python", "rust", "rust_runtime", "openbao", "release", "verification", "security"}
     if flags["all"] and (not all(flags[f] for f in broad) or flags["website_only"]):
         raise ValueError("incomplete full plan")
     if flags["ui"] and not flags["website"]:
-        raise ValueError("shared UI must validate the website")
-    if flags["website_only"] and (not flags["website"] or any(flags[f] for f in FLAGS if f not in {"website", "website_only"})):
-        raise ValueError("mixed website-only plan")
+        raise ValueError("shared UI must validate the application/customer boundary")
     if flags["rust_runtime"] and not flags["rust"]:
         raise ValueError("runtime without Rust ownership")
     if not isinstance(matrix, list) or not all(isinstance(v, str) for v in matrix):
@@ -131,8 +96,8 @@ def validate_flags(flags, matrix, event):
                            ("k8s_policy_test_only", {"release"})):
         if flags[leaf] and (event != "pull_request" or {f for f in broad if flags[f]} != required):
             raise ValueError(f"invalid {leaf} plan")
-    if event == "merge_group" and not flags["website_only"] and not flags["all"]:
-        raise ValueError("non-website merge groups require full qualification")
+    if event == "merge_group" and not flags["all"]:
+        raise ValueError("merge groups require full qualification")
     if event not in {"pull_request", "merge_group"} and not flags["all"]:
         raise ValueError("full qualification required for this event")
 

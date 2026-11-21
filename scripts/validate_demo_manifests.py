@@ -442,12 +442,24 @@ def load_manifests(root: Path, version_file: Path | None = None) -> tuple[dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", nargs="?", type=Path, default=Path("ui/public/demos/manifests"))
+    parser.add_argument("root", nargs="?", type=Path,
+                        help="Explicit website manifest directory; omitted validates the frozen operator catalog")
     parser.add_argument("--version-file", type=Path, default=Path("VERSION"))
     args = parser.parse_args()
     try:
+        if args.root is None:
+            if __package__:
+                from .operator_demo_catalog import load_operator_demo_catalog
+            else:
+                from operator_demo_catalog import load_operator_demo_catalog
+            catalog = load_operator_demo_catalog()
+            if args.version_file.exists():
+                require(catalog.metadata["default_stack_version"] == args.version_file.read_text(encoding="utf-8").strip(),
+                        "operator template must match VERSION")
+            print(f"Validated operator demo template {catalog.manifest['stack_version']} and draft poster; public website assets were not checked")
+            return 0
         index, manifests = load_manifests(args.root, args.version_file)
-    except (ManifestValidationError, json.JSONDecodeError) as error:
+    except (ValueError, OSError) as error:
         print(f"Demo manifest validation failed: {error}", file=sys.stderr)
         return 1
     print(f"Validated {len(manifests)} ElevenID LLC demo manifest(s); latest approved: {index.get('latest_approved_stack_version') or 'none'}")

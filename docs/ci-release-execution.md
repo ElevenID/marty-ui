@@ -3,7 +3,8 @@
 ## One request coordinates release execution
 
 `Release pipeline` coordinates full CI, the selected nightly/stable claims and
-producers, automatic stable publication, and optional production web packaging.
+producers, and automatic stable publication. Its current stages are `qualify`,
+`nightly`, `stable`, and `stable-publish`.
 The stable publication stage reuses a unique authenticated automatic publisher if
 already present; otherwise it explicitly dispatches the existing publisher once
 with the original successful candidate run ID. It waits only for the returned
@@ -53,6 +54,34 @@ the deterministic replacement for known upstream review obligations and the
 local development workflow. Source review and exploratory/visual work remain
 part of development; no incomplete installer checkpoint is relabeled Ready.
 
+## Independent web publication and composition
+
+The release coordinator no longer dispatches combined application/website
+builds or automatically composes a web release after stable publication.
+Its workflow has no `production_web` input. The retained v1 plan field is
+false-only; an explicit legacy `PRODUCTION_WEB=true` request fails before
+context validation, configuration reads, journal creation, or GitHub dispatch.
+
+| Requested output | Current entry point | Source and evidence |
+| --- | --- | --- |
+| Nightly or stable customer artifacts | `ElevenID/marty-ui` · `Release pipeline` | Eligible stack source, exact child runs and existing customer publication checks |
+| Standalone marketing website | `ElevenID/website` · `production-website-release.yml` | That repository's exact protected-main source and qualified standalone website receipt |
+| Independent application image | `ElevenID/marty-ui` · `production-web-release.yml`, mode `application` | Required exact application source, portable package/consumer checks, image and sandboxed-browser qualification |
+| Signed web composition | `ElevenID/marty-ui` · `production-web-release.yml`, mode `compose`, or its reviewed composition-manifest push | Authenticated original website/application releases, exact producer runs and attempts, and the compatible backend |
+
+The current Marty workflow rejects `combined` and `website` producer modes
+before either publication job can run. It retains historical receipt validators
+and can compose an original Marty website receipt when explicitly selected;
+the default website producer is `ElevenID/website`.
+
+Composition still requires the accepted historical combined-application receipt
+and its compatibility evidence. A newly published independent application
+receipt does not replace that input automatically. Publication, composition
+selection, and deployment remain separate operations; these workflow changes
+do not change the accepted composition or assert a live switchover. See
+[independent website releases](independent-website-release.md) and
+[UI release audiences](ui-release-audiences.md).
+
 ## Source checks precede expensive work
 
 `Release Source Preflight` validates the stack lock, independent product package
@@ -78,24 +107,32 @@ Changing the job roster requires updating the plan's explicit mapping and tests.
 
 | Change | Required work |
 | --- | --- |
-| Exact marketing modules in `contracts/website-source-ownership.json`, website entry or dedicated website directory | Source checks and `Website Surface` |
-| Shared UI, routing, public assets, dependencies or build configuration | Existing UI/security checks and `Website Surface` |
+| Application/shared UI, routing, public assets, dependencies or build configuration | Existing UI/security checks and `Website Surface` |
+| Previously marketing-only paths or restored retired crawler sources | Ordinary source-owner checks; no marketing-only shortcut |
 | Verified Rust test-only leaves in a pull request | Existing exact owned Rust matrix and associated checks |
-| Other merge-group changes, unknown owners, workflow/policy inputs | Full existing qualification |
+| Every merge group | Full existing qualification |
+| Unknown owners or workflow/policy inputs | Full existing qualification |
 | Scheduled or manually dispatched CI | Full existing qualification |
 
-The website exception works for both pull requests and merge groups. It only
-accepts a nonempty diff of regular owned files. Moves, deletions, symlinks, mixed
-changes, roster edits and guard edits retain broader checks. The website job tests
-navigation, builds crawlable website output, and builds both application and
-customer outputs with emitted-module guards. Those guards must continue to reject
-every marketing roster member from the other surfaces.
+The marketing-only exception is retired. The v1 plan retains `website_only` as
+a false-only field, and an old ownership roster or restored marketing module
+cannot authorize the old skip. Both crawler jobs have been removed from the
+workflow and the closed aggregate roster, which now contains 18 jobs. Evidence
+containing either retired job is rejected.
+
+The `test-website` job retains the `Website Surface` check name for required-check
+continuity. Its current purpose is application/customer qualification: fresh
+locked installs, reduced dependency profiles, portable source export and consumer
+restoration, runtime/browser checks, current surface contracts, default and
+explicit application builds, customer builds, and the pinned Nginx route suite.
+Marketing build, prerender and crawler qualification belongs to `ElevenID/website`.
+Current Marty output guards continue to reject marketing modules.
 
 Both required CodeQL checks use the complete exact Git diff, including both
 rename endpoints. They do not rely on a truncated pull-request file listing.
-Website-only merge groups complete the named checks without unrelated analysis;
-other merge groups and scheduled/manual runs retain full analysis. Existing Rust
-test-only production-scope proofs remain limited to pull requests.
+They reject retired website-only scope records. Every merge group and every
+scheduled/manual run retains full analysis. Existing Rust test-only
+production-scope proofs remain limited to pull requests.
 
 ## The offline compiler gets its own usable cache
 
@@ -144,13 +181,28 @@ Run the focused policy suites with the repository Python requirements installed:
 ```sh
 python -m pytest -q tests/test_affected_components.py tests/test_bookworm_compiler_cache.py \
   tests/test_release_preflight.py tests/test_nightly_native_artifact.py \
-  tests/test_ci_workflow_performance.py
+  tests/test_ci_workflow_performance.py tests/test_release_pipeline.py \
+  tests/test_release_pipeline_visibility.py tests/test_application_release_workflow.py
 cargo +1.95.0 test --locked --manifest-path rust/Cargo.toml \
   -p marty-deployment-catalog --lib installer_acme::tests::polling_tests
 ```
 
-The website build and crawler commands live in the `Website Surface` job and can
-also be run locally after the verified released UI dependencies are installed.
+Use Node 24 and the pinned Bun 1.4.4 toolchain for the application/customer
+commands. After the verified released UI dependencies are installed, the
+current boundary commands can also run locally from `ui/`:
+
+```sh
+bun run test:application
+node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs
+bun run build
+bun run build:application
+bun run build:selfhost
+python3 scripts/test_nginx_application_routes.py
+```
+
+The ordinary build writes `ui/dist`; explicit application and customer builds
+write `ui/dist-application` and `ui/dist-selfhost`. Run standalone website build,
+prerender and crawler checks in `ElevenID/website` using that repository's workflow.
 Docker-dependent qualification remains necessary for actual compiler-container
 and Nginx execution; source-policy tests do not stand in for those runs.
 

@@ -3,7 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { http, HttpResponse } from 'msw';
 import { act, render, screen, waitFor } from '@test/utils';
 import { server } from '@test/mocks/server';
-import i18n from '@test/i18nTestSetup';
+import i18n from '@test/i18nApplicationTestSetup';
 import consoleFr from '../../../../../public/locales/fr/console.json';
 import consoleDe from '../../../../../public/locales/de/console.json';
 import * as claimsProjection from '../projectTemplatePolicyClaims';

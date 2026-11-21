@@ -2,7 +2,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const repositoryRoot = path.resolve(import.meta.dirname, '../..');
-function validateWebsiteSourceOwnershipSchema(value) {
+export function validateWebsiteSourceOwnershipSchema(value) {
   if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'modules,schema_version'
     || value.schema_version !== 1 || !Array.isArray(value.modules) || !value.modules.length
     || new Set(value.modules).size !== value.modules.length) throw new Error('Invalid website source ownership');
@@ -22,9 +22,22 @@ export function validateWebsiteSourceOwnership(value, root = repositoryRoot) {
   return value;
 }
 
-// The application classifier needs the roster even when those forbidden
-// sources are absent. Builds that retain website source audit its files when
-// constructing their bundle contract plugin.
+export function assertWebsiteSourceRemoved(value = WEBSITE_SOURCE_OWNERSHIP, root = repositoryRoot) {
+  validateWebsiteSourceOwnershipSchema(value);
+  for (const entry of value.modules) {
+    try {
+      lstatSync(path.join(root, entry));
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    throw new Error(`Retired website source must remain absent: ${entry}`);
+  }
+  return value;
+}
+
+// The retained ownership roster rejects accidental marketing imports even
+// after those source files move to the independent website repository.
 export const WEBSITE_SOURCE_OWNERSHIP = validateWebsiteSourceOwnershipSchema(JSON.parse(readFileSync(
   path.join(repositoryRoot, 'contracts/website-source-ownership.json'), 'utf8',
 )));

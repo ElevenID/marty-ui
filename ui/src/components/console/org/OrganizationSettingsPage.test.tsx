@@ -2,7 +2,7 @@ import { act, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 import OrganizationSettingsPage from './OrganizationSettingsPage';
-import i18n from '@test/i18nTestSetup';
+import i18n from '@test/i18nApplicationTestSetup';
 
 const { load, save, useConsole, can } = vi.hoisted(() => ({
   load: vi.fn(), save: vi.fn(), useConsole: vi.fn(), can: vi.fn(),

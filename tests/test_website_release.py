@@ -336,3 +336,59 @@ def test_standalone_fixture_matches_javascript_producer_and_canonical_plan_hash(
     assert release == web.standalone_record(plan, metadata=web.image_metadata(plan),
                                             digest=release["image"]["digest"], run_id="1234567890", run_attempt="2")
     assert ui.digest(ui.canonical(plan)) == "sha256:651dc6a6bf9ed66ba7b2a58edfe72a6efd266924fa71f4a82aa514ddd7b8f609"
+
+
+def test_bun_standalone_fixture_matches_javascript_without_replacing_retained_v2_evidence():
+    fixture = web.read(ROOT / "tests/fixtures/standalone-website-release-v3.json")
+    assert fixture["purpose"] == "synthetic-contract-fixture-not-release-evidence"
+    release = fixture["release"]
+    assert web.validate_release(release, source_sha=SOURCE) == release
+    plan = release["build_plan"]
+    assert plan["package_manager"] == "bun@1.4.4"
+    assert plan["dependency_lock"] == "bun.lock"
+    assert {"bun.lock", "package-lock.json"} <= plan["input_sha256"].keys()
+    assert plan == web.standalone_plan(SOURCE, input_sha256=plan["input_sha256"],
+                                       output=plan["output"], route_contract=plan["route_contract"], version=3)
+    assert release == web.standalone_record(plan, metadata=web.image_metadata(plan),
+                                            digest=release["image"]["digest"], run_id="1234567890", run_attempt="2")
+    assert ui.digest(ui.canonical(plan)) == "sha256:9f128218d4c9999664620f59363ee61ee8703c4b50c57c7ce3f4d8c04aef8b72"
+    retained = web.read(ROOT / "tests/fixtures/standalone-website-release-v2.json")["release"]
+    assert web.validate_release(retained) == retained
+
+
+@pytest.mark.parametrize("path,value", [
+    (("package_manager",), "bun@latest"),
+    (("package_manager",), "npm@11"),
+    (("dependency_lock",), "package-lock.json"),
+    (("input_sha256", "bun.lock"), "missing"),
+    (("input_sha256", "package-lock.json"), "missing"),
+])
+def test_bun_standalone_plan_rejects_package_manager_and_lock_substitution(path, value):
+    release = web.read(ROOT / "tests/fixtures/standalone-website-release-v3.json")["release"]
+    target = release["build_plan"]
+    for key in path[:-1]:
+        target = target[key]
+    if value == "missing":
+        del target[path[-1]]
+    else:
+        target[path[-1]] = value
+    release["build_plan_sha256"] = ui.digest(ui.canonical(release["build_plan"]))
+    with pytest.raises(ValueError):
+        web.validate_release(release)
+
+
+@pytest.mark.parametrize("field", ["schema", "image_metadata"])
+def test_bun_standalone_receipt_rejects_mixed_version_envelopes(field):
+    release = web.read(ROOT / "tests/fixtures/standalone-website-release-v3.json")["release"]
+    retained = web.read(ROOT / "tests/fixtures/standalone-website-release-v2.json")["release"]
+    release[field] = retained[field]
+    with pytest.raises(ValueError):
+        web.validate_release(release)
+
+
+def test_retained_v2_receipt_cannot_silently_acquire_bun_fields():
+    release = web.read(ROOT / "tests/fixtures/standalone-website-release-v2.json")["release"]
+    release["build_plan"]["package_manager"] = "bun@1.4.4"
+    release["build_plan_sha256"] = ui.digest(ui.canonical(release["build_plan"]))
+    with pytest.raises(ValueError):
+        web.validate_release(release)

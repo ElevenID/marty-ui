@@ -42,7 +42,7 @@ export default defineConfig({
     // Worker threads avoid repeatedly booting Node and jsdom processes. The four
     // historically heaviest files run over twice as fast with identical tests.
     pool: 'threads',
-    setupFiles: ['./src/test/i18nTestSetup.js', './src/test/setup.ts'],
+    setupFiles: ['./src/test/i18nApplicationTestSetup.js', './src/test/setup.ts'],
     css: true,
     coverage: {
       provider: 'v8',
@@ -71,7 +71,7 @@ export default defineConfig({
     hookTimeout: 30000,
     server: {
       deps: {
-        inline: ['@elevenid/marty-blog', 'use-sync-external-store'],
+        inline: ['use-sync-external-store'],
       },
     },
   },
@@ -83,8 +83,8 @@ export default defineConfig({
       '@hooks': resolve(configDir, './src/hooks'),
       '@contexts': resolve(configDir, './src/contexts'),
       '@config': resolve(configDir, './src/config'),
-      '@ui-public-config': resolve(configDir, './src/variants/publicConfig.public.js'),
-      '@ui-public-routes': resolve(configDir, './src/variants/publicSite.public.jsx'),
+      '@ui-public-config': resolve(configDir, './src/variants/publicConfig.application.js'),
+      '@ui-public-routes': resolve(configDir, './src/variants/publicSite.application.jsx'),
       '@marty/commerce-extension': resolve(configDir, './src/extensions/commerce/publicStub.jsx'),
       '@test': resolve(configDir, './src/test'),
     },

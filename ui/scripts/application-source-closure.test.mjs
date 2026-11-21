@@ -15,7 +15,7 @@ import {
   compareApplicationProfileBaseline,
 } from './application-source-closure.mjs';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_LEGACY_TEST_FILES as APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import {
   APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
   APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RESOURCE_MIME_TYPES,
@@ -177,8 +177,7 @@ function fixture(t, buildOptions = {}) {
   put(root, 'contracts/website-source-ownership.json', JSON.stringify(ownership));
   put(root, 'contracts/web-surface-routes.json', routeBytes);
   put(root, 'contracts/organization-domain-behavior.json', organizationContract);
-  for (const entry of [...ownership.modules, ...RETAINED_SHARED_INPUTS]) put(root, entry, '// retained fixture source\n');
-  for (const entry of ADDITIONAL_OMISSIONS) put(root, entry, '{}\n');
+  for (const entry of RETAINED_SHARED_INPUTS) put(root, entry, '// retained fixture source\n');
   for (const entry of APPLICATION_RETAINED_PUBLIC_FILES) {
     let content = entry.endsWith('.json') ? '{}\n' : `Synthetic resource fixture: ${entry}\n`;
     if (entry === 'locales/en/common.json') content = JSON.stringify({ common: { login: 'Login' }, actions: { cancel: 'Cancel' } });
@@ -266,18 +265,20 @@ test('profile selection requires a fresh install and a separate full-profile bas
     baselineReport: '/tmp/unselected-baseline.json' }), /required only for the application/);
 });
 
-function profileMaterializationFixture(t) {
+function profileMaterializationFixture(t, bun = false) {
   const root = fixture(t);
   const directory = mkdtempSync(path.join(os.tmpdir(), 'marty-profile-materialization-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  for (const name of ['package.json', 'package-lock.json']) {
+  const names = ['package.json', 'package-lock.json', ...(bun ? ['bun.lock'] : [])];
+  for (const name of names) {
     put(root, `ui/profiles/application/${name}`, JSON.stringify({ selected: name }));
     put(directory, `ui/${name}`, readFileSync(path.join(root, `ui/${name}`)));
     put(directory, `ui/profiles/application/${name}`, readFileSync(path.join(root, `ui/profiles/application/${name}`)));
   }
   const plan = planApplicationSourceClosure({ repositoryRoot: root });
   const inputs = new Map(plan.source.files.map((row) => [row.path, row]));
-  plan.dependency_profile = { name: 'application', substitutions: ['package.json', 'package-lock.json'].map((name) => ({
+  plan.dependency_profile = { name: 'application', ...(bun ? { bun_lock_selected: true,
+    package_manager: { name: 'bun', version: '1.4.4', lock_file: 'bun.lock' } } : {}), substitutions: names.map((name) => ({
     path: `ui/${name}`, baseline: inputs.get(`ui/${name}`), selected: inputs.get(`ui/profiles/application/${name}`),
   })) };
   return { root, directory, plan };
@@ -296,6 +297,16 @@ test('profile materialization replaces exactly two export inputs and records bot
   assert.deepEqual(plan.source.files.map((row) => readFileSync(path.join(root, row.path))), before);
 });
 
+
+test('Bun profile materialization replaces the selected Bun lock while preserving its original and profile sources', (t) => {
+  const { root, directory, plan } = profileMaterializationFixture(t, true);
+  const original = readFileSync(path.join(root, 'ui/bun.lock'));
+  const rows = materializeApplicationDependencyProfile(plan, directory);
+  assert.deepEqual(rows.map((row) => row.path), ['ui/package.json', 'ui/package-lock.json', 'ui/bun.lock']);
+  assert.deepEqual(readFileSync(path.join(directory, 'ui/bun.lock')), readFileSync(path.join(root, 'ui/profiles/application/bun.lock')));
+  assert.deepEqual(readFileSync(path.join(root, 'ui/bun.lock')), original);
+});
+
 test('profile materialization refuses changed selected inputs, extra substitutions, and destination links', (t) => {
   const { root, directory, plan } = profileMaterializationFixture(t);
   const selected = plan.dependency_profile.substitutions[0].selected.path;
@@ -304,7 +315,7 @@ test('profile materialization refuses changed selected inputs, extra substitutio
   assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /selected profile input changed/);
   put(root, selected, original);
   plan.dependency_profile.substitutions.push({ path: 'ui/vite.config.ts' });
-  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /two reviewed package inputs/);
+  assert.throws(() => materializeApplicationDependencyProfile(plan, directory), /reviewed package inputs/);
   plan.dependency_profile.substitutions.pop();
   rmSync(path.join(directory, 'ui/package.json'));
   symlinkSync(path.join(root, 'ui/package.json'), path.join(directory, 'ui/package.json'));
@@ -502,7 +513,7 @@ test('real child processes build and test only the disposable export while prese
   }
   for (const entry of report.plan.boundary.omitted) {
     assert.equal(existsSync(path.join(report.export_directory, entry)), false, entry);
-    assert.equal(existsSync(path.join(root, entry)), true, entry);
+    assert.equal(existsSync(path.join(root, entry)), false, entry);
   }
   for (const entry of RETAINED_SHARED_INPUTS) {
     assert.deepEqual(readFileSync(path.join(report.export_directory, entry)), readFileSync(path.join(root, entry)));
@@ -550,7 +561,7 @@ test('build failure removes the disposable tree while preserving all original so
   assert.equal(report.qualification.application_tests_completed, false);
   assert.equal(report.qualification.source_checkout_unchanged, true);
   assert.equal(existsSync(path.dirname(report.export_directory)), false);
-  for (const entry of ownership.modules) assert.equal(existsSync(path.join(root, entry)), true);
+  for (const entry of ownership.modules) assert.equal(existsSync(path.join(root, entry)), false);
 });
 
 test('test failure removes the disposable tree instead of presenting the successful build as a completed rehearsal', (t) => {
@@ -694,14 +705,20 @@ test('parent-directory symlinks cannot import files outside the selected source 
   assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /ordinary directory|regular file/);
 });
 
-test('a missing fixed demo input fails instead of silently shrinking the audited omission set', (t) => {
-  const root = fixture(t);
-  rmSync(path.join(root, OMITTED_DEMO_INPUTS[0]));
-  assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /ENOENT/);
-});
+for (const kind of ['file', 'directory', 'symlink']) {
+  test(`a retired fixed demo input cannot be recreated as a ${kind}`, (t) => {
+    const root = fixture(t);
+    const target = path.join(root, OMITTED_DEMO_INPUTS[0]);
+    mkdirSync(path.dirname(target), { recursive: true });
+    if (kind === 'file') writeFileSync(target, '{}\n');
+    else if (kind === 'directory') mkdirSync(target);
+    else symlinkSync(path.join(root, 'ui/index.html'), target);
+    assert.throws(() => planApplicationSourceClosure({ repositoryRoot: root }), /contains an omitted input/);
+  });
+}
 
 for (const entry of [`ui/${APPLICATION_TEST_FILES[0]}`, 'contracts/organization-domain-behavior.json',
-  'ui/public/locales/nl/vendor.json', APPLICATION_ASSET_OMISSIONS[0]]) {
+  'ui/public/locales/nl/vendor.json']) {
   test(`a missing required test input refuses a narrower test claim: ${entry}`, (t) => {
     const root = fixture(t);
     rmSync(path.join(root, entry));

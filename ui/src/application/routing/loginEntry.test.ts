@@ -11,6 +11,7 @@ describe('loginEntry helpers', () => {
 
   it('resolves the post-login redirect from a next query param', () => {
     expect(getLoginEntryRedirect(null, '/', '?next=%2Fconsole%2Fapplicant%2Fcatalog%3Fcanvas_lti_state%3Dstate-1')).toBe('/console/applicant/catalog?canvas_lti_state=state-1');
+    expect(getLoginEntryRedirect(null, '/', '?next=%2Fconsole&return_to=%2Fapply')).toBe('/console');
   });
 
   it('returns an idle action while auth state is still loading', () => {
@@ -56,6 +57,7 @@ describe('validated login return destinations', () => {
   it('rejects attacker-controlled state, next, and fallback destinations', () => {
     for (const destination of ['https://example.invalid/', '//example.invalid/pricing', 'javascript:/pricing/?alert(1):alert(1)', 'data:text/html,hello', '/\\evil.example/', ' /pricing', '/pricing\n']) {
       expect(getLoginEntryRedirect(null, '/console', '?next=' + encodeURIComponent(destination))).toBe('/console');
+      expect(getLoginEntryRedirect(null, '/console', '?return_to=' + encodeURIComponent(destination))).toBe('/console');
       expect(getLoginEntryRedirect({ from: { pathname: destination } }, '/console')).toBe('/console');
       expect(getLoginEntryRedirect(null, destination)).toBe('/');
     }
@@ -65,6 +67,7 @@ describe('validated login return destinations', () => {
       const destination = `/console/${String.fromCharCode(code)}org`;
       expect(getLoginEntryRedirect({ from: { pathname: destination } }, '/console')).toBe('/console');
       expect(getLoginEntryRedirect(null, '/console', '?next=' + encodeURIComponent(destination))).toBe('/console');
+      expect(getLoginEntryRedirect(null, '/console', '?return_to=' + encodeURIComponent(destination))).toBe('/console');
     }
     expect(getLoginEntryRedirect({ from: { pathname: '/console/org', search: '?name=José' } })).toBe('/console/org?name=Jos%C3%A9');
   });

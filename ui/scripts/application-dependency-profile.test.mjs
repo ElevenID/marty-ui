@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   APPLICATION_REMOVED_DEPENDENCY_ROOTS, APPLICATION_PROFILE_SCRIPTS,
-  validateApplicationDependencyProfile,
+  validateApplicationDependencyProfile, parseApplicationBunLock, applicationPackageManager, APPLICATION_BUN_PACKAGE_MANAGER,
 } from './application-dependency-profile.mjs';
 
 function write(root, name, value) {
@@ -170,4 +170,55 @@ test('rejects a symlinked selected manifest', (t) => {
   rmSync(path.join(root, PROFILE_MANIFEST));
   symlinkSync(path.join(root, ROOT_MANIFEST), path.join(root, PROFILE_MANIFEST));
   assert.throws(() => validateApplicationDependencyProfile({ repositoryRoot: root }), /must be a regular file/);
+});
+
+function bunFixture(t) {
+  const root = fixture(t);
+  for (const name of [ROOT_MANIFEST, ROOT_LOCK, PROFILE_MANIFEST, PROFILE_LOCK, 'ui/bun.lock', 'ui/profiles/application/bun.lock']) {
+    writeFileSync(path.join(root, name), readFileSync(new URL(`../../${name}`, import.meta.url)));
+  }
+  return root;
+}
+
+test('committed Bun application profile preserves every reviewed artifact and all three substitutions', (t) => {
+  const result = validateApplicationDependencyProfile({ repositoryRoot: bunFixture(t) });
+  assert.equal(result.schema, 'marty.application-dependency-profile/v2');
+  assert.deepEqual(result.package_manager, APPLICATION_BUN_PACKAGE_MANAGER);
+  assert.equal(result.bun_lock_selected, true);
+  assert.deepEqual(result.substitutions.map((row) => row.path), ['ui/package.json', 'ui/package-lock.json', 'ui/bun.lock']);
+  assert.deepEqual(result.bun_lock_graph, { baseline_packages: 738, application_packages: 614,
+    retained_identity_changes: [], npm_reference_identities_preserved: true });
+});
+
+test('coordinated Bun lock root swaps cannot redirect dependencies while preserving the artifact set', (t) => {
+  const root = bunFixture(t);
+  for (const name of ['ui/bun.lock', 'ui/profiles/application/bun.lock']) {
+    const lock = parseApplicationBunLock(readFileSync(path.join(root, name)));
+    [lock.packages.react, lock.packages['react-dom']] = [lock.packages['react-dom'], lock.packages.react];
+    write(root, name, lock);
+  }
+  assert.throws(() => validateApplicationDependencyProfile({ repositoryRoot: root }), /redirected a dependency name/);
+});
+
+for (const [label, mutate] of [
+  ['version', (lock) => { lock.packages.react[0] = 'react@99.0.0'; }],
+  ['integrity', (lock) => { lock.packages.react[3] = `sha512-${'a'.repeat(86)}==`; }],
+  ['dependency edge', (lock) => { lock.packages['react-dom'][2].dependencies = {}; }],
+  ['lifecycle policy', (lock) => { lock.trustedDependencies.push('unreviewed'); }],
+]) test(`Bun profile rejects ${label} drift before installation`, (t) => {
+  const root = bunFixture(t); const name = 'ui/profiles/application/bun.lock';
+  const lock = parseApplicationBunLock(readFileSync(path.join(root, name))); mutate(lock); write(root, name, lock);
+  assert.throws(() => validateApplicationDependencyProfile({ repositoryRoot: root }));
+});
+
+test('unknown declared package managers fail instead of silently downgrading to npm', () => {
+  for (const packageManager of ['bun@1.4.5', 'pnpm@10', 'npm@11', 'bun', null]) {
+    assert.throws(() => applicationPackageManager({ packageManager }), /Unreviewed.*pin/);
+  }
+  assert.equal(applicationPackageManager({}), 'npm');
+});
+
+test('Bun text parsing preserves string contents and rejects duplicate trust keys', () => {
+  assert.deepEqual(parseApplicationBunLock(Buffer.from('{"text":"literal,}","nested":[1,2,],}')), { text: 'literal,}', nested: [1, 2] });
+  assert.throws(() => parseApplicationBunLock(Buffer.from('{"trustedDependencies":[],"trustedDependencies":["evil"],}')), /Duplicate/);
 });

@@ -44,6 +44,7 @@ const ApplyPage = () => {
       orgId,
       pathname: window.location.pathname,
       search: window.location.search,
+      hash: window.location.hash,
       locationState: location.state,
     });
 
@@ -65,7 +66,7 @@ const ApplyPage = () => {
     }
 
     navigate(decision.destination, decision.navigationState ? { state: decision.navigationState } : undefined);
-  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.pathname, location.state]);
+  }, [authLoading, isAuthenticated, user, credentialType, searchParams, navigate, location.pathname, location.hash, location.state]);
 
   // Show loading state while checking auth or redirecting
   return (

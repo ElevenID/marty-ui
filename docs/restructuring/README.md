@@ -1,8 +1,48 @@
 # Repository restructuring foundation
 
-Status: standalone website publication and signed cross-owner composition are
-qualified. Application source, test, asset and dependency separation is in progress. Production
-cutover remains a separate gate.
+Status: the standalone website owns marketing builds and publication. The
+current removal change switches `marty-ui` to application/customer builds and
+removes the first audited marketing source batch. Independent application
+publication and actual host adoption remain separately qualified operations.
+
+## Current development priorities
+
+The November 20 regression audit and free AWS qualification set this order.
+Use the [source-removal checkpoint](website-source-removal.md) for the current
+implementation, exact source bindings and verification limits.
+
+1. **Finish the repaired split under real browser/container checks.** Bun 1.4.4
+   is restored in the standalone website and portable application. Preserve
+   frozen installs, actual dependency identities, lifecycle patches, SDK/WASM,
+   archive restoration and original npm evidence. Qualify the exact repair
+   sources on the existing AWS Free plan host and run normal required public
+   CI with paid Actions spending blocked by the organization zero-dollar budget.
+2. **Switch current producers and remove the audited source.** Marketing builds
+   and publication use `ElevenID/website`. Current application/customer defaults
+   preserve `dist`, `dist-application` and `dist-selfhost`; the old combined and
+   website targets fail clearly. The private legacy source policy is adopted in
+   [PR #112](https://github.com/ElevenID/marty-subscriptions/pull/112). Remove the
+   72 audited original UI paths, obsolete marketing tests and producer/crawler
+   jobs together, retaining reintroduction guards and required-check identities.
+   Preserve operator demo metadata and historical source-package compatibility.
+3. **Publish and adopt the independent application.** Carry the selected Bun
+   identity through original publication, intake and backend qualification.
+   Authenticate the actual signed publication and select a backend supporting
+   the application's current endpoints before composition adoption. The accepted
+   historical composition keeps its original pins until that gate passes.
+4. **Qualify the selected public deployment and complete ownership closure.**
+   The user has requested switchover after testing. Identify the actual public
+   deployment owner, then exercise OIDC, promotion, rollback and recovery before
+   changing its routes. The existing AWS customer installer stack is a test host,
+   not the public marketing target. Complete remaining dependency/ownership work
+   before repository renaming.
+
+Source removal and host activation have different gates. Fresh installation,
+restored-source parity, runtime/container checks and the build/release consumer
+switch justify bounded removal. Actual host and authenticated journey evidence
+must still describe the selected deployment; it cannot be inferred from source
+or package tests. Do not delete the portable package's entire omission list:
+only the audited 72-path union is the first source-removal roster.
 
 ## Current continuation checkpoint
 
@@ -16,7 +56,7 @@ Latest recorded evidence, November 20, 2026 (America/Denver):
 | Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002) merged normally as `780b531a22a89ed75442e71ed51ce4cb727c08ec`. Clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses. Both [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) and [merge-queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44647472085) completed with 27 successful jobs and one intended skip; all queue output bytes match the accepted PR rehearsal | Preserve the merged boundary and its exact diagnostic evidence while extending independent application qualification |
 | Independent application packages and browser startup | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) merged normally as `d1cf7bf93460344eaf78bbf5496eb949835138f6`. Its accepted source `83a59f65902a6691f46d2051773313f7e2b5ff3b` passed [CI `44657507012/1`](https://github.com/ElevenID/marty-ui/actions/runs/44657507012): 27 successful jobs and one intended skip. Both fresh profiles passed 296 tests across 24 files and emitted identical 88-file output. Hosted nginx/browser execution observed the SDK WASM, public/console rendering, unavailable-session Retry and aborted-WASM recovery; owned cleanup passed | Preserve the accepted package/runtime boundary while qualifying independent publication; actual authentication/OIDC and host acceptance remain separate |
 | Portable application source package | [PR #2007](https://github.com/ElevenID/marty-ui/pull/2007) merged normally as `6fd59c730a28e413cec3855037ad600f8e2dabf3`. Its source `316afe12b21ee8ece006406ab510917f2c470574` passed [CI `44677296614/1`](https://github.com/ElevenID/marty-ui/actions/runs/44677296614); all six original artifacts were independently verified against the exact integration tree `18f67468ade76f527136fcc906a7d8c2af4deeb3`. The 575-file source package plus manifest restores outside Git; all three installations pass 296 tests and produce identical 88-file output and a normalized 92-file runtime payload. Real restored-package container/browser gates and cleanup passed | Preserve the merged source boundary, archive and original hosted evidence while qualifying independent application publication |
-| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | Qualify the integration with current main through required CI and normal merge, then inspect the first actual protected-main publication. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
+| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | PR #2010 merged as `f81bf70f867569db97f73b06dbaef7813e89118b`. Inspect the first actual protected-main publication after the current toolchain repair is qualified. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test
@@ -38,8 +78,9 @@ host/OIDC qualification.
 
 The [dependency and runtime boundary](application-dependency-boundary.md) retains
 the current full-lock baseline and immutable release selections. The explicit
-application profile is a separate selection; the root manifest, both root locks
-and default website/combined build behavior remain the baseline. Both fresh
+application profile is a separate selection; the root dependency manifest and both root locks
+remain the comparison baseline. Current default builds select the application;
+the website/combined build adapters are retired. Both fresh
 installations run before CI bootstrap changes the root package manifest, and both
 container checks exercise the unchanged production nginx/startup files. Removing
 the four audited roots is a bounded dependency reduction. The [portable source-package milestone](application-source-package.md) carries this

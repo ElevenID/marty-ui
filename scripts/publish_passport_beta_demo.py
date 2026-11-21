@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ import subprocess
 from pathlib import Path
 
 if __package__:
+    from .operator_demo_catalog import git_blob
+    from .validate_demo_manifests import STACK_VERSION, validate_index, validate_manifest
     from .collect_passport_beta_acceptance import EvidenceError, verify_attestations
     from .collect_passport_beta_aggregate_acceptance import collect_aggregate
     from .probe_passport_beta_host import (
@@ -26,6 +29,8 @@ if __package__:
         require_beta_deploy_config,
     )
 else:
+    from operator_demo_catalog import git_blob
+    from validate_demo_manifests import STACK_VERSION, validate_index, validate_manifest
     from collect_passport_beta_acceptance import EvidenceError, verify_attestations
     from collect_passport_beta_aggregate_acceptance import collect_aggregate
     from probe_passport_beta_host import (
@@ -51,7 +56,77 @@ REVIEWED_UI_FILES = (
     "scripts/deploy-passport-demo-content-beta.ps1",
     "scripts/deploy-demo-content.ps1",
     "tests/scripts/smoke-beta-demo-publication.js",
+    "scripts/operator_demo_catalog.py",
+    "scripts/validate_demo_manifests.py",
+    "scripts/demo_asset_hashes.py",
+    "deploy-config/catalog/demo-portfolio-v3.json",
+    "contracts/demo-portfolio-2026-08-reference.json",
+    "deploy-config/schemas/stack-demo-manifest.schema.json",
 )
+LEGACY_DEMO_SOURCE_FILES = (
+    "docker/ui.Dockerfile",
+    "ui/vite.config.ts",
+    "ui/src/variants/publicSite.public.jsx",
+    "ui/src/variants/marketingRoutes.jsx",
+    "ui/src/components/pages/DemoPages.jsx",
+    "ui/public/demos/manifests/index.json",
+)
+LEGACY_PUBLICATION_REQUIRED = (
+    "This beta demo publisher requires the signed legacy combined UI and its public demo catalog. "
+    "The selected source does not support that publication layout; use a reviewed "
+    "website-owned publication flow in ElevenID/website for split releases."
+)
+
+
+def _legacy_source_blob(repo_root: Path, source: str, filename: str) -> bytes:
+    entry = subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(repo_root), "ls-tree", "--full-tree",
+         "-z", source, "--", filename],
+        check=True, capture_output=True, timeout=30,
+    ).stdout
+    require(
+        re.fullmatch(rb"100644 blob [a-f0-9]{40}\t" + re.escape(filename.encode()) + rb"\0", entry),
+        LEGACY_PUBLICATION_REQUIRED,
+    )
+    return git_blob(repo_root, source, filename)
+
+
+def require_legacy_demo_layout(repo_root: Path, source: str) -> None:
+    """Admit the historical publisher only after exact signed-source verification."""
+    require(isinstance(source, str) and SHA.fullmatch(source) is not None,
+            "Signed legacy publication source is invalid")
+    try:
+        files = {name: _legacy_source_blob(repo_root, source, name)
+                 for name in LEGACY_DEMO_SOURCE_FILES}
+        dockerfile = files["docker/ui.Dockerfile"].decode()
+        stages = list(re.finditer(r"^FROM\s+\S+\s+AS\s+(\S+)\s*$", dockerfile,
+                                  re.MULTILINE | re.IGNORECASE))
+        require(stages and stages[-1].group(1).lower() == "public", LEGACY_PUBLICATION_REQUIRED)
+        public_stage = dockerfile[stages[-1].end():]
+        require(re.search(r"^ARG\s+UI_SURFACE\s*=\s*['\"]?combined['\"]?\s*$",
+                          public_stage, re.MULTILINE)
+                and re.search(r"io\.elevenid\.ui\.surface\s*=\s*['\"]?combined(?:['\"]|\s|$)", public_stage),
+                LEGACY_PUBLICATION_REQUIRED)
+        require(re.search(r"MARTY_UI_SURFACE\s*\|\|\s*(['\"])combined\1",
+                          files["ui/vite.config.ts"].decode()), LEGACY_PUBLICATION_REQUIRED)
+        require(all(files[name].strip() for name in LEGACY_DEMO_SOURCE_FILES[2:5]),
+                LEGACY_PUBLICATION_REQUIRED)
+        index = json.loads(files["ui/public/demos/manifests/index.json"])
+        releases = index.get("releases") if isinstance(index, dict) else None
+        require(isinstance(releases, list) and 0 < len(releases) <= 100, LEGACY_PUBLICATION_REQUIRED)
+        manifests = {}
+        for release in releases:
+            version = release.get("stack_version") if isinstance(release, dict) else None
+            require(isinstance(version, str) and STACK_VERSION.fullmatch(version), LEGACY_PUBLICATION_REQUIRED)
+            manifest = json.loads(_legacy_source_blob(
+                repo_root, source, "ui/public/demos/manifests/" + version + ".json"))
+            validate_manifest(manifest)
+            manifests[version] = manifest
+        validate_index(index, manifests)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PublicationEvidenceError("Unable to verify the signed legacy publication source") from exc
+    except (ValueError, TypeError, KeyError) as exc:
+        raise PublicationEvidenceError(LEGACY_PUBLICATION_REQUIRED) from exc
 
 
 def publication_environment(recorder_root: Path) -> dict[str, str]:
@@ -116,7 +191,7 @@ def require_browser(recorder_root: Path, repo_root: Path) -> None:
         ) from exc
 
 
-def require_signed_ui_source(artifact_dir: Path, repo_root: Path) -> None:
+def require_signed_ui_source(artifact_dir: Path, repo_root: Path) -> str:
     api_key = os.environ.get("PASSPORT_ACCEPTANCE_API_KEY", "")
     require(artifact_dir.is_absolute() and artifact_dir.is_dir()
             and len(api_key) >= 32,
@@ -139,6 +214,7 @@ def require_signed_ui_source(artifact_dir: Path, repo_root: Path) -> None:
         raise PublicationEvidenceError("Signed UI checkout is unavailable") from exc
     require(head == source and content.returncode == 0,
             "Publisher or beta deployment code differs from the signed UI source")
+    return source
 
 
 def publish(artifact_dir: Path, config: Path, video: Path, recorder_root: Path,
@@ -153,7 +229,8 @@ def publish(artifact_dir: Path, config: Path, video: Path, recorder_root: Path,
             and SHA.fullmatch(recorder_commit) is not None,
             "Reviewed D-12 publication inputs are unavailable")
     require_beta_deploy_config(config)
-    require_signed_ui_source(artifact_dir, repo_root)
+    source = require_signed_ui_source(artifact_dir, repo_root)
+    require_legacy_demo_layout(repo_root, source)
     require(shutil.which("powershell.exe") is not None
             and shutil.which("node") is not None
             and (recorder_root / "node_modules" / "@playwright" / "test").is_dir(),

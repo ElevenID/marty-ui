@@ -25,15 +25,16 @@ function serializeApplyLocationState(locationState) {
  *   orgId?: string | null,
  *   pathname?: string,
  *   search?: string,
+ *   hash?: string,
  *   now?: number,
  * }} params
  */
-export function buildApplyEntryContext({ credentialType = null, orgId = null, pathname = '', search = '', now = Date.now() }) {
+export function buildApplyEntryContext({ credentialType = null, orgId = null, pathname = '', search = '', hash = '', now = Date.now() }) {
   return {
     credentialType: credentialType || null,
     orgId: orgId || null,
     timestamp: now,
-    returnUrl: `${pathname}${search}`,
+    returnUrl: `${pathname}${search}${hash}`,
   };
 }
 
@@ -57,6 +58,7 @@ export function getApplyLoginRedirectUrl(returnUrl) {
  *   orgId?: string | null,
  *   pathname?: string,
  *   search?: string,
+ *   hash?: string,
  *   locationState?: any,
  *   now?: number,
  * }} params
@@ -68,6 +70,7 @@ export function getApplyEntryDecision({
   orgId = null,
   pathname = '',
   search = '',
+  hash = '',
   locationState = null,
   now = Date.now(),
 }) {
@@ -76,6 +79,7 @@ export function getApplyEntryDecision({
     orgId,
     pathname,
     search,
+    hash,
     now,
   });
   const serializedLocationState = serializeApplyLocationState(locationState);

@@ -14,8 +14,8 @@ authentication, host deployment or compatibility with the accepted composition.
 | Ref | Protected `refs/heads/main`, with an exact required source SHA |
 | Image | `ghcr.io/elevenid/marty-ui-oss/application` |
 | Platform | `linux/amd64` |
-| Plan | `marty.application-build-plan/v1` |
-| Release receipt | `marty.application-release/v1` |
+| Plan | `marty.application-build-plan/v2` for Bun; original npm v1 remains verifiable |
+| Release receipt | `marty.application-release/v2` for Bun; original npm v1 remains verifiable |
 | Artifact | `application-release-RUN-ATTEMPT` |
 
 The current repository remains the original source and signing authority.
@@ -32,11 +32,20 @@ Their existing validators continue to require the selected tests, locked
 dependency identities, actual SDK/WASM, preserved source and completed cleanup.
 
 The build plan binds the source commit/tree, archive and manifest, profile and
-consumer reports, selected npm lock, route contract, SDK/WASM and complete
+consumer reports, pinned Bun package manager and selected Bun lock, route
+contract, SDK/WASM and complete
 application output inventory. It also binds the original runtime-context
 manifest and the production Dockerfile's actual bytes. The producer reuses the
 existing Node validators through a fixed reviewed bridge; downloaded evidence
 cannot select code for the verifier to execute.
+
+The v2 package plan requires Bun 1.4.4 and a frozen installation. The retained
+npm lock remains a separately bound dependency reference and audit input.
+Manifest, source rehearsal and consumer evidence must all select the same
+manager and lock. Original npm v1 plans, receipts and package evidence keep
+their closed validation path; a schema rename cannot promote npm evidence into
+Bun qualification. The publisher installs the same pinned Bun version before
+source qualification and uses it for the committed browser-tooling install.
 
 `docker/application.Dockerfile` accepts the consumer's existing closed runtime
 context. It copies the 88 application outputs, nginx configuration and the two
@@ -99,6 +108,54 @@ application receipt. Its `web-application-RUN-ATTEMPT` artifact, backend relatio
 and composition intake remain unchanged. The current composition schema
 explicitly rejects the new package image even though its original producer is
 recognized for independent application publication.
+
+### Intake an original published artifact
+
+Use the separate intake entry to select one completed original run, attempt and
+source. The destination must not already exist; its parent directory must exist.
+
+```sh
+python3 scripts/application_release_intake.py \
+  --run-id EXACT_ORIGINAL_RUN --run-attempt EXACT_ORIGINAL_ATTEMPT \
+  --source-sha EXACT_ORIGINAL_SOURCE_SHA \
+  --assets /absolute/private/new-application-release \
+  --gh /absolute/pinned/gh --cosign /absolute/pinned/cosign
+```
+
+The fixed public producer is `ElevenID/marty-ui`. Only its successful
+protected-main `workflow_dispatch` attempt and
+`application-release-RUN-ATTEMPT` artifact are eligible. CI candidates, failed
+publication diagnostics and the legacy `web-application` artifact cannot replace
+that selection. `GH_TOKEN` is the default Actions read credential;
+`--github-token-env GITHUB_TOKEN` explicitly selects the other supported variable.
+Only the selected token reaches the fixed GitHub Actions GETs. Public image and
+receipt verification use the existing independent verifier without private
+registry credentials.
+
+Intake checks the original Actions archive's byte length and SHA-256, a closed
+14-file roster, per-file and total expansion bounds, ordinary file modes and
+consistent ZIP records and CRCs. All files remain inert, including the nested
+source archive. The retained build plan must equal the signed receipt's plan;
+the full source report must match the hash in the signed profile report.
+Original npm v1 receipts select full/profile v4/v5 evidence; Bun v2 receipts
+select v6/v7. Intake binds the full and profile reports to the same original
+source inventory and verifies the observed Bun version and frozen install.
+The full baseline lock is checked against its own `ui/bun.lock` source record;
+it is distinct from the selected application lock in the release plan.
+The existing application verifier authenticates the receipt, all bound evidence,
+and immutable image against the exact original producer. Intake compares every
+staged original again before publishing the destination with Linux
+`renameat2(RENAME_NOREPLACE)`. A destination created concurrently cannot be
+replaced, including an empty directory. Unsupported kernels or filesystems fail
+closed; there is no weaker rename fallback. Failures remove the owned staging
+directory and do not publish a partial result. This intake is qualified on
+Linux; it does not establish Windows support.
+
+This entry preserves all original producer files. It does not change the legacy
+application intake or composition contract and does not qualify backend/API
+compatibility, OIDC, host promotion or rollback. Its first real acceptance still
+requires the actual 14-file signed publication artifact; local inert fixtures
+and CI candidate archives cannot establish that acceptance.
 
 ## CI and acceptance
 
