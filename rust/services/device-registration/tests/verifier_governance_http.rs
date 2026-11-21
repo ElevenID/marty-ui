@@ -244,19 +244,25 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
     assert_eq!(verified.text().await.unwrap(), nonce);
     let trust = Arc::new(WalletVerifierTrustClient::new(&origin, &token, Some(&ca)).unwrap());
     let issuer_trust = Arc::new(WalletIssuerTrustClient::new(&origin, &token, Some(&ca)).unwrap());
-    let issuer_only = "issuer_only";
-    for (issuer, case) in [false, true]
-        .into_iter()
-        .flat_map(|issuer| CASES.iter().map(move |case| (issuer, case)))
-        .chain(std::iter::once((true, &issuer_only)))
-    {
-        let controlled_case = if issuer {
-            format!("issuer_{case}")
+    let cases = CASES
+        .iter()
+        .flat_map(|&case| [("managed", case), ("issuer", case)])
+        .chain([
+            ("issuer", "issuer_only"),
+            ("registered", "unchanged"),
+            ("registered", "bearer_rotated"),
+            ("registered", "membership_revoked"),
+        ]);
+    for (profile, case) in cases {
+        let issuer = profile == "issuer";
+        let registered = profile == "registered";
+        let controlled_case = if profile == "managed" {
+            case.to_owned()
         } else {
-            (*case).to_owned()
+            format!("{profile}_{case}")
         };
         let (device, credential, pairing) = seed(&pool).await;
-        if *case == "issuer_only" {
+        if case == "issuer_only" {
             sqlx::query("UPDATE device_registration_service.device_pairing_confirmations SET verifier_trust_profile_id=NULL WHERE pairing_id=$1")
                 .bind(&pairing).execute(&pool).await.unwrap();
         }
@@ -295,10 +301,17 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
         let mut query =
             reqwest::Url::parse("https://device.fixture/v1/devices/wallet-verifier-authority")
                 .unwrap();
-        query
-            .query_pairs_mut()
-            .append_pair("client_id", CLIENT)
-            .append_pair("request_uri", LOCATOR);
+        if registered {
+            query
+                .query_pairs_mut()
+                .append_pair("client_id", "registered-client")
+                .append_pair("device_scope", "true");
+        } else {
+            query
+                .query_pairs_mut()
+                .append_pair("client_id", CLIENT)
+                .append_pair("request_uri", LOCATOR);
+        }
         let request_uri = if issuer {
             "/v1/devices/wallet-issuer-keys".to_owned()
         } else {
@@ -362,7 +375,7 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(!text.contains(&credential.bearer) && !text.contains("cred-presenter-"));
-        if *case == "unchanged" || *case == "issuer_only" {
+        if case == "unchanged" || case == "issuer_only" {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(no_store.unwrap(), "no-store");
             assert_eq!(
@@ -375,7 +388,7 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
             );
             assert_eq!(body["scope"], serde_json::to_value(&expected).unwrap());
             if issuer {
-                if *case == "issuer_only" {
+                if case == "issuer_only" {
                     assert!(body["scope"]["verifier_trust_profile_id"].is_null());
                 }
                 assert_eq!(
@@ -386,6 +399,16 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
                     body["issuer"]["trust_profile_id"],
                     expected.issuer_trust_profile_id
                 );
+            } else if registered {
+                assert_eq!(
+                    body["verifier"]["contract"],
+                    "marty.wallet/verifier-authority/v1"
+                );
+                assert_eq!(
+                    body["verifier"]["authority"]["registration"]["client_id"],
+                    "registered-client"
+                );
+                assert!(body["verifier"].get("request").is_none());
             } else {
                 assert_eq!(body["verifier"]["request"]["request_uri"], LOCATOR);
             }
