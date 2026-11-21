@@ -861,6 +861,7 @@ when {{
             status: "ACTIVE".into(),
             revision: 7,
             policy_digest: format!("sha256:{}", "f".repeat(64)),
+            source_evidence_ref: "urn:application-test:synthetic-machine-policy-source".into(),
             observed_at: now,
             valid_until: now + Duration::seconds(12),
             entity_types: types,

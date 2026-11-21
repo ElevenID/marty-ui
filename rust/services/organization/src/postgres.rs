@@ -1027,7 +1027,7 @@ impl PostgresOrganizationStore {
     ) -> Result<Option<PolicySet>, RepositoryError> {
         let row = sqlx::query(
             "SELECT * FROM organization_service.policy_sets
-             WHERE organization_id=$1 AND id=$2 FOR UPDATE",
+             WHERE organization_id=$1 AND id=$2 AND policy_type<>'MACHINE_AUTHORIZATION' FOR UPDATE",
         )
         .bind(organization_id)
         .bind(policy_set_id)
@@ -1043,7 +1043,7 @@ impl PostgresOrganizationStore {
     ) -> Result<Vec<PolicySet>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT * FROM organization_service.policy_sets
-             WHERE organization_id=$1 ORDER BY created_at DESC,id FOR UPDATE",
+             WHERE organization_id=$1 AND policy_type<>'MACHINE_AUTHORIZATION' ORDER BY created_at DESC,id FOR UPDATE",
         )
         .bind(organization_id)
         .fetch_all(&mut **transaction)
@@ -1058,7 +1058,7 @@ impl PostgresOrganizationStore {
         policy_set_id: Uuid,
     ) -> Result<bool, RepositoryError> {
         let result = sqlx::query(
-            "DELETE FROM organization_service.policy_sets WHERE organization_id=$1 AND id=$2",
+            "DELETE FROM organization_service.policy_sets WHERE organization_id=$1 AND id=$2 AND policy_type<>'MACHINE_AUTHORIZATION'",
         )
         .bind(organization_id)
         .bind(policy_set_id)
@@ -1074,7 +1074,7 @@ impl PostgresOrganizationStore {
     ) -> Result<Option<PolicySet>, RepositoryError> {
         let row = sqlx::query(
             "SELECT * FROM organization_service.policy_sets
-             WHERE organization_id=$1 AND id=$2",
+             WHERE organization_id=$1 AND id=$2 AND policy_type<>'MACHINE_AUTHORIZATION'",
         )
         .bind(organization_id)
         .bind(policy_set_id)
@@ -1090,7 +1090,7 @@ impl PostgresOrganizationStore {
     ) -> Result<Vec<PolicySet>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT * FROM organization_service.policy_sets
-             WHERE organization_id=$1 AND ($2::text IS NULL OR status=$2)
+             WHERE organization_id=$1 AND policy_type<>'MACHINE_AUTHORIZATION' AND ($2::text IS NULL OR status=$2)
              ORDER BY created_at DESC,id",
         )
         .bind(organization_id)
@@ -1106,7 +1106,7 @@ impl PostgresOrganizationStore {
         policy_set_id: Uuid,
     ) -> Result<bool, RepositoryError> {
         let result = sqlx::query(
-            "DELETE FROM organization_service.policy_sets WHERE organization_id=$1 AND id=$2",
+            "DELETE FROM organization_service.policy_sets WHERE organization_id=$1 AND id=$2 AND policy_type<>'MACHINE_AUTHORIZATION'",
         )
         .bind(organization_id)
         .bind(policy_set_id)
@@ -1188,7 +1188,13 @@ async fn save_policy_set_on(
     connection: &mut PgConnection,
     policy_set: &PolicySet,
 ) -> Result<(), RepositoryError> {
-    sqlx::query(
+    if policy_set.policy_type == PolicySetType::MachineAuthorization {
+        return Err(invalid(
+            "policy_sets.policy_type",
+            "dedicated machine policy owner required".into(),
+        ));
+    }
+    let result = sqlx::query(
         "INSERT INTO organization_service.policy_sets (
             id,organization_id,name,description,policy_type,status,cedar_policies,
             cedar_schema_version,created_by,created_at,updated_at
@@ -1198,7 +1204,8 @@ async fn save_policy_set_on(
             policy_type=EXCLUDED.policy_type,status=EXCLUDED.status,
             cedar_policies=EXCLUDED.cedar_policies,
             cedar_schema_version=EXCLUDED.cedar_schema_version,
-            updated_at=EXCLUDED.updated_at",
+            updated_at=EXCLUDED.updated_at
+         WHERE organization_service.policy_sets.policy_type<>'MACHINE_AUTHORIZATION'",
     )
     .bind(policy_set.id)
     .bind(policy_set.organization_id)
@@ -1213,6 +1220,12 @@ async fn save_policy_set_on(
     .bind(policy_set.updated_at)
     .execute(connection)
     .await?;
+    if result.rows_affected() != 1 {
+        return Err(invalid(
+            "policy_sets.policy_type",
+            "dedicated machine policy owner required".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -1911,6 +1924,7 @@ fn parse_policy_set_type(value: String) -> Result<PolicySetType, RepositoryError
         "ACCESS_CONTROL" => Ok(PolicySetType::AccessControl),
         "CREDENTIAL_VERIFICATION" => Ok(PolicySetType::CredentialVerification),
         "APPROVAL_RULES" => Ok(PolicySetType::ApprovalRules),
+        "MACHINE_AUTHORIZATION" => Ok(PolicySetType::MachineAuthorization),
         "CUSTOM" => Ok(PolicySetType::Custom),
         _ => Err(invalid("policy_sets.policy_type", value)),
     }

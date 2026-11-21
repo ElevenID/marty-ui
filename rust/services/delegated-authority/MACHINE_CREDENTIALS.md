@@ -3,8 +3,11 @@
 `MartyNestedJwtVcMachineCredentialVerifier` supplies actual issuer and holder
 cryptography to the `MachineCredentialVerifier` port in
 [`MartyMachineOid4vpProofVerifier`](MACHINE_AUTH.md). It uses the accepted pinned
-Core implementation; it does not install a production credential authority or
-full-machine registry.
+Core implementation. The separate
+[`marty-machine-credential-source`](../../crates/machine-credential-source/README.md)
+crate now supplies an explicit concrete composition of the actual Trust Profile
+and Issuance PostgreSQL owners with retained source evidence. Neither library
+installs a production credential authority or full-machine host.
 
 ## Implemented selection
 
@@ -100,13 +103,17 @@ it is not the authoritative current full-machine/MAP registry required by this
 path. This change neither promotes those registrations nor adds an invented
 full-machine source endpoint.
 
-The existing authenticated Trust Profile/Issuance credential-owner channels
-are explicitly scoped to the managed SD-JWT selection. They are not silently
-reused as JWT-VC authority/status owners. A live deployment of this nested JWT
-VC adapter still requires an owned, authenticated, current and retained
-authority/status contract for this exact selection, including exact compact
-credential digest binding and issuer authorization by type. A local source
-fixture or an HTTP 200 response does not establish that qualification.
+The existing authenticated managed SD-JWT channels retain their existing scope.
+The concrete nested-profile source uses separately named internal owner APIs,
+explicit nested-type grants and a separate Trust Profile revision namespace.
+Its Issuance owner binds the exact compact artifact to the original committed
+issuance transaction and current lifecycle; its source commits exact private
+evidence before returning. No managed SD-JWT HTTP contract is widened.
+
+A live deployment still requires authenticated, qualified owner connections,
+the selected host and actual workload authentication. The source's local
+PostgreSQL/crypto tests establish implementation behavior; administrative test
+fixtures and HTTP success do not establish production owner qualification.
 
 There is no public route, default executable, inventory promotion or protocol
 capability advertisement added by this module. Broader credential bundles,

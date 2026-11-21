@@ -8,7 +8,7 @@ or qualify a deployed delegated-authority service.
 
 The companion
 [`operations/preflight.sql`](../rust/services/delegated-authority/operations/preflight.sql)
-recognizes the exact bundled migrations 0001–0007. It never applies migrations,
+recognizes the exact bundled migrations 0001–0008. It never applies migrations,
 creates a grant, writes a source assertion, repairs a record or manufactures a
 journal. Its successful report explicitly retains
 `runtime_qualification: NOT_ASSESSED` and `execution_authorized: false`.
@@ -70,7 +70,7 @@ passwords into a command line, review log or this runbook. A libpq service file
 or the deployment's existing protected connection configuration can identify
 the operator connection without disclosing a secret.
 
-| Identity | Lifecycle-service minimum access through migration 0007 |
+| Identity | Lifecycle-service minimum access through migration 0008 |
 | --- | --- |
 | Migration owner | Owns the service schema, tables and functions; runs the reviewed migrator during maintenance. Its credentials are unavailable to request and producer processes. |
 | Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results` and `command_identities`; EXECUTE on `grant_instant(TEXT)`. |
@@ -84,7 +84,9 @@ owned trigger; request credentials do not receive journal INSERT access.
 
 The three non-migration identities must not be owners, superusers, role/database
 administrators, replication identities, RLS bypass identities, or members of a
-role that supplies those powers. They must not reach each other or the migration
+role that supplies those powers. Predefined PostgreSQL `pg_` roles are also
+rejected, including server-program, server-file and monitoring roles. They must
+not reach each other or the migration
 owner through membership. The preflight conservatively audits every reachable
 membership, including NOINHERIT paths, and checks effective table, column,
 function, schema and grant-option privileges. It rejects database CREATE and
@@ -204,7 +206,7 @@ deployment tests. Database readiness never creates that qualification.
 Migration 0007 adds private `machine_authentication_evidence` storage, four
 audit guards and the `use_receipts_machine_evidence` guard. It does not rewrite
 migrations 0001–0006, existing receipts or source evidence. The post-migration
-inspection now requires all seven original checksums and verifies the exact
+inspection now requires all eight bundled checksums and verifies the exact
 tenant/evidence primary key, enabled guard bindings, deferred retention
 expiry check, exact bytes/digest/document constraint expressions and retained
 correspondence, complete retained
@@ -212,8 +214,8 @@ scope and machine receipt linkage. Expired evidence remains immutable history.
 
 The lifecycle/confirmation/authority roles above gain **no** audit access. A
 qualified machine audit composition uses a separate nonowner connection with
-schema USAGE, SELECT on `schema_migrations` and SELECT/INSERT only on
-`machine_authentication_evidence`. Its runtime readiness rejects unrelated
+schema USAGE, SELECT on `schema_migrations` and `machine_authorization_evidence`,
+and SELECT/INSERT only on `machine_authentication_evidence`. Its runtime readiness rejects unrelated
 reads, same-database source/ledger writes, destructive authority and reachable escalation.
 A qualified future use writer additionally needs SELECT on this audit table
 for its same-transaction receipt guard, never audit INSERT. The original
@@ -230,10 +232,44 @@ Pre-0007 machine receipts that have no retained aggregate audit are preserved
 and reported as `legacy_machine_receipt_count`. No migration synthesizes that
 missing record. The report also includes `machine_authentication_evidence_count`;
 both counts are historical inspection, with `runtime_qualification=NOT_ASSESSED`
-and `execution_authorized=false`. The selected full-machine host, source
-identity/status owners, source-record retention and live deployment remain
-independent qualification gates. See the service's
+and `execution_authorized=false`. The selected full-machine host, live source connections, required attestation and production deployment remain
+independent qualification gates. The concrete Organization, Trust Profile and
+Issuance source owners are implemented separately from the serving host. See the service's
 [`MACHINE_AUTH.md`](../rust/services/delegated-authority/MACHINE_AUTH.md).
+
+## Additive machine-policy source and evaluation retention
+
+Migration 0008 installs append-only `machine_authorization_evidence` for the
+selected Organization policy source and actual MMF evaluation. Its three table
+guards bind exact bytes, scope, source reference, policy revision and original
+times, and reject expired COMMIT. A fourth guard requires every newly retained
+aggregate machine audit selecting `MACHINE_AUTHORIZATION` to reference a matching
+retained evaluation. A hash-only policy reference cannot satisfy that guard.
+
+The policy evidence writer needs SELECT/INSERT on this table and SELECT on
+migration metadata only. The aggregate machine audit writer additionally needs
+SELECT on policy evidence for the new guard, with no policy-evidence INSERT.
+Organization policy, machine registry, Trust Profile, Issuance and credential
+source evidence use their independently checked connections. The existing
+lifecycle, confirmation and representation roles gain no access to these sources.
+
+Preflight verifies the exact new trigger bindings, function bodies, critical
+CHECK expressions, primary key and retained source/evaluation correspondence.
+It reports `machine_authorization_evidence_count` and
+`legacy_machine_authorization_audit_count`. Aggregate audit recorded before
+migration 0008 is preserved and counted as original history; it is not backfilled
+with invented policy observations. Missing evidence for new records blocks
+inspection. Expired retained observations remain historical evidence.
+
+Organization migrations 0005–0006 separately install full-machine registration,
+MAP assignment and the named machine-authorization policy owner. Trust Profile
+migration 0004 retains explicit nested JWT-VC authority revisions. The concrete
+credential source has its own additive evidence schema and three distinct roles.
+See [machine registration](../rust/services/organization/MACHINE_REGISTRY.md),
+[machine policy ownership](../rust/services/organization/MACHINE_AUTHORIZATION.md),
+[policy source composition](../rust/services/delegated-authority/MACHINE_POLICY_SOURCE.md)
+and [credential source composition](../rust/crates/machine-credential-source/README.md).
+These are internal composition APIs; this migration enables no public use host.
 
 ## Additional roles and privileges for the organization approval candidate
 
@@ -312,7 +348,7 @@ supporting audit/proof material. Historical result recovery, if exposed by a
 qualified runtime, still requires current caller/resource authorization. A
 stored result is never current authority or permission to repeat a side effect.
 
-Do not run down migrations, remove the 0004–0007 ledger entries, drop command, use or approval tables,
+Do not run down migrations, remove the 0004–0008 ledger entries, drop command, use or approval tables,
 relax guards or reuse a command identity to make an older binary appear ready.
 An older binary expecting a shorter migration list must fail readiness. Use a
 compatible reviewed fix or an explicitly tested recovery deployment before
@@ -352,7 +388,7 @@ are skipped, which must not be reported as live database validation.
 ## Optional human lifecycle command host
 
 The separate `marty-delegation-commands` executable uses the same checksum-verified
-Delegated Authority migrations, now through 0007, and is disabled by default.
+Delegated Authority migrations, now through 0008, and is disabled by default.
 It continues to support human lifecycle commands only. Its restricted command
 writer additionally needs SELECT/INSERT on the shared `command_identities`
 registry, whose trigger prevents lifecycle/use identity collisions. Provision that writer

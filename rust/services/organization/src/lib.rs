@@ -17,6 +17,8 @@ pub mod http_security;
 pub mod http_service;
 #[cfg(target_os = "linux")]
 pub mod installer_bootstrap;
+pub mod machine_authorization;
+pub mod machine_registry;
 pub mod migration;
 pub mod offline_audit;
 mod offline_audit_http;

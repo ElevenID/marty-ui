@@ -1358,6 +1358,10 @@ fn validate_relationship(
         .map_err(|_| TrustProfileApplicationError::Invalid("credential_authorizations"))?;
     crate::wallet_issuer_authority::authorizations(&relationship.metadata)
         .map_err(|_| TrustProfileApplicationError::Invalid("wallet_issuance_authorizations"))?;
+    marty_oid4vp_contract::machine_jwt_vc::nested_machine_credential_authorizations(
+        &relationship.metadata,
+    )
+    .map_err(|_| TrustProfileApplicationError::Invalid("machine_nested_jwt_authorizations"))?;
     Ok(())
 }
 

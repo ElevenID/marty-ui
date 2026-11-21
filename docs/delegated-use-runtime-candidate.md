@@ -226,7 +226,9 @@ HTTP fixture remains separate evidence.
 Delegated Authority migration 0006 adds the shared command identity and retained
 use ledger. Flow migration 0005 adds its storage identity, immutable challenge
 and proof records, consumption evidence and guards. Additive Delegated Authority
-migration 0007 adds exact machine audit retention and receipt linkage. Earlier
+migration 0007 adds exact machine audit retention and receipt linkage. Migration
+0008 binds selected machine authorization to retained source and MMF evaluation
+records. Earlier
 migration bytes are preserved. Follow the
 [read-only upgrade and rollback procedure](delegated-authority-upgrade.md);
 readiness never repairs missing historical evidence.
@@ -238,8 +240,9 @@ role composition across the relevant local schemas. Preserving separate
 producers and source readers remains necessary even when Flow and the ledger
 participate in the same database transaction.
 
-The machine audit writer needs only schema usage, migration metadata SELECT and
-SELECT/INSERT on its own audit table. It has no grant, command, Flow, consent or
+The machine audit writer needs schema usage, migration metadata SELECT,
+SELECT on retained machine-authorization evidence, and SELECT/INSERT on its own
+audit table. It has no grant, command, Flow, consent or
 source-owner access. A future use writer receives audit SELECT only. Readiness
 and preflight validate the actual role boundary, guard/index shape, critical
 hash/reference/byte-document CHECK constraints and retained-data consistency.

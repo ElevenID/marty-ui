@@ -37,6 +37,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         7,
         include_str!("../migrations/0007_machine_authentication_evidence.sql"),
     ),
+    (
+        8,
+        include_str!("../migrations/0008_machine_authorization_evidence.sql"),
+    ),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;
@@ -210,6 +214,9 @@ impl PgDelegationGrantRepository {
             return Err(RepositoryError::SchemaNotReady);
         }
         crate::use_postgres::verify_use_schema(&self.pool).await?;
+        crate::machine_policy_source::validate_machine_authorization_evidence_schema(&self.pool)
+            .await
+            .map_err(|_| RepositoryError::SchemaNotReady)?;
         Ok(())
     }
 }

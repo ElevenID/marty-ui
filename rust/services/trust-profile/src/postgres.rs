@@ -1109,7 +1109,7 @@ fn registry_entry_from_row(
     })
 }
 
-fn profile_from_row(row: &PgRow) -> Result<TrustProfile, TrustProfileRepositoryError> {
+pub(crate) fn profile_from_row(row: &PgRow) -> Result<TrustProfile, TrustProfileRepositoryError> {
     TrustProfile::try_from(TrustProfileRecord {
         id: get(row, "id")?,
         organization_id: get(row, "organization_id")?,

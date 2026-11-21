@@ -158,7 +158,13 @@ use additionally requires the [audited machine gate](MACHINE_AUTH.md): migration
 0007 retains exact immutable audit bytes and rejects machine receipts without a
 matching retained record. The selected [nested JWT-VC adapter](MACHINE_CREDENTIALS.md)
 performs real issuer and holder cryptography while leaving authoritative
-Trust Profile, issuer/key/status ownership explicitly configured.
+Trust Profile, issuer/key/status ownership explicitly configured. The concrete
+[Organization registry](../organization/MACHINE_REGISTRY.md),
+[machine policy source](MACHINE_POLICY_SOURCE.md) and
+[credential source](../../crates/machine-credential-source/README.md) now implement
+those internal owner paths. Migration 0008 requires retained source/evaluation
+evidence for selected machine authorization. No use executable or public route
+is installed by these adapters.
 
 The service accepts original request bytes. It reuses the bounded JSON reader
 before normal deserialization, rejects duplicate/unknown fields, explicit nulls,

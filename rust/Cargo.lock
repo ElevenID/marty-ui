@@ -4679,6 +4679,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-machine-credential-source"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "marty-credential-template",
+ "marty-delegated-authority",
+ "marty-issuance-service",
+ "marty-oid4vci",
+ "marty-oid4vp-contract",
+ "marty-organization",
+ "marty-principal-runtime-binding",
+ "marty-trust-profile",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "marty-managed-key-reference"
 version = "0.1.0"
 dependencies = [

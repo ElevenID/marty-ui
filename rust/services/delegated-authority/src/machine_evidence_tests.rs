@@ -59,6 +59,13 @@ impl Harness {
         identity["identity_keys"][0]["valid_from"] = json!(now - Duration::hours(1));
         identity["identity_keys"][0]["valid_until"] = json!(now + Duration::hours(1));
         documents["policy"]["created_at"] = json!(now - Duration::hours(1));
+        // This suite isolates aggregate retention. A selected machine policy
+        // now requires real retained source/evaluation records (migration 0008),
+        // exercised by machine_policy_source and the composed owner gate tests.
+        documents["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("authorization_policy_set_id");
         drop(documents);
         h
     }
@@ -92,7 +99,7 @@ impl Database {
         assert!(role.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
             GRANT USAGE ON SCHEMA delegated_authority_service TO {role};
-            GRANT SELECT ON delegated_authority_service.schema_migrations TO {role};
+            GRANT SELECT ON delegated_authority_service.schema_migrations,delegated_authority_service.machine_authorization_evidence TO {role};
             GRANT SELECT,INSERT ON delegated_authority_service.machine_authentication_evidence TO {role};")))
             .execute(&owner).await.unwrap();
         let mut writer_url = parsed;
@@ -352,6 +359,43 @@ async fn postgres_audit_role_and_all_guards_are_required_for_readiness() {
         return;
     };
     db.evidence.readiness().await.unwrap();
+    // Grant dangerous role paths without invoking their privileged operations.
+    // NOINHERIT does not make membership safe: the login can still SET ROLE.
+    db.sql(&format!("GRANT pg_execute_server_program TO {}", db.role))
+        .await;
+    assert!(db.evidence.readiness().await.is_err());
+    db.sql(&format!(
+        "REVOKE pg_execute_server_program FROM {}",
+        db.role
+    ))
+    .await;
+    db.sql(&format!("ALTER ROLE {} REPLICATION", db.role)).await;
+    assert!(db.evidence.readiness().await.is_err());
+    db.sql(&format!("ALTER ROLE {} NOREPLICATION", db.role))
+        .await;
+    db.evidence.readiness().await.unwrap();
+    let masked_role = db.role.clone();
+    let masked_owner = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |connection, _| {
+            let command = format!("SET ROLE {masked_role}");
+            Box::pin(async move {
+                sqlx::raw_sql(AssertSqlSafe(command))
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with(db.owner.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    assert!(
+        PgMachineAuthenticationEvidenceRepository::new(masked_owner)
+            .readiness()
+            .await
+            .is_err(),
+        "SET ROLE cannot hide the privileged login behind a minimal audit role"
+    );
     for (table, trigger) in [
         (
             "machine_authentication_evidence",

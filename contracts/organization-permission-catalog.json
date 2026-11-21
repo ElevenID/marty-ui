@@ -635,6 +635,66 @@
       "resource": "verification",
       "action": "execute",
       "description": "Execute verification flows"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "create",
+      "description": "Register a full machine identity with attributable ownership"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "update",
+      "description": "Replace a full machine identity revision and current key"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "view",
+      "description": "Inspect full machine identity and source history"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "suspend",
+      "description": "Suspend a full machine identity"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "revoke",
+      "description": "Revoke a full machine identity"
+    },
+    {
+      "resource": "machine-identity",
+      "action": "retire",
+      "description": "Retire a full machine identity"
+    },
+    {
+      "resource": "machine-authentication-policy",
+      "action": "assign",
+      "description": "Assign a machine authentication policy to a registered machine deployment"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "create",
+      "description": "Create a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "update",
+      "description": "Revise a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "activate",
+      "description": "Activate a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "archive",
+      "description": "Archive a machine authorization policy"
+    },
+    {
+      "resource": "machine-authorization-policy",
+      "action": "view",
+      "description": "Inspect machine authorization policy revisions"
     }
   ]
 }

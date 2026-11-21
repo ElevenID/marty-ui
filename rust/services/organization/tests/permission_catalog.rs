@@ -9,7 +9,7 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 127);
+    assert_eq!(catalog.len(), 139);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
     assert!(keys.contains("application:manage-ownership"));
@@ -35,6 +35,12 @@ fn shared_permission_catalog_is_unique_and_complete() {
     ] {
         assert!(keys.contains(&format!("agent-identity:{action}")));
     }
+    for resource in ["machine-identity", "machine-authorization-policy"] {
+        for action in ["create", "update", "view"] {
+            assert!(keys.contains(&format!("{resource}:{action}")));
+        }
+    }
+    assert!(keys.contains("machine-authentication-policy:assign"));
     assert!(keys.contains("delegation-grant:view"));
     assert!(keys.contains("delegation-grant:approve"));
     for action in ["create", "suspend", "reinstate", "revoke"] {
@@ -73,6 +79,25 @@ fn system_role_templates_preserve_intended_entitlements() {
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
     for template in &templates {
+        for key in [
+            "machine-identity:create",
+            "machine-identity:update",
+            "machine-identity:suspend",
+            "machine-identity:revoke",
+            "machine-identity:retire",
+            "machine-authentication-policy:assign",
+            "machine-authorization-policy:create",
+            "machine-authorization-policy:update",
+            "machine-authorization-policy:activate",
+            "machine-authorization-policy:archive",
+        ] {
+            assert_eq!(
+                template.permission_keys.contains(key),
+                matches!(template.name, "owner" | "admin"),
+                "unexpected full machine administration permission for {}",
+                template.name
+            );
+        }
         for key in [
             "agent-identity:enroll",
             "delegation-grant:create",

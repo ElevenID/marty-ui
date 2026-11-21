@@ -32,3 +32,4 @@ pub use validity::*;
 
 pub use rejection::*;
 pub use response::*;
+pub mod machine_jwt_vc;

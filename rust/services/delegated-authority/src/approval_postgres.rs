@@ -725,10 +725,12 @@ pub(crate) async fn storage_identity(pool: &PgPool) -> Result<Uuid, ApprovalProd
     sqlx::query_scalar("SELECT instance_id FROM delegated_authority_service.approval_storage_identity WHERE singleton=true").fetch_one(pool).await.map_err(not_ready)
 }
 pub(crate) async fn role_identity(pool: &PgPool) -> Result<String, ApprovalProducerError> {
-    sqlx::query_scalar("SELECT current_user::TEXT")
-        .fetch_one(pool)
+    // A narrowed SET ROLE must not hide a more privileged authenticated login.
+    sqlx::query_scalar("SELECT current_user::TEXT WHERE current_user=session_user")
+        .fetch_optional(pool)
         .await
-        .map_err(not_ready)
+        .map_err(not_ready)?
+        .ok_or(ApprovalProducerError::NotReady)
 }
 pub(crate) async fn check_role(
     pool: &PgPool,
@@ -794,6 +796,7 @@ pub(crate) async fn check_role_boundary_mutations(
         SELECT 1 FROM pg_roles subject JOIN pg_roles r ON (r.oid=subject.oid OR pg_has_role(subject.oid,r.oid,'MEMBER'))
         WHERE subject.rolname=$3 AND (
           r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls
+          OR left(r.rolname::TEXT,3)='pg_'
           OR EXISTS (SELECT 1 FROM pg_database d WHERE d.datname=current_database() AND d.datdba=r.oid)
           OR has_database_privilege(r.oid,current_database(),'CREATE,CREATE WITH GRANT OPTION,CONNECT WITH GRANT OPTION,TEMPORARY WITH GRANT OPTION')
           OR EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname=$1 AND

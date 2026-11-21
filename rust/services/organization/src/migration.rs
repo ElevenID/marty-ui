@@ -34,6 +34,14 @@ pub async fn migrate_organization_schema(pool: &PgPool) -> Result<(), Organizati
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0005_machine_registry.sql"))
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0006_machine_authorization_policy.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -210,6 +218,12 @@ async fn validate_connection(
             "managed enrollment retention or commit guards are missing",
         ));
     }
+    crate::machine_registry::validate_schema(connection)
+        .await
+        .map_err(|_| incompatible("full machine registry schema or guards are missing"))?;
+    crate::machine_authorization::validate_machine_authorization_schema(connection)
+        .await
+        .map_err(|_| incompatible("machine authorization policy schema or guards are missing"))?;
     Ok(())
 }
 

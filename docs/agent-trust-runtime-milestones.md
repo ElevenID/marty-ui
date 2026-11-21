@@ -9,8 +9,10 @@ exact-terms organization approval, managed key-control enrollment and an opt-in
 human lifecycle command host. Retained delegated use now includes authenticated
 internal command transport, selected full-machine and nested JWT-VC verification,
 durable machine-audit retention, concurrency-safe Flow finalization and managed
-receipt signing qualified against disposable OpenBao/Redis. Public delegated
-execution remains gated.
+receipt signing qualified against disposable OpenBao/Redis. The next source-owner
+slice adds explicit full-machine/MAP registration, concrete Trust Profile and
+Issuance credential observations, and a named Organization machine-policy owner
+with retained MMF evaluation. Public delegated execution remains gated.
 
 ## Implemented in this application slice
 
@@ -23,7 +25,10 @@ execution remains gated.
 | M02 directory and enrollment candidate | Tenant inventory, public-key history, immutable audit, authorized administration, retained signed-challenge enrollment and a local key-custodian signer | Managed entries start PROVISIONED; explicit key-control enrollment permits ACTIVE eligibility, with authority NOT_ASSESSED. Operational MAP, external host trust and suspended-identity resume remain separate |
 | M03 approval candidate | Exact immutable terms, explicit human confirmation, durable recovery/withdrawal, independent current Organization authority and an opt-in executable | One configured organization and KEY binding; represented-subject SESSION establishment and broader authority profiles remain separate work |
 | P03 application lifecycle commands | Atomic grant/journal/original-result persistence, opt-in human Gateway/host composition, exact producer confirmation and current Organization authorization rechecked after lock waits | Selected human organization/KEY profile only; the human executable and Gateway still reject START_USE and FINALIZE_USE |
-| M02 selected machine authentication candidate | Concrete Core OID4VP verification, strict MAP/full-machine consistency, real nested JWT-VC issuer/holder verification, actual MMF machine-policy evaluation and append-only exact audit retention | Requires independent full MachineIdentity/MAP and issuer/status/provider qualification; current SERVICE_ACCOUNT inventory and enrollment do not satisfy this gate |
+| M02 selected machine authentication candidate | Concrete Core OID4VP verification, strict MAP/full-machine consistency, real nested JWT-VC issuer/holder verification, actual MMF machine-policy evaluation and append-only exact audit retention | Concrete source owners are now implemented below; live deployment and required attestation remain unqualified. SERVICE_ACCOUNT inventory and enrollment do not satisfy this gate |
+| M02 full-machine source owner | Distinct Organization registry, explicit deployment MAP assignment, attributable human administration, immutable revision/key history, and exact retained source observations | Internal APIs only; no inventory promotion, public registration route, workload authentication or attestation claim |
+| M02 credential authority source | Explicit nested JWT-VC Trust Profile authorization, current issuer/key and exact original Issuance artifact/status binding, separate retained source evidence | Concrete PostgreSQL owner composition; no SD-JWT widening, external issuer transport or public host enablement |
+| M02 machine-policy source owner | Named Organization MACHINE_AUTHORIZATION policy, fixed context-only Cedar schema, immutable revisions, concrete MMF evaluation and retained source/evaluation linkage | General policy CRUD cannot write this type; domain/use authorization and public proof ingress remain separate |
 | P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition only; router is not installed by an executable, wallet/proof ingress remains separate, and unresolved claims are never automatically retried |
 | Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Default off; deployed outer HTTPS adapter, production custody/credentials and executable host qualification remain pending |
 
@@ -53,13 +58,13 @@ qualified delegated-use contracts.
 The broader milestones are not closed by these libraries and candidate
 administration paths. The next application packages still need:
 
-- Deployment qualification of the implemented selected machine proof/MAP/Cedar
-  and audited credential gates: independent full MachineIdentity/MAP and
-  issuer/key/status owners, required attestation and current policy/entity
-  sources. The new concrete audit repository still needs its reviewed deployment
-  role and source owners must retain their own evidence. Connection/grant aggregation and independent directory
-  qualification remain separate. Enrollment key possession does not satisfy
-  these operational checks.
+- Deployment qualification of the implemented machine proof/MAP/Cedar and
+  audited credential gates. Concrete full-machine/MAP, Trust Profile/issuer/key,
+  Issuance status and machine-policy source owners now exist, with their own
+  retained evidence and restricted connection checks. Required attestation,
+  protected live service connections and production role qualification remain.
+  Connection/grant aggregation and independent directory qualification remain
+  separate. Enrollment key possession does not satisfy these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
   establishment beyond the implemented human/organization KEY profile.
 - Qualified workload/caller sources, protected service-hop deployment and an
@@ -398,3 +403,69 @@ The implementation contracts are [internal HTTP](../rust/services/delegated-auth
 [machine audit](../rust/services/delegated-authority/MACHINE_AUTH.md),
 [Flow finalization](../rust/services/flow/DELEGATED_USE.md) and
 [receipt custody](../rust/services/delegated-authority/RECEIPT_SIGNING.md).
+
+
+## Concrete source-owner follow-on
+
+The follow-on to `f226585` replaces three missing internal source compositions
+with concrete owners. Full MachineIdentity registration is a separate Organization
+record with an explicitly assigned deployment MAP. Human administration checks
+current tenant membership and exact permissions under locks, preserves original
+identity/runtime/source fields and prevents historical key reuse. Selected source
+observations retain their exact bytes and immutable revision before return.
+
+The selected credential source reads the actual Trust Profile and Issuance
+owners. Its nested JWT-VC authorization metadata is separate from SD-JWT,
+selects the original issued artifact by digest and checks tenant, issuer, subject,
+key, credential types, current lifecycle and originating transaction. Separate
+trust, status and evidence connections are checked again during resolution.
+
+Machine authorization has a dedicated named Organization policy owner and fixed
+context-only Cedar schema. Generic policy administration cannot write this type.
+The concrete source compiles the current revision through MMF and retains exact
+source and evaluation evidence. Delegated Authority migration 0008 requires that
+evaluation when a new aggregate machine audit selects machine authorization.
+Old evidence remains historical, and no migration creates missing provenance.
+
+These libraries expose no public endpoint and install no serving host. They do
+not implement Rifare business permissions, execution, budgets or outcomes.
+Required attestation, workload identity, protected proof ingress, current
+use/domain authorization and deployed signer/Flow qualification remain the next
+serving-path milestones. Public MIP, the Protocol pin and discovery are unchanged.
+
+See [full-machine ownership](../rust/services/organization/MACHINE_REGISTRY.md),
+[machine policy ownership](../rust/services/organization/MACHINE_AUTHORIZATION.md),
+[policy source and evaluation](../rust/services/delegated-authority/MACHINE_POLICY_SOURCE.md),
+and [credential source composition](../rust/crates/machine-credential-source/README.md).
+
+### Source-owner validation
+
+Validation ran locally on Rust 1.95 and PostgreSQL 17.12 against the unchanged
+pinned external dependency versions. The complete selected source path uses
+actual Organization, Trust Profile, Issuance, MMF and audit owners. Its original
+Flow challenge and grant/authority lifecycle are fixture inputs, so this proves
+source-to-machine-proof composition without qualifying proof ingress, grant
+approval or final business execution.
+
+| Check | Result |
+| --- | --- |
+| Full delegated-authority library with PostgreSQL gates | 216 passed, none ignored; one separately configured external private-protocol corpus case filtered out |
+| Read-only database upgrade preflight | 157 passed, including 26 new source/evaluation, privilege, guard-drift and evidence-preserving upgrade cases |
+| Full-machine registry owner/source | 12 passed with real PostgreSQL, current permissions, key rotation/expiry, UTC normalization, exact retention and cancellation during COMMIT |
+| Machine-policy owner | 4 passed, including general policy get/list/mutation exclusion, independent permissions and immutable revision history |
+| Concrete credential source and composed machine gate | 4 passed with real owners, ES256/EdDSA cryptography, current revocation/status, exact original issuance binding, privilege drift and source/evidence cancellation checks |
+| Organization library and permission catalog | 71 library tests and 2 catalog tests passed; new machine administration rights remain limited to the intended role templates |
+| Selected nested-profile contract | 1 focused strict grant-namespace test passed |
+| Compilation | All targets passed for Organization, Delegated Authority, machine credential source, Trust Profile, Issuance and OID4VP contract |
+| Compatibility and hygiene | All 19 previously published Organization/Delegated Authority/Flow/Trust Profile migrations retain exact bytes; existing dependency versions/sources/checksums unchanged; scoped formatting, diff, local documentation links and OSS commerce boundary passed |
+
+The full delegated-authority row includes the five focused machine-policy source
+cases. Test views overlap and should not be added as a single independent total.
+Final role regressions grant predefined PostgreSQL capabilities and replication
+privileges to actual source and evidence logins, then verify rejection and
+recovery after revocation. Masking a privileged login with `SET ROLE` also fails
+readiness. No privileged server-file or server-program operation is executed.
+The new migrations are Organization 0005–0006, Delegated Authority 0008, Trust
+Profile 0004 and the new credential-source schema 0001. Existing audit, receipt,
+Flow and signing contracts remain intact. The commit uses `[skip ci]`; no hosted
+workflow is dispatched, and production/capability qualification is unchanged.

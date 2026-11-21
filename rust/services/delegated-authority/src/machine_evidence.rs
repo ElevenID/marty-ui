@@ -83,7 +83,11 @@ impl PgMachineAuthenticationEvidenceRepository {
             &self.pool,
             "delegated_authority_service",
             &["machine_authentication_evidence"],
-            &["schema_migrations", "machine_authentication_evidence"],
+            &[
+                "schema_migrations",
+                "machine_authentication_evidence",
+                "machine_authorization_evidence",
+            ],
         )
         .await
         .map_err(unavailable)?;
@@ -91,7 +95,7 @@ impl PgMachineAuthenticationEvidenceRepository {
             WHERE (r.rolname=$1 OR pg_has_role($1::TEXT,r.oid,'MEMBER')) AND (
               EXISTS(SELECT 1 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace
                 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND t.relkind IN ('r','p','v','m','f','S')
-                  AND NOT (n.nspname='delegated_authority_service' AND t.relname IN ('schema_migrations','machine_authentication_evidence'))
+                  AND NOT (n.nspname='delegated_authority_service' AND t.relname IN ('schema_migrations','machine_authentication_evidence','machine_authorization_evidence'))
                   AND (t.relowner=r.oid OR has_table_privilege(r.oid,t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
                     OR has_any_column_privilege(r.oid,t.oid,'SELECT,INSERT,UPDATE,REFERENCES')))
               OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'

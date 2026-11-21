@@ -20,9 +20,11 @@ The supported selection is deliberately bounded:
 
 The current Organization agent inventory remains `SERVICE_ACCOUNT`.
 Enrollment's `KEY_CONTROL_VERIFIED` state does not turn that record into a full
-MachineIdentity or qualify it for this gate. A production composition needs an
-independently trusted source of the full machine model, policy assignment and
-current key/deployment state. No conversion or fallback source is supplied here.
+MachineIdentity or qualify it for this gate. The separate Organization
+[full-machine registry](../organization/MACHINE_REGISTRY.md) and
+`OrganizationMachineAuthenticationStateSource` now provide explicit owner-backed
+registration and selection. Production composition still requires qualified
+connections to that owner; inventory is never a fallback source.
 
 ## Modules and integration
 
@@ -100,10 +102,13 @@ The audit table denies UPDATE, DELETE and TRUNCATE, including accidental writes
 by its owner through ordinary SQL. Private debug output is redacted.
 
 The audit writer is a distinct nonowner PostgreSQL identity. Readiness requires
-SELECT/INSERT on the audit table, SELECT on the migration ledger and schema
-USAGE. It rejects reachable administrative roles, destructive privileges,
-same-database source/ledger writes, unrelated table reads and executable security-definer
-functions. It receives no lifecycle or use-ledger write authority. Existing
+SELECT/INSERT on the audit table, SELECT on the migration ledger and retained
+machine-policy evidence, and schema USAGE. It rejects reachable administrative or
+predefined PostgreSQL `pg_` roles, replication privileges, destructive privileges,
+same-database source/ledger writes, unrelated table reads and executable
+security-definer functions. The authenticated login must match `current_user`;
+`SET ROLE` cannot hide broader login privileges. It receives no lifecycle or
+use-ledger write authority. Existing
 human lifecycle and consent/authority producer identities receive no audit
 access. A future use writer needs SELECT on the audit table for receipt binding;
 it must never inherit the audit writer's INSERT authority.
@@ -243,8 +248,34 @@ expired recovery, all audit/receipt guards, final-use scope/deadline binding,
 missing evidence, storage failure, expiry before insertion, deferred commit
 expiry and I/O completing after the original deadline. Source, consent,
 attestation and transport-shaped receipt fixtures are explicitly synthetic.
-The SQL upgrade preflight checks schema 0007, original migration checksums,
+The SQL upgrade preflight checks schema 0008, original migration checksums,
 role isolation, exact byte/digest/document constraints, audit history and new
 receipt linkage without changing data.
 Original pre-0007 machine receipts without this audit are counted separately as
 legacy history; an upgrade never invents missing audit or renews their authority.
+
+
+## Concrete source owners
+
+The next internal composition uses the Organization
+[`MachineRegistryService`](../organization/MACHINE_REGISTRY.md) and
+`OrganizationMachineAuthenticationStateSource` for separately registered full
+machine identity and deployment MAP assignment. It does not promote the existing
+SERVICE_ACCOUNT directory or managed key-control enrollment. Current selected
+identity/key/lifecycle facts are retained before returning a source observation.
+
+The [concrete credential source](../../crates/machine-credential-source/README.md)
+resolves current Trust Profile/issuer/key authority and exact originally issued
+credential state from their actual owners. It preserves the selected nested
+JWT-VC profile and the existing SD-JWT contract boundary. The
+[audited machine-policy source](MACHINE_POLICY_SOURCE.md) reads an explicitly
+administered named policy, compiles its fixed context-only schema through MMF and
+retains both source and evaluation evidence. Migration 0008 rejects a new aggregate
+machine audit that selects machine authorization without that retained evaluation.
+
+The five-second provider timeout remains. Sources bound reads and locks, shield
+only an already-started final evidence COMMIT from caller cancellation, and
+recheck the original deadline after COMMIT. A timeout yields no positive proof,
+never an automatic retry. Required attestation, protected workload authentication,
+public proof ingress, current use/domain authorization and deployment role
+qualification remain independent gates.

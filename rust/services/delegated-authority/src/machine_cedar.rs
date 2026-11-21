@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    domain::valid_digest,
+    domain::{valid_digest, valid_uri},
     machine_auth::{
         MachineAuthenticationScope, MachineAuthorizationVerifier, MachineEvidenceError,
         MachineEvidenceRequest, VerifiedMachineAuthorization,
@@ -34,6 +34,8 @@ pub struct ResolvedMachineCedarPolicy {
     pub status: String,
     pub revision: u64,
     pub policy_digest: String,
+    /// Exact retained source record, including policy/schema/entity selection.
+    pub source_evidence_ref: String,
     pub observed_at: DateTime<Utc>,
     pub valid_until: DateTime<Utc>,
     pub entity_types: CedarEntityTypes,
@@ -75,6 +77,26 @@ impl MachineAuthorizationVerifier for MmfMachineAuthorizationVerifier {
         &self,
         request: MachineEvidenceRequest<'_>,
     ) -> Result<VerifiedMachineAuthorization, MachineEvidenceError> {
+        self.verify_with_evidence(request)
+            .await
+            .map(|result| result.verified)
+    }
+}
+
+/// Internal prepared result; only the audited concrete wrapper retains and
+/// promotes it after COMMIT. This is neither a deserializable provider claim nor
+/// an authorization token.
+pub(crate) struct PreparedMachineAuthorization {
+    pub(crate) verified: VerifiedMachineAuthorization,
+    pub(crate) evidence: Value,
+    pub(crate) evaluated_at: DateTime<Utc>,
+}
+
+impl MmfMachineAuthorizationVerifier {
+    pub(crate) async fn verify_with_evidence(
+        &self,
+        request: MachineEvidenceRequest<'_>,
+    ) -> Result<PreparedMachineAuthorization, MachineEvidenceError> {
         let policy_set_id = request
             .policy
             .authorization_policy_set_id()
@@ -100,6 +122,7 @@ impl MachineAuthorizationVerifier for MmfMachineAuthorizationVerifier {
             || policy.status != "ACTIVE"
             || !valid_policy_revision(policy.revision)
             || !valid_digest(Some(&policy.policy_digest))
+            || !valid_uri(Some(&policy.source_evidence_ref))
             || policy.observed_at > now
             || policy.valid_until <= now
             || policy.valid_until <= policy.observed_at
@@ -150,11 +173,15 @@ impl MachineAuthorizationVerifier for MmfMachineAuthorizationVerifier {
             return Err(MachineEvidenceError);
         }
         let evidence = json!({
+            "profile": "urn:marty:machine-authorization-evidence:v1",
+            "scope": scope,
             "context": context,
+            "source_evidence_ref": policy.source_evidence_ref,
             "policy_set_id": policy_set_id.to_string(),
             "policy_revision": policy.revision,
             "policy_digest": policy.policy_digest,
             "evaluated_at": completed_at.to_rfc3339(),
+            "observed_at": policy.observed_at.to_rfc3339(),
             "valid_until": valid_until.to_rfc3339(),
             "decision": "PERMIT",
         });
@@ -162,15 +189,19 @@ impl MachineAuthorizationVerifier for MmfMachineAuthorizationVerifier {
             "urn:marty:machine-authorization:sha256:{:x}",
             Sha256::digest(serde_json::to_vec(&evidence).map_err(|_| MachineEvidenceError)?)
         );
-        Ok(VerifiedMachineAuthorization {
-            scope: scope.clone(),
-            policy_set_id,
-            policy_type: policy.policy_type,
-            revision: policy.revision,
-            policy_digest: policy.policy_digest,
-            evidence_ref,
-            observed_at: policy.observed_at,
-            valid_until,
+        Ok(PreparedMachineAuthorization {
+            verified: VerifiedMachineAuthorization {
+                scope: scope.clone(),
+                policy_set_id,
+                policy_type: policy.policy_type,
+                revision: policy.revision,
+                policy_digest: policy.policy_digest,
+                evidence_ref,
+                observed_at: policy.observed_at,
+                valid_until,
+            },
+            evidence,
+            evaluated_at: completed_at,
         })
     }
 }
