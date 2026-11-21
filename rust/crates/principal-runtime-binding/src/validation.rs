@@ -64,6 +64,37 @@ fn profile_uri(value: &str, field: &'static str) -> Result<(), BindingError> {
     uri(value, 1024, true, field)
 }
 
+fn authentication_audience(value: &str, field: &'static str) -> Result<(), BindingError> {
+    // The selected Flow DID client ID is an OID4VP identifier, not an RFC URI
+    // scheme: its prefix contains an underscore. Qualify that existing form
+    // only at the authentication-audience boundary. Generic URI fields retain
+    // their original grammar, and validate_binding still compares the complete
+    // original audience to the independently supplied allowlist verbatim.
+    let Some(did) = value.strip_prefix("decentralized_identifier:") else {
+        return profile_uri(value, field);
+    };
+    profile_uri(did, field)?;
+    let Some((method, identifier)) = did
+        .strip_prefix("did:")
+        .and_then(|value| value.split_once(':'))
+    else {
+        return Err(BindingError::new(ErrorKind::SchemaInvalid, field));
+    };
+    shape(
+        length(value, 1, 1024)
+            && !method.is_empty()
+            && method
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && !identifier.is_empty()
+            && !identifier.ends_with(':')
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-:%".contains(&byte)),
+        field,
+    )
+}
+
 fn principal(principal: &model::Principal, field: &'static str) -> Result<(), BindingError> {
     profile_uri(&principal.id, field)
 }
@@ -93,7 +124,7 @@ pub(crate) fn record_shape(record: &model::Record) -> Result<(), BindingError> {
         length(&record.authentication.subject, 1, 512),
         "record.authentication.subject",
     )?;
-    profile_uri(
+    authentication_audience(
         &record.authentication.audience,
         "record.authentication.audience",
     )?;
@@ -156,7 +187,7 @@ pub(crate) fn configuration_shape(
         "configuration.allowed_audiences",
     )?;
     for audience in &configuration.allowed_audiences {
-        profile_uri(audience, "configuration.allowed_audiences")?;
+        authentication_audience(audience, "configuration.allowed_audiences")?;
     }
     TypedThumbprint::from_document(&configuration.expected_key_thumbprint)?;
     let runtime = &configuration.runtime;

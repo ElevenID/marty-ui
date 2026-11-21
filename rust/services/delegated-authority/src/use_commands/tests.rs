@@ -1034,6 +1034,10 @@ async fn postgres_permission_loss_during_grant_lock_wait_prevents_preparation() 
     let _lock = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let f = Fixture::new().await;
     let mut held = f.pool.begin().await.unwrap();
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *held)
+        .await
+        .unwrap();
     sqlx::query(
         "SELECT id FROM delegated_authority_service.delegation_grants WHERE id=$1 FOR UPDATE",
     )
@@ -1047,8 +1051,20 @@ async fn postgres_permission_loss_during_grant_lock_wait_prevents_preparation() 
     let task = tokio::spawn(async move { service.execute(&caller, &bytes).await });
     let mut blocked = false;
     for _ in 0..100 {
-        let n:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%delegation_grants%FOR UPDATE%'").fetch_one(&f.pool).await.unwrap();
-        if n > 0 {
+        // The restricted writer now enters the migration-owned lock helper;
+        // pg_stat_activity shows that outer call rather than its inner SELECT.
+        // Observe this exact holder as the blocker, not an unrelated lock wait.
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity AS activity \
+             WHERE activity.datname=current_database() AND activity.wait_event_type='Lock' \
+             AND $1=ANY(pg_blocking_pids(activity.pid)) \
+             AND activity.query LIKE 'SELECT grant_document FROM delegated_authority_service.lock_use_grant(%')",
+        )
+        .bind(blocker_pid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        if waiting {
             blocked = true;
             break;
         }

@@ -41,6 +41,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
         8,
         include_str!("../migrations/0008_machine_authorization_evidence.sql"),
     ),
+    (9, include_str!("../migrations/0009_use_serving_locks.sql")),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;

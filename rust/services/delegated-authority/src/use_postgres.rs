@@ -339,7 +339,7 @@ async fn require_owned_claim(
     caller: &DelegationCommandCaller,
     claim: &UseClaim,
 ) -> Result<(), DelegationUseCommandError> {
-    let row=sqlx::query("SELECT command_digest,challenge_id FROM delegated_authority_service.use_command_claims WHERE organization_id=$1 AND actor_type=$2 AND actor_id=$3 AND command_id=$4 FOR UPDATE")
+    let row=sqlx::query("SELECT command_digest,challenge_id FROM delegated_authority_service.lock_use_claim($1,$2,$3,$4)")
         .bind(caller.organization_id()).bind(actor_type(caller)?).bind(&caller.actor().id).bind(claim.command.command_id).fetch_optional(&mut *tx).await.map_err(database)?.ok_or(DelegationUseCommandError::Conflict)?;
     if row
         .try_get::<String, _>("command_digest")
@@ -360,8 +360,14 @@ async fn lock_grant(
     tx: &mut PgConnection,
     expected: &DelegationGrant,
 ) -> Result<(), DelegationUseCommandError> {
-    let value:Option<Value>=sqlx::query_scalar("SELECT grant_document FROM delegated_authority_service.delegation_grants WHERE organization_id=$1 AND id=$2 FOR UPDATE")
-        .bind(expected.organization_id).bind(expected.id).fetch_optional(tx).await.map_err(database)?;
+    let value: Option<Value> = sqlx::query_scalar(
+        "SELECT grant_document FROM delegated_authority_service.lock_use_grant($1,$2)",
+    )
+    .bind(expected.organization_id)
+    .bind(expected.id)
+    .fetch_optional(tx)
+    .await
+    .map_err(database)?;
     if value.as_ref() != Some(&json(expected)?) {
         return Err(DelegationUseCommandError::Conflict);
     }
@@ -372,7 +378,7 @@ async fn lock_admission(
     caller: &DelegationCommandCaller,
     id: Uuid,
 ) -> Result<RetainedUseChallenge, DelegationUseCommandError> {
-    let value:Option<Value>=sqlx::query_scalar("SELECT challenge_document FROM delegated_authority_service.use_admissions WHERE organization_id=$1 AND challenge_id=$2 AND actor_type=$3 AND actor_id=$4 FOR UPDATE")
+    let value:Option<Value>=sqlx::query_scalar("SELECT challenge_document FROM delegated_authority_service.lock_use_admission($1,$3,$4,$2)")
         .bind(caller.organization_id()).bind(id).bind(actor_type(caller)?).bind(&caller.actor().id).fetch_optional(tx).await.map_err(database)?;
     decode_challenge(
         value.ok_or(DelegationUseCommandError::AccessDenied)?,
@@ -671,6 +677,69 @@ pub(crate) async fn verify_use_schema(pool: &PgPool) -> Result<(), RepositoryErr
     if indexes != 9 {
         return Err(RepositoryError::SchemaNotReady);
     }
+    verify_serving_lock_helpers(pool).await?;
     crate::machine_evidence::verify_machine_evidence_schema(pool).await?;
+    Ok(())
+}
+
+async fn verify_serving_lock_helpers(pool: &PgPool) -> Result<(), RepositoryError> {
+    let migration = include_str!("../migrations/0009_use_serving_locks.sql");
+    let guard_body = migration
+        .split_once(
+            "CREATE OR REPLACE FUNCTION delegated_authority_service.guard_use_command_claim()",
+        )
+        .and_then(|(_, rest)| rest.split_once("AS $$"))
+        .and_then(|(_, rest)| rest.split_once("$$;"))
+        .map(|(body, _)| body)
+        .ok_or(RepositoryError::SchemaNotReady)?;
+    let guard_matches: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_proc WHERE oid=to_regprocedure('delegated_authority_service.guard_use_command_claim()') AND prosrc=$1)")
+        .bind(guard_body).fetch_one(pool).await.map_err(|_| RepositoryError::DatabaseFailure)?;
+    if !guard_matches {
+        return Err(RepositoryError::SchemaNotReady);
+    }
+
+    for (name, signature, table) in [
+        ("lock_use_grant", "uuid,uuid", "delegation_grants"),
+        (
+            "lock_use_claim",
+            "uuid,text,text,uuid",
+            "use_command_claims",
+        ),
+        (
+            "lock_use_admission",
+            "uuid,text,text,uuid",
+            "use_admissions",
+        ),
+    ] {
+        let marker = format!("CREATE FUNCTION delegated_authority_service.{name}(");
+        let expected = migration
+            .split_once(&marker)
+            .and_then(|(_, rest)| rest.split_once("AS $lock$"))
+            .and_then(|(_, rest)| rest.split_once("$lock$;"))
+            .map(|(body, _)| body)
+            .ok_or(RepositoryError::SchemaNotReady)?;
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+          SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          JOIN pg_language l ON l.oid=p.prolang JOIN pg_class t ON t.oid=to_regclass($3)
+          WHERE p.oid=to_regprocedure($1) AND p.prosrc=$2 AND p.prosecdef
+            AND p.prokind='f' AND p.provolatile='v' AND p.proparallel='u'
+            AND p.proretset AND NOT p.proisstrict AND p.pronargdefaults=0
+            AND p.prorettype=t.reltype AND l.lanname='sql'
+            AND p.proconfig=ARRAY['search_path=pg_catalog']::TEXT[]
+            AND p.proowner=n.nspowner AND t.relowner=n.nspowner
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                           WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))",
+        )
+        .bind(format!("delegated_authority_service.{name}({signature})"))
+        .bind(expected)
+        .bind(format!("delegated_authority_service.{table}"))
+        .fetch_one(pool)
+        .await
+        .map_err(|_| RepositoryError::DatabaseFailure)?;
+        if !valid {
+            return Err(RepositoryError::SchemaNotReady);
+        }
+    }
     Ok(())
 }

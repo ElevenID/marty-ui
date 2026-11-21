@@ -3,8 +3,9 @@
 `DelegationUseHttpAuthenticator::mutual_tls` selects a concrete transport identity
 boundary for the existing internal command router and the new protected Flow
 ingress. `BoundDelegatedUseMtlsServer` supplies its mandatory mutual-TLS listener.
-These are explicit library compositions; no executable, Gateway route or public
-capability selects them automatically.
+The explicit default-off [`marty-delegated-use` host](../delegated-use/README.md)
+now selects these components. No public Gateway route or capability selects
+them automatically.
 
 ## Identity and current access
 
@@ -84,8 +85,9 @@ This is a selected X.509 transport and exact URI mapping, not an implementation
 of SPIRE enrollment, SVID distribution, trust-domain federation or automatic
 certificate rotation. Production CA issuance/revocation and pin replacement
 remain operator-owned qualification. No online CRL/OCSP fetch is introduced.
-The complete serving executable, production database roles, public wallet
-transport and deployed receipt-signer qualification remain explicit milestones.
+The serving executable is implemented. Production database-role deployment,
+public wallet transport and deployed receipt-signer qualification remain
+explicit milestones.
 
 See [internal use commands](USE_HTTP.md),
 [protected Flow ingress](../flow/DELEGATED_USE_INGRESS.md), and

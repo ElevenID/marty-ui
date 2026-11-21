@@ -1,8 +1,9 @@
 # Authenticated internal delegated-use transport
 
 `use_http::delegated_use_command_router` exposes the retained P03 command service
-through an explicitly assembled internal HTTP router. No executable or public
-Gateway installs it. The existing human command host continues rejecting
+through an explicitly assembled internal HTTP router. The separate default-off
+[`marty-delegated-use` executable](../delegated-use/README.md) installs it with
+mandatory mutual TLS. The public Gateway and existing human command host continue rejecting
 `START_USE` and `FINALIZE_USE`; public discovery and MIP support are unchanged.
 
 The sole application route is:
@@ -28,7 +29,7 @@ HTTP actor headers cannot override that identity. The same authenticator protect
 
 The existing `DelegationUseHttpState::new` constructor retains the explicit
 `trusted_forwarder` selection described below. These are separate trust models;
-neither is selected automatically by an executable.
+the serving executable selects only the mutual-TLS mode.
 
 ## Authenticated forwarding contract
 
@@ -123,8 +124,9 @@ fixtures remain explicit trusted test inputs.
 
 Concrete full-machine/MAP, Trust Profile/Issuance credential, machine-policy,
 machine-use access and exact-operation delegated-use policy owners now exist.
-The next executable must compose these sources with the audited verifier,
-protected Flow ingress, reviewed database roles and managed custody. Required
+The explicit serving executable composes these sources with the audited verifier,
+protected Flow ingress, reviewed database role contracts and managed custody
+adapters. Required
 attestation, production CA/revocation/pin rotation, deployed signing custody and
 public wallet transport remain separate qualification. See
 [retained commands](USE_COMMANDS.md), [machine audit](MACHINE_AUTH.md),

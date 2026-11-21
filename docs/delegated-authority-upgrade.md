@@ -8,7 +8,7 @@ or qualify a deployed delegated-authority service.
 
 The companion
 [`operations/preflight.sql`](../rust/services/delegated-authority/operations/preflight.sql)
-recognizes the exact bundled migrations 0001–0008. It never applies migrations,
+recognizes the exact bundled migrations 0001–0009. It never applies migrations,
 creates a grant, writes a source assertion, repairs a record or manufactures a
 journal. Its successful report explicitly retains
 `runtime_qualification: NOT_ASSESSED` and `execution_authorized: false`.
@@ -32,7 +32,7 @@ lifecycle history.
 ## Prepare the maintenance boundary
 
 1. Select the exact reviewed application artifact and its matching migration and
-   preflight files. Keep Delegated Authority migrations 0001–0008 byte-for-byte
+   preflight files. Keep Delegated Authority migrations 0001–0009 byte-for-byte
    unchanged. New Organization and Flow owner migrations are additive; rewriting
    an applied migration is not an upgrade strategy.
 2. Stop new lifecycle writes and drain in-flight request transactions. Also
@@ -70,7 +70,7 @@ passwords into a command line, review log or this runbook. A libpq service file
 or the deployment's existing protected connection configuration can identify
 the operator connection without disclosing a secret.
 
-| Identity | Lifecycle-service minimum access through migration 0008 |
+| Identity | Lifecycle-service minimum access through migration 0009 |
 | --- | --- |
 | Migration owner | Owns the service schema, tables and functions; runs the reviewed migrator during maintenance. Its credentials are unavailable to request and producer processes. |
 | Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results` and `command_identities`; EXECUTE on `grant_instant(TEXT)`. |
@@ -93,6 +93,13 @@ function, schema and grant-option privileges. It rejects database CREATE and
 service-schema CREATE for those identities. It allows direct function execution
 only for the pure timestamp helper; the producer and journal guards run through
 their triggers.
+
+On PostgreSQL 15+, parameter ACLs are also inspected. Administrative SET rights,
+including `session_replication_role`, ALTER SYSTEM, parameter grant options and
+unclassified extension parameter rights are rejected. These can undermine
+integrity even while table privileges and trigger definitions look correct.
+Ordinary USERSET configuration remains allowed. Inspection never changes a
+parameter or disables a trigger to test the grant.
 
 Role membership or existing PUBLIC grants can make an otherwise correct direct
 GRANT unsafe. Preflight reports such a failure; it does not automatically revoke
@@ -206,7 +213,7 @@ deployment tests. Database readiness never creates that qualification.
 Migration 0007 adds private `machine_authentication_evidence` storage, four
 audit guards and the `use_receipts_machine_evidence` guard. It does not rewrite
 migrations 0001–0006, existing receipts or source evidence. The post-migration
-inspection now requires all eight bundled checksums and verifies the exact
+inspection now requires all nine bundled checksums and verifies the exact
 tenant/evidence primary key, enabled guard bindings, deferred retention
 expiry check, exact bytes/digest/document constraint expressions and retained
 correspondence, complete retained
@@ -217,9 +224,9 @@ qualified machine audit composition uses a separate nonowner connection with
 schema USAGE, SELECT on `schema_migrations` and `machine_authorization_evidence`,
 and SELECT/INSERT only on `machine_authentication_evidence`. Its runtime readiness rejects unrelated
 reads, same-database source/ledger writes, destructive authority and reachable escalation.
-A qualified future use writer additionally needs SELECT on this audit table
+A qualified use writer additionally needs SELECT on this audit table
 for its same-transaction receipt guard, never audit INSERT. The original
-four-role preflight does not claim to qualify those future application roles;
+four-role preflight does not claim to qualify these additional application roles;
 the concrete audit repository performs its own connected-role readiness.
 
 Every newly appended `MACHINE_IDENTITY` use receipt requires matching retained
@@ -348,7 +355,7 @@ supporting audit/proof material. Historical result recovery, if exposed by a
 qualified runtime, still requires current caller/resource authorization. A
 stored result is never current authority or permission to repeat a side effect.
 
-Do not run down migrations, remove the 0004–0008 ledger entries, drop command, use or approval tables,
+Do not run down migrations, remove the 0004–0009 ledger entries, drop command, use or approval tables,
 relax guards or reuse a command identity to make an older binary appear ready.
 An older binary expecting a shorter migration list must fail readiness. Use a
 compatible reviewed fix or an explicitly tested recovery deployment before
@@ -388,7 +395,7 @@ are skipped, which must not be reported as live database validation.
 ## Optional human lifecycle command host
 
 The separate `marty-delegation-commands` executable uses the same checksum-verified
-Delegated Authority migrations, now through 0008, and is disabled by default.
+Delegated Authority migrations, now through 0009, and is disabled by default.
 It continues to support human lifecycle commands only. Its restricted command
 writer additionally needs SELECT/INSERT on the shared `command_identities`
 registry, whose trigger prevents lifecycle/use identity collisions. Provision that
@@ -409,14 +416,15 @@ results do not restore expired/revoked authority.
 
 ## Internal delegated-use composition
 
-The new `DelegationUseCommandService` is an internal library composition. It has
-no selected public executable or production use-writer provisioning in this
-candidate. Do not expand the lifecycle writer or the evidence-reader role to
+The `DelegationUseCommandService` is selected by the separate default-off
+[`marty-delegated-use` executable](../rust/services/delegated-use/README.md).
+Its internal serving composition does not install a public route or provision
+production database roles. Do not expand the lifecycle writer or evidence-reader role to
 make it a use host; their readiness checks reject access to use-specific tables.
 
-A future qualified use host must select a separate bounded use role and the
-actual `FlowDelegatedUseOwner`. Delegated Authority migration 0006 and Flow's
-additive `0005_delegated_use_retention.sql` must be installed in the same
+A qualified use host must select a separate bounded use role and the actual
+`FlowDelegatedUseOwner`, as the new executable does. Delegated Authority through
+migration 0009 and Flow through `0007_delegated_use_locks.sql` must be installed in the same
 authoritative PostgreSQL database. The Flow adapter independently pins its
 storage identity and checks it on the connection supplied by each use
 transaction. The authoritative Flow challenge or consumption, retained nonce,
@@ -446,10 +454,11 @@ source freshness, managed signing and remaining runtime qualification gates.
 
 ## Machine-use access, policy and protected Flow ingress
 
-The current follow-on adds Organization migrations
+The preceding access/ingress follow-on added Organization migrations
 `0007_machine_use_access.sql` and `0008_delegation_use_policy.sql`, plus Flow
-`0006_delegated_use_ingress.sql`. Delegated Authority remains at migration 0008;
-its existing four-role preflight does not qualify these additional schemas or
+`0006_delegated_use_ingress.sql`. The current serving-host follow-on additionally
+requires Delegated Authority 0009 and Flow 0007. The existing four-role preflight
+does not qualify these additional schemas or
 serving identities. Run each concrete owner's readiness check through its
 actual restricted login before serving. A privileged operator connection is
 not a substitute for the request process's credentials.
@@ -477,6 +486,76 @@ original bounds during disablement, rollback or restore reconciliation. An
 unresolved claim is retained after cancellation, expiry or ambiguous signing.
 Do not delete it, repeat signing or downgrade guards to make another attempt.
 Completed historical reads require current access and never renew authority.
+
+## Explicit serving host and restricted row locks
+
+The default-off `marty-delegated-use` executable requires Delegated Authority
+0009 and Flow 0007 in addition to the independently owned source schemas. These
+two migrations are additive; all 27 previously published migrations across
+Delegated Authority, Flow, Organization, Trust Profile and the credential source
+retain their exact bytes. The serving executable neither migrates nor grants
+privileges. Apply and inspect the reviewed migrations through the owners before
+provisioning the host's fourteen distinct restricted login identities.
+
+PostgreSQL row locking requires UPDATE authority even when the caller only reads
+the selected row. The use writer must not gain UPDATE on grants, immutable
+claims/admissions, definitions or proof evidence merely to obtain those locks.
+Five fixed SQL helpers isolate those operations:
+
+| Owner migration | Helper and lock |
+| --- | --- |
+| Delegated Authority 0009 | `lock_use_grant(uuid,uuid)`: one tenant/grant, `FOR UPDATE` |
+| Delegated Authority 0009 | `lock_use_claim(uuid,text,text,uuid)`: one tenant/typed actor/command, `FOR UPDATE` |
+| Delegated Authority 0009 | `lock_use_admission(uuid,text,text,uuid)`: one tenant/typed actor/challenge, `FOR UPDATE` |
+| Flow 0007 | `lock_delegated_use_definition(text,text)`: one tenant/definition, `FOR SHARE` |
+| Flow 0007 | `lock_delegated_use_proof(uuid,uuid,uuid)`: one tenant/challenge/submission, `FOR SHARE` |
+
+Each helper is migration-owned, `SECURITY DEFINER`, `VOLATILE`, fully qualified,
+and fixed to `search_path=pg_catalog`; PUBLIC receives no EXECUTE. The helpers
+accept only exact typed identifiers and contain no dynamic SQL or writes. The
+existing claim guard's grant read uses the new grant-lock helper while preserving
+all its original validation. Readiness validates the helpers' exact bodies,
+owners, return types and execution/security settings; a replacement with a
+similar name is insufficient. The read-only preflight also checks the three
+Delegated Authority helpers and rejects body, path, security or privilege drift.
+
+Grant the use writer EXECUTE on these five helpers and the existing pure
+`grant_instant(text)` function, selected metadata/evidence SELECT, and INSERT
+only on its command/use and Flow instance/binding/consumption tables. Its only
+UPDATE authority is on Flow instance `status`, `current_step_id`, `completed_at`,
+`updated_at`, `result` and `state_history`. The independent Flow ingress role
+retains its existing, different progress columns and definition-lock helper.
+Neither writer receives lifecycle, consent-producer, source-administrator or
+schema-owner authority. Use the exact checked-in
+[`ROLE_CONTRACTS`](../rust/services/delegated-use/src/database.rs) when provisioning;
+the [host runbook](../rust/services/delegated-use/README.md) maps every connection
+setting to its owner.
+
+Host readiness uses actual authenticated login names, not URL differences, and
+requires all fourteen to be distinct. It inspects every reachable membership,
+including NOINHERIT paths, grant options, schema/database creation, application
+object ownership, unrelated table/column privileges, security-definer execution,
+PostgreSQL predefined roles, administrative parameter authority and MAINTAIN.
+Selected tables must be visible without
+RLS. For each connected database, it also checks any of the other configured
+login identities present there, preventing a source reader from inheriting
+writer privileges through a different connection. A role's table/function
+allowlist applies only in its actual selected database; elsewhere the
+application allowlist is empty. A matching helper name in another database does
+not establish the migration-owned function that readiness verified.
+
+The ledger, evidence and Flow pools are compared by actual server/database
+identity. Flow and approval storage UUIDs additionally bind their participating
+connections. Organization readers must share their actual source database;
+Trust Profile, Issuance and credential evidence retain their independently
+checked source boundaries. A wrong Flow database, merged identities, elevated
+membership or drifted lock helper leaves the host unavailable.
+
+The four-role lifecycle preflight remains required for that owner's upgrade;
+it does not qualify these fourteen serving roles. Run the host's complete
+readiness after provisioning. Disabling or rolling back traffic preserves all
+existing records and pending claims. No helper or startup path reconstructs
+evidence or authorizes a repeat of an uncertain external operation.
 
 The explicit mutual-TLS listener and internal routers are library components.
 Database installation does not enable an executable, a public route or a

@@ -116,6 +116,29 @@ the runtime mapping, principal, or key requires newly established session
 evidence; an old tuple cannot silently move to the replacement. Even non-shared
 runtimes cannot self-assert a supplied subject-session tuple.
 
+## Application OID4VP audience adapter
+
+The selected Flow verifier emits the standard DID client identifier
+`decentralized_identifier:did:...`. Its prefix contains an underscore and is not
+an RFC URI scheme. This application consumer separately qualifies that existing
+format in `record.authentication.audience` and
+`configuration.allowed_audiences`. The complete identifier keeps the existing
+1,024-character bound and must contain a bare DID with a lowercase method name,
+a nonempty method-specific identifier, valid percent escapes, and no whitespace,
+controls, non-ASCII text, or wildcards. DID URL paths, queries, and fragments are
+rejected. Other optional OID4VP client-ID prefixes are not qualified by this
+adapter.
+
+The prefix and all original identifier bytes are retained. Binding still requires
+exact equality against the independently loaded audience allowlist; case changes,
+percent-encoding aliases, or removing the prefix do not create a match. This
+format check does not resolve a DID, authenticate a verifier, or establish key
+possession. The OID4VP proof owner must authenticate the same complete audience.
+Generic URI validation remains unchanged for principals, source issuers, runtime
+references, evidence, and enrollment, and delegated operation audiences remain
+ordinary URIs. This application adapter changes neither the pinned Protocol
+source/schema bytes nor the public protocol version or qualification status.
+
 ## Fingerprint handling
 
 `TypedThumbprint` preserves the distinction between:

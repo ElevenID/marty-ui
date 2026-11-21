@@ -299,8 +299,12 @@ impl PreparedUseChallenge for FlowPreparedUseChallenge {
     ) -> UseResult<()> {
         require_storage(transaction, self.storage_id).await?;
         let expected = self.prepared.definition();
-        let row = sqlx::query("SELECT * FROM flow_service.flow_definitions WHERE id=$1 AND organization_id=$2 FOR SHARE")
-            .bind(&expected.id).bind(&expected.organization_id).fetch_optional(&mut *transaction).await.map_err(unavailable)?
+        let row = sqlx::query("SELECT * FROM flow_service.lock_delegated_use_definition($2,$1)")
+            .bind(&expected.id)
+            .bind(&expected.organization_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(unavailable)?
             .ok_or(DelegationUseCommandError::Conflict)?;
         let definition = definition_from_row(&row).map_err(unavailable)?;
         if &definition != expected {
@@ -427,9 +431,14 @@ impl PreparedUseFinalization for FlowPreparedUseFinalization {
         now: DateTime<Utc>,
     ) -> UseResult<()> {
         require_storage(transaction, self.storage_id).await?;
-        let definition = sqlx::query("SELECT * FROM flow_service.flow_definitions WHERE id=$1 AND organization_id=$2 FOR SHARE")
-            .bind(&self.definition.id).bind(&self.definition.organization_id).fetch_optional(&mut *transaction).await.map_err(unavailable)?
-            .ok_or(DelegationUseCommandError::Conflict)?;
+        let definition =
+            sqlx::query("SELECT * FROM flow_service.lock_delegated_use_definition($2,$1)")
+                .bind(&self.definition.id)
+                .bind(&self.definition.organization_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(unavailable)?
+                .ok_or(DelegationUseCommandError::Conflict)?;
         if definition_from_row(&definition).map_err(unavailable)? != self.definition {
             return Err(DelegationUseCommandError::Conflict);
         }
@@ -475,7 +484,7 @@ impl PreparedUseFinalization for FlowPreparedUseFinalization {
         {
             return Err(DelegationUseCommandError::Expired);
         }
-        let proof = sqlx::query("SELECT proof_digest,received_at,actor_type,actor_id FROM flow_service.delegated_proof_submissions WHERE submission_id=$1 AND challenge_id=$2 AND organization_id=$3 FOR SHARE")
+        let proof = sqlx::query("SELECT proof_digest,received_at,actor_type,actor_id FROM flow_service.lock_delegated_use_proof($3,$2,$1)")
             .bind(self.submission_id).bind(self.retained.challenge_id).bind(self.retained.organization_id)
             .fetch_optional(&mut *transaction).await.map_err(unavailable)?
             .ok_or(DelegationUseCommandError::Conflict)?;

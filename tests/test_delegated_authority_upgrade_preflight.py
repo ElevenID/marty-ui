@@ -390,7 +390,7 @@ def test_retained_use_history_survives_grant_revocation_without_recovery_side_ef
     database.sql(f"UPDATE delegated_authority_service.delegation_grants SET status='REVOKED',revision=3,updated_at={literal(grant['updated_at'])},grant_document={literal(json.dumps(grant))}::jsonb WHERE id={literal(grant['id'])};")
     before = database.snapshot()
     report = database.inspect("post-migration")
-    assert_passed(report, version=8, grants=1, events=3)
+    assert_passed(report, version=9, grants=1, events=3)
     data = json.loads(report.stdout)
     assert data["use_command_claim_count"] == claims and data["use_command_result_count"] == results
     assert database.snapshot() == before
@@ -493,7 +493,7 @@ def test_organization_approval_preflight_preserves_historical_evidence_after_rev
     revoke_grant(database, grant)
     before = database.snapshot()
     report = database.inspect("post-migration")
-    assert_passed(report, version=8, grants=1, events=2)
+    assert_passed(report, version=9, grants=1, events=2)
     parsed = json.loads(report.stdout)
     assert parsed["approval_review_count"] == parsed["approval_confirmation_count"] == parsed["organization_authority_observation_count"] == 1
     assert database.snapshot() == before
@@ -532,7 +532,7 @@ def test_approval_producer_optional_privileges_do_not_require_lifecycle_result_a
             delegated_authority_service.approval_storage_identity TO {authority};
         GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {authority};
     """)
-    assert_passed(database.inspect("post-migration"), version=8)
+    assert_passed(database.inspect("post-migration"), version=9)
     database.sql(f"GRANT INSERT ON delegated_authority_service.organization_authority_observations TO {consent};")
     assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
 
@@ -718,6 +718,57 @@ def test_actual_database_privilege_paths_are_audited(database, postgres, mutatio
     assert_rejected_without_changes(database, code, phase="post-migration")
 
 
+@pytest.mark.parametrize("role,privilege,parameter,grant_option", [
+    ("request_role", "SET", "session_replication_role", False),
+    ("confirmation_role", "ALTER SYSTEM", "work_mem", False),
+    ("authority_role", "SET", "statement_timeout", True),
+    ("request_role", "SET", "marty_unloaded_extension.authority", False),
+])
+def test_administrative_parameter_authority_is_rejected_without_setting_it(
+    database, role, privilege, parameter, grant_option
+):
+    database.migrate()
+    database.privileges()
+    name = identifier(database.roles[role])
+    parameter = identifier(parameter)
+    suffix = " WITH GRANT OPTION" if grant_option else ""
+    database.sql(f"GRANT {privilege} ON PARAMETER {parameter} TO {name}{suffix};")
+    try:
+        assert_rejected_without_changes(database, "DA_PREFLIGHT_PARAMETER_PRIVILEGE", phase="post-migration")
+        assert database.sql("SHOW session_replication_role;").stdout.strip() == "origin"
+    finally:
+        database.sql(f"REVOKE {privilege} ON PARAMETER {parameter} FROM {name};")
+    assert database.inspect("post-migration").returncode == 0
+
+
+def test_parameter_authority_through_noinherit_membership_is_rejected(database, postgres):
+    database.migrate()
+    database.privileges()
+    role = "da_parameter_" + uuid4().hex[:16]
+    postgres(f"CREATE ROLE {identifier(role)} NOLOGIN NOINHERIT;")
+    database.extra_roles.append(role)
+    request = identifier(database.roles["request_role"])
+    database.sql(f"ALTER ROLE {request} NOINHERIT; GRANT {identifier(role)} TO {request};")
+    database.sql(f"GRANT SET ON PARAMETER session_replication_role TO {identifier(role)};")
+    try:
+        assert_rejected_without_changes(database, "DA_PREFLIGHT_PARAMETER_PRIVILEGE", phase="post-migration")
+        assert database.sql("SHOW session_replication_role;").stdout.strip() == "origin"
+    finally:
+        database.sql(f"REVOKE SET ON PARAMETER session_replication_role FROM {identifier(role)};")
+    assert database.inspect("post-migration").returncode == 0
+
+
+def test_ordinary_userset_parameter_remains_available(database):
+    database.migrate()
+    database.privileges()
+    request = identifier(database.roles["request_role"])
+    database.sql(f"GRANT SET ON PARAMETER statement_timeout TO {request};")
+    try:
+        assert database.inspect("post-migration").returncode == 0
+    finally:
+        database.sql(f"REVOKE SET ON PARAMETER statement_timeout FROM {request};")
+
+
 def test_psql_role_arguments_are_quoted_values_not_executable_sql(database_factory):
     with database_factory(unusual_names=True) as database:
         database.migrate()
@@ -833,7 +884,7 @@ def test_expired_machine_audit_is_preserved_history_without_runtime_qualificatio
     database.sql("SELECT pg_sleep(1.1);")
     before = database.snapshot()
     result = database.inspect("post-migration")
-    assert_passed(result, version=8)
+    assert_passed(result, version=9)
     report = json.loads(result.stdout.strip())
     assert report["machine_authentication_evidence_count"] == 1
     assert report["legacy_machine_receipt_count"] == 0
@@ -880,7 +931,7 @@ def test_additive_machine_audit_migration_preserves_preexisting_use_outcome(data
     for table, rows in before.items():
         if table != "schema_migrations":
             assert after[table] == rows
-    result = database.inspect("post-migration")
+    result = database.inspect("pre-migration")
     assert_passed(result, version=8, grants=1, events=2)
     report = json.loads(result.stdout.strip())
     assert report["machine_authentication_evidence_count"] == 0
@@ -987,7 +1038,7 @@ def test_machine_policy_retained_source_and_evaluation_are_inspected_without_aut
     insert_machine_policy_pair(database)
     before = database.snapshot()
     result = database.inspect("post-migration")
-    assert_passed(result, version=8)
+    assert_passed(result, version=9)
     report = json.loads(result.stdout.strip())
     assert report["machine_authorization_evidence_count"] == 2
     assert report["legacy_machine_authorization_audit_count"] == 0
@@ -1024,9 +1075,56 @@ def test_machine_policy_upgrade_preserves_unqualified_original_authorization_his
     for table, rows in before.items():
         if table != "schema_migrations":
             assert after[table] == rows
-    result = database.inspect("post-migration")
+    result = database.inspect("pre-migration")
     assert_passed(result, version=8)
     report = json.loads(result.stdout.strip())
     assert report["legacy_machine_authorization_audit_count"] == 1
     assert report["machine_authorization_evidence_count"] == 0
     assert report["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("signature,table", [
+    ("lock_use_grant(uuid,uuid)", "delegation_grants"),
+    ("lock_use_claim(uuid,text,text,uuid)", "use_command_claims"),
+    ("lock_use_admission(uuid,text,text,uuid)", "use_admissions"),
+])
+@pytest.mark.parametrize("mutation", ["missing", "body", "public-execute", "security", "search-path"])
+def test_serving_lock_helpers_are_exact_and_unavailable_to_lifecycle_roles(database, signature, table, mutation):
+    database.migrate()
+    database.privileges()
+    function = "delegated_authority_service." + signature
+    if mutation == "missing":
+        database.sql(f"DROP FUNCTION {function};")
+        code = "DA_PREFLIGHT_USE_LOCK_SCHEMA"
+    elif mutation == "body":
+        # Owner-only synthetic replacement; never execute the changed function.
+        arguments = database.sql(f"SELECT pg_get_function_identity_arguments({literal(function)}::regprocedure);").stdout.strip()
+        name = function.split("(", 1)[0]
+        database.sql(f"CREATE OR REPLACE FUNCTION {name}({arguments}) RETURNS SETOF delegated_authority_service.{table} LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT * FROM delegated_authority_service.{table} WHERE false';")
+        code = "DA_PREFLIGHT_USE_LOCK_HELPER"
+    elif mutation == "public-execute":
+        database.sql(f"GRANT EXECUTE ON FUNCTION {function} TO PUBLIC;")
+        code = "DA_PREFLIGHT_FUNCTION_PRIVILEGE"
+    elif mutation == "security":
+        database.sql(f"ALTER FUNCTION {function} SECURITY INVOKER;")
+        code = "DA_PREFLIGHT_FUNCTION_OWNER"
+    else:
+        database.sql(f"ALTER FUNCTION {function} SET search_path=public;")
+        code = "DA_PREFLIGHT_FUNCTION_OWNER"
+    assert_rejected_without_changes(database, code, phase="post-migration")
+
+
+def test_serving_lock_upgrade_preserves_original_grants_commands_and_use_evidence(database):
+    database.migrate(8)
+    database.privileges()
+    insert_retained_use(database, "PERMIT", delegate_type="SERVICE_ACCOUNT")
+    before = database.snapshot()
+    assert_passed(database.inspect("pre-migration"), version=8, grants=1, events=2)
+    raw = (SERVICE / "migrations/0009_use_serving_locks.sql").read_bytes()
+    database.sql(f"SET ROLE {identifier(database.roles['migration_owner'])}; BEGIN;\n" + raw.decode() +
+        f"\nINSERT INTO delegated_authority_service.schema_migrations(version,checksum) VALUES (9,{literal('sha256:' + hashlib.sha256(raw).hexdigest())}); COMMIT; RESET ROLE;")
+    after = database.snapshot()
+    for table, rows in before.items():
+        if table != "schema_migrations":
+            assert after[table] == rows
+    assert_passed(database.inspect("post-migration"), version=9, grants=1, events=2)

@@ -93,8 +93,64 @@ impl<'de> Visitor<'de> for StrictValue {
     }
 }
 
+fn integer_lexemes(raw: &[u8]) -> bool {
+    // serde_json's arbitrary_precision feature changes number visitor dispatch
+    // into a synthetic map for fractions/exponents/overflow. Inspect original
+    // numeric tokens before deserialization so feature unification cannot turn
+    // an unsupported number into an object or silently change its value.
+    // This is not a second structural parser: serde still validates the JSON
+    // grammar, string escapes/UTF-8, duplicate fields and nesting below.
+    let mut index = 0;
+    while index < raw.len() {
+        match raw[index] {
+            b'"' => {
+                index += 1;
+                while index < raw.len() {
+                    match raw[index] {
+                        b'\\' => index += 2,
+                        b'"' => {
+                            index += 1;
+                            break;
+                        }
+                        _ => index += 1,
+                    }
+                }
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = index;
+                index += 1;
+                while index < raw.len()
+                    && (raw[index].is_ascii_digit()
+                        || matches!(raw[index], b'.' | b'e' | b'E' | b'+' | b'-'))
+                {
+                    index += 1;
+                }
+                let Ok(literal) = std::str::from_utf8(&raw[start..index]) else {
+                    return false;
+                };
+                let negative = literal.starts_with('-');
+                let digits = literal.strip_prefix('-').unwrap_or(literal);
+                if digits.is_empty()
+                    || !digits.bytes().all(|byte| byte.is_ascii_digit())
+                    || (digits.len() > 1 && digits.starts_with('0'))
+                    || if negative {
+                        // Without arbitrary_precision, -0 reaches visit_f64.
+                        digits == "0" || literal.parse::<i64>().is_err()
+                    } else {
+                        literal.parse::<u64>().is_err()
+                    }
+                {
+                    return false;
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    true
+}
+
 pub(crate) fn object(raw: &[u8]) -> Result<Value, BindingError> {
-    if raw.len() > MAX_DOCUMENT_BYTES {
+    if raw.len() > MAX_DOCUMENT_BYTES || !integer_lexemes(raw) {
         return Err(BindingError::new(ErrorKind::InvalidJson, "document"));
     }
     let mut deserializer = serde_json::Deserializer::from_slice(raw);
@@ -123,4 +179,61 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(
 ) -> Result<T, BindingError> {
     serde_json::from_value(object(raw)?)
         .map_err(|_| BindingError::new(ErrorKind::SchemaInvalid, field))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_lexemes_reject_before_projection_independent_of_serde_features() {
+        for literal in [
+            "1.0",
+            "0.0",
+            "-0",
+            "-0.0",
+            "1e0",
+            "1E+0",
+            "1e-1",
+            "1e999",
+            "18446744073709551616",
+            "-9223372036854775809",
+            "01",
+            "-01",
+        ] {
+            for raw in [
+                format!("{{\"x\":{literal}}}"),
+                format!("{{\"nested\":[{{\"x\":{literal}}}]}}"),
+            ] {
+                assert_eq!(
+                    object(raw.as_bytes()).unwrap_err().kind(),
+                    ErrorKind::InvalidJson,
+                    "accepted {literal}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_bounds_and_quoted_lexemes_preserve_original_values() {
+        for literal in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "18446744073709551615",
+        ] {
+            let raw = format!("{{\"x\":{literal}}}");
+            let parsed = object(raw.as_bytes()).unwrap();
+            assert!(parsed["x"].is_number());
+            assert_eq!(parsed["x"].to_string(), literal);
+        }
+        let raw = br#"{"1e999":"1.0","escaped":"a\"1e999\\-0","unicode":"\u0031e999","nested":["18446744073709551616","-9223372036854775809"]}"#;
+        let parsed = object(raw).unwrap();
+        assert_eq!(parsed["1e999"], "1.0");
+        assert_eq!(parsed["escaped"], "a\"1e999\\-0");
+        assert_eq!(parsed["unicode"], "1e999");
+        assert_eq!(parsed["nested"][0], "18446744073709551616");
+        assert_eq!(parsed["nested"][1], "-9223372036854775809");
+    }
 }

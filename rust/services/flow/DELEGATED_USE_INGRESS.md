@@ -3,8 +3,10 @@
 `FlowDelegatedUseIngress` provides explicitly assembled internal request
 retrieval and immutable proof submission for an original delegated Flow.
 `delegated_use_flow_router` protects it with the reusable Delegated Authority
-workload authenticator. Existing executables and public Gateway route tables do
-not install this router.
+workload authenticator. The explicit default-off
+[`marty-delegated-use` host](../delegated-use/README.md) installs this router with
+mandatory mutual TLS. The existing general Flow executable and public Gateway
+route tables do not install it.
 
 The application requires an opaque `AuthenticatedDelegationUseContext` and an
 independent current `DelegationUseIngressAuthorizer`. The concrete Organization

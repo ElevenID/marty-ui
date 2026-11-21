@@ -149,13 +149,15 @@ bearer-permit guarantee is implied.
 return `UnsupportedCommand`; they are not composed through this lifecycle
 service or its human executable. The separate internal
 [`DelegationUseCommandService`](USE_COMMANDS.md) implements the bounded KEY use
-composition without installing a use host or Gateway route.
+composition selected by the separate default-off
+[`marty-delegated-use` host](../delegated-use/README.md). No public Gateway route
+is installed.
 
 The [internal use HTTP router](USE_HTTP.md) selects either
 [mandatory mutual TLS](USE_MTLS.md) with exact leaf certificate identity mapping
 or a separately trusted forwarding workload. It carries the original bounded
-authentication observation into source rechecks and COMMIT guards. It is not
-registered in an executable. Full-machine
+authentication observation into source rechecks and COMMIT guards. The explicit
+serving executable selects mandatory mutual TLS only. Full-machine
 use additionally requires the [audited machine gate](MACHINE_AUTH.md): migration
 0007 retains exact immutable audit bytes and rejects machine receipts without a
 matching retained record. The selected [nested JWT-VC adapter](MACHINE_CREDENTIALS.md)
@@ -165,8 +167,10 @@ Trust Profile, issuer/key/status ownership explicitly configured. The concrete
 [machine policy source](MACHINE_POLICY_SOURCE.md) and
 [credential source](../../crates/machine-credential-source/README.md) now implement
 those internal owner paths. Migration 0008 requires retained source/evaluation
-evidence for selected machine authorization. No use executable or public route
-is installed by these adapters.
+evidence for selected machine authorization. Migration 0009 adds fixed row-lock
+helpers so the use writer needs no UPDATE authority over grants or immutable
+claims/admissions. The executable assembles these adapters with fourteen
+restricted database connections; public routing remains separate.
 
 The [machine-use access owner](../organization/MACHINE_USE_ACCESS.md) now supplies
 current full-machine/deployment access for commands and Flow ingress. The
@@ -731,9 +735,9 @@ from enabling these approval administration routes.
 - Configure external-authority/status and external-constraint sources where
   selected, plus the consuming domain's active Cedar policy and typed entities.
   Verify freshness and revocation behavior across those independent owners.
-- Compose an explicit default-off use executable with the implemented mutual-TLS
-  boundary, current use-access/policy owners, protected request/proof ingress,
-  concrete same-database Flow owner, restricted use writer and independent source
+- Qualify deployment of the implemented default-off use executable with its
+  mutual-TLS boundary, current use-access/policy owners, protected request/proof
+  ingress, same-database Flow owner, restricted use writer and independent source
   credentials. Qualify production certificate issuance/revocation and pin
   rotation. The human command executable and Gateway lifecycle surface must
   continue rejecting use commands.

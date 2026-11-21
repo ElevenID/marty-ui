@@ -6,7 +6,9 @@ and policy sources, immutable machine audit and managed decision-receipt signing
 The current follow-on adds explicit machine-use access rights, a concrete current
 delegated-use Cedar policy owner, certificate-authenticated internal transport,
 and protected request retrieval/proof submission with retained original results.
-It does not install a delegated-use executable or public route.
+The explicit `marty-delegated-use` executable now assembles these owners behind
+mandatory mutual TLS. It stays disabled unless explicitly configured and does
+not install a public Gateway route.
 
 The human `marty-delegation-commands` executable and its Gateway surface still
 reject use commands. Each current source, transport, database role and receipt
@@ -18,9 +20,10 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 
 | Component | Implemented responsibility | Boundary that remains explicit |
 | --- | --- | --- |
+| `marty-delegated-use` | Default-off serving executable, strict bounded configuration, fourteen restricted database connections, concrete source/provider assembly and readiness before mandatory mTLS listen | Deployed CA/custody/role qualification and public wallet/consumer contracts remain separate |
 | `DelegationUseCommandService` | Strict P03 use intent, durable original command claims, current caller authorization, sealed START admission, final PERMIT/DENY evaluation and original-result recovery | Internal KEY-grant API; requires explicit authenticated host composition |
 | `OrganizationDelegationUseCommandAuthorizer` | Current active tenant/full-machine/deployment and five explicitly assigned entrypoint rights, including historical result recovery | Does not authenticate the transport or grant consumer business rights |
-| `delegated_use_command_router` | Explicit mutual-TLS or trusted-forwarder authentication, strict original JSON and observation bounds propagated through current source checks and COMMIT | No automatic executable/public Gateway installation |
+| `delegated_use_command_router` | Explicit mutual-TLS or trusted-forwarder authentication, strict original JSON and observation bounds propagated through current source checks and COMMIT | The new executable selects mTLS only; no public Gateway installation |
 | `BoundDelegatedUseMtlsServer` | Mandatory client certificate verification, exact leaf URI/digest-to-machine mapping and original certificate validity bounds; remote keyless server identity | CA issuance, revocation, pin rotation and deployed custody remain operator qualification |
 | `PgDelegationUseRepository` | Shared lifecycle/use command identity, immutable admission/receipt/result records and deferred deadline checks | Requires separately provisioned privileges and the same PostgreSQL database as its Flow owner |
 | `FlowDelegatedUseOwner` | Actual Flow challenge preparation, immutable proof submission, frozen definition/proof checks, retained nonce admission and final consumption on the supplied connection | Storing proof bytes does not verify them |
@@ -32,7 +35,8 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 | `OrganizationDelegationCedarPolicySource` | Concrete current Organization policy, immutable attributed revisions and exact retained source scope; real MMF compilation under a fixed context schema | Selected EXACT_OPERATION only; external-domain attributes and permissions remain separate consumer adapters |
 | `HttpManagedDelegatedReceiptSigner` | Pinned managed issuer/key, separate signing-grant origin, remote signing and independent verification of the returned signature | Explicit deployment selection, key provisioning and live provider qualification remain required |
 
-The component contracts are documented in
+The component contracts are documented in the
+[serving-host runbook](../rust/services/delegated-use/README.md),
 [retained use commands](../rust/services/delegated-authority/USE_COMMANDS.md),
 [internal authenticated transport](../rust/services/delegated-authority/USE_HTTP.md),
 [certificate-authenticated transport](../rust/services/delegated-authority/USE_MTLS.md),
@@ -249,6 +253,12 @@ migration 0007 adds exact machine audit retention and receipt linkage. Migration
 records. Organization migrations 0007–0008 add dedicated machine-use access and
 delegated-use policy ownership. Flow migration 0006 adds immutable request
 preparation claims, exact request results and proof-ingress authorization.
+Delegated Authority migration 0009 and Flow migration 0007 add five fixed
+migration-owned row-lock helpers. Serving credentials can take the required
+locks without UPDATE authority on grants, definitions or immutable evidence.
+The original claim trigger delegates only its grant lock to the new helper;
+all original claim checks remain. Readiness checks exact helper bodies, owners,
+return types and search paths, and rejects PUBLIC execution.
 Earlier migration bytes are preserved. Follow the
 [read-only upgrade and rollback procedure](delegated-authority-upgrade.md);
 readiness never repairs missing historical evidence.
@@ -263,11 +273,11 @@ participate in the same database transaction.
 The machine audit writer needs schema usage, migration metadata SELECT,
 SELECT on retained machine-authorization evidence, and SELECT/INSERT on its own
 audit table. It has no grant, command, Flow, consent or
-source-owner access. A future use writer receives audit SELECT only. Readiness
+source-owner access. The explicit use writer receives audit SELECT only. Readiness
 and preflight validate the actual role boundary, guard/index shape, critical
 hash/reference/byte-document CHECK constraints and retained-data consistency.
 
-Disabling a future host stops new admissions while preserving original claims,
+Disabling the host stops new admissions while preserving original claims,
 nonce reservations, proofs, decisions and receipts. Rollback does not erase an
 ambiguous command or free its identity for reuse.
 
@@ -291,7 +301,7 @@ The following are separate verification views and overlap; do not add them into
 one aggregate. Rust checks use the locked dependency graph offline. Hosted
 Actions and production deployment are outside this evidence. This table records
 the prior `085d65c` baseline; the current follow-on checks are recorded in the
-[milestone checkpoint](agent-trust-runtime-milestones.md#current-access-delegated-policy-and-authenticated-ingress-follow-on).
+[milestone checkpoint](agent-trust-runtime-milestones.md#current-default-off-serving-host-follow-on).
 
 | Check | Result |
 | --- | --- |
@@ -337,11 +347,10 @@ external HTTPS deployment remain open.
    qualify required attestation when selected. External domain policy,
    connection/grant aggregation and broader authority/session profiles retain
    their separate contracts.
-2. Assemble an explicit, default-off executable using the implemented internal
-   command and request/proof routers, mandatory mutual TLS, exact certificate
-   bindings and reviewed use, Flow, audit and source credentials. Qualify CA
-   issuance/revocation and pin rotation. The human administration host must
-   continue rejecting use commands.
+2. Qualify deployment of the implemented default-off executable, including its
+   mandatory mutual TLS, exact certificate bindings and separately provisioned
+   use, Flow, audit and source credentials. Qualify CA issuance/revocation and
+   pin rotation. The human administration host continues rejecting use commands.
 3. Qualify deployed HTTPS and production custody/credentials beyond the passing
    disposable OpenBao/Redis gate, including the outer receipt adapter and any
    selected AWS/IAM or network-timeout profile.

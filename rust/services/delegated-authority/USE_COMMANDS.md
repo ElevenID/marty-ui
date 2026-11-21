@@ -12,10 +12,12 @@ proof/constraint/Cedar evaluation, the managed receipt issuer, and the Flow
 owner. Enabling a future public host additionally requires operational workload
 authentication and deployment qualification of these ports.
 
-The explicitly assembled [internal HTTP router](USE_HTTP.md) now authenticates a
-dedicated forwarding workload, validates the complete typed actor and binds the
-original authentication deadline through current source rechecks and the local
-transaction. It is not installed by an executable. Original source observations
+The explicitly assembled [internal HTTP router](USE_HTTP.md) supports mandatory
+mutual TLS or a separately trusted forwarding workload, validates the complete
+typed actor and binds the original authentication deadline through current source
+rechecks and the local transaction. The default-off
+[`marty-delegated-use` executable](../delegated-use/README.md) selects only mutual
+TLS. Original source observations
 must satisfy their own freshness contract before being shortened to the hop
 deadline. Finalization rechecks that bound after proof resolution and prepared
 Flow work, before it starts an external receipt-signing invocation.
@@ -144,7 +146,7 @@ Its production role composition and public host are separate qualification
 gates. Do not grant a lifecycle or evidence reader arbitrary Flow, proof,
 signing, consent or authority producer writes to make this composition work.
 
-Disable a future use host to stop new admissions, while preserving all command
+Disable the use host to stop new admissions, while preserving all command
 claims, nonce bindings, consumed outcomes and receipts. Rollback never clears an
 ambiguous command or permits nonce reuse. Public MIP, support/discovery and Rifare
-business execution remain unchanged by this library milestone.
+business execution remain unchanged by the internal serving candidate.

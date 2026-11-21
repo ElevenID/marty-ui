@@ -1,0 +1,45 @@
+[package]
+name = "marty-delegated-use"
+version = "0.1.0"
+description = "Explicit internal Marty delegated-use serving composition"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+marty-delegated-authority = { path = "../delegated-authority" }
+marty-flow = { path = "../flow" }
+marty-machine-credential-source = { path = "../../crates/machine-credential-source" }
+marty-organization = { path = "../organization" }
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
+marty-principal-runtime-binding = { path = "../../crates/principal-runtime-binding" }
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity", "https"] }
+marty-signing-grant = { path = "../../crates/signing-grant" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+marty-credential-template = { path = "../credential-template" }
+ed25519-dalek.workspace = true
+marty-issuance-service = { path = "../issuance" }
+marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "wallet"] }
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
+marty-trust-profile = { path = "../trust-profile" }
+p256 = { workspace = true, features = ["ecdsa"] }
+rand.workspace = true
+rcgen.workspace = true
+tower.workspace = true

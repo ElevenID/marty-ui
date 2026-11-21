@@ -70,7 +70,8 @@ DECLARE
         '2dbd6187782f4e53608adfce3a60a8619eb0d598bb66ec78cd83cb013a6596f6',
         '11682b6f2a646ded3a56f05f0f6dc7c66f183f35cad4b2892bb7c5a089495287',
         'b7bf6fe2257c3869b3d35088c5892ad719f7e86b466cbf42d58ebf41bd9c115f',
-        '1281908a88452a7068fa123047a82a680a5e60842e53bfead470b9277b4b84fe'
+        '1281908a88452a7068fa123047a82a680a5e60842e53bfead470b9277b4b84fe',
+        '5d97df8bba281edc60806d691cadb66e5beea7781a4217962591e88e2a627afa'
     ];
     evidence_tables TEXT[] := ARRAY['consent_confirmations','consent_withdrawals',
         'representation_authority_sources','representation_authority_assertions'];
@@ -184,6 +185,11 @@ BEGIN
     IF (schema_version>=8) IS DISTINCT FROM (to_regclass('delegated_authority_service.machine_authorization_evidence') IS NOT NULL) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: machine policy audit table disagrees with recorded migrations';
     END IF;
+    SELECT count(*) INTO use_table_count FROM pg_proc WHERE pronamespace=schema_id
+      AND proname IN ('lock_use_grant','lock_use_claim','lock_use_admission');
+    IF (schema_version>=9 AND use_table_count<>3) OR (schema_version<9 AND use_table_count<>0) THEN
+        RAISE EXCEPTION 'DA_PREFLIGHT_USE_LOCK_SCHEMA: serving lock helpers do not match migration history';
+    END IF;
     IF selected_phase='post-migration' AND schema_version <> cardinality(expected_checksums) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: post-migration inspection requires every bundled migration';
     END IF;
@@ -213,7 +219,8 @@ BEGIN
                  OR prosecdef IS DISTINCT FROM (proname IN
                     ('journal_grant_lifecycle','guard_consent_source','guard_authority_assertion',
                      'guard_approval_review','guard_approval_confirmation_binding',
-                     'guard_organization_authority_observation')))) THEN
+                     'guard_organization_authority_observation','lock_use_grant',
+                     'lock_use_claim','lock_use_admission')))) THEN
             RAISE EXCEPTION 'DA_PREFLIGHT_FUNCTION_OWNER: service function owner, security mode or fixed search path differs';
         END IF;
     END IF;
@@ -234,6 +241,20 @@ BEGIN
                OR (assumed_role.oid=ANY(role_ids[2:4]) AND assumed_role.oid<>role_ids[role_index])
                OR has_database_privilege(assumed_role.oid,current_database(),'CREATE') THEN
                 RAISE EXCEPTION 'DA_PREFLIGHT_ROLE_ESCALATION: request/producer identity can reach administrative or another component authority';
+            END IF;
+            -- Parameter ACLs can suppress ordinary integrity triggers without
+            -- changing role flags, table grants or the trigger definitions.
+            -- Ordinary USERSET configuration remains allowed; administrative
+            -- settings, unknown extension settings and delegation do not.
+            IF current_setting('server_version_num')::INTEGER >= 150000 THEN
+                IF EXISTS(SELECT 1 FROM pg_parameter_acl parameter
+                    LEFT JOIN pg_settings setting ON setting.name=parameter.parname
+                    WHERE has_parameter_privilege(assumed_role.oid,parameter.parname,
+                        'ALTER SYSTEM,SET WITH GRANT OPTION,ALTER SYSTEM WITH GRANT OPTION')
+                    OR (NOT coalesce(setting.context='user',false)
+                        AND has_parameter_privilege(assumed_role.oid,parameter.parname,'SET'))) THEN
+                    RAISE EXCEPTION 'DA_PREFLIGHT_PARAMETER_PRIVILEGE: request/producer identity can change or delegate administrative parameter settings';
+                END IF;
             END IF;
             IF schema_id IS NOT NULL AND has_schema_privilege(assumed_role.oid,schema_id,'CREATE') THEN
                 RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_PRIVILEGE: request/producer identity can create service objects';
@@ -917,6 +938,30 @@ BEGIN
 
     PERFORM set_config('marty.preflight.result',CASE WHEN selected_phase='post-migration'
         THEN 'DATABASE_PREFLIGHT_PASSED' ELSE 'PRE_MIGRATION_INSPECTION_PASSED' END,true);
+    IF schema_version>=9 THEN
+        IF NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid=to_regprocedure('delegated_authority_service.guard_use_command_claim()')
+          AND encode(sha256(convert_to(prosrc,'UTF8')),'hex')='1421459962bb49b3d91a3d7b82e56d7cd5430b0cc9e6f771144b20912ed064c6') THEN
+            RAISE EXCEPTION 'DA_PREFLIGHT_USE_LOCK_HELPER: use claim lock delegation or binding guard differs';
+        END IF;
+        SELECT count(*) INTO use_table_count FROM (VALUES
+            ('lock_use_grant(uuid,uuid)','delegation_grants','d1aa2f9582901679fe383ccfe423b0c2437c163727cc3d8036af88ee3e23d2ae'),
+            ('lock_use_claim(uuid,text,text,uuid)','use_command_claims','3e08d33df8a634589311359b388ca8eb3255b9f49d0c0b2fb9b764648af6cca3'),
+            ('lock_use_admission(uuid,text,text,uuid)','use_admissions','0090bcd7bb36e1be9bf9579f63e7ce518de80530119d3d7486c2a72efa36b317')
+        ) expected(signature,table_name,body_digest)
+        JOIN pg_proc p ON p.oid=to_regprocedure('delegated_authority_service.'||expected.signature)
+        JOIN pg_class t ON t.oid=to_regclass('delegated_authority_service.'||expected.table_name)
+        JOIN pg_language l ON l.oid=p.prolang
+        WHERE p.prosecdef AND p.proretset AND p.prorettype=t.reltype AND p.prokind='f'
+          AND p.provolatile='v' AND p.proparallel='u' AND NOT p.proisstrict AND p.pronargdefaults=0
+          AND l.lanname='sql' AND p.proconfig=ARRAY['search_path=pg_catalog']::TEXT[]
+          AND encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')=expected.body_digest
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                         WHERE a.grantee=0 AND a.privilege_type='EXECUTE');
+        IF use_table_count<>3 THEN
+            RAISE EXCEPTION 'DA_PREFLIGHT_USE_LOCK_HELPER: serving lock body, shape or PUBLIC access differs';
+        END IF;
+    END IF;
+
     PERFORM set_config('marty.preflight.version',schema_version::TEXT,true);
     PERFORM set_config('marty.preflight.grants',grant_count::TEXT,true);
     PERFORM set_config('marty.preflight.events',event_count::TEXT,true);

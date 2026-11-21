@@ -73,6 +73,9 @@ pub async fn migrate_flow_schema_for_organization(
     sqlx::raw_sql(include_str!("../migrations/0006_delegated_use_ingress.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0007_delegated_use_locks.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
@@ -167,6 +170,7 @@ async fn validate_builtin_ownership(
 async fn validate_connection(
     connection: &mut sqlx::PgConnection,
 ) -> Result<(), FlowMigrationError> {
+    validate_delegated_use_lock_helpers(connection).await?;
     let version: Option<String> = sqlx::query_scalar(
         "SELECT version FROM flow_service.rust_schema_versions WHERE version=$1",
     )
@@ -419,4 +423,66 @@ async fn validate_connection(
 
 fn incompatible(message: &str) -> FlowMigrationError {
     FlowMigrationError::Incompatible(message.into())
+}
+
+/// Verify only the exact lock helpers required by the internal use writer.
+/// This reads metadata through a restricted Flow connection and changes no data.
+pub async fn validate_delegated_use_lock_schema(pool: &PgPool) -> Result<(), FlowMigrationError> {
+    let mut connection = pool.acquire().await?;
+    validate_delegated_use_lock_helpers(&mut connection).await
+}
+
+async fn validate_delegated_use_lock_helpers(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), FlowMigrationError> {
+    let migration = include_str!("../migrations/0007_delegated_use_locks.sql");
+    let marker: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM flow_service.rust_schema_versions WHERE version='rust_flow_delegated_use_locks_0007')")
+        .fetch_one(&mut *connection).await?;
+    if !marker {
+        return Err(incompatible(
+            "delegated-use serving lock migration is missing",
+        ));
+    }
+    for (name, signature, table) in [
+        (
+            "lock_delegated_use_definition",
+            "text,text",
+            "flow_definitions",
+        ),
+        (
+            "lock_delegated_use_proof",
+            "uuid,uuid,uuid",
+            "delegated_proof_submissions",
+        ),
+    ] {
+        let marker = format!("CREATE OR REPLACE FUNCTION flow_service.{name}(");
+        let expected = migration
+            .split_once(&marker)
+            .and_then(|(_, rest)| rest.split_once("AS $lock$"))
+            .and_then(|(_, rest)| rest.split_once("$lock$;"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| incompatible("delegated-use lock helper definition is missing"))?;
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+          SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          JOIN pg_language l ON l.oid=p.prolang JOIN pg_class t ON t.oid=to_regclass($3)
+          WHERE p.oid=to_regprocedure($1) AND p.prosrc=$2 AND p.prosecdef
+            AND p.prokind='f' AND p.provolatile='v' AND p.proparallel='u'
+            AND p.proretset AND NOT p.proisstrict AND p.pronargdefaults=0
+            AND p.prorettype=t.reltype AND l.lanname='sql'
+            AND p.proconfig=ARRAY['search_path=pg_catalog']::TEXT[]
+            AND p.proowner=n.nspowner AND t.relowner=n.nspowner
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                           WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))",
+        )
+        .bind(format!("flow_service.{name}({signature})"))
+        .bind(expected)
+        .bind(format!("flow_service.{table}"))
+        .fetch_one(&mut *connection)
+        .await?;
+        if !valid {
+            return Err(incompatible("delegated-use lock helper changed"));
+        }
+    }
+    Ok(())
 }

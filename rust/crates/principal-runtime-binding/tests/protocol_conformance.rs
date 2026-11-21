@@ -169,6 +169,107 @@ fn exact_principal_type_issuer_subject_audience_and_runtime_are_required() {
 }
 
 #[test]
+fn flow_did_client_audiences_preserve_the_exact_registered_value() {
+    for original in [
+        "decentralized_identifier:did:web:delegated-host.example.test",
+        "decentralized_identifier:did:web:Verifier.Example%3A8443:tenant",
+        "decentralized_identifier:did:key:z6MkiLocalShapeOnly",
+        "decentralized_identifier:did:jwk:eyJrdHkiOiJFQyJ9",
+    ] {
+        for source in [EXTERNAL, MANAGED, SHARED] {
+            let mut fixture = value(source);
+            fixture["record"]["authentication"]["audience"] = json!(original);
+            fixture["configuration"]["allowed_audiences"] = json!([original]);
+            let checked = check(&fixture).unwrap();
+            assert_eq!(checked.audience(), original);
+        }
+    }
+
+    let original = "decentralized_identifier:did:web:verifier.example";
+    for different in [
+        "did:web:verifier.example",
+        "decentralized_identifier:did:web:Verifier.Example",
+        "decentralized_identifier:did:web:%76erifier.example",
+        "decentralized_identifier:did:web:verifier.example:other",
+    ] {
+        let mut fixture = value(MANAGED);
+        fixture["record"]["authentication"]["audience"] = json!(original);
+        fixture["configuration"]["allowed_audiences"] = json!([different]);
+        rejects(&fixture, ErrorKind::AudienceMismatch);
+    }
+}
+
+#[test]
+fn malformed_or_unsupported_prefixed_audiences_fail_both_input_parsers() {
+    let oversized = format!("decentralized_identifier:did:web:{}", "a".repeat(1024));
+    for malformed in [
+        "decentralized_identifier:",
+        "decentralized_identifier:https://verifier.example",
+        "decentralized_identifier:did:",
+        "decentralized_identifier:did::verifier.example",
+        "decentralized_identifier:did:WEB:verifier.example",
+        "decentralized_identifier:did:web:",
+        "decentralized_identifier:did:web:verifier.example:",
+        "decentralized_identifier:did:web:verifier.example/path",
+        "decentralized_identifier:did:web:verifier.example?owner=other",
+        "decentralized_identifier:did:web:verifier.example#key-1",
+        "decentralized_identifier:did:web:*.example",
+        "decentralized_identifier:did:web:verifier%GG.example",
+        "decentralized_identifier:did:web:verifier%.example",
+        "decentralized_identifier:did:web:verifier.example ",
+        "decentralized_identifier:did:web:verifier\n.example",
+        "decentralized_identifier:did:web:vérifier.example",
+        "unknown_prefix:did:web:verifier.example",
+        oversized.as_str(),
+    ] {
+        let mut fixture = value(EXTERNAL);
+        fixture["record"]["authentication"]["audience"] = json!(malformed);
+        assert_eq!(
+            parse_binding_record(&bytes(&fixture["record"]))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::SchemaInvalid,
+            "accepted record audience {malformed:?}",
+        );
+        fixture["configuration"]["allowed_audiences"] = json!([malformed]);
+        assert_eq!(
+            parse_configuration(&bytes(&fixture["configuration"]))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::SchemaInvalid,
+            "accepted configured audience {malformed:?}",
+        );
+    }
+}
+
+#[test]
+fn oid4vp_audience_qualification_does_not_change_other_uri_fields_or_bounds() {
+    const PREFIX: &str = "decentralized_identifier:did:web:";
+    let maximum = format!("{PREFIX}{}", "a".repeat(1024 - PREFIX.len()));
+    let mut fixture = value(EXTERNAL);
+    fixture["record"]["authentication"]["audience"] = json!(maximum);
+    fixture["configuration"]["allowed_audiences"] = json!([maximum]);
+    assert_eq!(check(&fixture).unwrap().audience(), maximum);
+    fixture["record"]["authentication"]["audience"] = json!(format!("{maximum}a"));
+    rejects(&fixture, ErrorKind::SchemaInvalid);
+
+    let audience = "decentralized_identifier:did:web:verifier.example";
+    for pointer in [
+        "/record/principal/id",
+        "/record/authentication/issuer",
+        "/record/runtime/instance_ref",
+        "/configuration/principal/id",
+        "/configuration/authentication_source/issuer",
+        "/configuration/runtime/instance_ref",
+    ] {
+        let mut fixture = value(EXTERNAL);
+        *fixture.pointer_mut(pointer).unwrap() = json!(audience);
+        rejects(&fixture, ErrorKind::SchemaInvalid);
+    }
+    assert!(!marty_principal_runtime_binding::machine_policy::valid_evidence_uri(audience));
+}
+
+#[test]
 fn managed_machine_id_tenant_and_principal_are_independently_bound() {
     let mut fixture = value(MANAGED);
     fixture["machine_identity"]["organization_id"] = json!(OTHER_ORG);

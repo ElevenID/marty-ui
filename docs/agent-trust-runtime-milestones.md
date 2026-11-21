@@ -15,7 +15,9 @@ Issuance credential observations, and a named Organization machine-policy owner
 with retained MMF evaluation. The current serving-path slice adds explicit
 machine-use rights, a current exact-operation delegated-use policy owner,
 certificate-authenticated transport and protected original request/proof ingress.
-Public delegated execution remains gated.
+The explicit default-off serving executable now assembles these owners with
+fourteen restricted database connections and readiness before mandatory mTLS
+listen. Public delegated execution and production deployment remain gated.
 
 ## Implemented in this application slice
 
@@ -32,11 +34,12 @@ Public delegated execution remains gated.
 | M02 full-machine source owner | Distinct Organization registry, explicit deployment MAP assignment, attributable human administration, immutable revision/key history, and exact retained source observations | Internal APIs only; no inventory promotion, public registration route, workload authentication or attestation claim |
 | M02 credential authority source | Explicit nested JWT-VC Trust Profile authorization, current issuer/key and exact original Issuance artifact/status binding, separate retained source evidence | Concrete PostgreSQL owner composition; no SD-JWT widening, external issuer transport or public host enablement |
 | M02 machine-policy source owner | Named Organization MACHINE_AUTHORIZATION policy, fixed context-only Cedar schema, immutable revisions, concrete MMF evaluation and retained source/evaluation linkage | General policy CRUD cannot write this type; domain/use authorization and public proof ingress remain separate |
-| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition only; router is not installed by an executable, public wallet transport remains separate, and unresolved claims are never automatically retried |
+| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition selected by the explicit host below; public wallet transport remains separate, and unresolved claims are never automatically retried |
 | P03 machine-use access owner | Five independent rights administered against actual full-machine/deployment registration, current RBAC and immutable history; concrete command and ingress authorizer | Component access is separate from transport identity, cryptographic machine proof and Rifare business permission |
 | P03 delegated-use policy owner | Dedicated exact-operation Cedar policy lifecycle, fixed schema, retained current observations and real MMF evaluation | Consumer domain attributes and EXTERNAL_PROFILE adapters remain independently owned |
-| P03 authenticated request/proof ingress | Mandatory mTLS listener with exact leaf certificate binding; protected Flow request retrieval and immutable proof retention, durable one-sign request claims and original deadline checks through COMMIT | Explicit library assembly; production CA/pin management, serving executable and public wallet contracts remain unqualified |
-| Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Default off; deployed outer HTTPS adapter, production custody/credentials and executable host qualification remain pending |
+| P03 authenticated request/proof ingress | Mandatory mTLS listener with exact leaf certificate binding; protected Flow request retrieval and immutable proof retention, durable one-sign request claims and original deadline checks through COMMIT | Selected by the explicit host; production CA/pin management and public wallet contracts remain unqualified |
+| P03 explicit serving candidate | Default-off `marty-delegated-use` executable, fourteen actual restricted database identities, concrete local-owner and protected-provider assembly, bounded read-only readiness and mandatory mTLS before serving | Selected managed organization / full-machine / KEY / EXACT_OPERATION profile; production network, custody, roles and public consumers remain separate gates |
+| Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Selected by the default-off host; deployed outer HTTPS adapter and production custody/credentials remain pending |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -73,10 +76,11 @@ administration paths. The next application packages still need:
   separate. Enrollment key possession does not satisfy these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
   establishment beyond the implemented human/organization KEY profile.
-- An explicit default-off executable selecting the implemented internal command
-  and Flow ingress routers, mutual-TLS identity mapping and concrete current
-  access/policy sources. Qualify production CA issuance/revocation and pin
-  rotation. The human administration host does not accept machine use calls.
+- Deployment qualification of the implemented default-off executable, its
+  fourteen restricted connections, protected provider origins, mutual-TLS
+  identity mapping and concrete current access/policy sources. Qualify production
+  CA issuance/revocation and pin rotation. The human administration host does not
+  accept machine use calls.
 - Deployment of retained `START_USE`/`FINALIZE_USE`, the concrete same-database
   Flow owner and managed receipt signer with reviewed serving privileges,
   the implemented authenticated request/proof ingress, deployed signing-provider
@@ -567,3 +571,118 @@ lock and strict schema checks intact. Independent review found no additional
 concrete blocker. Public wallet transport, production deployment and capability
 promotion remain outside this validation. Publication uses `[skip ci]` and
 does not dispatch a hosted workflow.
+
+## Current default-off serving-host follow-on
+
+The follow-on to `1063f32` adds the explicit
+[`marty-delegated-use` executable](../rust/services/delegated-use/README.md).
+Its selected profile is a managed organization, full-machine identity, KEY
+binding and EXACT_OPERATION policy. The executable checks its opt-in before
+reading other configuration or credentials, assembles the concrete local owners
+and protected remote adapters, completes bounded readiness, and then opens the
+mandatory mutual-TLS listener. The original command, request and proof routes
+and authenticated status probes share the same certificate identity mapping.
+
+The host joins actual current human authority and retained consent, explicit
+machine/MAP registration, use-access rights, Trust Profile and Issuance credential
+authority/status, machine and delegated-use Cedar evaluations, append-only audit,
+same-database Flow finalization and managed receipt signing. It holds fourteen
+distinct restricted database logins. Startup performs no migrations, privilege
+provisioning, signing-grant minting, request signing or receipt signing. The
+production constructor selects existing protected providers; the separate
+`assemble` seam permits explicitly named acceptance fixtures without adding a
+production mock mode.
+
+Restricted-role integration required five fixed row-lock helpers under new
+Delegated Authority migration 0009 and Flow migration 0007. They preserve exact
+source rows while allowing the use writer to lock grants, claims, admissions,
+definitions and proofs without UPDATE authority over those records. The claim
+guard preserves its original binding checks and takes the stronger grant lock
+through the fixed helper. Readiness validates exact bodies, owner, return types,
+security mode, search path and PUBLIC execution restrictions.
+
+Independent review additionally closed two privilege gaps. The host applies a
+role's table/function allowlist only in its actual selected database; the
+application allowlist is empty in other connected databases. Administrative
+PostgreSQL parameter ACLs, ALTER SYSTEM and parameter grant options are now
+rejected by both the host's role checks and the lifecycle upgrade preflight.
+Ordinary USERSET parameters remain available. Tests inspect actual grants and
+revocation without disabling a trigger or invoking ALTER SYSTEM.
+
+The actual selected profile also exposed a verifier-identifier mismatch:
+Flow emits `decentralized_identifier:did:...`, while the normalized machine
+binding parser previously required an RFC URI scheme for authentication
+audiences. A dedicated application adapter now qualifies that bounded bare-DID
+form in only the record/configuration audience fields. It retains the complete
+original client ID and exact allowlist equality; ordinary URI fields retain
+their original rules. No pinned Protocol bytes or public schema/version change
+is implied.
+
+The combined dependency graph also exposed a strict-JSON decoding difference:
+`serde_json` arbitrary precision can deliver fractional/overflow number tokens
+through a map visitor. The principal parser now validates original numeric
+lexemes before DTO projection, preserving its existing integer-only contract
+independently of dependency feature unification. Existing duplicate, nesting,
+UTF-8 and schema checks remain in place.
+
+Outbound review corrected the request-signing base to the actual
+`/internal/compat` routes. All three selected template/wallet/presentation-policy
+gRPC reads now bound the entire unary response, including bodies and trailers.
+Definitions selecting optional trust/deployment catalog references are rejected
+at readiness because those existing readers require human membership; no human
+impersonation or silently omitted reference is introduced. Actual credential
+Trust Profile checks and the explicit deployment/MAP source remain selected.
+
+All 27 previously published migrations retain their exact bytes. All 812
+existing package identities, versions, sources and checksums are unchanged; the
+only additional package is the local `marty-delegated-use` crate. Public MIP
+0.5.0, the Protocol source pin, capability discovery and the human Gateway's use
+command rejection remain unchanged. Production CA issuance/revocation and pin
+rotation, deployed role/network/custody qualification, required attestation,
+public wallet contracts and independent receipt consumers remain exit gates.
+Rifare still owns domain permission, orchestration, budgets and business commits.
+
+### Serving-host validation
+
+Local validation uses Rust 1.95 and disposable PostgreSQL 17.12. The listed views
+overlap and are not an independent combined test total. The new host acceptance
+tests explicitly run the normally ignored database cases with actual roles.
+
+| Check | Result |
+| --- | --- |
+| Complete local host acceptance | 3 passed, none failed or ignored: actual approval-to-receipt/recovery, consent withdrawal after proof, and connected storage/role/helper rejection |
+| Host configuration and runtime selection | 12 passed, including default-off behavior, bounded configuration, actual Signing Keys route selection and rejection of human-only catalog references |
+| Actual executable smoke tests | 3 passed, including disabled-before-I/O and sanitized invalid startup |
+| Principal binding and numeric parser | 29 passed: 27 local conformance cases and 2 parser cases; the independently supplied pinned Protocol corpus remains explicitly ignored in this run |
+| Full Delegated Authority library | 225 passed, none failed or ignored, with PostgreSQL and actual mTLS enabled; one independently supplied private Protocol command corpus explicitly filtered |
+| Selected PostgreSQL Flow integration | 24 passed, none failed or ignored, including delegated start/finalization and protected request/proof ingress |
+| Normal Flow library | 95 passed; 26 fixture-dependent tests ignored in this normal view, with the selected delegated cases executed separately; includes the actual HTTP/2 stalled-body/trailer deadline case |
+| Read-only database preflight | 179 passed, including exact new helper checks, evidence-preserving 0008-to-0009 upgrade and six parameter-ACL cases |
+| All-targets compilation | Passed for the new host, Delegated Authority, Flow, Organization, machine credential source, Trust Profile, Issuance, OID4VP contract and principal binding |
+| Compatibility and hygiene | All 27 historical migrations and all 812 existing package identities/sources/checksums preserved; one additional local crate; scoped formatting of 22 Rust files, local documentation links, diff checks and OSS commerce boundary passed |
+
+The successful host case uses separately credentialed real lifecycle, consent
+and authority producers, actual full-machine/MAP and access owners, real Trust
+Profile/Issuance authority and status reads, actual nested issuer/holder proof
+verification, both Cedar evaluations and linked retained audit. It independently
+verifies the request and receipt signatures, recovers the original request and
+final result without signing again, and confirms grant/access revocation blocks
+the corresponding new use/recovery while preserving original evidence. A
+separate withdrawal case preserves submitted proof and produces no receipt or
+Flow consumption.
+
+The privilege case exercises independent forbidden UPDATE assertions, wrong
+Flow storage, direct and NOINHERIT source authority, administrative parameter
+rights, a matching helper signature in a different selected source database and
+helper security drift. It first establishes passing baselines and verifies
+recovery after revocation. No test executes an administrative parameter change
+or disables an integrity trigger to exercise those grants.
+
+Remote presentation/template metadata, ephemeral ES256 request/receipt custody,
+bootstrap credential bytes and preauthenticated human/workload transport are
+explicit fixtures. All local current owners and cryptographic checks above are
+real. The assembled runtime still rejects forwarded service-token authentication
+and selects mTLS only; actual mTLS transport is exercised separately by the
+Delegated Authority suite. These tests do not qualify a deployed remote CA/KMS,
+fresh production credential issuance, public wallets or a Rifare business commit.
+Publication uses `[skip ci]` without dispatching a hosted workflow.

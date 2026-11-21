@@ -71,8 +71,10 @@ The explicitly assembled [authenticated delegated ingress](DELEGATED_USE_INGRESS
 now supplies current source-authorized request retrieval and proof submission.
 It retains one request-signing claim before external work, exact request bytes,
 and fresh proof-ingress bounds under additive migration 0006. Ordinary Flow and
-paired-wallet request retrieval reject delegated instances; existing executables
-and public discovery do not select the new internal router.
+paired-wallet request retrieval reject delegated instances. The separate
+default-off [`marty-delegated-use` host](../delegated-use/README.md) selects the
+internal router with mandatory mTLS; the general Flow executable and public
+discovery remain unchanged.
 
 Storing bytes does not verify their signature or create authority. Finalization
 resolves those original bytes, checks the actual Core OID4VP proof through the
@@ -141,12 +143,20 @@ Readiness checks their exact table/function association, enabled state,
 deferral/security properties and required primary/unique index shapes. Earlier
 Flow migrations are unchanged.
 
-A future serving role needs bounded access to the existing Flow definition and
+The explicit serving role needs bounded access to the existing Flow definition and
 instance tables and these retained tables, with no schema ownership, guard
 disablement, evidence UPDATE/DELETE/TRUNCATE or migration privileges. Provisioning
 and qualifying that role together with the Delegated Authority use writer is a
 separate deployment gate. Existing lifecycle writers and evidence readers do
 not gain these proof/Flow privileges.
+
+Migration `0007_delegated_use_locks.sql` adds two fixed migration-owned row-lock
+helpers for definition and immutable proof reads. Their exact body, return type,
+owner, search path, security mode and PUBLIC execution restrictions are checked
+by `validate_delegated_use_lock_schema` and the explicit host's readiness. The
+use writer receives EXECUTE on these helpers instead of UPDATE on the locked
+definition/proof tables. Instance completion retains narrowly selected column
+UPDATE privileges. All earlier Flow migration bytes remain unchanged.
 
 Local PostgreSQL integration tests compose this real adapter with the actual
 Core proof verifier and real ES256 proof/receipt signatures. Current consent,
