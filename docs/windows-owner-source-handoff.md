@@ -6,6 +6,11 @@ for a reviewed Windows owner revision. It is a preparation tool for the
 It creates or verifies one inert archive. It does not install that archive,
 execute its code, edit a retained owner, or change a scheduled task.
 
+The separate [Windows source installation and replay tool](windows-owner-source-install.md)
+can place the verified archive in a new private versioned directory and replay
+the original selection anchor. It preserves the remaining caller-migration and
+live admission requirements below.
+
 ## Create the exact source artifact
 
 Use the complete 40-character commit from the reviewed change, available in the
