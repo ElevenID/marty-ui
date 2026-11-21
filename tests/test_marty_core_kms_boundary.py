@@ -32,6 +32,12 @@ def reviewed_graph() -> dict:
             "source": guard.ISOMDL_SOURCE,
         }
     )
+    packages.append({
+        "id": "jsonwebtoken",
+        "name": "jsonwebtoken",
+        "version": "11.1.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+    })
     packages.extend([
         {"id": "sd-jwt-rs", "name": "sd-jwt-rs", "version": "0.8.0", "source": guard.SD_JWT_SOURCE},
         {"id": "ssi-json-ld", "name": "ssi-json-ld", "version": "0.3.3", "source": guard.SSI_SOURCE},
@@ -105,6 +111,14 @@ def test_duplicate_sd_jwt_implementations_fail() -> None:
         guard.check(graph)
 
 
+def test_duplicate_jwt_versions_fail() -> None:
+    graph = reviewed_graph()
+    jwt = next(package for package in graph["packages"] if package["name"] == "jsonwebtoken")
+    graph["packages"].append({**jwt, "id": "old-jwt", "version": "10.4.0"})
+    with pytest.raises(ValueError, match="one reviewed registry jsonwebtoken"):
+        guard.check(graph)
+
+
 @pytest.mark.parametrize("feature", sorted(guard.FORBIDDEN_FEATURES))
 def test_core_private_key_features_fail(feature: str) -> None:
     graph = reviewed_graph()
@@ -146,6 +160,7 @@ def test_isomdl_local_signing_fails(feature: str) -> None:
     'p384 feature "ecdsa"',
     'k256 feature "ecdsa"',
     'jsonwebtoken feature "rust_crypto"',
+    'jsonwebtoken feature "aws_lc_rs"',
     'ed448-goldilocks-plus feature "signing"',
 ])
 def test_production_transitive_signing_is_rejected(feature: str) -> None:
