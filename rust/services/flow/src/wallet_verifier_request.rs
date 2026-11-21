@@ -184,6 +184,25 @@ fn text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+// The service configures expected origins even for request_uri deployments.
+// Only a DC API transport or a flow already bound to that transport is incompatible.
+fn incompatible_wallet_transport(
+    instance: &FlowInstanceRecord,
+    options: &RequestObjectOptions,
+) -> bool {
+    options.client_id_scheme != Oid4vpClientIdScheme::DecentralizedIdentifier
+        || options.compatibility != RequestObjectCompatibility::Standard
+        || options.transport != RequestObjectTransport::RequestUri
+        || options.wallet_nonce.is_some()
+        || instance.context.get("dc_api_expected_origins").is_some()
+        || instance.context.get("dc_api_protocol").is_some()
+        || instance.context.get("dc_api_response_mode").is_some()
+        || instance.context["flow_type"].as_str() == Some("siop_v2")
+        || instance.context["oid4vp_profile"].as_str() == Some("haip")
+        || instance.context["request_uri_method"].as_str() == Some("post")
+        || instance.context["request_transport"].as_str() == Some("url_query")
+}
+
 /// Prepare the owner's canonical signed request or revalidate its immutable
 /// stored JWS. The entry point deliberately accepts no caller recipient/key/JWS.
 /// `organization_id` must come from the authenticated governance owner.
@@ -217,15 +236,7 @@ pub async fn prepare_wallet_verifier_request(
         || parsed_base.password().is_some()
         || parsed_base.query().is_some()
         || parsed_base.fragment().is_some()
-        || options.client_id_scheme != Oid4vpClientIdScheme::DecentralizedIdentifier
-        || options.compatibility != RequestObjectCompatibility::Standard
-        || options.transport != RequestObjectTransport::RequestUri
-        || options.wallet_nonce.is_some()
-        || !options.expected_origins.is_empty()
-        || instance.context["flow_type"].as_str() == Some("siop_v2")
-        || instance.context["oid4vp_profile"].as_str() == Some("haip")
-        || instance.context["request_uri_method"].as_str() == Some("post")
-        || instance.context["request_transport"].as_str() == Some("url_query")
+        || incompatible_wallet_transport(&instance, options)
     {
         return Err(invalid());
     }
@@ -657,6 +668,18 @@ mod tests {
             signing_identity: Some(signer),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn direct_post_accepts_configured_dc_api_origins_and_rejects_a_dc_api_instance() {
+        let mut flow = instance(Utc::now());
+        let config = RequestObjectOptions {
+            expected_origins: vec!["https://verifier.example".into()],
+            ..Default::default()
+        };
+        assert!(!incompatible_wallet_transport(&flow, &config));
+        flow.context["dc_api_expected_origins"] = json!(["https://verifier.example"]);
+        assert!(incompatible_wallet_transport(&flow, &config));
     }
 
     #[tokio::test]
