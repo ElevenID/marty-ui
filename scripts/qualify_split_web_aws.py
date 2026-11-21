@@ -128,6 +128,24 @@ def container_ids(docker: list[str], env: dict) -> list[str]:
     return sorted(identifiers)
 
 
+def validate_tracked_source_modes(root: Path, records: str) -> None:
+    for record in records.split("\0"):
+        if not record:
+            continue
+        header, separator, relative = record.partition("\t")
+        require(separator == "\t", "Malformed tracked source inventory")
+        mode, kind, _oid = header.split()
+        require(kind == "blob" and mode in ("100644", "100755"), "Unsupported tracked source type")
+        candidate = Path(relative)
+        require(not candidate.is_absolute() and ".." not in candidate.parts, "Unsafe tracked source path")
+        metadata = (root / candidate).lstat()
+        require(stat.S_ISREG(metadata.st_mode), "Tracked source must be an ordinary file: " + relative)
+        expected = 0o755 if mode == "100755" else 0o644
+        require(stat.S_IMODE(metadata.st_mode) == expected,
+                "Tracked source mode differs from Git: " + relative
+                + " (expected " + oct(expected) + ", found " + oct(stat.S_IMODE(metadata.st_mode)) + ")")
+
+
 def source_identity(root: Path, sha: str, tree: str, env: dict) -> dict:
     git = shutil.which("git", path=env.get("PATH"))
     require(git is not None, "Git is required")
@@ -138,7 +156,9 @@ def source_identity(root: Path, sha: str, tree: str, env: dict) -> dict:
     require(capture(command + ["rev-parse", "HEAD^{tree}"], env) == tree, "Wrong source tree")
     require(capture(command + ["status", "--porcelain=v1", "--untracked-files=all"], env) == "",
             "Source checkout has tracked changes or untracked source files: " + str(root))
-    return {"root": str(root), "commit": sha, "tree": tree, "clean": True}
+    validate_tracked_source_modes(root, capture(command + ["ls-tree", "-r", "-z", "HEAD"], env))
+    return {"root": str(root), "commit": sha, "tree": tree, "clean": True,
+            "tracked_file_modes_verified": True}
 
 
 def validate_dotenv_inputs(root: Path, reviewed: dict[str, str]) -> None:

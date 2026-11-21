@@ -39,5 +39,27 @@ class DotenvAdmissionTests(unittest.TestCase):
                 runner.validate_dotenv_inputs(root, runner.MARTY_REVIEWED_DOTENV)
 
 
+class TrackedModeAdmissionTests(unittest.TestCase):
+    def test_exact_git_modes_pass_and_umask_variants_fail_without_chmod(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "LICENSE"
+            executable = root / "entry.sh"
+            source.write_text("fixture license\n")
+            executable.write_text("#!/bin/sh\n")
+            source.chmod(0o644)
+            executable.chmod(0o755)
+            records = "100644 blob " + "a" * 40 + "\tLICENSE\0" + "100755 blob " + "b" * 40 + "\tentry.sh\0"
+            runner.validate_tracked_source_modes(root, records)
+            for candidate, mode, original in ((source, 0o600, 0o644), (source, 0o664, 0o644),
+                                               (executable, 0o700, 0o755), (executable, 0o775, 0o755)):
+                with self.subTest(path=candidate.name, mode=oct(mode)):
+                    candidate.chmod(mode)
+                    with self.assertRaisesRegex(ValueError, "Tracked source mode differs from Git"):
+                        runner.validate_tracked_source_modes(root, records)
+                    self.assertEqual(candidate.stat().st_mode & 0o777, mode)
+                    candidate.chmod(original)
+
+
 if __name__ == "__main__":
     unittest.main()

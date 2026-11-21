@@ -41,6 +41,13 @@ digest-pinned public nginx images.
 
 Use fresh, separate source worktrees or checkouts for the exact commits above.
 Do not reuse a live development mount or another run's installed dependencies.
+Create those checkouts with an explicit `umask 022`, inside a private `0700`
+parent directory. Preflight checks every tracked ordinary file against its exact
+Git mode: `100644` requires `0644`, and `100755` requires `0755`. Git's ordinary
+clean-status check does not detect permission differences such as `0664` or
+`0600`; the source exporter intentionally rejects them. A failed run's source
+and evidence must be preserved, with fresh correctly created checkouts used for
+the next attempt. The runner never changes file modes to make admission pass.
 The runner rejects dirty source, untracked source files, existing application
 or website `node_modules`, existing website output/evidence and unreviewed dotenv
 files. The tracked Marty baseline inputs `.env.native` and `ui/.env.test` are
