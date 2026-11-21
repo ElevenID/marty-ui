@@ -9,7 +9,7 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 113);
+    assert_eq!(catalog.len(), 122);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
     assert!(keys.contains("application:manage-ownership"));
@@ -23,6 +23,11 @@ fn shared_permission_catalog_is_unique_and_complete() {
     assert!(keys.contains("passport-certificate:issue-csca"));
     assert!(keys.contains("mdoc-certificate:issue-iaca"));
     assert!(keys.contains("mdoc-certificate:issue"));
+    for action in ["view", "create", "update", "suspend", "revoke", "retire", "rotate-key"] {
+        assert!(keys.contains(&format!("agent-identity:{action}")));
+    }
+    assert!(keys.contains("delegation-grant:view"));
+    assert!(keys.contains("delegation-grant:approve"));
 }
 
 #[test]
@@ -56,6 +61,20 @@ fn system_role_templates_preserve_intended_entitlements() {
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
     for template in &templates {
+        assert_eq!(
+            template.permission_keys.contains("delegation-grant:approve"),
+            matches!(template.name, "owner" | "admin"),
+            "unexpected representation authority for {}",
+            template.name
+        );
+        for action in ["create", "update", "suspend", "revoke", "retire", "rotate-key"] {
+            assert_eq!(
+                template.permission_keys.contains(&format!("agent-identity:{action}")),
+                matches!(template.name, "owner" | "admin" | "access_admin"),
+                "unexpected agent administration permission for {}",
+                template.name
+            );
+        }
         for key in ["identity:attest", "external-association:manage"] {
             assert_eq!(
                 template.permission_keys.contains(key),

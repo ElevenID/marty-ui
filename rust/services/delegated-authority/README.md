@@ -2,7 +2,8 @@
 
 This crate implements the managed DelegationGrant v1 lifecycle, persistence and
 delegated operation evaluation layer, including Marty OID4VP proof and MMF Cedar
-adapters. It is not yet a hosted or production-qualified authorization service.
+adapters. An optional organization approval producer is hosted behind the
+authenticated Gateway; delegated-use authorization is not production-qualified.
 The optional delegated-authority capability must remain undiscoverable until its
 remaining runtime integrations are qualified.
 
@@ -554,12 +555,94 @@ remain separate final-use and consuming-domain obligations. A production signer
 adapter and independent JWS verification against the protocol's ES256/EdDSA
 conformance vectors are still required before runtime qualification.
 
+## Optional organization approval producer
+
+The `marty-delegation-approval` binary hosts an explicitly enabled approval
+candidate for a narrow relationship: an authenticated human grantor represents
+the configured organization, and the delegate is bound by `KEY`. The subject is
+exactly `urn:marty:organization:<tenant UUID>` and the grantor is exactly
+`urn:marty:user:<canonical user UUID>`. The configured issuer must be an
+`ORGANIZATION`. This path does not establish delegated `SESSION` evidence or
+authenticate the delegate's key; those remain separate use-time requirements.
+
+The Gateway validates a live, non-impersonated Auth session, its actual expiry,
+the exact active tenant, the configured browser Origin and current organization
+permission. It forwards a short-lived observation through a mandatory service
+token hop. Only the SHA-256 reference of the validated session cookie is
+forwarded/stored, never the cookie. `AuthenticatedApprovalSession` has no
+deserializer; calling its constructor only checks shape and does not authenticate.
+Public JSON cannot supply actor, session, source state or an authority-success flag.
+
+The service returns a server-issued review ID with the exact immutable grant
+reference, terms, issuer, fixed review expiry and maximum consent lifetime.
+Only an explicit `CONFIRM` for that review/digest can produce consent. Review and
+confirmation bind the authenticated human and original session. Consent and its
+confirmation index commit in one PostgreSQL transaction. Concurrent identical
+confirmation requests recover the same original record; different terms, grant,
+review or session cannot reuse that identity. Each review can be confirmed once.
+Neither a review nor a confirmation activates the grant.
+
+Current representation authority comes from `PostgresOrganizationStore`, using
+the authoritative database, an active organization and membership, and the exact
+`delegation-grant:approve` permission. Owner status and role names do not replace
+that permission. The authority producer independently checks that source and
+appends an assertion plus source/member provenance using its own database role.
+Assertions live for at most 15 seconds, bounded from before the source read;
+slow reads, source failures, clock regression and expired observations deny.
+The trusted worker refreshes due assertions only after another source check.
+Revocation is terminal for an evidence reference. The read-only
+`OrganizationRepresentationAuthorityProvider` separately rechecks Organization
+on every verification and reads current durable revocation state. It never
+renews authority or confirmation timestamps as a side effect of resolution.
+This is bounded current-source validation, not an atomic lock across Organization
+administration and a delegated operation.
+
+Consent expires at the earlier of the grant deadline and the configured
+confirmation lifetime (at most 300 seconds); the returned `valid_until` is that
+actual bound. Historical retry does not renew it. Confirm/recovery and withdrawal
+require current `delegation-grant:view`; a new confirmation additionally requires
+the independently checked approval permission. An identical committed
+confirmation can therefore be recovered after the approval permission is removed.
+Withdrawal is available to the original human using a fresh live session and
+current read access, even without current representation authority. It records
+one immutable withdrawal event. Historical confirmation recovery after withdrawal
+still returns the original historical result, not current authority.
+
+`PgApprovalConfirmationSource` composes with the existing P03
+`DelegationConfirmationSource`. It requires the same typed human, exact grant
+and digest, original authenticated session reference, unwithdrawn consent and
+fresh immutable deadline. A command runtime must populate session provenance
+from its authenticated context, never command JSON. The existing configured
+consent verifier still performs the independent current-authority check before
+an activation can commit. The approval host exposes no lifecycle command or
+final-use route and does not automatically approve on confirmation.
+
+Migration `0005_organization_approval.sql` is additive. Migrations 0001–0004 are
+unchanged. Deploy four distinct restricted credentials: evidence reader, consent
+producer, authority producer and Organization source reader. Use a separate
+migration owner. Startup applies no DDL/grants and requires schema/readiness
+qualification. Readiness checks reachable roles (including `SET ROLE`), column
+ACLs and grant options, source-write crossover, object ownership, enabled guard
+bindings and the evidence installation identity. It is not a measurement of the
+running executable or complete network/credential attestation. Operators must
+qualify deployment isolation, exact profile/version/artifact metadata, primary
+database routing, clocks, security audit delivery and the public Gateway/Auth
+composition before enabling the candidate. The existing deployment preflight
+remains part of that qualification.
+
+Run owned migrations explicitly with `marty-delegation-approval migrate` and
+`DELEGATION_MIGRATION_DATABASE_URL` (or its `_FILE` form). The optional host
+requires `MARTY_DELEGATION_APPROVAL_ENABLED=true`, a mandatory `GRPC_SERVICE_TOKEN`,
+and the `DELEGATION_APPROVAL_*` configuration in `approval_host_config.rs`.
+`verify-owned-schema` is read-only. No capability discovery claim follows merely
+from enabling these approval administration routes.
+
 ## Remaining runtime qualification
 
-- Connect the configured consent verifier and typed producer APIs to an
-  authenticated trusted approval surface and current grantor-authority source.
-  This requires own-session confirmation, fresh challenges and organization
-  action authorization; database records alone do not establish those guarantees.
+- Qualify the optional KEY organization approval path across live Gateway,
+  Auth, Organization and independently provisioned producer credentials.
+  Additional represented-subject/issuer relationships need their own reviewed
+  authority source; they cannot reuse organization membership as a shortcut.
 - Compose the implemented Flow starter with authenticated organization/action
   authorization and a qualified session-establishment source for session-bound
   signing keys. Qualify request retrieval and proof submission through that
@@ -570,10 +653,11 @@ conformance vectors are still required before runtime qualification.
   reservation and signed receipts into the delegated final-use path. Coordinate
   this with the consuming domain's own operation idempotency and commit contract;
   a read-only evaluation cannot make an external side effect atomic.
-- Add HTTP/gRPC hosting, public Gateway contracts, organization action
-  authorization, attributed security audit delivery and capability discovery.
+- Compose lifecycle and delegated-use HTTP/gRPC hosting, public Gateway
+  contracts, organization action authorization, attributed security audit
+  delivery and capability discovery. Approval administration is separately gated.
 - Qualify deployment and end-to-end behavior across the relevant services.
 
 No allow-all consent verifier is provided for production. Test doubles exist only
-under `cfg(test)`. There is no public Gateway route, discovery advertisement or
-production deployment in this milestone.
+under `cfg(test)`. There is no public delegated-use route, discovery
+advertisement or production deployment qualification in this milestone.

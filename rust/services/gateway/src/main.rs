@@ -65,13 +65,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.issuer_csr_grant_mint_token_file.clone(),
     )?;
     let contract = GatewayContract::load()?;
-    let routes = contract.runtime_route_table_with_passport_selectors(
+    let mut routes = contract.runtime_route_table_with_passport_selectors(
         config.passport_native_gateway_enabled,
         config.passport_provider_ingress_gateway_enabled,
     )?;
-    let proxy_routes = contract.proxy_route_table_with_passport_selectors(
+    let mut proxy_routes = contract.proxy_route_table_with_passport_selectors(
         config.passport_native_gateway_enabled,
         config.passport_provider_ingress_gateway_enabled,
+    )?;
+    marty_gateway::agent_administration::add_routes(
+        &mut routes,
+        config.agent_admin_enabled,
+        config.delegation_approval_enabled,
+    )?;
+    marty_gateway::agent_administration::add_routes(
+        &mut proxy_routes,
+        config.agent_admin_enabled,
+        config.delegation_approval_enabled,
     )?;
     let registry = StaticServiceRegistry::from_urls(&config.service_urls)?;
     let upstream = ReqwestUpstream::new(config.maximum_response_bytes)?;
@@ -187,6 +197,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?
         .with_client_ip_observation(config.observe_client_ip)
         .with_service_token(config.grpc_service_token.clone())?
+        .with_agent_administration(
+            config.agent_admin_enabled,
+            config.delegation_approval_enabled,
+        )?
         .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
         .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
         .with_service_sign_grant_minter(service_sign_grant_minter)

@@ -90,6 +90,7 @@ pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRole
             "role",
             "policy-set",
             "api-key",
+            "agent-identity",
             "signing-key",
             "webhook",
             "integration-connector",

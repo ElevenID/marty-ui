@@ -26,6 +26,9 @@ pub async fn migrate_organization_schema(pool: &PgPool) -> Result<(), Organizati
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0003_agent_directory.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -61,6 +64,9 @@ async fn validate_connection(
         "member_roles",
         "policy_sets",
         "audit_events",
+        "agent_identities",
+        "agent_identity_keys",
+        "agent_identity_history",
     ];
     let table_rows = sqlx::query(
         "SELECT table_name FROM information_schema.tables WHERE table_schema='organization_service'",
@@ -115,6 +121,58 @@ async fn validate_connection(
                 "offline audit index {required} is missing"
             )));
         }
+    }
+    let agent_version: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM organization_service.rust_schema_versions WHERE version='rust_organization_agent_directory_0003')",
+    ).fetch_one(&mut *connection).await?;
+    // A matching trigger name does not establish its protected operations or
+    // execution timing. In particular, inventory completeness must run at commit
+    // and must be bound to the reviewed function, not an unrelated trigger.
+    // pg_trigger.tgtype uses ROW=1, BEFORE=2, INSERT=4, DELETE=8, UPDATE=16,
+    // TRUNCATE=32. These explicit shapes match migration 0003.
+    let agent_guards: i64 = sqlx::query_scalar(
+        "WITH expected(table_name, trigger_name, function_name, trigger_type, deferred) AS (VALUES
+            ('agent_identities','agent_identity_guard','guard_agent_identity',23,false),
+            ('agent_identities','agent_identity_no_removal','reject_agent_directory_mutation',42,false),
+            ('agent_identities','agent_identity_complete','check_agent_inventory_complete',21,true),
+            ('agent_identity_keys','agent_key_guard','guard_agent_key',23,false),
+            ('agent_identity_keys','agent_key_no_removal','reject_agent_directory_mutation',42,false),
+            ('agent_identity_keys','agent_keys_complete','check_agent_inventory_complete',21,true),
+            ('agent_identity_history','agent_history_guard','guard_agent_history',7,false),
+            ('agent_identity_history','agent_history_immutable','reject_agent_directory_mutation',58,false)
+         )
+         SELECT count(*) FROM expected e
+         JOIN pg_trigger t ON t.tgrelid=to_regclass('organization_service.' || e.table_name)
+             AND t.tgname=e.trigger_name
+         JOIN pg_proc p ON p.oid=t.tgfoid
+         JOIN pg_language l ON l.oid=p.prolang
+         WHERE NOT t.tgisinternal AND t.tgenabled='O' AND t.tgqual IS NULL
+             AND t.tgtype=e.trigger_type AND t.tgnargs=0 AND t.tgattr=''::int2vector
+             AND t.tgdeferrable=e.deferred AND t.tginitdeferred=e.deferred
+             AND (t.tgconstraint<>0)=e.deferred
+             AND t.tgfoid=to_regprocedure('organization_service.' || e.function_name || '()')
+             AND NOT p.prosecdef AND p.prorettype='trigger'::regtype AND p.prokind='f'
+             AND l.lanname='plpgsql'
+             AND p.proconfig=ARRAY['search_path=pg_catalog']::text[]",
+    ).fetch_one(&mut *connection).await?;
+    let active_key_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_index i
+            JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am am ON am.oid=c.relam
+            WHERE i.indexrelid=to_regclass('organization_service.agent_identity_one_active_key')
+                AND i.indrelid='organization_service.agent_identity_keys'::regclass
+                AND i.indisunique AND i.indisvalid AND i.indisready AND i.indislive
+                AND NOT i.indisexclusion AND i.indnkeyatts=2 AND i.indnatts=2
+                AND i.indexprs IS NULL AND am.amname='btree'
+                AND pg_get_indexdef(i.indexrelid,1,true)='organization_id'
+                AND pg_get_indexdef(i.indexrelid,2,true)='agent_id'
+                AND pg_get_expr(i.indpred,i.indrelid)='(status = ''ACTIVE''::text)')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !agent_version || agent_guards != 8 || !active_key_index {
+        return Err(incompatible(
+            "agent directory migration or lifecycle guards are missing",
+        ));
     }
     Ok(())
 }

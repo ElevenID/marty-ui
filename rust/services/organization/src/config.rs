@@ -38,6 +38,7 @@ pub struct OrganizationServiceConfig {
     pub event_stream_ca_certificate: Option<PathBuf>,
     pub event_stream_timeout_seconds: u64,
     pub organization_creation_enabled: bool,
+    pub agent_admin_enabled: bool,
     pub marty_organization_id: Uuid,
     pub marty_organization_name: String,
     pub marty_organization_slug: String,
@@ -104,6 +105,10 @@ impl OrganizationServiceConfig {
             redis_database,
         )?;
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
+        let agent_admin_enabled = boolean(&values, "MARTY_AGENT_ADMIN_ENABLED", false)?;
+        if agent_admin_enabled && service_token.as_ref().is_none_or(|token| token.len() < 32) {
+            return Err(OrganizationConfigError::Missing { name: "GRPC_SERVICE_TOKEN" });
+        }
         if environment.is_deployed() && service_token.is_none() {
             return Err(OrganizationConfigError::Missing {
                 name: "GRPC_SERVICE_TOKEN",
@@ -162,6 +167,7 @@ impl OrganizationServiceConfig {
             event_stream_ca_certificate,
             event_stream_timeout_seconds: number(&values, "ES_GRPC_TIMEOUT_SECONDS", 5)?,
             organization_creation_enabled: boolean(&values, "ORGANIZATION_CREATION_ENABLED", true)?,
+            agent_admin_enabled,
             marty_organization_id,
             marty_organization_name: value(&values, "MARTY_ORG_NAME")
                 .unwrap_or("Marty")

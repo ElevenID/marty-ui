@@ -12,6 +12,7 @@ import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
 import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { applicationSourceTestPolicy } from './export-application-source.mjs';
 import { APPLICATION_INSTALL_INPUTS, installApplicationDependencies } from './application-dependency-install.mjs';
 import {
   APPLICATION_DEPENDENCY_PROFILE_INPUTS, validateApplicationDependencyProfile,
@@ -385,14 +386,17 @@ function buildEnvironment(sourceSha) {
 
 export { buildEnvironment as applicationBuildEnvironment, verifyApplicationTestResult, verifyApplicationResourceResult };
 
-function verifyApplicationTestResult(temporary, exported) {
+function verifyApplicationTestResult(temporary, exported, manifest) {
+  // Independent consumers may select only the exact roster of an approved
+  // source contract. Ordinary source rehearsals keep the current roster.
+  const selected = manifest === undefined ? APPLICATION_TEST_FILES : applicationSourceTestPolicy(manifest).test_profile.files;
   const raw = readInput(temporary, 'application-tests.json').bytes;
   const result = JSON.parse(raw.toString('utf8'));
   require(result && typeof result === 'object' && result.success === true, 'Application test report did not succeed');
-  require(Array.isArray(result.testResults) && result.testResults.length === APPLICATION_TEST_FILES.length,
+  require(Array.isArray(result.testResults) && result.testResults.length === selected.length,
     'Application test report did not complete the selected files');
   const uiRoot = path.join(exported, 'ui');
-  const expected = [...APPLICATION_TEST_FILES].sort();
+  const expected = [...selected].sort();
   const completed = [];
   let assertions = 0;
   for (const file of result.testResults) {

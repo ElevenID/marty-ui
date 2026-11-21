@@ -9,7 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_CONFIG } from './application-test-profile.mjs';
 import {
   APPLICATION_LOCALE_NAMESPACES, APPLICATION_RETAINED_PUBLIC_FILES, APPLICATION_RESOURCE_MIME_TYPES,
 } from './application-public-assets.mjs';
@@ -52,7 +52,11 @@ function allFiles(root, prefix = '') {
 // selected test/result parsers, output comparison and actual closed runtime
 // construction use the production consumer. All injected executions must stay
 // nonqualifying and remove their context, even when every assertion passes.
-function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
+function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false } = {}) {
+  const contractBytes = readFileSync(path.join(ROOT, historical ? 'contracts/application-source-export-history/initial-v1.json' : 'contracts/application-source-export.json'));
+  const sourceContract = JSON.parse(contractBytes);
+  const selectedTests = sourceContract.test_profile.files;
+  const assertionCount = historical ? 296 : 321;
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-package-consumer-test-'));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const sourceBytes = new Map();
@@ -72,12 +76,12 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
   }
   for (const name of ['package.json', 'package-lock.json']) select(`ui/profiles/application/${name}`, `ui/${name}`);
   const routeContract = { version: 1, sha256: `sha256:${'b'.repeat(64)}` };
-  const testProfile = { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES],
+  const testProfile = { config: APPLICATION_TEST_CONFIG, files: [...selectedTests],
     shared_contracts: ['contracts/organization-domain-behavior.json'] };
   const substitutions = ['ui/package.json', 'ui/package-lock.json'].map((name) => ({ path: name,
     baseline: record(name, readFileSync(path.join(ROOT, name))),
     selected: sourceFiles.get(`ui/profiles/application/${path.basename(name)}`) }));
-  const manifest = { fixture: true, source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
+  const manifest = { fixture: true, contract: { sha256: digest(contractBytes) }, source: { commit: COMMIT, tree: 'c'.repeat(40), working_tree_dirty: false },
     files: selected, route_contract: routeContract, test_profile: testProfile, substitutions,
     source_inventory_sha256: identity(selected) };
   const plan = { schema: 'marty.application-source-closure-plan/v5',
@@ -121,7 +125,7 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
       'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved', 'application_resource_smoke_completed',
       'locale_fallback_observed', 'runtime_context_prepared', 'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound',
       'independent_dependency_installation'].map((name) => [name, true])),
-    tests: { result: { test_count: 296, completed_files: [...APPLICATION_TEST_FILES].sort() } },
+    tests: { result: { test_count: assertionCount, completed_files: [...selectedTests].sort() } },
     output, resources: { result: resources }, runtime_context: context };
   const options = { archivePath: path.join(temporary, 'source.zip'), manifestPath: path.join(temporary, 'manifest.json'),
     baselineReportPath: path.join(temporary, 'baseline.json'), producerReportPath: path.join(temporary, 'producer.json'),
@@ -174,9 +178,9 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory } = {}) {
     }));
     if (options.stage === 'npm-build') for (const [name, bytes] of outputBytes) write(restoredRoot, `ui/dist-application/${name}`, bytes);
     if (options.stage === 'npm-test') writeFileSync(args.at(-1), json({ success: true,
-      numTotalTests: 296, numPassedTests: 296, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
-      testResults: APPLICATION_TEST_FILES.map((name, index) => ({ name: path.join(options.cwd, name), status: 'passed',
-        assertionResults: Array.from({ length: index === 0 ? 20 : 12 }, () => ({ status: 'passed' })) })) }));
+      numTotalTests: assertionCount, numPassedTests: assertionCount, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0,
+      testResults: selectedTests.map((name, index) => ({ name: path.join(options.cwd, name), status: 'passed',
+        assertionResults: Array.from({ length: index === 0 ? assertionCount - 12 * (selectedTests.length - 1) : 12 }, () => ({ status: 'passed' })) })) }));
     if (options.stage === 'resource-smoke') writeFileSync(args[args.indexOf('--report') + 1], json(resources));
     return afterCommand?.({ executable, args, options, calls, restoredRoot }) || { status: 0, signal: null };
   };
@@ -190,7 +194,7 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
   assert.equal(result.fixture, true);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
-  assert.equal(result.tests.test_count, 296);
+  assert.equal(result.tests.test_count, 321);
   assert.equal(result.output_comparison.output_files, 88);
   assert.equal(result.output_comparison.mode_transformations.length, 54);
   assert.equal(result.runtime_comparison.payload_files, 92);
@@ -230,6 +234,21 @@ test('consumer baseline refuses fixtures, dirty sources, duplicate inventory and
     const changed = structuredClone(input.baseline); change(changed);
     assert.throws(() => validateApplicationPackageBaseline(changed, input.manifest));
   }
+});
+
+test('the approved historical package keeps its original 24-file, 296-assertion consumer policy', async (t) => {
+  const input = fixture(t, { historical: true });
+  const result = await input.run();
+  assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
+  assert.equal(result.tests.completed_files.length, 24);
+  assert.equal(result.tests.test_count, 296);
+  assert.ok(Object.values(result.qualification).every((value) => value === false));
+  const arbitrary = structuredClone(input.manifest);
+  arbitrary.test_profile.files.pop();
+  assert.throws(() => validateApplicationPackageBaseline(input.baseline, arbitrary), /roster changed/);
+  arbitrary.test_profile = input.manifest.test_profile;
+  arbitrary.contract.sha256 = `sha256:${'0'.repeat(64)}`;
+  assert.throws(() => validateApplicationPackageBaseline(input.baseline, arbitrary), /unapproved source contract/);
 });
 
 test('only the exact 54 public modes may change; output bytes, paths, unexpected modes and resource records remain bound', (t) => {

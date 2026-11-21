@@ -25,6 +25,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         include_str!("../migrations/0003_trusted_consent_evidence.sql"),
     ),
     (4, include_str!("../migrations/0004_command_results.sql")),
+    (
+        5,
+        include_str!("../migrations/0005_organization_approval.sql"),
+    ),
 ];
 // A service-specific transaction advisory lock serializes concurrent startup.
 const MIGRATION_LOCK: i64 = 0x4d41_5254_5944_4101;
@@ -137,7 +141,11 @@ impl PgDelegationGrantRepository {
                  AND to_regclass('delegated_authority_service.consent_withdrawals') IS NOT NULL
                  AND to_regclass('delegated_authority_service.representation_authority_sources') IS NOT NULL
                  AND to_regclass('delegated_authority_service.representation_authority_assertions') IS NOT NULL
-                 AND to_regclass('delegated_authority_service.command_results') IS NOT NULL",
+                 AND to_regclass('delegated_authority_service.command_results') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.approval_storage_identity') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.approval_reviews') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.approval_confirmation_bindings') IS NOT NULL
+                 AND to_regclass('delegated_authority_service.organization_authority_observations') IS NOT NULL",
         )
         .fetch_one(&self.pool)
         .await
@@ -177,12 +185,20 @@ impl PgDelegationGrantRepository {
                  OR (tgrelid = 'delegated_authority_service.representation_authority_assertions'::regclass
                      AND tgname IN ('representation_authority_assertions_guard','representation_authority_assertions_immutable','representation_authority_assertions_no_truncate'))
                  OR (tgrelid = 'delegated_authority_service.command_results'::regclass
-                     AND tgname IN ('command_results_binding','command_results_immutable','command_results_no_truncate')))",
+                     AND tgname IN ('command_results_binding','command_results_immutable','command_results_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.approval_storage_identity'::regclass
+                     AND tgname IN ('approval_storage_identity_immutable','approval_storage_identity_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.approval_reviews'::regclass
+                     AND tgname IN ('approval_reviews_binding','approval_reviews_immutable','approval_reviews_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.approval_confirmation_bindings'::regclass
+                     AND tgname IN ('approval_confirmation_bindings_guard','approval_confirmation_bindings_immutable','approval_confirmation_bindings_no_truncate'))
+                 OR (tgrelid = 'delegated_authority_service.organization_authority_observations'::regclass
+                     AND tgname IN ('organization_authority_observations_guard','organization_authority_observations_immutable','organization_authority_observations_no_truncate')))",
         )
         .fetch_one(&self.pool)
         .await
         .map_err(map_database)?;
-        if triggers != 20 {
+        if triggers != 31 {
             return Err(RepositoryError::SchemaNotReady);
         }
         Ok(())

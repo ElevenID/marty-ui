@@ -55,6 +55,9 @@ DECLARE
     grant_count BIGINT := 0;
     event_count BIGINT := 0;
     result_count BIGINT := 0;
+    review_count BIGINT := 0;
+    confirmation_count BIGINT := 0;
+    observation_count BIGINT := 0;
     schema_version INTEGER := 0;
     versions INTEGER[] := ARRAY[]::INTEGER[];
     -- File-byte SHA-256 values. The Rust migrator stores them with the mandatory
@@ -63,11 +66,15 @@ DECLARE
         'bd7c8d273f0824099fcd230667e64e40bb1cd42107f3bf419b25fe0c60887945',
         '9e1f6df883edeaf1abba52b3ff8ceafed0e9ecbf32f5ee723a9f458b09f29ff6',
         '63cb2d26f3efff51c6725f0c67e3c6c4541f70bce69a0559c6ed0afa53a295c1',
-        'cedcf39d7d2cc35defe20066c5fad80e2c00b39f422fb0ffe9590ac508e9f16a'
+        'cedcf39d7d2cc35defe20066c5fad80e2c00b39f422fb0ffe9590ac508e9f16a',
+        '2dbd6187782f4e53608adfce3a60a8619eb0d598bb66ec78cd83cb013a6596f6'
     ];
     evidence_tables TEXT[] := ARRAY['consent_confirmations','consent_withdrawals',
         'representation_authority_sources','representation_authority_assertions'];
     evidence_count INTEGER := 0;
+    approval_tables TEXT[] := ARRAY['approval_storage_identity','approval_reviews',
+        'approval_confirmation_bindings','organization_authority_observations'];
+    approval_count INTEGER := 0;
     bad BOOLEAN;
     role_index INTEGER;
     object_record RECORD;
@@ -145,6 +152,15 @@ BEGIN
        OR (schema_version < 4 AND results_id IS NOT NULL) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: command results table disagrees with recorded migrations';
     END IF;
+    FOREACH table_name IN ARRAY approval_tables LOOP
+        IF to_regclass(format('delegated_authority_service.%I',table_name)) IS NOT NULL THEN
+            approval_count := approval_count + 1;
+        END IF;
+    END LOOP;
+    IF (schema_version >= 5 AND approval_count <> 4)
+       OR (schema_version < 5 AND approval_count <> 0) THEN
+        RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: organization approval tables are partial or untracked';
+    END IF;
     IF selected_phase='post-migration' AND schema_version <> cardinality(expected_checksums) THEN
         RAISE EXCEPTION 'DA_PREFLIGHT_SCHEMA_STATE: post-migration inspection requires every bundled migration';
     END IF;
@@ -172,7 +188,9 @@ BEGIN
             AND (proowner<>role_ids[1] OR prokind<>'f'
                  OR proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']::TEXT[]
                  OR prosecdef IS DISTINCT FROM (proname IN
-                    ('journal_grant_lifecycle','guard_consent_source','guard_authority_assertion')))) THEN
+                    ('journal_grant_lifecycle','guard_consent_source','guard_authority_assertion',
+                     'guard_approval_review','guard_approval_confirmation_binding',
+                     'guard_organization_authority_observation')))) THEN
             RAISE EXCEPTION 'DA_PREFLIGHT_FUNCTION_OWNER: service function owner, security mode or fixed search path differs';
         END IF;
     END IF;
@@ -205,15 +223,21 @@ BEGIN
                             (privilege_name='SELECT' AND object_record.relname IN
                               ('schema_migrations','delegation_grants','grant_lifecycle_events',
                                'consent_confirmations','consent_withdrawals',
-                               'representation_authority_sources','representation_authority_assertions','command_results'))
+                               'representation_authority_sources','representation_authority_assertions','command_results',
+                               'approval_storage_identity','approval_reviews','approval_confirmation_bindings',
+                               'organization_authority_observations'))
                             OR (object_record.relname='delegation_grants' AND privilege_name IN ('INSERT','UPDATE'))
                             OR (object_record.relname='command_results' AND privilege_name='INSERT')
                         WHEN role_index=3 THEN
-                            object_record.relname IN ('consent_confirmations','consent_withdrawals')
-                            AND privilege_name IN ('SELECT','INSERT')
+                            (object_record.relname IN ('consent_confirmations','consent_withdrawals',
+                                'approval_reviews','approval_confirmation_bindings')
+                            AND privilege_name IN ('SELECT','INSERT'))
+                            OR (object_record.relname='approval_storage_identity' AND privilege_name='SELECT')
                         ELSE
-                            object_record.relname IN ('representation_authority_sources','representation_authority_assertions')
-                            AND privilege_name IN ('SELECT','INSERT') END;
+                            (object_record.relname IN ('representation_authority_sources','representation_authority_assertions',
+                                'organization_authority_observations') AND privilege_name IN ('SELECT','INSERT'))
+                            OR (object_record.relname IN ('delegation_grants','approval_storage_identity')
+                                AND privilege_name='SELECT') END;
                     effective := has_table_privilege(assumed_role.oid,object_record.oid,privilege_name);
                     grantable := has_table_privilege(assumed_role.oid,object_record.oid,privilege_name || ' WITH GRANT OPTION');
                     IF privilege_name IN ('SELECT','INSERT','UPDATE','REFERENCES') THEN
@@ -234,6 +258,10 @@ BEGIN
             END LOOP;
         END LOOP;
         IF selected_phase='post-migration' THEN
+            -- These are the existing lifecycle-service minimum privileges.
+            -- Approval-host-only grants above are allowed but not required for
+            -- a lifecycle-only deployment. Its separate runtime-read and
+            -- Organization-read identities are checked by approval readiness.
             IF NOT has_schema_privilege(role_ids[role_index],schema_id,'USAGE') THEN
                 RAISE EXCEPTION 'DA_PREFLIGHT_MISSING_PRIVILEGE: component requires schema USAGE';
             END IF;
@@ -281,7 +309,18 @@ BEGIN
         (3,'representation_authority_assertions','representation_authority_assertions_no_truncate','reject_lifecycle_event_mutation',34),
         (4,'command_results','command_results_binding','guard_command_result',7),
         (4,'command_results','command_results_immutable','reject_lifecycle_event_mutation',27),
-        (4,'command_results','command_results_no_truncate','reject_lifecycle_event_mutation',34)
+        (4,'command_results','command_results_no_truncate','reject_lifecycle_event_mutation',34),
+        (5,'approval_storage_identity','approval_storage_identity_immutable','reject_lifecycle_event_mutation',27),
+        (5,'approval_storage_identity','approval_storage_identity_no_truncate','reject_lifecycle_event_mutation',34),
+        (5,'approval_reviews','approval_reviews_binding','guard_approval_review',7),
+        (5,'approval_reviews','approval_reviews_immutable','reject_lifecycle_event_mutation',27),
+        (5,'approval_reviews','approval_reviews_no_truncate','reject_lifecycle_event_mutation',34),
+        (5,'approval_confirmation_bindings','approval_confirmation_bindings_guard','guard_approval_confirmation_binding',7),
+        (5,'approval_confirmation_bindings','approval_confirmation_bindings_immutable','reject_lifecycle_event_mutation',27),
+        (5,'approval_confirmation_bindings','approval_confirmation_bindings_no_truncate','reject_lifecycle_event_mutation',34),
+        (5,'organization_authority_observations','organization_authority_observations_guard','guard_organization_authority_observation',7),
+        (5,'organization_authority_observations','organization_authority_observations_immutable','reject_lifecycle_event_mutation',27),
+        (5,'organization_authority_observations','organization_authority_observations_no_truncate','reject_lifecycle_event_mutation',34)
       ) AS expected(version,table_name,trigger_name,function_name,trigger_type)
       WHERE version<=schema_version
     LOOP
@@ -290,6 +329,7 @@ BEGIN
               AND t.tgname=trigger_record.trigger_name AND NOT t.tgisinternal
               AND t.tgenabled='O' AND t.tgtype=trigger_record.trigger_type
               AND t.tgqual IS NULL AND t.tgnargs=0 AND t.tgattr=''::int2vector
+              AND NOT t.tgdeferrable AND NOT t.tginitdeferred
               AND p.pronamespace=schema_id AND p.proname=trigger_record.function_name
               AND p.pronargs=0) THEN
             RAISE EXCEPTION 'DA_PREFLIGHT_TRIGGER: required guard/journal trigger is absent, disabled or retargeted';
@@ -412,12 +452,117 @@ BEGIN
         END;
     END IF;
 
+    IF schema_version >= 5 THEN
+        -- Review and confirmation history is immutable even after the grant
+        -- becomes terminal or consent expires/withdraws. Check original binding,
+        -- never require old evidence to be current or renew its timestamps.
+        BEGIN
+            IF (SELECT count(*) FROM delegated_authority_service.approval_storage_identity) <> 1
+               OR EXISTS (SELECT 1 FROM delegated_authority_service.approval_storage_identity
+                    WHERE NOT singleton OR instance_id='00000000-0000-0000-0000-000000000000'::UUID) THEN
+                RAISE EXCEPTION 'invalid approval storage identity';
+            END IF;
+            SELECT count(*) INTO review_count FROM delegated_authority_service.approval_reviews;
+            SELECT count(*) INTO confirmation_count FROM delegated_authority_service.approval_confirmation_bindings;
+            SELECT count(*) INTO observation_count FROM delegated_authority_service.organization_authority_observations;
+            SELECT EXISTS (
+                SELECT 1 FROM delegated_authority_service.approval_reviews r
+                LEFT JOIN delegated_authority_service.delegation_grants g
+                  ON g.organization_id=r.organization_id AND g.id=r.grant_id
+                LEFT JOIN delegated_authority_service.grant_lifecycle_events e
+                  ON e.organization_id=r.organization_id AND e.grant_id=r.grant_id AND e.revision=r.grant_revision
+                WHERE g.id IS NULL OR e.revision IS NULL OR e.status IS DISTINCT FROM 'PENDING'
+                  OR r.terms_digest IS DISTINCT FROM g.terms_digest
+                  OR r.grant_document->>'id' IS DISTINCT FROM r.grant_id::TEXT
+                  OR r.grant_document->>'organization_id' IS DISTINCT FROM r.organization_id::TEXT
+                  OR r.grant_document->>'revision' IS DISTINCT FROM r.grant_revision::TEXT
+                  OR r.grant_document->>'status' IS DISTINCT FROM e.status
+                  OR r.grant_document ? 'approval'
+                  OR r.grant_document->>'terms_digest' IS DISTINCT FROM r.terms_digest
+                  OR r.grant_document->>'updated_at' IS DISTINCT FROM e.occurred_at
+                  OR (r.grant_document - ARRAY['status','revision','updated_at','approval'])
+                     IS DISTINCT FROM (g.grant_document - ARRAY['status','revision','updated_at','approval'])
+                  OR r.grant_document#>>'{terms,grantor,type}' IS DISTINCT FROM 'USER'
+                  OR r.grant_document#>>'{terms,grantor,id}' IS DISTINCT FROM ('urn:marty:user:' || r.actor_id::TEXT)
+                  OR r.grant_document#>>'{terms,subject,type}' IS DISTINCT FROM 'ORGANIZATION'
+                  OR r.grant_document#>>'{terms,subject,id}' IS DISTINCT FROM ('urn:marty:organization:' || r.organization_id::TEXT)
+                  OR r.grant_document#>>'{terms,binding,method}' IS DISTINCT FROM 'KEY'
+                  OR r.grant_document#>>'{authority,issuer,type}' IS DISTINCT FROM 'ORGANIZATION'
+                  OR delegated_authority_service.grant_instant(r.created_at)
+                       < delegated_authority_service.grant_instant(r.grant_document->>'created_at')
+                  OR delegated_authority_service.grant_instant(r.expires_at)
+                       > delegated_authority_service.grant_instant(r.grant_document#>>'{terms,valid_until}')
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.approval_confirmation_bindings b
+                LEFT JOIN delegated_authority_service.approval_reviews r
+                  ON r.organization_id=b.organization_id AND r.review_id=b.review_id
+                LEFT JOIN delegated_authority_service.consent_confirmations c
+                  ON c.organization_id=b.organization_id AND c.evidence_ref=b.evidence_ref
+                LEFT JOIN delegated_authority_service.representation_authority_sources a
+                  ON a.organization_id=b.organization_id AND a.authority_evidence_ref=b.authority_evidence_ref
+                WHERE r.review_id IS NULL OR c.evidence_ref IS NULL OR a.authority_evidence_ref IS NULL
+                  OR b.actor_id IS DISTINCT FROM r.actor_id OR b.grant_id IS DISTINCT FROM r.grant_id
+                  OR b.terms_digest IS DISTINCT FROM r.terms_digest OR b.session_ref IS DISTINCT FROM r.session_ref
+                  OR c.grant_id IS DISTINCT FROM b.grant_id OR c.terms_digest IS DISTINCT FROM b.terms_digest
+                  OR c.authority_evidence_ref IS DISTINCT FROM b.authority_evidence_ref
+                  OR c.confirmed_at IS DISTINCT FROM b.confirmed_at OR c.valid_until IS DISTINCT FROM b.valid_until
+                  OR c.profile IS DISTINCT FROM r.profile OR c.adapter_version IS DISTINCT FROM r.adapter_version
+                  OR c.artifact_digest IS DISTINCT FROM r.artifact_digest
+                  OR c.grantor IS DISTINCT FROM r.grant_document#>'{terms,grantor}'
+                  OR c.subject IS DISTINCT FROM r.grant_document#>'{terms,subject}'
+                  OR c.issuer IS DISTINCT FROM r.grant_document#>'{authority,issuer}'
+                  OR a.evidence_ref IS DISTINCT FROM b.evidence_ref OR a.grant_id IS DISTINCT FROM b.grant_id
+                  OR a.terms_digest IS DISTINCT FROM b.terms_digest
+                  OR a.grantor IS DISTINCT FROM c.grantor OR a.subject IS DISTINCT FROM c.subject
+                  OR a.issuer IS DISTINCT FROM c.issuer OR a.profile IS DISTINCT FROM c.profile
+                  OR a.adapter_version IS DISTINCT FROM c.adapter_version OR a.artifact_digest IS DISTINCT FROM c.artifact_digest
+                  OR delegated_authority_service.grant_instant(b.confirmed_at) < delegated_authority_service.grant_instant(r.created_at)
+                  OR delegated_authority_service.grant_instant(b.confirmed_at) >= delegated_authority_service.grant_instant(r.expires_at)
+                  OR delegated_authority_service.grant_instant(b.valid_until) <= delegated_authority_service.grant_instant(b.confirmed_at)
+                  OR delegated_authority_service.grant_instant(b.valid_until) > delegated_authority_service.grant_instant(b.confirmed_at) + 300
+                  OR delegated_authority_service.grant_instant(b.valid_until) > delegated_authority_service.grant_instant(r.grant_document#>>'{terms,valid_until}')
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.organization_authority_observations o
+                LEFT JOIN delegated_authority_service.representation_authority_assertions a
+                  ON a.organization_id=o.organization_id AND a.authority_evidence_ref=o.authority_evidence_ref AND a.revision=o.revision
+                LEFT JOIN delegated_authority_service.representation_authority_sources s
+                  ON s.organization_id=o.organization_id AND s.authority_evidence_ref=o.authority_evidence_ref
+                WHERE a.revision IS NULL OR s.authority_evidence_ref IS NULL
+                  OR s.grantor->>'type' IS DISTINCT FROM 'USER'
+                  OR s.grantor->>'id' IS DISTINCT FROM ('urn:marty:user:' || o.user_id::TEXT)
+                  OR s.subject->>'type' IS DISTINCT FROM 'ORGANIZATION'
+                  OR s.subject->>'id' IS DISTINCT FROM ('urn:marty:organization:' || o.organization_id::TEXT)
+                  OR o.authorized IS DISTINCT FROM (a.state='AUTHORIZED')
+                  OR o.observed_at IS DISTINCT FROM a.asserted_at OR o.valid_until IS DISTINCT FROM a.valid_until
+                  OR (o.authorized AND (o.member_id IS NULL
+                      OR delegated_authority_service.grant_instant(o.valid_until) <= delegated_authority_service.grant_instant(o.observed_at)
+                      OR delegated_authority_service.grant_instant(o.valid_until) > delegated_authority_service.grant_instant(o.observed_at) + 15))
+            ) OR EXISTS (
+                SELECT 1 FROM delegated_authority_service.approval_confirmation_bindings b
+                LEFT JOIN delegated_authority_service.representation_authority_assertions a
+                  ON a.organization_id=b.organization_id AND a.authority_evidence_ref=b.authority_evidence_ref
+                LEFT JOIN delegated_authority_service.organization_authority_observations o
+                  ON o.organization_id=a.organization_id AND o.authority_evidence_ref=a.authority_evidence_ref AND o.revision=a.revision
+                WHERE a.revision IS NULL OR o.revision IS NULL
+            ) INTO bad;
+            IF bad THEN
+                RAISE EXCEPTION 'invalid approval or authority observation binding';
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION USING MESSAGE='DA_PREFLIGHT_APPROVAL_HISTORY: organization approval evidence disagrees with its original binding',
+                HINT='Preserve the original review, confirmation, authority and grant records; never recreate consent to make inspection pass.';
+        END;
+    END IF;
+
     PERFORM set_config('marty.preflight.result',CASE WHEN selected_phase='post-migration'
         THEN 'DATABASE_PREFLIGHT_PASSED' ELSE 'PRE_MIGRATION_INSPECTION_PASSED' END,true);
     PERFORM set_config('marty.preflight.version',schema_version::TEXT,true);
     PERFORM set_config('marty.preflight.grants',grant_count::TEXT,true);
     PERFORM set_config('marty.preflight.events',event_count::TEXT,true);
     PERFORM set_config('marty.preflight.results',result_count::TEXT,true);
+    PERFORM set_config('marty.preflight.reviews',review_count::TEXT,true);
+    PERFORM set_config('marty.preflight.confirmations',confirmation_count::TEXT,true);
+    PERFORM set_config('marty.preflight.observations',observation_count::TEXT,true);
 END
 $preflight$;
 
@@ -428,6 +573,9 @@ SELECT jsonb_build_object(
     'grant_count',current_setting('marty.preflight.grants')::BIGINT,
     'event_count',current_setting('marty.preflight.events')::BIGINT,
     'command_result_count',current_setting('marty.preflight.results')::BIGINT,
+    'approval_review_count',current_setting('marty.preflight.reviews')::BIGINT,
+    'approval_confirmation_count',current_setting('marty.preflight.confirmations')::BIGINT,
+    'organization_authority_observation_count',current_setting('marty.preflight.observations')::BIGINT,
     'runtime_qualification','NOT_ASSESSED',
     'execution_authorized',false
 ) AS delegated_authority_database_preflight;

@@ -8,7 +8,7 @@ or qualify a deployed delegated-authority service.
 
 The companion
 [`operations/preflight.sql`](../rust/services/delegated-authority/operations/preflight.sql)
-recognizes the exact bundled migrations 0001–0004. It never applies migrations,
+recognizes the exact bundled migrations 0001–0005. It never applies migrations,
 creates a grant, writes a source assertion, repairs a record or manufactures a
 journal. Its successful report explicitly retains
 `runtime_qualification: NOT_ASSESSED` and `execution_authorized: false`.
@@ -32,8 +32,8 @@ lifecycle history.
 ## Prepare the maintenance boundary
 
 1. Select the exact reviewed application artifact and its matching migration and
-   preflight files. Keep migrations 0001–0003 byte-for-byte unchanged. The new
-   command-results migration is additive; rewriting an applied migration is not
+   preflight files. Keep migrations 0001–0004 byte-for-byte unchanged. The new
+   organization-approval migration is additive; rewriting an applied migration is not
    an upgrade strategy.
 2. Stop new lifecycle writes and drain in-flight request transactions. Also
    pause confirmation, withdrawal, authority-refresh and authority-revocation
@@ -70,7 +70,7 @@ passwords into a command line, review log or this runbook. A libpq service file
 or the deployment's existing protected connection configuration can identify
 the operator connection without disclosing a secret.
 
-| Identity | Required access after migration 0004 |
+| Identity | Lifecycle-service minimum access through migration 0005 |
 | --- | --- |
 | Migration owner | Owns the service schema, tables and functions; runs the reviewed migrator during maintenance. Its credentials are unavailable to request and producer processes. |
 | Request role | Schema USAGE; SELECT/INSERT/UPDATE on `delegation_grants`; SELECT on `schema_migrations`, `grant_lifecycle_events` and the four evidence tables; SELECT/INSERT on `command_results`; EXECUTE on `grant_instant(TEXT)`. |
@@ -128,10 +128,11 @@ delegated requests.
 
 ## Install or upgrade
 
-Invoke the existing `PgDelegationGrantRepository::migrate()` from the trusted
-deployment integration using the migration-owner connection. This crate exposes
-a library migrator; this runbook does not invent a production CLI or public
-migration route. The migrator applies the original embedded SQL and records its
+Invoke `PgDelegationGrantRepository::migrate()` from the trusted deployment
+integration, or run the candidate `marty-delegation-approval migrate` executable
+with exactly one of `DELEGATION_MIGRATION_DATABASE_URL` or its `_FILE` configured
+through protected deployment configuration. Both use the migration-owner
+connection; there is no public migration route. The migrator applies the original embedded SQL and records its
 SHA-256 checksums in `schema_migrations` in a transaction under the service
 advisory lock. It must not be invoked with request-serving credentials.
 
@@ -172,7 +173,13 @@ checksums, object ownership, fixed function search paths/security modes, enabled
 unconditional guard bindings, journal continuity and current snapshot
 consistency. Original command results must bind to their own lifecycle revision,
 status, digest and exact occurrence time. A later suspension, revocation or
-expiration does not make a valid historical result inconsistent.
+expiration does not make a valid historical result inconsistent. Migration 0005
+adds checks for the storage identity, review/confirmation/authority-observation
+tables and their eleven guard bindings. Its historical checks bind saved reviews
+to the original pending revision and immutable terms, confirmations to their
+original human/session/review and consent, and observations to the independent
+authority assertion. Later revocation or withdrawal does not require rewriting
+that history. The report includes counts for all three kinds of approval evidence.
 
 Then invoke the repository's `readiness()` using the request connection. Both
 checks must succeed before ending database maintenance. Re-enabling any hosted
@@ -180,6 +187,42 @@ feature still requires the separately qualified runtime composition described in
 the service README: authentication, authorization, trusted confirmation and
 representation sources, freshness, signing, audit, recovery and the relevant
 deployment tests. Database readiness never creates that qualification.
+
+## Additional roles and privileges for the organization approval candidate
+
+The four-role preflight above remains usable for a lifecycle-only deployment.
+It allows the following additional migration-0005 privileges without requiring
+an approval host to be selected. When selecting the approval host, provision two
+additional distinct identities: its runtime read role and its Organization
+source read role. Do not use the lifecycle request writer as the approval
+runtime reader. The host's `readiness()` checks their actual connected identities,
+separation, storage identity and privileges, including reachable membership and
+cross-database writes to the Organization source; this is an additional required
+gate, not a result supplied by the four-role preflight.
+
+| Approval host connection | Required bounded access |
+| --- | --- |
+| Runtime read | Schema USAGE; SELECT on `schema_migrations`, `delegation_grants`, `grant_lifecycle_events`, `command_results`, `consent_confirmations`, `consent_withdrawals`, `representation_authority_sources`, `representation_authority_assertions`, `approval_reviews`, `approval_confirmation_bindings`, `organization_authority_observations` and `approval_storage_identity`; EXECUTE on `grant_instant(TEXT)`. No writes. |
+| Confirmation producer | Existing confirmation/withdrawal SELECT/INSERT plus SELECT/INSERT on `approval_reviews` and `approval_confirmation_bindings`; SELECT on `approval_storage_identity`. No command-result or authority-source reads are needed. |
+| Representation-authority producer | Existing authority-source/assertion SELECT/INSERT plus SELECT/INSERT on `organization_authority_observations`; SELECT on `delegation_grants` and `approval_storage_identity`; EXECUTE on `grant_instant(TEXT)`. No consent writes. |
+| Organization source read | In the authoritative Organization database: schema USAGE and SELECT on `organizations`, `members`, `roles`, `permissions`, `member_roles` and `role_permissions`. No writes to that source or delegation evidence. |
+
+Use exact table grants, preserve the no-grant-option and no-schema-creation
+boundaries, and verify the connected login identities. Different connection
+strings do not establish separation. Apply Organization grants in its own
+authoritative database when it is hosted separately. The lifecycle request role
+may additionally read the four migration-0005 tables; it still cannot insert,
+update or delete approval evidence.
+
+Run the core preflight again with the actual confirmation and authority producer
+identities after granting the additional access. Then run the approval host's
+startup/readiness using all four configured host connections. The command
+`marty-delegation-approval verify-owned-schema` checks the repository schema with
+the runtime read credential; it does not replace the host's complete
+multi-connection readiness check. See
+[the candidate hosting contract](agent-identity-and-approval-candidate.md) for
+configuration and role limits. An unsuccessful check leaves the host disabled;
+it does not install schema, grant privileges or reconstruct evidence.
 
 ## Nonempty legacy grants without trustworthy journal evidence
 
@@ -222,7 +265,7 @@ supporting audit/proof material. Historical result recovery, if exposed by a
 qualified runtime, still requires current caller/resource authorization. A
 stored result is never current authority or permission to repeat a side effect.
 
-Do not run down migrations, remove the 0004 ledger entry, drop the command table,
+Do not run down migrations, remove the 0004/0005 ledger entries, drop command or approval tables,
 relax guards or reuse a command identity to make an older binary appear ready.
 An older binary expecting a shorter migration list must fail readiness. Use a
 compatible reviewed fix or an explicitly tested recovery deployment before

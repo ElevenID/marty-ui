@@ -138,6 +138,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         organization_creation_enabled: config.organization_creation_enabled,
         marty_organization_id: Some(config.marty_organization_id),
     };
+    let agent_admin = if config.agent_admin_enabled {
+        marty_organization::agent_directory_http::organization_agent_admin_router(
+            marty_organization::agent_directory_http::AgentDirectoryHttpState::new(
+                marty_organization::agent_directory::AgentDirectoryService::new(application.store().clone()),
+                config.service_token.clone().ok_or("candidate agent administration requires service authentication")?,
+            )?,
+        )
+    } else { axum::Router::new() };
     let grpc_service = OrganizationGrpcService::new(
         Arc::clone(&application),
         config.service_token.clone(),
@@ -160,7 +168,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         http_listener,
         runtime
             .operational_router()
-            .merge(organization_core_router(http_state)),
+            .merge(organization_core_router(http_state))
+            .merge(agent_admin),
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let organization_server = OrganizationServiceServer::new(grpc_service);

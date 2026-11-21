@@ -26,6 +26,8 @@ export const APPLICATION_TEST_FILES = Object.freeze([
   'src/components/navigation/ConsoleHeaderBar.test.tsx',
   'src/components/navigation/SidebarNavigation.test.tsx',
   'src/components/navigation/SidebarNavigationApplicant.test.tsx',
+  'src/components/console/agents/AgentTrustPages.test.tsx',
+  'src/services/__tests__/agentTrustApi.test.ts',
   'src/services/__tests__/authApi.test.ts',
   'tests/application/surface-profile.test.tsx',
 ]);

@@ -7,6 +7,7 @@ alter synthetic test records; none is an operational repair/import procedure.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -243,6 +244,133 @@ def test_current_schema_and_valid_history_remain_unchanged(database):
     version = len(list((SERVICE / "migrations").glob("*.sql")))
     assert_passed(database.inspect("post-migration"), version=version, grants=1, events=2)
     assert database.snapshot() == before
+
+
+def insert_organization_approval(database):
+    """Independent synthetic evidence using actual guards, never a repair path."""
+    grant = pending_grant()
+    actor, review, confirmation, member = (str(uuid4()) for _ in range(4))
+    grant["authority"]["issuer"] = {"type": "ORGANIZATION", "id": "urn:marty:organization:" + grant["organization_id"]}
+    grant["terms"]["grantor"] = {"type": "USER", "id": "urn:marty:user:" + actor}
+    grant["terms"]["subject"] = grant["authority"]["issuer"].copy()
+    insert_grant(database, grant)
+    now = datetime.now(timezone.utc)
+    stamp = lambda value: value.isoformat().replace("+00:00", "Z")
+    created, confirmed, expires, authority_until = (
+        stamp(now - timedelta(seconds=2)), stamp(now - timedelta(seconds=1)),
+        stamp(now + timedelta(seconds=120)), stamp(now + timedelta(seconds=10)),
+    )
+    org, gid, digest = map(literal, (grant["organization_id"], grant["id"], grant["terms_digest"]))
+    evidence, authority = map(literal, ("urn:example:consent:" + confirmation, "urn:example:authority:" + confirmation))
+    profile, version, artifact = map(literal, ("urn:example:organization-approval:v1", "1.0.0", "sha256:" + "c" * 64))
+    session = literal("urn:marty:session:sha256:" + "d" * 64)
+    grantor, subject, issuer = (literal(json.dumps(p)) + "::jsonb" for p in
+        (grant["terms"]["grantor"], grant["terms"]["subject"], grant["authority"]["issuer"]))
+    database.sql(f"""
+        INSERT INTO delegated_authority_service.approval_reviews
+            (organization_id,review_id,grant_id,grant_revision,terms_digest,grant_document,actor_id,session_ref,profile,adapter_version,artifact_digest,created_at,expires_at)
+        VALUES ({org},{literal(review)},{gid},1,{digest},{literal(json.dumps(grant))}::jsonb,{literal(actor)},{session},{profile},{version},{artifact},{literal(created)},{literal(expires)});
+        INSERT INTO delegated_authority_service.representation_authority_sources
+            (organization_id,authority_evidence_ref,evidence_ref,grant_id,terms_digest,grantor,subject,issuer,profile,adapter_version,artifact_digest)
+        VALUES ({org},{authority},{evidence},{gid},{digest},{grantor},{subject},{issuer},{profile},{version},{artifact});
+        INSERT INTO delegated_authority_service.representation_authority_assertions
+            (organization_id,authority_evidence_ref,revision,state,asserted_at,valid_until)
+        VALUES ({org},{authority},1,'AUTHORIZED',{literal(confirmed)},{literal(authority_until)});
+        INSERT INTO delegated_authority_service.organization_authority_observations
+            (organization_id,authority_evidence_ref,revision,user_id,member_id,source,permission,authorized,observed_at,valid_until)
+        VALUES ({org},{authority},1,{literal(actor)},{literal(member)},'urn:marty:organization-store:v1','delegation-grant:approve',true,{literal(confirmed)},{literal(authority_until)});
+        INSERT INTO delegated_authority_service.consent_confirmations
+            (organization_id,evidence_ref,authority_evidence_ref,grant_id,terms_digest,grantor,subject,issuer,profile,adapter_version,artifact_digest,confirmed_at,valid_until)
+        VALUES ({org},{evidence},{authority},{gid},{digest},{grantor},{subject},{issuer},{profile},{version},{artifact},{literal(confirmed)},{literal(expires)});
+        INSERT INTO delegated_authority_service.approval_confirmation_bindings
+            (organization_id,actor_id,confirmation_id,review_id,grant_id,terms_digest,session_ref,evidence_ref,authority_evidence_ref,confirmed_at,valid_until)
+        VALUES ({org},{literal(actor)},{literal(confirmation)},{literal(review)},{gid},{digest},{session},{evidence},{authority},{literal(confirmed)},{literal(expires)});
+    """)
+    return grant
+
+
+def test_organization_approval_preflight_preserves_historical_evidence_after_revocation(database):
+    database.migrate()
+    database.privileges()
+    grant = insert_organization_approval(database)
+    revoke_grant(database, grant)
+    before = database.snapshot()
+    report = database.inspect("post-migration")
+    assert_passed(report, version=5, grants=1, events=2)
+    parsed = json.loads(report.stdout)
+    assert parsed["approval_review_count"] == parsed["approval_confirmation_count"] == parsed["organization_authority_observation_count"] == 1
+    assert database.snapshot() == before
+
+
+@pytest.mark.parametrize("table,assignment,guard", [
+    ("approval_reviews", "session_ref='urn:marty:session:sha256:' || repeat('e',64)", "approval_reviews_immutable"),
+    ("approval_reviews", "grant_document=jsonb_set(grant_document,'{terms,delegate,id}','\"urn:example:changed-agent\"')", "approval_reviews_immutable"),
+    ("approval_reviews", "grant_document=jsonb_set(grant_document,'{approval}','null'::jsonb)", "approval_reviews_immutable"),
+    ("approval_confirmation_bindings", "terms_digest='sha256:' || repeat('e',64)", "approval_confirmation_bindings_immutable"),
+    ("approval_confirmation_bindings", "actor_id=gen_random_uuid()", "approval_confirmation_bindings_immutable"),
+    ("organization_authority_observations", "user_id=gen_random_uuid()", "organization_authority_observations_immutable"),
+    ("organization_authority_observations", "authorized=false", "organization_authority_observations_immutable"),
+])
+def test_organization_approval_history_drift_is_reported_without_repair(database, table, assignment, guard):
+    database.migrate()
+    database.privileges()
+    insert_organization_approval(database)
+    database.sql(f"ALTER TABLE delegated_authority_service.{table} DISABLE TRIGGER {guard}; UPDATE delegated_authority_service.{table} SET {assignment}; ALTER TABLE delegated_authority_service.{table} ENABLE TRIGGER {guard};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_APPROVAL_HISTORY", phase="post-migration")
+
+
+def test_approval_producer_optional_privileges_do_not_require_lifecycle_result_access(database):
+    database.migrate()
+    database.privileges()
+    request, consent, authority = (identifier(database.roles[key]) for key in ("request_role", "confirmation_role", "authority_role"))
+    database.sql(f"""
+        GRANT SELECT ON delegated_authority_service.approval_storage_identity,
+            delegated_authority_service.approval_reviews,delegated_authority_service.approval_confirmation_bindings,
+            delegated_authority_service.organization_authority_observations TO {request};
+        GRANT SELECT,INSERT ON delegated_authority_service.approval_reviews,
+            delegated_authority_service.approval_confirmation_bindings TO {consent};
+        GRANT SELECT ON delegated_authority_service.approval_storage_identity TO {consent};
+        GRANT SELECT,INSERT ON delegated_authority_service.organization_authority_observations TO {authority};
+        GRANT SELECT ON delegated_authority_service.delegation_grants,
+            delegated_authority_service.approval_storage_identity TO {authority};
+        GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {authority};
+    """)
+    assert_passed(database.inspect("post-migration"), version=5)
+    database.sql(f"GRANT INSERT ON delegated_authority_service.organization_authority_observations TO {consent};")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_TABLE_PRIVILEGE", phase="post-migration")
+
+
+@pytest.mark.parametrize("remove_assertions", [False, True])
+def test_bound_approval_authority_requires_its_original_observation(database, remove_assertions):
+    database.migrate()
+    database.privileges()
+    insert_organization_approval(database)
+    database.sql("ALTER TABLE delegated_authority_service.organization_authority_observations DISABLE TRIGGER organization_authority_observations_immutable; DELETE FROM delegated_authority_service.organization_authority_observations; ALTER TABLE delegated_authority_service.organization_authority_observations ENABLE TRIGGER organization_authority_observations_immutable;")
+    if remove_assertions:
+        database.sql("ALTER TABLE delegated_authority_service.representation_authority_assertions DISABLE TRIGGER representation_authority_assertions_immutable; DELETE FROM delegated_authority_service.representation_authority_assertions; ALTER TABLE delegated_authority_service.representation_authority_assertions ENABLE TRIGGER representation_authority_assertions_immutable;")
+    assert_rejected_without_changes(database, "DA_PREFLIGHT_APPROVAL_HISTORY", phase="post-migration")
+
+
+@pytest.mark.parametrize("mutation", ["missing-table", "missing-ledger", "disabled-guard", "wrong-function", "empty-identity"])
+def test_approval_schema_and_guard_drift_fail_closed(database, mutation):
+    database.migrate()
+    database.privileges()
+    if mutation == "missing-table":
+        database.sql("DROP TABLE delegated_authority_service.organization_authority_observations;")
+        code = "DA_PREFLIGHT_SCHEMA_STATE"
+    elif mutation == "missing-ledger":
+        database.sql("DELETE FROM delegated_authority_service.schema_migrations WHERE version=5;")
+        code = "DA_PREFLIGHT_SCHEMA_STATE"
+    elif mutation == "disabled-guard":
+        database.sql("ALTER TABLE delegated_authority_service.approval_reviews DISABLE TRIGGER approval_reviews_binding;")
+        code = "DA_PREFLIGHT_TRIGGER"
+    elif mutation == "wrong-function":
+        database.sql("ALTER FUNCTION delegated_authority_service.guard_approval_review() SECURITY INVOKER;")
+        code = "DA_PREFLIGHT_FUNCTION_OWNER"
+    else:
+        database.sql("ALTER TABLE delegated_authority_service.approval_storage_identity DISABLE TRIGGER approval_storage_identity_immutable; DELETE FROM delegated_authority_service.approval_storage_identity; ALTER TABLE delegated_authority_service.approval_storage_identity ENABLE TRIGGER approval_storage_identity_immutable;")
+        code = "DA_PREFLIGHT_APPROVAL_HISTORY"
+    assert_rejected_without_changes(database, code, phase="post-migration")
 
 
 def test_historical_result_survives_later_lifecycle_change(database):

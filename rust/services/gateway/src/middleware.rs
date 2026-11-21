@@ -106,6 +106,10 @@ impl MipError {
 pub struct SessionIdentity {
     pub user_id: String,
     pub authentication_time_unix: Option<i64>,
+    /// Actual expiry returned by Auth; absent/invalid remains unavailable to
+    /// opt-in operations that require a bounded verified session observation.
+    #[serde(default)]
+    pub expires_at_unix: Option<i64>,
     #[serde(default)]
     pub non_impersonated_session: Option<bool>,
     pub email: Option<String>,
@@ -158,6 +162,8 @@ pub struct GatewayIdentity {
     pub source: AuthenticationSource,
     pub user_id: String,
     pub authentication_time_unix: Option<i64>,
+    pub expires_at_unix: Option<i64>,
+    pub session_observed_at_unix: Option<i64>,
     pub non_impersonated_session: Option<bool>,
     pub user_email: Option<String>,
     pub user_domain: Option<String>,
@@ -286,6 +292,8 @@ fn session_context(identity: SessionIdentity) -> GatewayIdentity {
         source: AuthenticationSource::Session,
         user_id: identity.user_id,
         authentication_time_unix: identity.authentication_time_unix,
+        expires_at_unix: identity.expires_at_unix,
+        session_observed_at_unix: Some(chrono::Utc::now().timestamp()),
         non_impersonated_session: identity.non_impersonated_session,
         user_email: identity.email,
         user_domain,
@@ -306,6 +314,8 @@ fn api_key_context(identity: ApiKeyIdentity) -> GatewayIdentity {
         source: AuthenticationSource::ApiKey,
         user_id: format!("api_key:{api_key_id}"),
         authentication_time_unix: None,
+        expires_at_unix: None,
+        session_observed_at_unix: None,
         non_impersonated_session: None,
         user_email: None,
         user_domain: None,

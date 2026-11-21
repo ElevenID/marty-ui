@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod api_keys;
+pub mod agent_directory;
+pub mod agent_directory_http;
 pub mod application;
 pub mod audit;
 pub mod authorization;

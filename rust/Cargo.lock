@@ -4123,10 +4123,13 @@ name = "marty-delegated-authority"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "chrono",
  "hex",
  "marty-oid4vci",
+ "marty-organization",
+ "marty-service-runtime",
  "marty-verification",
  "mmf-security",
  "serde",
@@ -4135,6 +4138,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tower",
  "url",
  "uuid",
 ]
@@ -4797,6 +4801,7 @@ dependencies = [
  "libc",
  "marty-api-key-policy",
  "marty-key-material-policy",
+ "marty-principal-runtime-binding",
  "marty-service-contracts",
  "marty-service-runtime",
  "mmf-core",

@@ -29,6 +29,7 @@ pub const DELEGATION_COMMAND_RESPONSE_PROFILE: &str = "urn:marty:delegation-comm
 pub struct DelegationCommandCaller {
     organization_id: Uuid,
     actor: Principal,
+    authentication_session_ref: Option<String>,
 }
 impl DelegationCommandCaller {
     pub fn from_authenticated_context(
@@ -41,7 +42,24 @@ impl DelegationCommandCaller {
         Ok(Self {
             organization_id,
             actor,
+            authentication_session_ref: None,
         })
+    }
+    /// Adds independently authenticated session provenance for a configured
+    /// approval adapter. This is not populated by command JSON and does not
+    /// authenticate a cookie or establish delegated SESSION binding.
+    pub fn with_authenticated_session_ref(
+        mut self,
+        session_ref: String,
+    ) -> Result<Self, DelegationCommandError> {
+        if !crate::approval::valid_session_ref(&session_ref) {
+            return Err(DelegationCommandError::AccessDenied);
+        }
+        self.authentication_session_ref = Some(session_ref);
+        Ok(self)
+    }
+    pub fn authentication_session_ref(&self) -> Option<&str> {
+        self.authentication_session_ref.as_deref()
     }
     pub fn organization_id(&self) -> Uuid {
         self.organization_id
