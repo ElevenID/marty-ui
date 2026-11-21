@@ -4,17 +4,20 @@ Get started writing tests for marty-ui in 5 minutes.
 
 ## Setup (One-Time)
 
+Use Node.js 24 and the pinned Bun 1.4.4 package manager. Test commands continue
+to invoke Vitest through the package scripts.
+
 ```bash
 cd ui
-npm install
+bun install --frozen-lockfile
 ```
 
 ## Run Tests
 
 ```bash
-npm test              # Run once
-npm run test:watch   # Watch mode (recommended for TDD)
-npm run test:ui      # Interactive browser UI
+bun run test              # Run once
+bun run test:watch   # Watch mode (recommended for TDD)
+bun run test:ui      # Interactive browser UI
 ```
 
 ## Write Your First Test
@@ -168,7 +171,7 @@ describe.skip('MyComponent', () => {
 ### Visual Debugging with Vitest UI
 
 ```bash
-npm run test:ui
+bun run test:ui
 ```
 
 Opens browser UI showing:
@@ -206,7 +209,7 @@ server.use(
 ## Storybook
 
 ```bash
-npm run storybook  # Start on http://localhost:6006
+bun run storybook  # Start on http://localhost:6006
 ```
 
 Create `MyComponent.stories.tsx`:
@@ -247,7 +250,7 @@ export const Loading: Story = {
 Check coverage after writing tests:
 
 ```bash
-npm run test:coverage
+bun run test:coverage
 ```
 
 Opens HTML report in `coverage/index.html`
@@ -256,4 +259,4 @@ Target: **70% coverage** for lines, functions, branches, statements
 
 ---
 
-**Try it now!** Run `npm run test:watch` and start writing tests. Vitest will re-run automatically as you save files.
+**Try it now!** Run `bun run test:watch` and start writing tests. Vitest will re-run automatically as you save files.

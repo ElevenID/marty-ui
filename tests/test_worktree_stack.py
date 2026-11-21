@@ -36,6 +36,42 @@ class WorktreeStackTests(unittest.TestCase):
         self.assertEqual(env["PUBLIC_API_URL"], "http://127.0.0.1:28000")
         self.assertEqual(env["WT_UI_PORT"], "28001")
 
+    @unittest.skipUnless(shutil.which("bun") and shutil.which("node"),
+                         "Bun and Node are required for the UI process boundary")
+    def test_ui_runner_does_not_reload_service_credentials_from_dotenv(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ui = root / "ui"
+            (ui / "node_modules" / "vite").mkdir(parents=True)
+            (ui / ".env").write_text("POSTGRES_PASSWORD=dotenv-service-sentinel\n", encoding="utf-8")
+            (ui / ".env.local").write_text("GOOGLE_CLIENT_SECRET=local-service-sentinel\n", encoding="utf-8")
+            (ui / "package.json").write_text(json.dumps({"scripts": {"dev": "node probe.cjs"}}), encoding="utf-8")
+            (ui / "probe.cjs").write_text(
+                "console.log(JSON.stringify(Object.fromEntries(['POSTGRES_PASSWORD', "
+                "'GOOGLE_CLIENT_SECRET', 'VITE_PORT', 'VITE_API_URL', 'VITE_DEV_PROXY_TARGET']"
+                ".map(name => [name, process.env[name] ?? null]))));\n",
+                encoding="utf-8",
+            )
+            observations = []
+
+            def run_ui(command, **kwargs):
+                result = subprocess.run(command, **kwargs, text=True, capture_output=True,
+                                        timeout=10, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                observations.append(json.loads(result.stdout))
+                return result.returncode
+
+            with patch.object(worktree_stack, "ROOT", root), \
+                    patch.object(worktree_stack, "validate_config"), \
+                    patch.object(worktree_stack.subprocess, "call", side_effect=run_ui), \
+                    patch.object(worktree_stack.sys, "argv", ["worktree-stack", "ui", "--port-base", "28000"]):
+                self.assertEqual(worktree_stack.main(), 0)
+            self.assertEqual(observations, [{
+                "POSTGRES_PASSWORD": None, "GOOGLE_CLIENT_SECRET": None,
+                "VITE_PORT": "28001", "VITE_API_URL": "http://127.0.0.1:28000",
+                "VITE_DEV_PROXY_TARGET": "http://127.0.0.1:28000",
+            }])
+
     @unittest.skipUnless(shutil.which("docker"), "Docker CLI is unavailable")
     def test_compose_does_not_load_worktree_dotenv(self):
         with tempfile.TemporaryDirectory() as temporary:

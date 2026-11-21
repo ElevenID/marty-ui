@@ -34,6 +34,10 @@ RELEASE_FIELDS = {"schema", "source_sha", "revision", "production_pages", "comme
 STANDALONE_PLAN_SCHEMA = "marty.website-build-plan/v2"
 STANDALONE_RELEASE_SCHEMA = "marty.website-release/v2"
 STANDALONE_IMAGE_SCHEMA = "marty.website-image/v2"
+STANDALONE_BUN_PLAN_SCHEMA = "marty.website-build-plan/v3"
+STANDALONE_BUN_RELEASE_SCHEMA = "marty.website-release/v3"
+STANDALONE_BUN_IMAGE_SCHEMA = "marty.website-image/v3"
+STANDALONE_PACKAGE_MANAGER = "bun@1.4.4"
 STANDALONE_REPOSITORY = policy.STANDALONE_REPOSITORY
 STANDALONE_WORKFLOW = policy.STANDALONE_WORKFLOW
 STANDALONE_IMAGE = policy.STANDALONE_IMAGE
@@ -44,6 +48,7 @@ STANDALONE_INPUTS = (
     "scripts/website-prerender-plan.mjs", "ui/nginx.website.conf", "ui/nginx.website.headers.conf",
     "ui/scripts/render-website-nginx.mjs", "ui/vite.config.mjs",
 )
+STANDALONE_BUN_INPUTS = (*STANDALONE_INPUTS, "bun.lock")
 STANDALONE_PLAN_FIELDS = {
     "schema", "repository", "source_sha", "revision", "production_pages", "commerce_extension",
     "workflow", "image", "platform", "dockerfile", "build_kind", "dependency_lock",
@@ -145,7 +150,7 @@ def plan(root: Path, source_sha: str, *, production_pages: str = "public",
 
 
 def validate_plan(value: dict) -> dict:
-    if isinstance(value, dict) and value.get("schema") == STANDALONE_PLAN_SCHEMA:
+    if isinstance(value, dict) and value.get("schema") in (STANDALONE_PLAN_SCHEMA, STANDALONE_BUN_PLAN_SCHEMA):
         return validate_standalone_plan(value)
     object_keys(value, PLAN_FIELDS, "website plan")
     source_sha = full_sha(value["source_sha"])
@@ -182,8 +187,9 @@ def validate_plan(value: dict) -> dict:
 
 def image_metadata(build_plan: dict) -> dict:
     validate_plan(build_plan)
-    if build_plan["schema"] == STANDALONE_PLAN_SCHEMA:
-        return {"schema": STANDALONE_IMAGE_SCHEMA, "audience": "production", "surface": "website",
+    if build_plan["schema"] in {STANDALONE_PLAN_SCHEMA, STANDALONE_BUN_PLAN_SCHEMA}:
+        schema = STANDALONE_BUN_IMAGE_SCHEMA if build_plan["schema"] == STANDALONE_BUN_PLAN_SCHEMA else STANDALONE_IMAGE_SCHEMA
+        return {"schema": schema, "audience": "production", "surface": "website",
                 "repository": STANDALONE_REPOSITORY, "source_sha": build_plan["source_sha"],
                 "revision": build_plan["revision"], "production_pages": "public",
                 "route_contract": build_plan["route_contract"], "commerce_extension": None}
@@ -207,7 +213,7 @@ def record(root: Path, build_plan: dict, *, source_sha: str, metadata: dict, dig
 
 
 def validate_release(value: dict, *, source_sha: str | None = None, commerce_source_sha: str | None = None) -> dict:
-    if isinstance(value, dict) and value.get("schema") == STANDALONE_RELEASE_SCHEMA:
+    if isinstance(value, dict) and value.get("schema") in (STANDALONE_RELEASE_SCHEMA, STANDALONE_BUN_RELEASE_SCHEMA):
         return validate_standalone_release(value, source_sha=source_sha, commerce_source_sha=commerce_source_sha)
     object_keys(value, RELEASE_FIELDS, "website release")
     build_plan = validate_plan(value["build_plan"])
@@ -237,7 +243,7 @@ def standalone_producer(source_sha: str, run_id: str, run_attempt: str) -> dict:
     }, role="website")
 
 
-def standalone_plan(source_sha: str, *, input_sha256: dict, output: dict, route_contract: dict) -> dict:
+def standalone_plan(source_sha: str, *, input_sha256: dict, output: dict, route_contract: dict, version: int = 2) -> dict:
     """Describe supplied immutable inputs, without importing application source.
 
     A producer must compute these fingerprints from its verified clean checkout
@@ -245,12 +251,16 @@ def standalone_plan(source_sha: str, *, input_sha256: dict, output: dict, route_
     an unsigned qualification receipt, or a published container.
     """
     source_sha = full_sha(source_sha)
+    ui.require(type(version) is int and version in {2, 3}, "unsupported standalone website plan version")
     value = {
-        "schema": STANDALONE_PLAN_SCHEMA, "repository": STANDALONE_REPOSITORY,
+        "schema": STANDALONE_BUN_PLAN_SCHEMA if version == 3 else STANDALONE_PLAN_SCHEMA,
+        "repository": STANDALONE_REPOSITORY,
         "source_sha": source_sha, "revision": source_sha, "production_pages": "public",
         "commerce_extension": None, "workflow": STANDALONE_WORKFLOW, "image": STANDALONE_IMAGE,
         "platform": "linux/amd64", "dockerfile": "Dockerfile.website", "build_kind": "prebuilt-static",
-        "dependency_lock": "package-lock.json", "input_sha256": input_sha256, "output": output,
+        "dependency_lock": "bun.lock" if version == 3 else "package-lock.json",
+        **({"package_manager": STANDALONE_PACKAGE_MANAGER} if version == 3 else {}),
+        "input_sha256": input_sha256, "output": output,
         "base_image": STANDALONE_BASE_IMAGE, "route_contract": route_contract,
         "build_args": {"WEBSITE_SOURCE_SHA": source_sha, "WEBSITE_REVISION": source_sha,
                        "WEBSITE_ROUTE_CONTRACT_SHA256": route_contract.get("sha256") if isinstance(route_contract, dict) else None},
@@ -259,17 +269,20 @@ def standalone_plan(source_sha: str, *, input_sha256: dict, output: dict, route_
 
 
 def validate_standalone_plan(value: dict) -> dict:
-    object_keys(value, STANDALONE_PLAN_FIELDS, "standalone website plan")
+    bun = isinstance(value, dict) and value.get("schema") == STANDALONE_BUN_PLAN_SCHEMA
+    object_keys(value, STANDALONE_PLAN_FIELDS | ({"package_manager"} if bun else set()), "standalone website plan")
     source = full_sha(value["source_sha"])
     expected = {
-        "schema": STANDALONE_PLAN_SCHEMA, "repository": STANDALONE_REPOSITORY,
+        "schema": STANDALONE_BUN_PLAN_SCHEMA if bun else STANDALONE_PLAN_SCHEMA,
+        "repository": STANDALONE_REPOSITORY,
         "revision": source, "production_pages": "public", "commerce_extension": None,
         "workflow": STANDALONE_WORKFLOW, "image": STANDALONE_IMAGE, "platform": "linux/amd64",
         "dockerfile": "Dockerfile.website", "build_kind": "prebuilt-static",
-        "dependency_lock": "package-lock.json", "base_image": STANDALONE_BASE_IMAGE,
+        "dependency_lock": "bun.lock" if bun else "package-lock.json", "base_image": STANDALONE_BASE_IMAGE,
+        **({"package_manager": STANDALONE_PACKAGE_MANAGER} if bun else {}),
     }
     ui.require(all(value[key] == item for key, item in expected.items()), "standalone website build identity differs")
-    object_keys(value["input_sha256"], set(STANDALONE_INPUTS), "standalone website input fingerprints")
+    object_keys(value["input_sha256"], set(STANDALONE_BUN_INPUTS if bun else STANDALONE_INPUTS), "standalone website input fingerprints")
     for fingerprint in value["input_sha256"].values():
         image_digest(fingerprint)
     output = value["output"]
@@ -288,11 +301,12 @@ def validate_standalone_plan(value: dict) -> dict:
 
 
 def standalone_record(build_plan: dict, *, metadata: dict, digest: str, run_id: str, run_attempt: str) -> dict:
-    """Build a v2 receipt to be signed only by the original hosted producer."""
+    """Build a version-matched receipt to be signed by the original hosted producer."""
     validate_standalone_plan(build_plan)
     source = build_plan["source_sha"]
     value = {
-        "schema": STANDALONE_RELEASE_SCHEMA, "source_sha": source, "revision": source,
+        "schema": STANDALONE_BUN_RELEASE_SCHEMA if build_plan["schema"] == STANDALONE_BUN_PLAN_SCHEMA else STANDALONE_RELEASE_SCHEMA,
+        "source_sha": source, "revision": source,
         "production_pages": "public", "commerce_extension": None,
         "producer": standalone_producer(source, run_id, run_attempt),
         "image": {"uri": STANDALONE_IMAGE, "digest": image_digest(digest), "platform": "linux/amd64"},
@@ -305,7 +319,7 @@ def standalone_record(build_plan: dict, *, metadata: dict, digest: str, run_id: 
 def validate_standalone_release(value: dict, *, source_sha: str | None = None,
                                 commerce_source_sha: str | None = None) -> dict:
     object_keys(value, RELEASE_FIELDS, "standalone website release")
-    ui.require(value["schema"] == STANDALONE_RELEASE_SCHEMA, "standalone website release schema differs")
+    ui.require(value["schema"] in (STANDALONE_RELEASE_SCHEMA, STANDALONE_BUN_RELEASE_SCHEMA), "standalone website release schema differs")
     build_plan = validate_standalone_plan(value["build_plan"])
     source = build_plan["source_sha"]
     selected = policy.validate_producer(value["producer"], role="website")
@@ -316,7 +330,8 @@ def validate_standalone_release(value: dict, *, source_sha: str | None = None,
     }, "standalone website image metadata")
     validate_route_identity(value["image_metadata"]["route_contract"])
     expected = {
-        "schema": STANDALONE_RELEASE_SCHEMA, "source_sha": source, "revision": source,
+        "schema": STANDALONE_BUN_RELEASE_SCHEMA if build_plan["schema"] == STANDALONE_BUN_PLAN_SCHEMA else STANDALONE_RELEASE_SCHEMA,
+        "source_sha": source, "revision": source,
         "production_pages": "public", "commerce_extension": None,
         "producer": standalone_producer(source, selected["run_id"], selected["run_attempt"]),
         "image": {"uri": STANDALONE_IMAGE, "digest": image_digest(value["image"]["digest"]), "platform": "linux/amd64"},

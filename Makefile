@@ -261,7 +261,7 @@ run-api-tunnel: infra-tunnel services-up-tunnel ## Start infra + API microservic
 
 run-ui: ## Run UI natively (requires API stack)
 	@echo "$(BLUE)Starting UI natively...$(NC)"
-	@cd ui && npm run dev
+	@cd ui && bun run dev
 
 public-ui: run-api-tunnel tunnel-keycloak-restart prod-ui-docker tunnel-start tunnel-use-prod ## Start all dependencies + Cloudflare tunnel/proxy + persistent Docker UI
 
@@ -302,7 +302,7 @@ beta-public-ui-check: public-ui-check ## Run readiness checks for the beta publi
 prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal close)
 	@echo "$(BLUE)🔨 Building production UI...$(NC)"
 	@cp "$(BETA_ENV_FILE)" ui/.env
-	@cd ui && npm run build
+	@cd ui && bun run build
 	@echo "$(BLUE)🚀 Starting UI container on :3002...$(NC)"
 	@docker compose -f docker-compose.ui-prod.yml up -d --force-recreate
 	@echo "$(GREEN)✅ UI running in Docker (restart: unless-stopped)$(NC)"
@@ -311,7 +311,7 @@ prod-ui-docker: ## Build UI and serve in Docker (persistent, survives terminal c
 prod-ui-docker-rebuild: ## Rebuild UI and restart Docker container
 	@echo "$(BLUE)🔨 Rebuilding UI...$(NC)"
 	@cp "$(BETA_ENV_FILE)" ui/.env
-	@cd ui && npm run build
+	@cd ui && bun run build
 	@docker compose -f docker-compose.ui-prod.yml restart ui-prod
 	@echo "$(GREEN)✅ UI rebuilt and restarted$(NC)"
 
@@ -538,7 +538,7 @@ tunnel-use-dev: ## Route tunnel proxy to Vite dev UI (:3000)
 dev-ui-tunnel: ## Start UI dev server for tunnel mode
 	@echo "$(BLUE)🚀 Starting UI dev server for tunnel mode...$(NC)"
 	@cp "$(BETA_ENV_FILE)" ui/.env
-	@cd ui && npm run dev -- --host --mode tunnel
+	@cd ui && bun run dev --host --mode tunnel
 
 # Legacy compatibility aliases — intentionally hidden from `make help`.
 prod-ui-tunnel:

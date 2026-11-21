@@ -13,26 +13,31 @@ source-ownership audit or create a new release producer identity.
 The explicit export contract maps reviewed original paths to package paths.
 It retains every accepted non-test application/shared source file, including
 development support outside the current entrypoint graph. It includes the
-24-file application test roster and its six support files, all 54 accepted
+25-file application test roster and its six support files, all 54 accepted
 public resources, the three shared contracts, nginx configuration, two shared
 runtime hooks and the original `LICENSE`.
 
-The two profile files are materialized at `ui/package.json` and
-`ui/package-lock.json`. Unmodified copies also remain under
+The three profile files are materialized at `ui/package.json`,
+`ui/package-lock.json` and `ui/bun.lock`. Bun 1.4.4 and the frozen Bun lock
+are the selected installation contract; the npm lock remains a reference and
+audit input. Unmodified copies also remain under
 `ui/profiles/application/` for the existing installed-dependency inspector.
 The committed [package README](application-package-README.md) is copied to the
 package root. Package names, SDK coordinates and dependency selections remain
 the existing profile's values.
 
-The initial reviewed payload has 575 source files. The archive adds its
+The original npm v1 payload had 575 source files. The archive adds its
 `application-source-origin.json` manifest as one explicit self-excluded entry,
-for 576 members. The manifest records all payload paths, source mappings, byte
+for 576 members in v1. The Bun v2 package adds the selected Bun inputs and
+expanded regression coverage; its manifest is authoritative for the current
+member inventory. The reviewed v2 payload has 578 files and 579 archive
+members including the manifest. The manifest records all payload paths, source mappings, byte
 counts, hashes, Git identities and modes. An independently supplied manifest
 must have exactly the same bytes as the archive's copy.
 
 The package omits the existing 72 application exclusions, unselected tests and
 unused test support, unselected package configuration, migration diagnostics,
-the nonselected Bun lock, Git metadata, installed dependencies and build state.
+Git metadata, installed dependencies and build state.
 These are package selections, not source deletions or additions to the
 exclusive website ownership roster.
 
@@ -53,6 +58,12 @@ The supported application entries and selected test/build graphs have no
 unresolved local static import edge in the reviewed inventory.
 
 ## Deterministic source and separate evidence
+
+Bun v2 source, producer and consumer schemas explicitly bind the selected
+manager and Bun lock. The full/profile source rehearsals use v6/v7. Original
+npm v1 package evidence and v4/v5 rehearsals retain separate validation; they
+are not relabeled as Bun evidence. Node.js 24 and Vitest remain the runtime and
+test runner used by the package scripts.
 
 The archive and its canonical source manifest depend on the clean source
 commit/tree, reviewed export contract, source bytes and Git-derived modes.
@@ -81,9 +92,9 @@ The supported package commands remain:
 
 ```sh
 cd ui
-npm ci
-npm run build
-npm test
+bun install --frozen-lockfile
+bun run build
+bun run test
 ```
 
 Ordinary builds retain the existing `development` marker. The application does
@@ -92,8 +103,8 @@ external qualifier supplies the existing `MARTY_UI_SHA` value after archive,
 manifest, producer receipt and same-source baseline verification.
 
 The qualifier restores into an owned ordinary directory outside Git, with no
-borrowed dependency directory. It runs the standard npm commands with the
-reviewed clean environment, fresh cache, explicit empty npm configuration and
+borrowed dependency directory. It runs the pinned Bun package scripts with the
+reviewed clean environment, fresh cache, isolated package-manager configuration and
 `PUPPETEER_SKIP_DOWNLOAD=true`. The actual lifecycle patch, installed locked
 identities, removed website dependencies and SDK/WASM initialization are checked
 through the existing dependency inspector.
@@ -104,7 +115,7 @@ Only `ui/node_modules/` and `ui/dist-application/` are permitted generated trees
 their contents are validated separately. Reports and other temporary state stay
 outside the restored source.
 
-The selected tests must complete all 24 files and their declared assertions.
+The selected tests must complete all 25 files and their declared assertions.
 The output must match the same-source profile baseline in every path, byte
 count and hash. Source/package scripts and locks remain unchanged throughout.
 

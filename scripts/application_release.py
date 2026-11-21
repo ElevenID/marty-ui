@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/application"
 PLAN_SCHEMA = "marty.application-build-plan/v1"
 RELEASE_SCHEMA = "marty.application-release/v1"
+BUN_PLAN_SCHEMA = "marty.application-build-plan/v2"
+BUN_RELEASE_SCHEMA = "marty.application-release/v2"
+BUN_PACKAGE_MANAGER = {"name": "bun", "version": "1.4.4", "lock_file": "bun.lock"}
 BASE_IMAGE = web.STANDALONE_BASE_IMAGE
 DOCKERFILE = "docker/application.Dockerfile"
 INPUT_BRIDGE = "scripts/application_release_inputs.mjs"
@@ -127,10 +130,13 @@ def _input_pins(value: dict) -> None:
 
 
 def validate_plan(value: dict) -> dict:
-    web.object_keys(value, PLAN_FIELDS, "application build plan")
+    bun = isinstance(value, dict) and value.get("schema") == BUN_PLAN_SCHEMA
+    web.object_keys(value, PLAN_FIELDS | ({"package_manager"} if bun else set()), "application build plan")
+    if bun:
+        ui.require(value["package_manager"] == BUN_PACKAGE_MANAGER, "application package manager differs")
     source = web.full_sha(value["source_sha"])
     web.full_sha(value["source_tree"], "tree")
-    expected = {"schema": PLAN_SCHEMA, "repository": ui.REPOSITORY, "workflow": ui.WORKFLOW,
+    expected = {"schema": BUN_PLAN_SCHEMA if bun else PLAN_SCHEMA, "repository": ui.REPOSITORY, "workflow": ui.WORKFLOW,
                 "audience": "production", "surface": "application", "production_pages": "public", "commerce_extension": None,
                 "image": IMAGE, "platform": "linux/amd64", "build_kind": "verified-source-package-static",
                 "dockerfile": DOCKERFILE, "base_image": BASE_IMAGE}
@@ -208,15 +214,18 @@ def production_plan(root: Path, source_sha: str, *, assets: Path, context: Path,
         ui.require(browser_report.absolute() == assets / BROWSER_REPORT, "producer browser validation requires its fixed evidence path")
         arguments += ["--browser-report", str(browser_report.absolute())]
     result = parse(_command(arguments, root).encode())
+    bun = result.get("schema") == "marty.application-release-inputs/v2"
     fields = {"schema", "source", "inputs", "source_inventory_sha256", "dependency_lock_sha256",
               "route_contract", "runtime_context", "output", "sdk"}
+    if bun:
+        fields.add("package_manager")
     web.object_keys(result, fields, "reviewed application input validation")
-    ui.require(result["schema"] == "marty.application-release-inputs/v1" and result["source"] == {
+    ui.require(result["schema"] == f"marty.application-release-inputs/v{2 if bun else 1}" and result["source"] == {
         "repository": ui.REPOSITORY, "commit": source_sha, "tree": tree, "object_format": "sha1", "working_tree_dirty": False},
         "validated application source differs")
     recipe = read_bytes(root / DOCKERFILE)
     ui.require((root / DOCKERFILE).stat().st_mode & 0o777 == 0o644, "application recipe mode differs")
-    plan = {"schema": PLAN_SCHEMA, "repository": ui.REPOSITORY, "source_sha": source_sha, "source_tree": tree,
+    plan = {"schema": BUN_PLAN_SCHEMA if bun else PLAN_SCHEMA, "repository": ui.REPOSITORY, "source_sha": source_sha, "source_tree": tree,
             "workflow": ui.WORKFLOW, "audience": "production", "surface": "application", "production_pages": "public",
             "commerce_extension": None, "image": IMAGE, "platform": "linux/amd64", "build_kind": "verified-source-package-static",
             "dockerfile": DOCKERFILE, "dockerfile_sha256": ui.digest(recipe),
@@ -330,26 +339,63 @@ def _validate_input_assets(directory: Path, plan: dict) -> dict:
     consumer = documents["application-package-consumer.json"]
     baseline = documents["application-profile-source-closure.json"]
     context = documents["application-runtime-context.json"]
+    bun = plan["schema"] == BUN_PLAN_SCHEMA
+    package_version = 2 if bun else 1
     source = {"repository": ui.REPOSITORY, "commit": plan["source_sha"], "tree": plan["source_tree"],
               "object_format": "sha1", "working_tree_dirty": False}
-    ui.require(manifest.get("schema") == "marty.application-source-package/v1" and manifest.get("fixture") is False
+    ui.require(manifest.get("schema") == f"marty.application-source-package/v{package_version}" and manifest.get("fixture") is False
                and manifest.get("source") == source and manifest.get("route_contract") == plan["route_contract"]
                and manifest.get("source_inventory_sha256") == plan["source_inventory_sha256"]
                and ui.digest(compact(manifest.get("files"))) == plan["source_inventory_sha256"],
                "application source manifest differs from its signed plan")
-    lock = [row for row in manifest["files"] if row.get("path") == "ui/package-lock.json"]
+    lock_path = "ui/bun.lock" if bun else "ui/package-lock.json"
+    lock = [row for row in manifest["files"] if row.get("path") == lock_path]
     ui.require(len(lock) == 1 and lock[0]["sha256"] == plan["dependency_lock_sha256"], "application lock differs")
-    ui.require(producer.get("schema") == "marty.application-source-package-producer/v1"
+    manager_evidence = (
+        manifest.get("dependency_profile", {}).get("package_manager"),
+        baseline.get("plan", {}).get("package_manager"),
+        baseline.get("plan", {}).get("dependency_profile", {}).get("package_manager"),
+        baseline.get("build", {}).get("package_manager"),
+        baseline.get("dependency_install", {}).get("package_manager"),
+        baseline.get("dependency_profile", {}).get("package_manager"),
+        consumer.get("environment", {}).get("package_manager"),
+        consumer.get("dependency_install", {}).get("package_manager"),
+    )
+    if bun:
+        ui.require(all(item == BUN_PACKAGE_MANAGER for item in manager_evidence),
+                   "application package manager evidence differs")
+        ui.require(baseline.get("plan", {}).get("schema") == "marty.application-source-closure-plan/v7",
+                   "application baseline plan schema differs")
+        for observation in (baseline["dependency_install"], consumer["dependency_install"]):
+            ui.require(observation.get("status") == "passed" and observation.get("mode") == "fresh-bun-frozen"
+                       and observation.get("dependency_profile") == "application"
+                       and observation.get("bun_version") == BUN_PACKAGE_MANAGER["version"]
+                       and observation.get("bun_lock_selected") is True
+                       and observation.get("independent_dependency_installation") is True,
+                       "application observed Bun installation differs")
+        ui.require(consumer.get("environment", {}).get("bun_version") == BUN_PACKAGE_MANAGER["version"],
+                   "application observed Bun consumer version differs")
+        ui.require(baseline.get("build", {}).get("dependency_mode") == "fresh-bun-frozen"
+                   and baseline["build"].get("dependency_lock_sha256") == plan["dependency_lock_sha256"],
+                   "application frozen Bun installation differs")
+        reference_lock = [row for row in manifest["files"] if row.get("path") == "ui/package-lock.json"]
+        ui.require(len(reference_lock) == 1
+                   and baseline["build"].get("package_lock_sha256") == reference_lock[0]["sha256"],
+                   "application npm reference lock differs")
+    else:
+        ui.require(all(item is None for item in manager_evidence),
+                   "legacy application evidence cannot select a different package manager")
+    ui.require(producer.get("schema") == f"marty.application-source-package-producer/v{package_version}"
                and producer.get("status") == "passed" and producer.get("fixture") is False
                and producer.get("source_commit") == plan["source_sha"] and producer.get("source_tree") == plan["source_tree"]
                and producer.get("source_preserved") is True and producer.get("archive_manifest_identical") is True,
                "application source producer was not qualified")
     for key, name in (("archive", INPUT_FILES[0]), ("manifest", INPUT_FILES[1]), ("baseline_report", INPUT_FILES[3])):
         ui.require(producer.get(key) == plan["inputs"][name], "application source producer pins differ")
-    ui.require(baseline.get("schema") == "marty.application-source-closure-rehearsal/v5" and baseline.get("status") == "passed"
+    ui.require(baseline.get("schema") == f"marty.application-source-closure-rehearsal/v{7 if bun else 5}" and baseline.get("status") == "passed"
                and baseline.get("fixture", False) is False and baseline.get("plan", {}).get("source", {}).get("commit") == plan["source_sha"],
                "application baseline differs")
-    ui.require(consumer.get("schema") == "marty.application-source-package-consumer/v1" and consumer.get("status") == "passed"
+    ui.require(consumer.get("schema") == f"marty.application-source-package-consumer/v{package_version}" and consumer.get("status") == "passed"
                and consumer.get("fixture") is False and consumer.get("source") == source
                and consumer.get("source_inventory_sha256") == plan["source_inventory_sha256"]
                and consumer.get("preservation") == {"pinned_inputs_unchanged": True, "restored_source_unchanged": True},
@@ -402,7 +448,8 @@ def _release(plan: dict, *, image_digest: str, run_id: str, run_attempt: str, ev
     web.object_keys(evidence, set(EVIDENCE_FILES), "application release evidence")
     for name, pin in evidence.items():
         _pin(pin, name)
-    return {"schema": RELEASE_SCHEMA, "repository": ui.REPOSITORY, "source_sha": plan["source_sha"],
+    return {"schema": BUN_RELEASE_SCHEMA if plan["schema"] == BUN_PLAN_SCHEMA else RELEASE_SCHEMA,
+            "repository": ui.REPOSITORY, "source_sha": plan["source_sha"],
             "audience": "production", "surface": "application", "production_pages": "public", "commerce_extension": None,
             "producer": _producer(plan["source_sha"], run_id, run_attempt),
             "image": {"uri": IMAGE, "digest": web.image_digest(image_digest), "platform": "linux/amd64"},

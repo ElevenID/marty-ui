@@ -6,30 +6,36 @@ needed to use them outside the original repository checkout.
 
 ## Install, build and test
 
-Use Node.js 24 and npm. From the extracted package directory:
+Use Node.js 24 and Bun 1.4.4. From the extracted package directory:
 
 ```sh
 cd ui
-npm ci
-npm run build
-npm test
+bun install --frozen-lockfile
+bun run build
+bun run test
 ```
 
-`npm ci` uses the included application lock and runs the existing checker-worker
-patch. The application build writes `ui/dist-application/`. `npm test` runs the
-selected suite in `scripts/application-test-profile.mjs`, currently 24 test
-files covering routing, authentication states, organization-domain behavior and
-startup recovery.
+The frozen Bun install uses the included application `bun.lock` and runs the
+existing checker-worker patch. The application build writes
+`ui/dist-application/`. `bun run test` invokes the existing Vitest suite in
+`scripts/application-test-profile.mjs`, including authentication redirects,
+invitation navigation, organization-domain behavior and startup recovery.
+The Node-based build and test runtime remains Node.js 24.
 
 Puppeteer remains in the selected dependency profile. For build and test work
 that does not need a downloaded browser, set `PUPPETEER_SKIP_DOWNLOAD=true`
-before `npm ci`. The package qualification uses that setting with a fresh npm
-cache and explicit empty user/global npm configuration. Its evidence records
-the exact Node, npm and installed-package identities.
+before `bun install --frozen-lockfile`. The package qualification uses that
+setting with a fresh cache and isolated package-manager configuration. Its
+evidence records the exact Node/Bun versions, authoritative Bun lock and
+installed-package identities. Dependency lifecycle permissions are explicit
+in the selected manifest; the existing project postinstall patch is verified.
 
 The package keeps the existing `marty-ui` npm name, SDK coordinates and selected
 dependency versions. `ui/profiles/application/` retains the original selected
-manifest and lock; their bytes match the two materialized files at `ui/`.
+manifest, Bun lock and npm reference lock; their bytes match the three
+materialized files at `ui/`. `package-lock.json` remains a reviewed dependency
+reference and audit input. The v2 package selects Bun for installation; older
+npm v1 evidence retains its original meaning and separate validation.
 
 ## Layout and supported scope
 
@@ -61,7 +67,7 @@ producer evidence before supplying an exact commit through the existing
 
 The source manifest is included inside the archive and supplied separately with
 identical bytes. It records the original commit and tree, source paths and Git
-modes, the selected contracts and test roster, and the two package-profile
+modes, the selected contracts and test roster, and the three package-profile
 materializations. The separate producer receipt binds the archive and manifest
 digests to its validation evidence. Check those digests against the producer
 record when consuming a package.

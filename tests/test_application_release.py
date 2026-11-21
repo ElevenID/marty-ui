@@ -21,9 +21,12 @@ TREE = "c" * 40
 DIGEST = "sha256:" + "b" * 64
 
 
-def make_assets(directory: Path) -> dict:
+def make_assets(directory: Path, *, package_manager: str = "npm") -> dict:
     """Return a structurally valid inert signed-evidence fixture for trust tests."""
     directory.mkdir(parents=True, exist_ok=True)
+    assert package_manager in {"npm", "bun"}
+    bun = package_manager == "bun"
+    version = 2 if bun else 1
     def write(name, value):
         raw = value if isinstance(value, bytes) else ui.canonical(value)
         (directory / name).write_bytes(raw)
@@ -42,13 +45,30 @@ def make_assets(directory: Path) -> dict:
     context_pin = write("application-runtime-context.json", context)
     source_files = [{"path": "ui/package-lock.json", "bytes": 2, "sha256": ui.digest(b"{}")},
                     {"path": "ui/src/main.jsx", "bytes": 1, "sha256": ui.digest(b"x")}]
-    manifest = {"schema": "marty.application-source-package/v1", "fixture": False, "source": source,
+    if bun:
+        source_files.append({"path": "ui/bun.lock", "bytes": 3, "sha256": ui.digest(b"bun")})
+    manifest = {"schema": f"marty.application-source-package/v{version}", "fixture": False, "source": source,
                 "route_contract": route, "files": source_files, "source_inventory_sha256": ui.digest(app.compact(source_files))}
+    if bun:
+        manifest["dependency_profile"] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER)}
     manifest_pin = write("application-source-origin.json", manifest)
     archive_pin = write("application-source-package.zip", b"inert archive fixture; never executed or extracted by the verifier")
-    baseline = {"schema": "marty.application-source-closure-rehearsal/v5", "status": "passed", "plan": {"source": {"commit": SOURCE}}}
+    baseline = {"schema": f"marty.application-source-closure-rehearsal/v{7 if bun else 5}",
+                "status": "passed", "plan": {"source": {"commit": SOURCE}}}
+    if bun:
+        baseline["plan"]["schema"] = "marty.application-source-closure-plan/v7"
+        baseline["plan"]["package_manager"] = dict(app.BUN_PACKAGE_MANAGER)
+        baseline["plan"]["dependency_profile"] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER)}
+        baseline["build"] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER), "dependency_mode": "fresh-bun-frozen",
+                             "dependency_lock_sha256": source_files[-1]["sha256"],
+                             "package_lock_sha256": source_files[0]["sha256"]}
+        for key in ("dependency_install", "dependency_profile"):
+            baseline[key] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER)}
+        baseline["dependency_install"].update({"status": "passed", "mode": "fresh-bun-frozen",
+            "dependency_profile": "application", "bun_version": "1.4.4", "bun_lock_selected": True,
+            "independent_dependency_installation": True})
     baseline_pin = write("application-profile-source-closure.json", baseline)
-    producer = {"schema": "marty.application-source-package-producer/v1", "status": "passed", "fixture": False,
+    producer = {"schema": f"marty.application-source-package-producer/v{version}", "status": "passed", "fixture": False,
                 "source_commit": SOURCE, "source_tree": TREE, "source_preserved": True, "archive_manifest_identical": True,
                 "archive": archive_pin, "manifest": manifest_pin, "baseline_report": baseline_pin}
     producer_pin = write("application-source-package.json", producer)
@@ -57,7 +77,7 @@ def make_assets(directory: Path) -> dict:
            "integrity": "sha512-" + "A" * 86 + "==",
            "wasm": {**wasm, "path": "node_modules/@elevenid/marty-api-core/src/wasm/marty_api_client_bg.wasm"},
            "initialized_in_node": True}
-    consumer = {"schema": "marty.application-source-package-consumer/v1", "status": "passed", "fixture": False,
+    consumer = {"schema": f"marty.application-source-package-consumer/v{version}", "status": "passed", "fixture": False,
                 "source": source, "source_inventory_sha256": manifest["source_inventory_sha256"],
                 "inputs": {"archive": archive_pin, "manifest": manifest_pin, "producer_report": producer_pin, "baseline_report": baseline_pin},
                 "preservation": {"pinned_inputs_unchanged": True, "restored_source_unchanged": True},
@@ -65,19 +85,29 @@ def make_assets(directory: Path) -> dict:
                             "runtime_adapter_removed": True, "temporary_removed": True, "runtime_context_removed": False},
                 "runtime_context": {**context, "path": "/inert-fixture/context", "manifest_sha256": context_pin["sha256"]},
                 "output": output, "dependency_install": {"sdk": sdk}}
+    if bun:
+        consumer["environment"] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER), "bun_version": "1.4.4"}
+        consumer["dependency_install"]["package_manager"] = dict(app.BUN_PACKAGE_MANAGER)
+        consumer["dependency_install"].update({"status": "passed", "mode": "fresh-bun-frozen",
+            "dependency_profile": "application", "bun_version": "1.4.4", "bun_lock_selected": True,
+            "independent_dependency_installation": True})
     consumer_pin = write("application-package-consumer.json", consumer)
     recipe = {"path": app.DOCKERFILE, "bytes": 123, "sha256": ui.digest(b"reviewed recipe"), "mode": 0o644}
-    plan = {"schema": app.PLAN_SCHEMA, "repository": ui.REPOSITORY, "source_sha": SOURCE, "source_tree": TREE,
+    plan = {"schema": app.BUN_PLAN_SCHEMA if bun else app.PLAN_SCHEMA,
+            "repository": ui.REPOSITORY, "source_sha": SOURCE, "source_tree": TREE,
             "workflow": ui.WORKFLOW, "audience": "production", "surface": "application", "production_pages": "public",
             "commerce_extension": None, "image": app.IMAGE, "platform": "linux/amd64", "build_kind": "verified-source-package-static",
             "dockerfile": app.DOCKERFILE, "dockerfile_sha256": recipe["sha256"], "recipe_input": recipe, "base_image": app.BASE_IMAGE,
             "inputs": dict(zip(app.INPUT_FILES, (archive_pin, manifest_pin, producer_pin, baseline_pin, consumer_pin, context_pin))),
-            "source_inventory_sha256": manifest["source_inventory_sha256"], "dependency_lock_sha256": source_files[0]["sha256"],
+            "source_inventory_sha256": manifest["source_inventory_sha256"],
+            "dependency_lock_sha256": source_files[-1 if bun else 0]["sha256"],
             "route_contract": route,
             "runtime_context": {"manifest_sha256": context_pin["sha256"], "payload_sha256": ui.digest(app.compact(context_inventory)), "source_sha": SOURCE},
             "output": {"inventory_sha256": output["inventory_sha256"], "file_count": len(files), "total_bytes": sum(row["bytes"] for row in files)},
             "sdk": {**{key: sdk[key] for key in ("name", "version", "resolved", "integrity", "wasm")}, "emitted_wasm": wasm},
             "build_args": {"APPLICATION_SOURCE_SHA": SOURCE, "APPLICATION_CONTEXT_SHA": context_pin["sha256"]}}
+    if bun:
+        plan["package_manager"] = dict(app.BUN_PACKAGE_MANAGER)
     runtime_identity = {"schema": "marty.application-image-check/v1", "image_mode": "published-digest", "image_reference": app.IMAGE + "@" + DIGEST,
                         "recipe_input": recipe, "context_sha256": context_pin["sha256"], "image_id": "sha256:" + "1" * 64,
                         "container_id": "2" * 64, "endpoint": {"host": "127.0.0.1", "port": 23456}, "cleanup": dict(app.IMAGE_CLEANUP)}
@@ -109,13 +139,111 @@ def make_assets(directory: Path) -> dict:
     return release
 
 
-def test_fixed_inert_assets_roundtrip(tmp_path, monkeypatch):
-    release = make_assets(tmp_path)
+@pytest.mark.parametrize("package_manager", ["npm", "bun"])
+def test_fixed_inert_assets_roundtrip(tmp_path, monkeypatch, package_manager):
+    release = make_assets(tmp_path, package_manager=package_manager)
     monkeypatch.setattr(app, "_command", lambda *_args: pytest.fail("consumer executed a producer command"))
     assert app.validate_release(deepcopy(release), source_sha=SOURCE) == release
     assert app.validate_assets(tmp_path, source_sha=SOURCE) == release
     assert release["image"]["uri"] != ui.PUBLIC_IMAGE
     assert "version" not in release and "backend" not in release
+
+
+def rebind_fixture_inputs(directory, plan):
+    """Rebind all outer hashes so a semantic rejection cannot pass by accident."""
+    def pin(name):
+        return app.file_record((directory / name).read_bytes())
+    def write(name, value):
+        (directory / name).write_bytes(ui.canonical(value))
+    producer = app.read(directory / "application-source-package.json")
+    for key, name in (("archive", app.INPUT_FILES[0]), ("manifest", app.INPUT_FILES[1]),
+                      ("baseline_report", app.INPUT_FILES[3])):
+        producer[key] = pin(name)
+    write("application-source-package.json", producer)
+    consumer = app.read(directory / "application-package-consumer.json")
+    for key, name in (("archive", app.INPUT_FILES[0]), ("manifest", app.INPUT_FILES[1]),
+                      ("producer_report", app.INPUT_FILES[2]), ("baseline_report", app.INPUT_FILES[3])):
+        consumer["inputs"][key] = pin(name)
+    write("application-package-consumer.json", consumer)
+    plan["inputs"] = {name: pin(name) for name in app.INPUT_FILES}
+    write(app.RECEIPT, app._release(plan, image_digest=DIGEST, run_id="231", run_attempt="2",
+                                  evidence={name: pin(name) for name in app.EVIDENCE_FILES}))
+
+
+@pytest.mark.parametrize("name,path,value", [
+    ("application-source-origin.json", ("dependency_profile", "package_manager", "name"), "npm"),
+    ("application-source-origin.json", ("schema",), "marty.application-source-package/v1"),
+    ("application-source-package.json", ("schema",), "marty.application-source-package-producer/v1"),
+    ("application-profile-source-closure.json", ("schema",), "marty.application-source-closure-rehearsal/v5"),
+    ("application-profile-source-closure.json", ("plan", "schema"), "marty.application-source-closure-plan/v5"),
+    ("application-profile-source-closure.json", ("build", "dependency_mode"), "fresh-npm-ci"),
+    ("application-profile-source-closure.json", ("build", "package_manager", "version"), "latest"),
+    ("application-profile-source-closure.json", ("build", "dependency_lock_sha256"), ui.digest(b"{}")),
+    ("application-profile-source-closure.json", ("build", "package_lock_sha256"), ui.digest(b"bun")),
+    ("application-profile-source-closure.json", ("dependency_install", "mode"), "fresh-npm-ci"),
+    ("application-profile-source-closure.json", ("dependency_install", "bun_version"), "1.4.3"),
+    ("application-profile-source-closure.json", ("dependency_install", "bun_lock_selected"), False),
+    ("application-profile-source-closure.json", ("dependency_install", "independent_dependency_installation"), False),
+    ("application-package-consumer.json", ("schema",), "marty.application-source-package-consumer/v1"),
+    ("application-package-consumer.json", ("environment", "package_manager", "lock_file"), "package-lock.json"),
+    ("application-package-consumer.json", ("environment", "bun_version"), "1.4.3"),
+    ("application-package-consumer.json", ("dependency_install", "package_manager", "version"), "1.4.3"),
+    ("application-package-consumer.json", ("dependency_install", "bun_version"), "1.4.3"),
+    ("application-package-consumer.json", ("dependency_install", "mode"), "fresh-npm-ci"),
+    ("application-package-consumer.json", ("dependency_install", "status"), "failed"),
+])
+def test_bun_evidence_cannot_mix_managers_or_relabel_legacy_reports(tmp_path, name, path, value):
+    release = make_assets(tmp_path, package_manager="bun")
+    document = app.read(tmp_path / name)
+    target = document
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    (tmp_path / name).write_bytes(ui.canonical(document))
+    rebind_fixture_inputs(tmp_path, release["build_plan"])
+    with pytest.raises(ValueError):
+        app.validate_assets(tmp_path)
+
+
+def test_bun_plan_binds_selected_lock_instead_of_npm_reference(tmp_path):
+    release = make_assets(tmp_path, package_manager="bun")
+    release["build_plan"]["dependency_lock_sha256"] = ui.digest(b"{}")
+    rebind_fixture_inputs(tmp_path, release["build_plan"])
+    with pytest.raises(ValueError, match="application lock differs"):
+        app.validate_assets(tmp_path)
+
+
+@pytest.mark.parametrize("key,value", [("name", "npm"), ("version", "1.4.3"), ("lock_file", "package-lock.json")])
+def test_bun_plan_requires_exact_reviewed_manager(tmp_path, key, value):
+    release = make_assets(tmp_path, package_manager="bun")
+    release["build_plan"]["package_manager"][key] = value
+    with pytest.raises(ValueError, match="package manager differs"):
+        app.validate_plan(release["build_plan"])
+
+
+def test_legacy_plan_cannot_acquire_bun_semantics(tmp_path):
+    release = make_assets(tmp_path)
+    release["build_plan"]["package_manager"] = dict(app.BUN_PACKAGE_MANAGER)
+    with pytest.raises(ValueError):
+        app.validate_plan(release["build_plan"])
+
+
+def test_legacy_manifest_cannot_acquire_bun_semantics(tmp_path):
+    release = make_assets(tmp_path)
+    manifest = app.read(tmp_path / "application-source-origin.json")
+    manifest["dependency_profile"] = {"package_manager": dict(app.BUN_PACKAGE_MANAGER)}
+    (tmp_path / "application-source-origin.json").write_bytes(ui.canonical(manifest))
+    rebind_fixture_inputs(tmp_path, release["build_plan"])
+    with pytest.raises(ValueError, match="legacy application evidence"):
+        app.validate_assets(tmp_path)
+
+
+def test_bun_receipt_cannot_use_legacy_schema(tmp_path):
+    release = make_assets(tmp_path, package_manager="bun")
+    assert release["schema"] == app.BUN_RELEASE_SCHEMA
+    release["schema"] = app.RELEASE_SCHEMA
+    with pytest.raises(ValueError, match="differs from its plan"):
+        app.validate_release(release)
 
 
 @pytest.mark.parametrize("path,value", [

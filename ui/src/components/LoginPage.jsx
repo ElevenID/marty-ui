@@ -52,11 +52,13 @@ function LoginPage({ fallbackRedirectTo = '/' }) {
   // Show a neutral loading state while auth is checked or SSO redirect is in progress
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
       data-testid="login-page"
     >
       <CircularProgress size={48} />

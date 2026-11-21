@@ -8,9 +8,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES, APPLICATION_LEGACY_TEST_FILES,
+  APPLICATION_EXPECTED_TESTS, APPLICATION_LEGACY_EXPECTED_TESTS } from './application-test-profile.mjs';
 import { APPLICATION_RETAINED_PUBLIC_FILES } from './application-public-assets.mjs';
-import { applicationInstallationEnvironment, runOwnedInstallCommand } from './application-dependency-install.mjs';
+import { prepareApplicationInstall, runOwnedInstallCommand } from './application-dependency-install.mjs';
+import { APPLICATION_BUN_PACKAGE_MANAGER } from './application-dependency-profile.mjs';
 import {
   applicationBuildEnvironment, verifyApplicationClosureOutput,
   verifyApplicationTestResult, verifyApplicationResourceResult,
@@ -22,7 +24,6 @@ import {
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
-const EXPECTED_TESTS = 296;
 const EXPECTED_OUTPUT_FILES = 88;
 const EXPECTED_CONTEXT_FILES = 92;
 const PROFILE_INPUTS = ['ui/package.json', 'ui/package-lock.json'];
@@ -94,20 +95,32 @@ function reportMessages(error) {
 }
 
 export function validateApplicationPackageBaseline(baseline, manifest) {
-  require(baseline?.schema === 'marty.application-source-closure-rehearsal/v5' && baseline.status === 'passed'
+  const bun = manifest.schema === 'marty.application-source-package/v2';
+  const version = bun ? 'v7' : 'v5'; const mode = bun ? 'fresh-bun-frozen' : 'fresh-npm-ci';
+  const selectedTests = bun ? APPLICATION_TEST_FILES : APPLICATION_LEGACY_TEST_FILES;
+  const expectedTests = bun ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS;
+  require(baseline?.schema === `marty.application-source-closure-rehearsal/${version}` && baseline.status === 'passed'
     && baseline.fixture !== true
-    && baseline.plan?.schema === 'marty.application-source-closure-plan/v5', 'Consumer requires a passed v5 application baseline');
+    && baseline.plan?.schema === `marty.application-source-closure-plan/${version}`, 'Consumer requires a passed application baseline');
   const source = baseline.plan.source;
   require(source?.commit === manifest.source.commit && source.working_tree_dirty === false
     && Array.isArray(source.git_status) && source.git_status.length === 0
     && Array.isArray(source.files) && new Set(source.files.map((row) => row.path)).size === source.files.length
     && source.input_inventory_sha256 === identity(source.files), 'Consumer baseline source identity differs');
-  require(baseline.build?.dependency_mode === 'fresh-npm-ci' && baseline.build.dependency_profile === 'application'
+  require(baseline.build?.dependency_mode === mode && baseline.build.dependency_profile === 'application'
     && baseline.build.effective_source_sha === source.commit
-    && baseline.dependency_install?.status === 'passed' && baseline.dependency_install.mode === 'fresh-npm-ci'
+    && baseline.dependency_install?.status === 'passed' && baseline.dependency_install.mode === mode
     && baseline.dependency_install.dependency_profile === 'application'
     && baseline.dependency_install.independent_dependency_installation === true,
   'Consumer baseline did not independently install the application profile');
+  for (const value of [manifest.dependency_profile?.package_manager, baseline.plan.package_manager,
+    baseline.build.package_manager, baseline.dependency_install.package_manager,
+    baseline.plan.dependency_profile?.package_manager, baseline.dependency_profile?.package_manager]) {
+    assert.deepEqual(value, bun ? APPLICATION_BUN_PACKAGE_MANAGER : undefined, 'Consumer baseline package-manager identity differs');
+  }
+  if (bun) require(baseline.dependency_install.bun_lock_selected === true
+    && baseline.dependency_install.bun_version === APPLICATION_BUN_PACKAGE_MANAGER.version,
+  'Consumer baseline did not prove the reviewed Bun installer');
   for (const key of ['application_build_completed', 'application_tests_completed', 'omitted_sources_absent',
     'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved',
     'application_resource_smoke_completed', 'locale_fallback_observed', 'runtime_context_prepared',
@@ -116,17 +129,17 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   }
   assert.deepEqual(baseline.plan.route_contract, manifest.route_contract, 'Consumer route contract differs');
   assert.deepEqual(baseline.plan.test_profile, manifest.test_profile, 'Consumer selected test contract differs');
-  assert.deepEqual(manifest.test_profile.files, [...APPLICATION_TEST_FILES], 'Consumer test roster changed');
-  require(manifest.test_profile.config === APPLICATION_TEST_CONFIG && APPLICATION_TEST_FILES.length === 24
-    && baseline.tests?.result?.test_count === EXPECTED_TESTS, 'Consumer requires all 24 selected files and 296 assertions');
-  assert.deepEqual([...baseline.tests.result.completed_files].sort(), [...APPLICATION_TEST_FILES].sort(), 'Baseline selected tests are incomplete');
+  assert.deepEqual(manifest.test_profile.files, [...selectedTests], 'Consumer test roster changed');
+  require(manifest.test_profile.config === APPLICATION_TEST_CONFIG && selectedTests.length === (bun ? 25 : 24)
+    && baseline.tests?.result?.test_count === expectedTests, 'Consumer requires the complete versioned selected assertion suite');
+  assert.deepEqual([...baseline.tests.result.completed_files].sort(), [...selectedTests].sort(), 'Baseline selected tests are incomplete');
   require(baseline.plan.dependency_profile?.name === 'application' && baseline.dependency_profile?.name === 'application'
     && baseline.dependency_profile.output_identical_to_full_profile === true
     && baseline.dependency_profile.baseline_comparison?.output_files_identical === true
     && baseline.dependency_profile.baseline_comparison.public_resources_identical === true,
   'Consumer baseline omitted the full-profile comparison');
   assert.deepEqual(manifest.substitutions, baseline.plan.dependency_profile.substitutions, 'Consumer profile substitutions differ');
-  assert.deepEqual(manifest.substitutions.map((row) => row.path), PROFILE_INPUTS, 'Consumer substitutions exceed the reviewed package inputs');
+  assert.deepEqual(manifest.substitutions.map((row) => row.path), [...PROFILE_INPUTS, ...(bun ? ['ui/bun.lock'] : [])], 'Consumer substitutions exceed the reviewed package inputs');
   const originals = new Map(source.files.map((row) => [row.path, row]));
   const producerOnlyInputs = [];
   for (const row of manifest.files) {
@@ -142,6 +155,8 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   }
   const selectedLock = manifest.files.find((row) => row.path === 'ui/package-lock.json');
   require(selectedLock && baseline.build.package_lock_sha256 === selectedLock.sha256, 'Consumer baseline selected lock differs');
+  if (bun) require(baseline.build.dependency_lock_sha256 === manifest.files.find((row) => row.path === 'ui/bun.lock')?.sha256,
+    'Consumer baseline selected Bun lock differs');
   require(baseline.output?.files?.length === EXPECTED_OUTPUT_FILES
     && baseline.output.inventory_sha256 === identity(baseline.output.files), 'Consumer baseline output inventory is invalid');
   assert.deepEqual(baseline.output.public_resources.map((row) => row.path), [...APPLICATION_RETAINED_PUBLIC_FILES], 'Baseline public resource set differs');
@@ -241,6 +256,7 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
   let temporary;
   let restored;
   let ownedContext = false;
+  let packageManager = 'npm';
   let phase = 'input-verification';
   let failure;
   let sourcePreserved = false;
@@ -296,6 +312,8 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
     }
     manifest = api.parseApplicationSourceJson(snapshots[1].bytes);
     api.validateApplicationSourcePackageManifest(manifest);
+    packageManager = manifest.schema === 'marty.application-source-package/v2' ? 'bun' : 'npm';
+    report.schema = `marty.application-source-package-consumer/${packageManager === 'bun' ? 'v2' : 'v1'}`;
     const producer = api.parseApplicationSourceJson(snapshots[2].bytes);
     baseline = api.parseApplicationSourceJson(snapshots[3].bytes);
     api.validateApplicationSourceProducerReceipt(producer, {
@@ -323,42 +341,47 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
       && restoredResult.manifest_sha256 === report.inputs.manifest.sha256
       && restoredResult.source_inventory_sha256 === manifest.source_inventory_sha256, 'Consumer restore identity differs');
     api.validateApplicationSourceInventory({ destination: restored, manifest, allowGenerated: false });
-    const cache = path.join(temporary, 'npm-cache');
-    mkdirSync(cache, { mode: 0o700 });
-    const userConfig = path.join(temporary, 'npm-user-config');
-    const globalConfig = path.join(temporary, 'npm-global-config');
-    for (const filename of [userConfig, globalConfig]) writeFileSync(filename, '', { flag: 'wx', mode: 0o600 });
-    const npmConfiguration = { npm_config_cache: cache, npm_config_userconfig: userConfig, npm_config_globalconfig: globalConfig,
-      npm_config_include: 'dev', npm_config_ignore_scripts: 'false', npm_config_audit: 'false', npm_config_fund: 'false',
-      npm_config_package_lock: 'true', npm_config_install_strategy: 'hoisted', npm_config_legacy_peer_deps: 'false',
-      npm_config_install_links: 'false', npm_config_registry: 'https://registry.npmjs.org' };
-    const installEnvironment = { ...applicationInstallationEnvironment(), ...npmConfiguration };
-    // This is the only exact-source marker injection. All external pins,
-    // producer/baseline identities and the restored inventory are verified first.
-    const buildEnvironment = { ...applicationBuildEnvironment(manifest.source.commit), ...npmConfiguration };
-    const version = await run('npm-version', 'npm', ['--version'], installEnvironment, 30_000);
-    const npmVersion = readFile(version.stdoutFile, 64 * 1024).bytes.toString('utf8').trim();
-    require(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(npmVersion), 'Consumer npm version is invalid');
-    report.environment = { node_version: process.version, npm_version: npmVersion, npm_configuration: 'explicit-empty-user-and-global',
+    const install = prepareApplicationInstall(temporary, packageManager);
+    const installEnvironment = install.environment;
+    // Inject the source marker only after original pins and the restored tree
+    // have been checked. Preserve the isolated manager config for script runs.
+    const configuration = Object.fromEntries(Object.entries(installEnvironment).filter(([key]) =>
+      key.startsWith('npm_config_') || key.startsWith('BUN_') || ['HOME', 'XDG_CONFIG_HOME'].includes(key)));
+    const buildEnvironment = { ...applicationBuildEnvironment(manifest.source.commit), ...configuration };
+    const version = await run(`${packageManager}-version`, packageManager, ['--version'], installEnvironment, 30_000);
+    const managerVersion = readFile(version.stdoutFile, 64 * 1024).bytes.toString('utf8').trim();
+    require(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(managerVersion), 'Consumer package-manager version is invalid');
+    if (packageManager === 'bun') require(managerVersion === APPLICATION_BUN_PACKAGE_MANAGER.version, 'Consumer requires pinned Bun 1.4.4');
+    report.environment = { node_version: process.version, [`${packageManager}_version`]: managerVersion,
+      [`${packageManager}_configuration`]: install.configuration,
+      ...(packageManager === 'bun' ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}),
       cache_mode: 'new-temporary-cache', browser_download_skipped: true, effective_source_sha: manifest.source.commit,
       identity_authority: 'verified-external-producer-and-same-source-baseline' };
-    await run('npm-ci', 'npm', ['ci'], installEnvironment, 8 * 60_000);
+    await run(packageManager === 'bun' ? 'bun-frozen-install' : 'npm-ci', packageManager,
+      packageManager === 'bun' ? install.args : ['ci'], installEnvironment, 8 * 60_000);
     const inspected = await run('dependency-inspection', process.execPath,
-      [fileURLToPath(new URL('./application-dependency-install.mjs', import.meta.url)), '--inspect-installed', path.join(restored, 'ui'), 'application'],
+      [fileURLToPath(new URL('./application-dependency-install.mjs', import.meta.url)), '--inspect-installed', path.join(restored, 'ui'), 'application', packageManager],
       installEnvironment, 30_000);
     report.dependency_install = api.parseApplicationSourceJson(readFile(inspected.stdoutFile, 2 * 1024 * 1024).bytes);
     const installed = report.dependency_install;
+    if (packageManager === 'bun') {
+      assert.deepEqual(installed.package_manager, APPLICATION_BUN_PACKAGE_MANAGER, 'Consumer inspected a different package manager');
+      Object.assign(installed, { status: 'passed', mode: 'fresh-bun-frozen', dependency_profile: 'application',
+        bun_version: managerVersion, bun_lock_selected: true, independent_dependency_installation: true });
+    }
     require(installed.postinstall?.verified === true && installed.postinstall.prerender_selected === false
       && installed.sdk?.initialized_in_node === true && installed.sdk.browser_execution_observed === false,
     'Consumer dependency inspection did not prove its lifecycle patch and SDK initialization');
     for (const key of ['bytes', 'sha256']) require(installed.sdk.wasm?.[key] === baseline.dependency_install.sdk.wasm[key],
       'Consumer installed a different SDK WASM');
-    await run('npm-build', 'npm', ['run', 'build'], buildEnvironment, 20 * 60_000);
-    await run('npm-test', 'npm', ['test', '--', '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')],
-      buildEnvironment, 20 * 60_000);
+    const runOptions = packageManager === 'bun' ? ['--no-env-file', `--config=${path.join(temporary, 'bunfig.toml')}`] : [];
+    await run(`${packageManager}-build`, packageManager, ['run', ...runOptions, 'build'], buildEnvironment, 20 * 60_000);
+    await run(`${packageManager}-test`, packageManager, [...(packageManager === 'bun' ? ['run', ...runOptions, 'test'] : ['test', '--']),
+      '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')], buildEnvironment, 20 * 60_000);
     readFile(path.join(temporary, 'application-tests.json'));
-    report.tests = verifyApplicationTestResult(temporary, restored);
-    require(report.tests.test_count === EXPECTED_TESTS, 'Consumer did not complete all 296 selected assertions');
+    report.tests = verifyApplicationTestResult(temporary, restored, manifest.test_profile.files);
+    require(report.tests.test_count === (packageManager === 'bun' ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS),
+      'Consumer did not complete the selected assertion suite');
     phase = 'output-comparison';
     report.output = verifyApplicationClosureOutput(restored, baseline.plan);
     report.output_comparison = compareApplicationPackageOutput(report.output, baseline);
@@ -396,7 +419,7 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
     try { checkInputs(); inputsPreserved = snapshots.length === 4; } catch (error) { inputsPreserved = false; errors.push(error); }
     try { checkSource(); sourcePreserved = Boolean(restored); } catch (error) { sourcePreserved = false; errors.push(error); }
     if (temporary && report.cleanup.process_group_cleanup_completed) {
-      for (const [name, key] of [['source', 'source_removed'], ['npm-cache', 'cache_removed'], ['runtime-source', 'runtime_adapter_removed']]) {
+      for (const [name, key] of [['source', 'source_removed'], [`${packageManager}-cache`, 'cache_removed'], ['runtime-source', 'runtime_adapter_removed']]) {
         try { rmSync(path.join(temporary, name), { recursive: true, force: true }); report.cleanup[key] = !existsSync(path.join(temporary, name)); }
         catch (error) { errors.push(error); }
       }

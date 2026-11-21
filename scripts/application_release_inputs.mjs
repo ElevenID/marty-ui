@@ -14,6 +14,8 @@ import {
   compareApplicationPackageOutput, validateApplicationPackageBaseline,
 } from '../ui/scripts/application-package-consumer.mjs';
 import { validateApplicationRuntimeContext, verifyApplicationBrowserResult } from '../ui/scripts/application-runtime-context.mjs';
+import { APPLICATION_BUN_PACKAGE_MANAGER } from '../ui/scripts/application-dependency-profile.mjs';
+import { APPLICATION_EXPECTED_TESTS, APPLICATION_LEGACY_EXPECTED_TESTS } from '../ui/scripts/application-test-profile.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '');
 const FILES = Object.freeze({
@@ -51,7 +53,8 @@ function read(filename, maximum = 8 * 1024 * 1024) {
 /** Reuse the existing selected-profile and output validators, then bind the
  * consumer's completed ordinary commands to their original immutable inputs. */
 export function validateApplicationReleaseConsumer(consumer, { manifest, baseline, snapshots, verified }) {
-  assert.equal(consumer.schema, 'marty.application-source-package-consumer/v1');
+  const bun = manifest.schema === 'marty.application-source-package/v2';
+  assert.equal(consumer.schema, `marty.application-source-package-consumer/${bun ? 'v2' : 'v1'}`);
   assert.equal(consumer.status, 'passed');
   assert.equal(consumer.fixture, false);
   assert.deepEqual(consumer.source, manifest.source);
@@ -80,13 +83,30 @@ export function validateApplicationReleaseConsumer(consumer, { manifest, baselin
   const pending = ['source_extraction_complete', 'package_graph_minimized', 'container_runtime_tested',
     'browser_startup_observed', 'host_deployment_tested', 'oidc_journey_tested', 'signed_release_produced', 'published', 'activated'];
   assert.deepEqual(consumer.qualification, Object.fromEntries([...passed.map((key) => [key, true]), ...pending.map((key) => [key, false])]));
-  assert.deepEqual(consumer.commands.map((item) => item.stage), ['npm-version', 'npm-ci', 'dependency-inspection', 'npm-build', 'npm-test', 'resource-smoke']);
+  assert.deepEqual(consumer.commands.map((item) => item.stage), bun
+    ? ['bun-version', 'bun-frozen-install', 'dependency-inspection', 'bun-build', 'bun-test', 'resource-smoke']
+    : ['npm-version', 'npm-ci', 'dependency-inspection', 'npm-build', 'npm-test', 'resource-smoke']);
   assert.ok(consumer.commands.every((item) => item.status === 0 && item.signal === null && item.process_group_cleanup_completed === true));
   assert.equal(consumer.environment?.effective_source_sha, manifest.source.commit);
   assert.equal(consumer.environment?.identity_authority, 'verified-external-producer-and-same-source-baseline');
-  assert.equal(consumer.environment?.npm_configuration, 'explicit-empty-user-and-global');
+  if (bun) {
+    assert.deepEqual(consumer.environment?.package_manager, APPLICATION_BUN_PACKAGE_MANAGER);
+    assert.deepEqual(consumer.dependency_install?.package_manager, APPLICATION_BUN_PACKAGE_MANAGER);
+    assert.equal(consumer.dependency_install?.bun_version, APPLICATION_BUN_PACKAGE_MANAGER.version);
+    assert.equal(consumer.dependency_install?.mode, 'fresh-bun-frozen');
+    assert.equal(consumer.dependency_install?.status, 'passed');
+    assert.equal(consumer.dependency_install?.dependency_profile, 'application');
+    assert.equal(consumer.dependency_install?.bun_lock_selected, true);
+    assert.equal(consumer.dependency_install?.independent_dependency_installation, true);
+    assert.equal(consumer.environment?.bun_version, APPLICATION_BUN_PACKAGE_MANAGER.version);
+    assert.equal(consumer.environment?.bun_configuration, 'explicit-empty-home-and-config');
+  } else {
+    assert.equal(consumer.environment?.package_manager, undefined);
+    assert.equal(consumer.dependency_install?.package_manager, undefined);
+    assert.equal(consumer.environment?.npm_configuration, 'explicit-empty-user-and-global');
+  }
   assert.equal(consumer.environment?.cache_mode, 'new-temporary-cache');
-  assert.equal(consumer.tests?.test_count, 296);
+  assert.equal(consumer.tests?.test_count, bun ? APPLICATION_EXPECTED_TESTS : APPLICATION_LEGACY_EXPECTED_TESTS);
   assert.deepEqual([...consumer.tests.completed_files].sort(), [...manifest.test_profile.files].sort());
   assert.equal(consumer.dependency_install?.sdk?.initialized_in_node, true);
   assert.equal(consumer.dependency_install?.postinstall?.verified, true);
@@ -149,10 +169,12 @@ export async function verifyApplicationReleaseInputs({ sourceSha, assets, contex
   const sdk = consumer.dependency_install.sdk;
   assert.ok(wasm && wasm.bytes === sdk.wasm.bytes && wasm.sha256 === sdk.wasm.sha256);
   const file = ({ path: name, bytes, sha256 }) => ({ path: name, bytes, sha256 });
-  return { schema: 'marty.application-release-inputs/v1', source: manifest.source,
+  const bun = manifest.schema === 'marty.application-source-package/v2';
+  return { schema: `marty.application-release-inputs/${bun ? 'v2' : 'v1'}`, source: manifest.source,
+    ...(bun ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}),
     inputs: Object.fromEntries(Object.entries(FILES).map(([name, filename]) => [filename, identity(snapshots[name])])),
     source_inventory_sha256: manifest.source_inventory_sha256,
-    dependency_lock_sha256: manifest.files.find((item) => item.path === 'ui/package-lock.json').sha256,
+    dependency_lock_sha256: manifest.files.find((item) => item.path === (bun ? 'ui/bun.lock' : 'ui/package-lock.json')).sha256,
     route_contract: manifest.route_contract,
     runtime_context: { manifest_sha256: verified.manifest_sha256,
       payload_sha256: consumer.runtime_comparison.payload_inventory_sha256, source_sha: sourceSha },

@@ -143,18 +143,18 @@ Use the repository's normal UI dependency installation and postinstall patches.
 From `ui/`:
 
 ```sh
-npm run test:application
-npm run check:application-source-closure -- --report /tmp/application-source-closure.json
+bun run test:application
+bun run check:application-source-closure --report /tmp/application-source-closure.json
 
-# Install the unchanged full npm lock into a fresh export, then prepare a
+# Install the unchanged full Bun lock into a fresh export, then prepare a
 # separate static context for the nonpublishing container check.
-npm run check:application-source-closure -- --fresh-install \
+bun run check:application-source-closure --fresh-install --package-manager bun \
   --runtime-context /tmp/application-runtime-context \
   --report /tmp/application-source-closure-fresh.json
 
 # From the same unchanged source, materialize the reviewed application package
 # profile and require byte-identical output to that fresh full-profile baseline.
-npm run check:application-source-closure -- --fresh-install \
+bun run check:application-source-closure --fresh-install --package-manager bun \
   --dependency-profile application \
   --baseline-report /tmp/application-source-closure-fresh.json \
   --runtime-context /tmp/application-profile-runtime-context \
@@ -170,11 +170,11 @@ resource probe, report validation, output check or source-preservation check exi
 
 The default rehearsal reuses installed dependencies and keeps
 `independent_dependency_installation` false. `--fresh-install` instead runs a
-strict npm clean installation from the unchanged source lock, verifies both
+frozen Bun 1.4.4 installation from the unchanged source lock, verifies both
 postinstall patches and the actual SDK WASM, and binds that binary to emitted
 output. It cannot be combined with `--dependencies` and has no fallback to a
 borrowed installation. The full-profile mode qualifies installation of the
-existing full graph. The application profile independently installs its committed npm lock, verifies the
+existing full graph. The application profile independently installs its committed Bun lock, verifies the
 checker patch without running the website prerender patch, and checks that all
 four reviewed website dependencies are absent, including nested packages and
 aliases. Both modes retain Puppeteer and the actual API SDK. Neither claims
@@ -217,7 +217,9 @@ context does not claim that Docker ran; the separate hosted checker must observe
 the actual image build and resource checks.
 The separate website composition checkpoint records the signed producer evidence;
 this application rehearsal does not replace its combined application image.
-Next classify the remaining source/assets and qualify an independent
-application producer, compatibility intake and actual application/OIDC behavior
-before removing source, selecting a slim application image or renaming the
-repository.
+Next resolve the remaining website/combined source consumers and replace
+presence-based migration guards with absence checks before deleting the owned
+marketing inputs. Application publication, compatibility intake, actual
+authentication/OIDC and host acceptance govern adoption of the new image. They
+do not block a separately verified source-removal batch. Repository renaming
+follows complete ownership and release-path separation.

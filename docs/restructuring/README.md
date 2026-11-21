@@ -4,6 +4,46 @@ Status: standalone website publication and signed cross-owner composition are
 qualified. Application source, test, asset and dependency separation is in progress. Production
 cutover remains a separate gate.
 
+## Current development priorities
+
+The November 20 regression audit changes the next implementation order. The
+accepted historical runs below remain evidence for their original source; they
+do not qualify the current repair branch.
+
+1. **Repair behavior and restore the established toolchain.** Complete the
+   Bun 1.4.4 frozen-install path in the standalone website and portable
+   application, including actual dependency identities, lifecycle patches,
+   SDK/WASM, deterministic package restoration and explicit release metadata.
+   Preserve validation of original npm evidence. Include the audited login,
+   invitation navigation, apply-return destination, loading-style and website
+   development-resource fixes in the same regression milestone. Validate
+   locally before requesting hosted checks; do not start chargeable CI work.
+2. **Remove the owned marketing source.** Resolve the old combined/default
+   build entries, website Docker/CI targets and release consumers. The private
+   commerce publisher still builds a selected historical `marty-ui` source:
+   migrate that path or explicitly constrain legacy modes to a supported
+   historical source before deleting their current-source inputs. Convert
+   migration checks that require old files into checks against reintroduction,
+   then delete the owned modules, assets and obsolete tests. Recheck application
+   and customer builds. The 34-module ownership roster is the starting point;
+   the portable package's complete omission list is not a deletion manifest.
+3. **Adopt the independently published application.** Carry the selected Bun
+   identity through publication, intake and backend qualification. Reconcile
+   the pending intake/backend-preparation work with the new evidence schemas.
+   Authenticate the actual first publication and select a backend supporting
+   the application's current endpoints before composition adoption.
+4. **Complete runtime adoption and ownership closure.** Exercise the real
+   authentication/OIDC journey and isolated-host promotion, rollback and
+   recovery before live adoption. Complete the remaining source/release
+   ownership work before repository renaming. Production activation retains
+   its separate acceptance decision.
+
+Steps 2 and 3 have different gates. Fresh installation and standalone
+application/container evidence already justify beginning bounded source
+cleanup. OIDC, host deployment and production activation are not blanket
+prerequisites for removing unused marketing files. A source-removal change
+must still preserve or deliberately retire every remaining supported consumer.
+
 ## Current continuation checkpoint
 
 Latest recorded evidence, November 20, 2026 (America/Denver):
@@ -16,7 +56,7 @@ Latest recorded evidence, November 20, 2026 (America/Denver):
 | Application source, tests and assets | [PR #2002](https://github.com/ElevenID/marty-ui/pull/2002) merged normally as `780b531a22a89ed75442e71ed51ce4cb727c08ec`. Clean local and hosted v3 rehearsals passed with 71 inputs absent, 284 tests across 23 selected files, 54 preserved public resources and 73 checked HTTP responses. Both [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/44641102200) and [merge-queue CI](https://github.com/ElevenID/marty-ui/actions/runs/44647472085) completed with 27 successful jobs and one intended skip; all queue output bytes match the accepted PR rehearsal | Preserve the merged boundary and its exact diagnostic evidence while extending independent application qualification |
 | Independent application packages and browser startup | [PR #2004](https://github.com/ElevenID/marty-ui/pull/2004) merged normally as `d1cf7bf93460344eaf78bbf5496eb949835138f6`. Its accepted source `83a59f65902a6691f46d2051773313f7e2b5ff3b` passed [CI `44657507012/1`](https://github.com/ElevenID/marty-ui/actions/runs/44657507012): 27 successful jobs and one intended skip. Both fresh profiles passed 296 tests across 24 files and emitted identical 88-file output. Hosted nginx/browser execution observed the SDK WASM, public/console rendering, unavailable-session Retry and aborted-WASM recovery; owned cleanup passed | Preserve the accepted package/runtime boundary while qualifying independent publication; actual authentication/OIDC and host acceptance remain separate |
 | Portable application source package | [PR #2007](https://github.com/ElevenID/marty-ui/pull/2007) merged normally as `6fd59c730a28e413cec3855037ad600f8e2dabf3`. Its source `316afe12b21ee8ece006406ab510917f2c470574` passed [CI `44677296614/1`](https://github.com/ElevenID/marty-ui/actions/runs/44677296614); all six original artifacts were independently verified against the exact integration tree `18f67468ade76f527136fcc906a7d8c2af4deeb3`. The 575-file source package plus manifest restores outside Git; all three installations pass 296 tests and produce identical 88-file output and a normalized 92-file runtime payload. Real restored-package container/browser gates and cleanup passed | Preserve the merged source boundary, archive and original hosted evidence while qualifying independent application publication |
-| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | Qualify the integration with current main through required CI and normal merge, then inspect the first actual protected-main publication. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
+| Package-built application image | [PR #2010](https://github.com/ElevenID/marty-ui/pull/2010), source `56276dadd401e86cc505eab2d334b903dbce68db`, passed [CI `44689242895/1`](https://github.com/ElevenID/marty-ui/actions/runs/44689242895). Its actual integration source `3b291bf41e90aca2d4950d80f8f345f0a5ecb4f8` built the separate production recipe from the verified consumer context. All seven original artifacts were independently inspected, including real sandboxed browser, Retry, WASM-failure recovery and owned cleanup evidence | PR #2010 merged as `f81bf70f867569db97f73b06dbaef7813e89118b`. Inspect the first actual protected-main publication after the current toolchain repair is qualified. The accepted composition remains unchanged; CI records a local release-image build and does not establish registry publication or host/OIDC readiness |
 
 Continue from the [standalone website composition checkpoint](website-composition-checkpoint.md)
 and the exact run/artifact records in those PRs. The application source/test

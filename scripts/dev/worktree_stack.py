@@ -143,14 +143,15 @@ def main() -> int:
         return 0
     if args.action == "ui":
         if not (ROOT / "ui" / "node_modules" / "vite").exists():
-            raise SystemExit("Install this worktree's UI dependencies first: cd ui && npm ci")
+            raise SystemExit("Install this worktree's UI dependencies first: cd ui && bun install --frozen-lockfile")
         env["VITE_PORT"] = env["WT_UI_PORT"]
         env["VITE_API_URL"] = f"http://127.0.0.1:{env['WT_GATEWAY_PORT']}"
         env["VITE_DEV_PROXY_TARGET"] = env["VITE_API_URL"]
-        npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
-        if npm is None:
-            raise SystemExit("npm is not installed")
-        return subprocess.call([npm, "run", "dev", "--", "--host", "127.0.0.1",
+        bun = shutil.which("bun.exe" if os.name == "nt" else "bun")
+        if bun is None:
+            raise SystemExit("Bun 1.4.4 is required for UI development")
+        # Vite owns frontend dotenv loading; Bun must preserve the sanitized environment.
+        return subprocess.call([bun, "run", "--no-env-file", "dev", "--host", "127.0.0.1",
                                 "--strictPort"], cwd=ROOT / "ui", env=env)
     if args.action == "up":
         existing = subprocess.run(

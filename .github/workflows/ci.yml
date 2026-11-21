@@ -129,14 +129,14 @@ jobs:
         with:
           node-version: '24'
       - name: Qualify application from a fresh locked dependency install
-        run: node scripts/application-source-closure.mjs --fresh-install --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"
+        run: node scripts/application-source-closure.mjs --fresh-install --package-manager bun --runtime-context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-source-closure.json"
       - name: Build and probe the isolated application runtime
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-runtime-context" --report "$RUNNER_TEMP/application-runtime.json" --check-container
       - name: Audit the committed application dependency profile
         working-directory: ${{ github.workspace }}
         run: python3 scripts/ci/audit-application-dependencies.py
       - name: Qualify the application package without website dependencies
-        run: node scripts/application-source-closure.mjs --fresh-install --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"
+        run: node scripts/application-source-closure.mjs --fresh-install --package-manager bun --dependency-profile application --baseline-report "$RUNNER_TEMP/application-source-closure.json" --runtime-context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-source-closure.json"
       - name: Build and probe the application profile runtime
         run: node scripts/application-runtime-context.mjs --context "$RUNNER_TEMP/application-profile-runtime-context" --report "$RUNNER_TEMP/application-profile-runtime.json" --check-container
       - name: Package the verified application source

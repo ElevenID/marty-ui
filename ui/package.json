@@ -17,7 +17,7 @@
     "lint": "eslint src --ext .js,.jsx",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:prerendered-seo": "npm run build && vitest run src/__tests__/prerenderedSeo.test.ts",
+    "test:prerendered-seo": "bun run build && vitest run src/__tests__/prerenderedSeo.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest --coverage",
     "test:ui": "vitest --ui",
@@ -116,5 +116,11 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  }
+  },
+  "packageManager": "bun@1.4.4",
+  "trustedDependencies": [
+    "esbuild",
+    "fsevents",
+    "puppeteer"
+  ]
 }

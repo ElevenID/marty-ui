@@ -63,7 +63,8 @@ contract. Its exact identity is:
 | Reserved workflow | `.github/workflows/production-website-release.yml` |
 | Ref | `refs/heads/main` |
 | Image | `ghcr.io/elevenid/website` |
-| Plan / receipt / image marker | `marty.website-build-plan/v2` / `marty.website-release/v2` / `marty.website-image/v2` |
+| New Bun plan / receipt / image marker | `marty.website-build-plan/v3` / `marty.website-release/v3` / `marty.website-image/v3` |
+| Original accepted npm schemas | v2 remains supported with its original closed shape |
 | Audience / pages / platform | production / public / `linux/amd64` |
 
 The v2 plan describes `Dockerfile.website`, the root `package-lock.json`, eleven
@@ -74,6 +75,14 @@ synthetic fixture in `tests/fixtures/standalone-website-release-v2.json` verifie
 the same closed schema and canonical build-plan hash as the JavaScript producer.
 The [website contract specification](https://github.com/ElevenID/website/blob/main/docs/standalone-release-contract.md)
 defines the input paths, output hashing and publisher requirements.
+
+The additive v3 contract selects Bun 1.4.4 and `bun.lock`. Its twelve fixed
+source inputs retain the npm reference lock and add the Bun lock, binding both
+without changing the dependency versions. The companion v3 fixture covers the
+same producer/consumer canonical contract. Original v2 evidence remains
+verifiable and continues to identify the accepted composition above; it cannot
+be relabeled as a Bun build. A new v3 publication still requires the real
+protected-main producer, browser/image qualification and original signatures.
 
 `website_producer_policy.py` admits this repository only for website receipts and
 its own image. Application, stable backend and outer composition authorities

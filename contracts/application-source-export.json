@@ -1,5 +1,5 @@
 {
-  "schema": "marty.application-source-export/v1",
+  "schema": "marty.application-source-export/v2",
   "repository": "ElevenID/marty-ui",
   "source_boundary": {
     "prefixes": [
@@ -76,6 +76,13 @@
       ]
     },
     {
+      "source": "ui/profiles/application/bun.lock",
+      "path": "ui/bun.lock",
+      "roles": [
+        "application-dependency-input"
+      ]
+    },
+    {
       "source": "ui/console/index.html",
       "path": "ui/console/index.html",
       "roles": [
@@ -115,6 +122,13 @@
       "path": "ui/package.json",
       "roles": [
         "application-dependency-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/bun.lock",
+      "path": "ui/profiles/application/bun.lock",
+      "roles": [
+        "application-profile-provenance-support"
       ]
     },
     {
@@ -1296,6 +1310,13 @@
     {
       "source": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
       "path": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
+      "path": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
       "roles": [
         "selected-application-test"
       ]
@@ -4051,9 +4072,8 @@
     "migration-or-browser-diagnostic": "Producer-side migration/qualification tool; no selected package command or source dependency.",
     "platform-package-diagnostic": "Platform-owned source-package exporter, consumer, codec, contract or process guardian; absent from the portable application source and runtime.",
     "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
-    "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
     "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
-    "unselected-test": "Not in the exact 24-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-test": "Not in the exact 25-file selected suite and not imported by selected test/setup or retained source closure.",
     "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
     "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
   },
@@ -4112,7 +4132,7 @@
     },
     {
       "source": "ui/bun.lock",
-      "role": "unselected-package-manager-lock"
+      "role": "baseline-profile-substitution"
     },
     {
       "source": "ui/nginx.dev.conf",
@@ -4712,10 +4732,6 @@
     },
     {
       "source": "ui/src/components/__tests__/ImpersonationBanner.test.tsx",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
       "role": "unselected-test"
     },
     {
@@ -5739,6 +5755,7 @@
       "src/contexts/__tests__/PublicEntryAuth.test.tsx",
       "src/components/__tests__/AuthCallback.integration.test.tsx",
       "src/components/__tests__/AuthAvailability.integration.test.tsx",
+      "src/components/__tests__/InviteAcceptPage.test.tsx",
       "src/components/__tests__/ProtectedRoute.test.tsx",
       "src/components/__tests__/BrowserRedirect.test.tsx",
       "src/components/navigation/ConsoleHeaderBar.test.tsx",

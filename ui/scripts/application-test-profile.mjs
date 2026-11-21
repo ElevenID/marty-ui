@@ -21,6 +21,7 @@ export const APPLICATION_TEST_FILES = Object.freeze([
   'src/contexts/__tests__/PublicEntryAuth.test.tsx',
   'src/components/__tests__/AuthCallback.integration.test.tsx',
   'src/components/__tests__/AuthAvailability.integration.test.tsx',
+  'src/components/__tests__/InviteAcceptPage.test.tsx',
   'src/components/__tests__/ProtectedRoute.test.tsx',
   'src/components/__tests__/BrowserRedirect.test.tsx',
   'src/components/navigation/ConsoleHeaderBar.test.tsx',
@@ -29,3 +30,34 @@ export const APPLICATION_TEST_FILES = Object.freeze([
   'src/services/__tests__/authApi.test.ts',
   'tests/application/surface-profile.test.tsx',
 ]);
+
+// Historical npm source packages bind the original suite. Keep its evidence
+// contract separate from the expanded Bun regression suite.
+export const APPLICATION_LEGACY_TEST_FILES = Object.freeze([
+  'src/__tests__/startupRecovery.test.ts',
+  'src/application/routing/appHandoff.test.ts',
+  'src/application/routing/applyEntry.test.ts',
+  'src/application/routing/authCallback.test.ts',
+  'src/application/routing/guardPolicy.test.ts',
+  'src/application/routing/landingEntry.test.ts',
+  'src/application/routing/loginEntry.test.ts',
+  'src/application/routing/publicEntry.test.ts',
+  'src/application/session/authSession.test.ts',
+  'src/application/session/consoleSession.test.ts',
+  'src/apps/public/PublicRoutes.test.tsx',
+  'src/apps/console/ConsoleRoutes.test.tsx',
+  'src/apps/shared/AppShell.publicEntry.test.tsx',
+  'src/apps/shared/WebSurfaceBoundary.test.tsx',
+  'src/contexts/__tests__/PublicEntryAuth.test.tsx',
+  'src/components/__tests__/AuthCallback.integration.test.tsx',
+  'src/components/__tests__/AuthAvailability.integration.test.tsx',
+  'src/components/__tests__/ProtectedRoute.test.tsx',
+  'src/components/__tests__/BrowserRedirect.test.tsx',
+  'src/components/navigation/ConsoleHeaderBar.test.tsx',
+  'src/components/navigation/SidebarNavigation.test.tsx',
+  'src/components/navigation/SidebarNavigationApplicant.test.tsx',
+  'src/services/__tests__/authApi.test.ts',
+  'tests/application/surface-profile.test.tsx',
+]);
+export const APPLICATION_EXPECTED_TESTS = 308;
+export const APPLICATION_LEGACY_EXPECTED_TESTS = 296;

@@ -12,7 +12,8 @@ import {
   APPLICATION_INSTALL_INPUTS, installApplicationDependencies,
   inspectInstalledApplicationDependencies, runOwnedInstallCommand,
 } from './application-dependency-install.mjs';
-import { APPLICATION_PROFILE_POSTINSTALL, APPLICATION_REMOVED_DEPENDENCY_ROOTS } from './application-dependency-profile.mjs';
+import { APPLICATION_PROFILE_POSTINSTALL, APPLICATION_REMOVED_DEPENDENCY_ROOTS,
+  APPLICATION_BUN_PACKAGE_MANAGER, APPLICATION_TRUSTED_DEPENDENCIES } from './application-dependency-profile.mjs';
 
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const sdkName = '@elevenid/marty-api-core';
@@ -25,7 +26,7 @@ function put(root, relative, content) {
 }
 
 function fixture(t, { skipPrerender = false, skipChecker = false, mutateLock = false, failScript = false,
-  applicationProfile = false, mutateSelectedProfile = false } = {}) {
+  applicationProfile = false, mutateSelectedProfile = false, bunProfile = false } = {}) {
   const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), 'marty-application-install-'));
   t.after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
   const uiRoot = path.join(temporaryRoot, 'source/ui');
@@ -43,7 +44,8 @@ function fixture(t, { skipPrerender = false, skipChecker = false, mutateLock = f
     execFileSync('tar', ['-czf', path.join(uiRoot, relative), '-C', directory, 'package']);
     const integrity = `sha512-${createHash('sha512').update(readFileSync(path.join(uiRoot, relative))).digest('base64')}`;
     dependencies[name] = `file:${relative}`;
-    packages[`node_modules/${name}`] = { version, resolved: `file:${relative}`, integrity };
+    packages[`node_modules/${name}`] = { version, resolved: `file:${relative}`, integrity,
+      ...(extra.scripts?.postinstall ? { hasInstallScript: true } : {}) };
   }
   pack(sdkName, '0.3.6', {
     'src/index.js': `import { readFileSync } from 'node:fs';
@@ -55,6 +57,9 @@ export const createApiClient = () => ({ get() { throw new Error('No API calls in
   const checkerBefore = '// unpatched checker\n';
   const checkerAfter = '// reviewed patched checker\n';
   pack('vite-plugin-checker', '0.14.5', { 'dist/main.js': checkerBefore }, { type: 'module' });
+  if (bunProfile) for (const name of APPLICATION_TRUSTED_DEPENDENCIES) pack(name, '1.0.0', {
+    'install.cjs': "require('node:assert/strict').equal(process.env.PUPPETEER_SKIP_DOWNLOAD, 'true'); require('node:fs').writeFileSync('lifecycle-proof', 'passed');\n",
+  }, { scripts: { postinstall: 'node install.cjs' } });
   const manifest = { name: 'application-install-fixture', version: '1.0.0', private: true,
     type: 'module', scripts: { postinstall: applicationProfile ? APPLICATION_PROFILE_POSTINSTALL : postinstall }, dependencies, devDependencies: {} };
   put(uiRoot, 'package.json', JSON.stringify(manifest));
@@ -97,8 +102,51 @@ ${skipChecker ? '' : `fs.writeFileSync('node_modules/vite-plugin-checker/dist/ma
 fs.copyFileSync('scripts/checker-worker-cleanup.mjs', 'node_modules/vite-plugin-checker/dist/marty-checker-cleanup.js');`}
 }
 `);
+  if (bunProfile) {
+    manifest.packageManager = 'bun@1.4.4'; manifest.trustedDependencies = [...APPLICATION_TRUSTED_DEPENDENCIES];
+    put(uiRoot, 'package.json', JSON.stringify(manifest));
+    rmSync(path.join(uiRoot, 'bun.lock'));
+    execFileSync('bun', ['install', '--lockfile-only', '--ignore-scripts', '--no-env-file'], { cwd: uiRoot, stdio: 'pipe' });
+    if (applicationProfile) for (const name of ['package.json', 'package-lock.json', 'bun.lock']) {
+      put(uiRoot, `profiles/application/${name}`, readFileSync(path.join(uiRoot, name)));
+    }
+  }
   return { uiRoot, temporaryRoot };
 }
+
+for (const applicationProfile of [false, true]) test(`real frozen Bun installs the ${applicationProfile ? 'application' : 'full'} profile and proves lifecycle plus SDK bytes`, async (t) => {
+  const input = fixture(t, { applicationProfile, bunProfile: true });
+  const original = APPLICATION_INSTALL_INPUTS.map((name) => readFileSync(path.join(input.uiRoot, name)));
+  const inherited = { BUN_CONFIG_SKIP_LOAD_LOCKFILE: 'true', BUN_CONFIG_SKIP_INSTALL_PACKAGES: 'true',
+    NPM_CONFIG_IGNORE_SCRIPTS: 'true', BUN_CONFIG_REGISTRY: 'https://example.invalid', NODE_OPTIONS: '--require /missing.cjs' };
+  const previous = Object.fromEntries(Object.keys(inherited).map((key) => [key, process.env[key]]));
+  let report;
+  try {
+    Object.assign(process.env, inherited);
+    report = installApplicationDependencies({ ...input, dependencyProfile: applicationProfile ? 'application' : 'full' });
+  } finally {
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  assert.equal(report.mode, 'fresh-bun-frozen'); assert.equal(report.bun_version, '1.4.4');
+  assert.deepEqual(report.package_manager, APPLICATION_BUN_PACKAGE_MANAGER);
+  assert.equal(report.bun_lock_selected, true); assert.equal(report.bun_configuration, 'explicit-empty-home-and-config');
+  assert.deepEqual(report.command.slice(0, 6), ['bun', 'install', '--frozen-lockfile', '--linker=hoisted', '--backend=copyfile', '--no-env-file']);
+  assert.equal(report.postinstall.verified, true); assert.equal(report.postinstall.prerender_selected, !applicationProfile);
+  assert.equal(report.sdk.initialized_in_node, true); assert.equal(report.sdk.wasm.bytes, 8);
+  assert.equal(report.graph.identity_source, 'committed-bun-lock-and-installed-manifests');
+  assert.equal(report.graph.package_count, applicationProfile ? 5 : 6);
+  for (const name of APPLICATION_TRUSTED_DEPENDENCIES) assert.equal(readFileSync(path.join(input.uiRoot, 'node_modules', name, 'lifecycle-proof'), 'utf8'), 'passed');
+  assert.deepEqual(APPLICATION_INSTALL_INPUTS.map((name) => readFileSync(path.join(input.uiRoot, name))), original);
+  assert.equal(existsSync(path.join(input.uiRoot, 'node_modules/.package-lock.json')), false);
+  put(input.uiRoot, 'node_modules/unreviewed/package.json', JSON.stringify({ name: 'unreviewed', version: '1.0.0' }));
+  await assert.rejects(inspectInstalledApplicationDependencies(input.uiRoot,
+    { dependencyProfile: applicationProfile ? 'application' : 'full' }), /differs from the committed lock/);
+});
+
+test('frozen Bun cannot report success when its application lifecycle patch did not run', (t) => {
+  const input = fixture(t, { applicationProfile: true, bunProfile: true, skipChecker: true });
+  assert.throws(() => installApplicationDependencies({ ...input, dependencyProfile: 'application' }), /verification failed/);
+});
 
 test('real npm ci installs only into a fresh export, runs both patches, and initializes its own SDK WASM', (t) => {
   const input = fixture(t);

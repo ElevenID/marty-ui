@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@test/utils';
+import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import InviteAcceptPage from '../InviteAcceptPage';
+import { redirectBrowser } from '../../application/routing/appHandoff';
 
 const {
   mockNavigate,
@@ -35,6 +36,15 @@ vi.mock('../../services/organizationsApi', () => ({
   validateOrganizationInvitation: (...args: unknown[]) => mockValidateOrganizationInvitation(...args),
 }));
 
+vi.mock('../../application/routing/appHandoff', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../application/routing/appHandoff')>(),
+  redirectBrowser: vi.fn(() => true),
+}));
+
+function renderInvitation() {
+  return renderWithRouter(<InviteAcceptPage />, { initialEntries: ['/invite/accept?token=token-1'] });
+}
+
 describe('InviteAcceptPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -65,12 +75,13 @@ describe('InviteAcceptPage', () => {
       login: vi.fn(),
     });
 
-    render(<InviteAcceptPage />);
+    renderInvitation();
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/organizations/join?inviteToken=token-1', { replace: true });
     });
     expect(mockValidateOrganizationInvitation).not.toHaveBeenCalled();
+    expect(redirectBrowser).not.toHaveBeenCalled();
   });
 
   it('shows login-required state and stores returnUrl before login', async () => {
@@ -80,7 +91,7 @@ describe('InviteAcceptPage', () => {
       login,
     });
 
-    const { user } = render(<InviteAcceptPage />);
+    const { user } = renderInvitation();
 
     expect(await screen.findByTestId('invite-login-required')).toBeInTheDocument();
     await user.click(screen.getByTestId('login-to-accept-btn'));
@@ -92,10 +103,20 @@ describe('InviteAcceptPage', () => {
   it('shows an invalid state when no invitation token is provided', async () => {
     mockSearchParams.mockReturnValue(new URLSearchParams(''));
 
-    render(<InviteAcceptPage />);
+    renderInvitation();
 
     expect(await screen.findByTestId('invite-error')).toBeInTheDocument();
     expect(screen.getByText('No invitation token provided')).toBeInTheDocument();
     expect(mockValidateOrganizationInvitation).not.toHaveBeenCalled();
+  });
+
+  it('loads the website document when leaving an invalid invitation for home', async () => {
+    mockSearchParams.mockReturnValue(new URLSearchParams(''));
+    const { user } = renderInvitation();
+
+    await user.click(await screen.findByRole('button', { name: 'Go Home' }));
+
+    expect(redirectBrowser).toHaveBeenCalledWith('/', { replace: false });
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });

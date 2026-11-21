@@ -11,10 +11,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES, APPLICATION_LEGACY_TEST_FILES } from './application-test-profile.mjs';
 import { APPLICATION_INSTALL_INPUTS, installApplicationDependencies } from './application-dependency-install.mjs';
 import {
-  APPLICATION_DEPENDENCY_PROFILE_INPUTS, validateApplicationDependencyProfile,
+  applicationDependencyProfileInputs, applicationPackageManager, APPLICATION_BUN_PACKAGE_MANAGER, validateApplicationDependencyProfile,
 } from './application-dependency-profile.mjs';
 import { createApplicationRuntimeContext } from './application-runtime-context.mjs';
 import {
@@ -79,7 +79,7 @@ const REQUIRED_INPUTS = [
   'ui/scripts/application-public-assets.mjs', 'ui/scripts/application-resource-smoke.mjs',
   'ui/src/test/i18nApplicationTestSetup.js', 'ui/src/test/setup.ts',
   ...APPLICATION_RETAINED_PUBLIC_FILES.map((entry) => `ui/public/${entry}`),
-  ...APPLICATION_TEST_FILES.map((entry) => `ui/${entry}`), ...RETAINED_SHARED_INPUTS,
+  ...RETAINED_SHARED_INPUTS,
 ];
 const APPLICATION_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'errors', 'applicant', 'vendor'];
 const EXCLUDED_OUTPUTS = ['blog', 'authors', 'demos', 'images/authors', 'images/demos', 'images/social',
@@ -148,10 +148,13 @@ function identity(records) {
 }
 
 export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, freshInstall = false, runtimeContext = false,
-  dependencyProfile = 'full' } = {}) {
+  dependencyProfile = 'full', packageManager } = {}) {
   require(['full', 'application'].includes(dependencyProfile), 'Unsupported dependency profile');
   require(dependencyProfile === 'full' || freshInstall, 'The application dependency profile requires a fresh install');
   const root = realpathSync(repositoryRoot);
+  const sourceManifest = JSON.parse(readInput(root, 'ui/package.json').bytes.toString('utf8'));
+  packageManager = applicationPackageManager(sourceManifest, packageManager);
+  const selectedTests = sourceManifest.packageManager ? APPLICATION_TEST_FILES : APPLICATION_LEGACY_TEST_FILES;
   require(realpathSync(git(root, ['rev-parse', '--show-toplevel']).trim()) === root, 'Select the actual repository root');
   const sourceSha = git(root, ['rev-parse', 'HEAD']).trim();
   require(/^[0-9a-f]{40}$/.test(sourceSha), 'Source checkout requires an exact commit');
@@ -162,21 +165,23 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, fr
   const omitted = new Set([...ownership.modules, ...ADDITIONAL_OMISSIONS]);
   const modeInputs = [...(runtimeContext ? RUNTIME_INPUTS : []),
     ...(freshInstall ? APPLICATION_INSTALL_INPUTS.map((entry) => `ui/${entry}`) : []),
-    ...(dependencyProfile === 'application' ? APPLICATION_DEPENDENCY_PROFILE_INPUTS : [])];
-  for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS, ...modeInputs]) {
+    ...(dependencyProfile === 'application' ? applicationDependencyProfileInputs(packageManager) : [])];
+  for (const entry of [...omitted, ...CONTRACTS, ...REQUIRED_INPUTS, ...selectedTests.map((entry) => `ui/${entry}`), ...modeInputs]) {
     require(paths.includes(entry), `Required reviewed source input is missing: ${entry}`);
   }
   for (const entry of RETAINED_SHARED_INPUTS) require(!omitted.has(entry), `Shared input cannot be omitted: ${entry}`);
   const files = paths.map((entry) => readInput(root, entry).record);
   const status = sourceStatus(root);
   return {
-    schema: `marty.application-source-closure-plan/${dependencyProfile === 'application' ? 'v5' : 'v4'}`,
+    schema: `marty.application-source-closure-plan/${packageManager === 'bun'
+      ? (dependencyProfile === 'application' ? 'v7' : 'v6') : (dependencyProfile === 'application' ? 'v5' : 'v4')}`,
+    ...(packageManager === 'bun' ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}),
     repository_root: root,
     source: { commit: sourceSha, working_tree_dirty: status.length > 0, git_status: status,
       input_inventory_sha256: identity(files), files, extra_inputs: [...extraInputs] },
     route_contract: { version: routes.schema_version, sha256: digest(canonicalJson(routes)) },
-    test_profile: { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES], shared_contracts: [...TEST_CONTRACTS] },
-    ...(dependencyProfile === 'application' ? { dependency_profile: validateApplicationDependencyProfile({ repositoryRoot: root }) } : {}),
+    test_profile: { config: APPLICATION_TEST_CONFIG, files: [...selectedTests], shared_contracts: [...TEST_CONTRACTS] },
+    ...(dependencyProfile === 'application' ? { dependency_profile: validateApplicationDependencyProfile({ repositoryRoot: root, packageManager }) } : {}),
     boundary: {
       website_roster: ownership.modules.slice().sort(),
       additional_omissions: [...ADDITIONAL_OMISSIONS],
@@ -234,8 +239,11 @@ function exportSource(plan, destination) {
 
 export function materializeApplicationDependencyProfile(plan, exported) {
   require(plan.dependency_profile?.name === 'application', 'No reviewed application dependency profile was selected');
-  assert.deepEqual(plan.dependency_profile.substitutions.map((row) => row.path), ['ui/package.json', 'ui/package-lock.json'],
-    'Application profile substitutions exceeded the two reviewed package inputs');
+  const bun = plan.dependency_profile.bun_lock_selected === true;
+  assert.deepEqual(plan.dependency_profile.package_manager, bun ? APPLICATION_BUN_PACKAGE_MANAGER : undefined);
+  assert.deepEqual(plan.dependency_profile.substitutions.map((row) => row.path),
+    ['ui/package.json', 'ui/package-lock.json', ...(bun ? ['ui/bun.lock'] : [])],
+    'Application profile substitutions exceeded the reviewed package inputs');
   return plan.dependency_profile.substitutions.map(({ path: relative, baseline, selected }) => {
     const original = readInput(plan.repository_root, relative);
     const replacement = readInput(plan.repository_root, selected.path);
@@ -246,7 +254,7 @@ export function materializeApplicationDependencyProfile(plan, exported) {
     const descriptor = openSync(path.join(exported, relative), constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       require(fstatSync(descriptor).isFile(), 'The exported package input changed type');
-      // The export is disposable. Replace only these two copied inputs; the
+      // The export is disposable. Replace only the selected copied inputs; the
       // inventoried source checkout and committed profile bytes stay intact.
       ftruncateSync(descriptor, 0);
       writeFileSync(descriptor, replacement.bytes);
@@ -269,13 +277,21 @@ function verifyMaterializedProfile(plan, exported, materialized) {
 }
 
 function validateBaselineReport(report, plan) {
-  require(report?.schema === 'marty.application-source-closure-rehearsal/v4' && report.status === 'passed'
-    && report.plan?.schema === 'marty.application-source-closure-plan/v4' && !report.plan.dependency_profile,
+  const bun = plan.package_manager?.name === 'bun';
+  const version = bun ? 'v6' : 'v4'; const mode = bun ? 'fresh-bun-frozen' : 'fresh-npm-ci';
+  require(report?.schema === `marty.application-source-closure-rehearsal/${version}` && report.status === 'passed'
+    && report.plan?.schema === `marty.application-source-closure-plan/${version}` && !report.plan.dependency_profile,
   'The application profile requires a passed full-profile v4 baseline');
-  require(report.build?.dependency_mode === 'fresh-npm-ci' && report.dependency_install?.mode === 'fresh-npm-ci'
+  require(report.build?.dependency_mode === mode && report.dependency_install?.mode === mode
     && report.dependency_install.status === 'passed' && report.dependency_install.dependency_profile === 'full'
     && report.dependency_install.independent_dependency_installation === true,
   'The application profile baseline must use the full fresh locked install');
+  for (const value of [plan.package_manager, report.plan.package_manager, report.build.package_manager, report.dependency_install.package_manager]) {
+    assert.deepEqual(value, bun ? APPLICATION_BUN_PACKAGE_MANAGER : undefined, 'Baseline package-manager evidence differs');
+  }
+  if (bun) require(report.build.dependency_lock_sha256 === plan.source.files.find((row) => row.path === 'ui/bun.lock').sha256
+    && report.dependency_install.bun_lock_selected === true && report.dependency_install.bun_version === APPLICATION_BUN_PACKAGE_MANAGER.version,
+  'Baseline did not preserve the selected frozen Bun lock and installer');
   for (const key of ['application_build_completed', 'application_tests_completed', 'omitted_sources_absent',
     'application_output_checked', 'source_checkout_unchanged', 'public_assets_preserved',
     'application_resource_smoke_completed', 'locale_fallback_observed', 'sdk_wasm_initialized_in_node',
@@ -385,14 +401,14 @@ function buildEnvironment(sourceSha) {
 
 export { buildEnvironment as applicationBuildEnvironment, verifyApplicationTestResult, verifyApplicationResourceResult };
 
-function verifyApplicationTestResult(temporary, exported) {
+function verifyApplicationTestResult(temporary, exported, selectedFiles = APPLICATION_TEST_FILES) {
   const raw = readInput(temporary, 'application-tests.json').bytes;
   const result = JSON.parse(raw.toString('utf8'));
   require(result && typeof result === 'object' && result.success === true, 'Application test report did not succeed');
-  require(Array.isArray(result.testResults) && result.testResults.length === APPLICATION_TEST_FILES.length,
+  require(Array.isArray(result.testResults) && result.testResults.length === selectedFiles.length,
     'Application test report did not complete the selected files');
   const uiRoot = path.join(exported, 'ui');
-  const expected = [...APPLICATION_TEST_FILES].sort();
+  const expected = [...selectedFiles].sort();
   const completed = [];
   let assertions = 0;
   for (const file of result.testResults) {
@@ -470,11 +486,12 @@ function requireInstalledDependencies(dependencies) {
 }
 
 export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, dependencyDirectory,
-  freshInstall = false, runtimeContextDirectory, keepExport = false, dependencyProfile = 'full', baselineReport } = {}) {
+  freshInstall = false, runtimeContextDirectory, keepExport = false, dependencyProfile = 'full', baselineReport, packageManager } = {}) {
   require(!(freshInstall && dependencyDirectory), 'Fresh install and reused dependencies are mutually exclusive');
   require(dependencyProfile === 'application' ? Boolean(baselineReport) : !baselineReport,
     'A baseline report is required only for the application dependency profile');
-  const plan = planApplicationSourceClosure({ repositoryRoot, freshInstall, runtimeContext: Boolean(runtimeContextDirectory), dependencyProfile });
+  const plan = planApplicationSourceClosure({ repositoryRoot, freshInstall, runtimeContext: Boolean(runtimeContextDirectory), dependencyProfile, packageManager });
+  packageManager = plan.package_manager?.name || 'npm';
   const baseline = dependencyProfile === 'application' ? readBaselineReport(baselineReport, plan) : undefined;
   if (runtimeContextDirectory) {
     require(path.isAbsolute(runtimeContextDirectory), 'Runtime context must be an absolute new directory');
@@ -503,15 +520,18 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
   const resourceArguments = ['scripts/application-resource-smoke.mjs', '--dist', 'dist-application',
     '--report', path.join(temporary, 'application-resources.json')];
   const report = {
-    schema: `marty.application-source-closure-rehearsal/${dependencyProfile === 'application' ? 'v5' : 'v4'}`,
+    schema: plan.schema.replace('-plan/', '-rehearsal/'),
     status: 'failed', plan,
     build: { command: ['node', 'scripts/build-web-surface.mjs', 'application'], node_version: process.version,
-      dependency_mode: freshInstall ? 'fresh-npm-ci' : 'reused-installed-node_modules', dependency_directory: dependencies,
+      dependency_mode: freshInstall ? (packageManager === 'bun' ? 'fresh-bun-frozen' : 'fresh-npm-ci') : 'reused-installed-node_modules', dependency_directory: dependencies,
       dependency_profile: dependencyProfile,
+      ...(packageManager === 'bun' ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER },
+        dependency_lock_sha256: plan.source.files.find((entry) => entry.path === (dependencyProfile === 'application'
+          ? 'ui/profiles/application/bun.lock' : 'ui/bun.lock')).sha256 } : {}),
       package_lock_sha256: plan.source.files.find((entry) => entry.path === (dependencyProfile === 'application'
         ? 'ui/profiles/application/package-lock.json' : 'ui/package-lock.json')).sha256,
       effective_source_sha: effectiveSourceSha(plan) },
-    tests: { command: ['node', ...testArguments], selected_files: [...APPLICATION_TEST_FILES] },
+    tests: { command: ['node', ...testArguments], selected_files: [...plan.test_profile.files] },
     resources: { command: ['node', ...resourceArguments] },
     qualification: { application_build_completed: false, application_tests_completed: false, omitted_sources_absent: false,
       application_output_checked: false, source_checkout_unchanged: false, source_extraction_complete: false,
@@ -523,7 +543,9 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
       signed_release_produced: false },
     ...(dependencyProfile === 'application' ? { dependency_profile: { name: 'application',
       materialized_inputs: [], baseline_report: { path: baselineReport, bytes: baseline.bytes, sha256: baseline.sha256 },
-      bun_lock_selected: false, package_graph_minimized: false, output_identical_to_full_profile: false } } : {}),
+      bun_lock_selected: packageManager === 'bun',
+      ...(packageManager === 'bun' ? { package_manager: { ...APPLICATION_BUN_PACKAGE_MANAGER } } : {}),
+      package_graph_minimized: false, output_identical_to_full_profile: false } } : {}),
     export_directory: exported, export_retained: keepExport,
   };
   let ownedContext = false;
@@ -534,7 +556,7 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     }
     if (freshInstall) {
       report.dependency_install = installApplicationDependencies({ uiRoot: path.join(exported, 'ui'), temporaryRoot: temporary,
-        dependencyProfile });
+        dependencyProfile, packageManager });
       requireOmittedInputsAbsent(plan, exported);
       requireInstalledDependencies(dependencies);
       report.qualification.independent_dependency_installation = true;
@@ -556,7 +578,7 @@ export function rehearseApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT
     });
     if (tests.error) throw tests.error;
     require(tests.status === 0, `Application tests failed with exit code ${tests.status}`);
-    report.tests.result = verifyApplicationTestResult(temporary, exported);
+    report.tests.result = verifyApplicationTestResult(temporary, exported, plan.test_profile.files);
     report.qualification.application_tests_completed = true;
     requireOmittedInputsAbsent(plan, exported);
     report.output = verifyApplicationClosureOutput(exported, plan);
@@ -658,13 +680,14 @@ function main() {
     const argument = arguments_[index];
     if (argument === '--keep-export') options.keepExport = true;
     else if (argument === '--fresh-install') options.freshInstall = true;
-    else if (['--repository-root', '--dependencies', '--runtime-context', '--dependency-profile', '--baseline-report', '--report'].includes(argument)) {
+    else if (['--repository-root', '--dependencies', '--runtime-context', '--dependency-profile', '--package-manager', '--baseline-report', '--report'].includes(argument)) {
       const value = arguments_[++index];
       require(value && !value.startsWith('--'), `Missing value for ${argument}`);
       if (argument === '--repository-root') options.repositoryRoot = value;
       else if (argument === '--dependencies') options.dependencyDirectory = value;
       else if (argument === '--runtime-context') options.runtimeContextDirectory = value;
       else if (argument === '--dependency-profile') options.dependencyProfile = value;
+      else if (argument === '--package-manager') options.packageManager = value;
       else if (argument === '--baseline-report') options.baselineReport = value;
       else reportPath = path.resolve(value);
     } else throw new Error(`Unknown option: ${argument}`);

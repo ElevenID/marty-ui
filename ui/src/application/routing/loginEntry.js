@@ -12,7 +12,10 @@ export function getLoginEntryRedirect(locationState, fallback = '/', search = ''
     if (stateDestination) return stateDestination;
   }
 
-  const next = new URLSearchParams(search || '').get('next');
+  const params = new URLSearchParams(search || '');
+  // Existing /apply entry links use return_to. Validate that destination just
+  // like next so sign-in does not discard the selected credential or org.
+  const next = params.get('next') ?? params.get('return_to');
   return safeNavigationDestination(next) || safeNavigationDestination(fallback) || '/';
 }
 
