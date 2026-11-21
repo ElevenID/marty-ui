@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use super::{canonical_uuid, digest, fields, AdminRoute};
 
-pub(super) fn timestamp(value: &Value) -> Option<DateTime<Utc>> {
+pub(crate) fn timestamp(value: &Value) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value.as_str()?)
         .ok()
         .filter(|time| {
@@ -26,7 +26,7 @@ pub(super) fn ordered_instants(start: &Value, end: &Value, maximum_seconds: i64)
     end > start && end - start <= Duration::seconds(maximum_seconds)
 }
 
-fn uri(value: &Value) -> bool {
+pub(crate) fn uri(value: &Value) -> bool {
     value.as_str().is_some_and(|text| {
         !text.is_empty()
             && text.len() <= 1024
@@ -92,20 +92,17 @@ fn constraints(value: &Value) -> bool {
     }
 }
 
-pub(super) fn valid_review(route: &AdminRoute, user: Option<&str>, value: &Value) -> bool {
-    let Some(user) = user.filter(|user| canonical_uuid(user).is_some()) else {
-        return false;
-    };
-    let terms = &value["terms"];
+/// The selected public organization profile permits a human grantor and KEY
+/// binding. It does not establish current authority or consent.
+pub(crate) fn valid_terms(organization_id: uuid::Uuid, terms: &Value) -> bool {
     let Some(object) = terms.as_object() else {
         return false;
     };
-    let organization = json!({"type":"ORGANIZATION", "id":format!("urn:marty:organization:{}", route.organization_id)});
-    let (Some(valid_from), Some(valid_until), Some(created_at), Some(expires_at)) = (
+    let organization =
+        json!({"type":"ORGANIZATION", "id":format!("urn:marty:organization:{organization_id}")});
+    let (Some(valid_from), Some(valid_until)) = (
         timestamp(&terms["valid_from"]),
         timestamp(&terms["valid_until"]),
-        timestamp(&value["created_at"]),
-        timestamp(&value["expires_at"]),
     ) else {
         return false;
     };
@@ -125,9 +122,14 @@ pub(super) fn valid_review(route: &AdminRoute, user: Option<&str>, value: &Value
             "constraints",
         ],
         &[],
-    ) && terms["grantor"] == json!({"type":"USER", "id":format!("urn:marty:user:{user}")})
+    ) && principal(&terms["grantor"])
+        && terms["grantor"]["type"] == "USER"
+        && terms["grantor"]["id"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("urn:marty:user:"))
+            .and_then(canonical_uuid)
+            .is_some()
         && terms["subject"] == organization
-        && value["issuer"] == organization
         && principal(&terms["delegate"])
         && terms["binding"].as_object().is_some_and(|binding| {
             fields(binding, &["method", "key_thumbprint"], &[])
@@ -140,6 +142,24 @@ pub(super) fn valid_review(route: &AdminRoute, user: Option<&str>, value: &Value
         && terms["subdelegation_allowed"] == false
         && constraints(&terms["constraints"])
         && valid_until > valid_from
+}
+
+pub(super) fn valid_review(route: &AdminRoute, user: Option<&str>, value: &Value) -> bool {
+    let Some(user) = user.filter(|user| canonical_uuid(user).is_some()) else {
+        return false;
+    };
+    let terms = &value["terms"];
+    let organization = json!({"type":"ORGANIZATION", "id":format!("urn:marty:organization:{}", route.organization_id)});
+    let (Some(valid_until), Some(created_at), Some(expires_at)) = (
+        timestamp(&terms["valid_until"]),
+        timestamp(&value["created_at"]),
+        timestamp(&value["expires_at"]),
+    ) else {
+        return false;
+    };
+    valid_terms(route.organization_id, terms)
+        && terms["grantor"] == json!({"type":"USER", "id":format!("urn:marty:user:{user}")})
+        && value["issuer"] == organization
         && expires_at > created_at
         && expires_at <= valid_until
         && expires_at - created_at <= Duration::seconds(300)

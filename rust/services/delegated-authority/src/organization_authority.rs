@@ -387,6 +387,24 @@ pub struct OrganizationRepresentationAuthorityProvider {
     current: CurrentOrganizationAuthority,
     pool: PgPool,
 }
+impl OrganizationRepresentationAuthorityProvider {
+    /// Compose a verifier without ever acquiring a producer writer credential.
+    pub fn from_read_sources(
+        store: PostgresOrganizationStore,
+        evidence_read_pool: PgPool,
+        configuration: OrganizationApprovalConfiguration,
+        clock: Arc<dyn DelegationClock>,
+    ) -> Self {
+        Self {
+            current: CurrentOrganizationAuthority {
+                store,
+                configuration,
+                clock,
+            },
+            pool: evidence_read_pool,
+        }
+    }
+}
 #[async_trait]
 impl RepresentationAuthorityProvider for OrganizationRepresentationAuthorityProvider {
     async fn resolve_authority(

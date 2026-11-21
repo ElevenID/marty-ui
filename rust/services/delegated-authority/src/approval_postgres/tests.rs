@@ -15,6 +15,8 @@ use marty_organization::{
 };
 use sqlx::{postgres::PgPoolOptions, AssertSqlSafe};
 
+mod command_host;
+
 struct Fixture {
     owner: PgPool,
     read: PgPool,

@@ -29,7 +29,7 @@ pub(crate) fn uuid(value: &str, field: &'static str) -> Result<(), BindingError>
     )
 }
 
-fn uri(
+pub(crate) fn uri(
     value: &str,
     maximum: usize,
     no_wildcard: bool,

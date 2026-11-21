@@ -37,6 +37,11 @@
       "description": "Replace an agent identity's public key while preserving historical key bindings"
     },
     {
+      "resource": "agent-identity",
+      "action": "enroll",
+      "description": "Establish key-control enrollment eligibility for a managed inventory record with exact authenticated challenge proof"
+    },
+    {
       "resource": "delegation-grant",
       "action": "view",
       "description": "Review exact delegated grant terms for the current organization"
@@ -45,6 +50,26 @@
       "resource": "delegation-grant",
       "action": "approve",
       "description": "Explicitly approve exact grant terms on behalf of the current organization as an authenticated human"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "create",
+      "description": "Create a pending immutable delegated grant for the authenticated human grantor"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "suspend",
+      "description": "Suspend a delegated grant while retaining original evidence"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "reinstate",
+      "description": "Reinstate a suspended delegated grant only through the current authority lifecycle checks"
+    },
+    {
+      "resource": "delegation-grant",
+      "action": "revoke",
+      "description": "Permanently revoke a delegated grant while retaining original outcomes"
     },
     {
       "resource": "identity",

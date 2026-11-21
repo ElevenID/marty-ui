@@ -670,7 +670,7 @@ const CONSENT_READ_TABLES: [&str; 5] = [
     "approval_confirmation_bindings",
     "approval_storage_identity",
 ];
-const EVIDENCE_READ_TABLES: [&str; 12] = [
+pub(crate) const EVIDENCE_READ_TABLES: [&str; 12] = [
     "schema_migrations",
     "delegation_grants",
     "grant_lifecycle_events",
@@ -721,16 +721,16 @@ pub(crate) async fn check_authority_roles(
     }
     Ok(())
 }
-async fn storage_identity(pool: &PgPool) -> Result<Uuid, ApprovalProducerError> {
+pub(crate) async fn storage_identity(pool: &PgPool) -> Result<Uuid, ApprovalProducerError> {
     sqlx::query_scalar("SELECT instance_id FROM delegated_authority_service.approval_storage_identity WHERE singleton=true").fetch_one(pool).await.map_err(not_ready)
 }
-async fn role_identity(pool: &PgPool) -> Result<String, ApprovalProducerError> {
+pub(crate) async fn role_identity(pool: &PgPool) -> Result<String, ApprovalProducerError> {
     sqlx::query_scalar("SELECT current_user::TEXT")
         .fetch_one(pool)
         .await
         .map_err(not_ready)
 }
-async fn check_role(
+pub(crate) async fn check_role(
     pool: &PgPool,
     schema: &str,
     insert_tables: &[&str],
@@ -767,11 +767,23 @@ async fn check_role(
     Ok(role)
 }
 
-async fn check_role_boundary(
+pub(crate) async fn check_role_boundary(
     pool: &PgPool,
     schema: &str,
     role: &str,
     insert_tables: &[&str],
+) -> Result<(), ApprovalProducerError> {
+    check_role_boundary_mutations(pool, schema, role, insert_tables, &[]).await
+}
+
+/// An explicitly bounded request writer may update its grant table; evidence
+/// readers/producers keep the stricter no-update wrapper above.
+pub(crate) async fn check_role_boundary_mutations(
+    pool: &PgPool,
+    schema: &str,
+    role: &str,
+    insert_tables: &[&str],
+    update_tables: &[&str],
 ) -> Result<(), ApprovalProducerError> {
     // Inspect every reachable role, including roles available via SET ROLE even
     // when automatic inheritance is disabled. A role name alone is no isolation.
@@ -788,15 +800,16 @@ async fn check_role_boundary(
                 (n.nspowner=r.oid OR has_schema_privilege(r.oid,n.oid,'CREATE,CREATE WITH GRANT OPTION,USAGE WITH GRANT OPTION')))
           OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
               WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f') AND (
-                c.relowner=r.oid OR has_table_privilege(r.oid,c.oid,'UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')
-                OR has_any_column_privilege(r.oid,c.oid,'UPDATE,REFERENCES')
+                c.relowner=r.oid OR has_table_privilege(r.oid,c.oid,'DELETE,TRUNCATE,TRIGGER,REFERENCES')
+                OR has_any_column_privilege(r.oid,c.oid,'REFERENCES')
+                OR ((has_table_privilege(r.oid,c.oid,'UPDATE') OR has_any_column_privilege(r.oid,c.oid,'UPDATE')) AND NOT (c.relname=ANY($4::TEXT[])))
                 OR has_table_privilege(r.oid,c.oid,'SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,DELETE WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION,TRIGGER WITH GRANT OPTION')
                 OR has_any_column_privilege(r.oid,c.oid,'SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION')
                 OR ((has_table_privilege(r.oid,c.oid,'INSERT') OR has_any_column_privilege(r.oid,c.oid,'INSERT')) AND NOT (c.relname=ANY($2::TEXT[])))))
           OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
               WHERE n.nspname=$1 AND (p.proowner=r.oid OR has_function_privilege(r.oid,p.oid,'EXECUTE WITH GRANT OPTION')
                 OR (p.prosecdef AND has_function_privilege(r.oid,p.oid,'EXECUTE'))))))")
-        .bind(schema).bind(insert_tables).bind(role).fetch_one(pool).await.map_err(not_ready)?;
+        .bind(schema).bind(insert_tables).bind(role).bind(update_tables).fetch_one(pool).await.map_err(not_ready)?;
     if unsafe_role {
         return Err(ApprovalProducerError::NotReady);
     }

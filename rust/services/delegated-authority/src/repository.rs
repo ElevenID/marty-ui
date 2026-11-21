@@ -261,7 +261,7 @@ impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
 
     async fn commit_command(
         &self,
-        prepared: PreparedDelegationCommand,
+        mut prepared: PreparedDelegationCommand,
     ) -> Result<CommittedDelegationCommand, RepositoryError> {
         prepared.result.validate()?;
         if prepared.result.grant != prepared.mutation.grant {
@@ -298,7 +298,11 @@ impl DelegationGrantRepository for InMemoryDelegationGrantRepository {
             }
             None
         };
-        prepared.check_access(None)?;
+        prepared.recheck_access(None).await?;
+        let mutation = &prepared.mutation;
+        // The source authorization above awaited while holding the write lock.
+        // Consent can expire during that read even when command access remains.
+        check_activation_guard(&mutation.grant, mutation.activation.as_ref(), None)?;
         let event = GrantAuditEvent::from_grant(&mutation.grant, previous_status);
         state
             .audit

@@ -1,6 +1,6 @@
 //! Internal consumer of the optional Marty principal/runtime-binding profile.
 //!
-//! This crate checks consistency of independently supplied inputs. It does not
+//! The binding validator checks consistency of independently supplied inputs. It does not
 //! authenticate an issuer, a caller, a certificate, a session, or a workload;
 //! perform a live status/freshness check; or grant permission. Its opaque result
 //! must not be treated as a bearer capability or persisted authorization.
@@ -8,9 +8,15 @@
 //! Existing API-key and human-session contexts do not establish proof of
 //! possession. There are deliberately no conversions from either context,
 //! public HTTP headers, or transport metadata into the validated result.
+//!
+//! The separate [`managed_enrollment`] module verifies a bounded, purpose-specific
+//! signed enrollment challenge. That result establishes current key possession
+//! only; its host must atomically consume the retained challenge. It does not
+//! perform operational machine authentication or establish delegated authority.
 
 #![forbid(unsafe_code)]
 
+pub mod managed_enrollment;
 mod model;
 mod strict_json;
 mod thumbprint;

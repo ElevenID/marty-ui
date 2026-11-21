@@ -358,6 +358,10 @@ impl VerifiedDelegationCommandAccess {
 /// current tenant/typed actor/resource permissions, not the old grant's ACTIVE state.
 #[async_trait]
 pub trait DelegationCommandAuthorizer: Send + Sync {
+    /// Read-only authority observation for the exact supplied intent/snapshot.
+    /// Called during preparation and again with repository write locks held.
+    /// Implementations must use their independent authority source, not acquire
+    /// this grant repository's locks or produce external side effects.
     async fn authorize_mutation(
         &self,
         caller: &DelegationCommandCaller,
@@ -511,8 +515,45 @@ pub struct PreparedDelegationCommand {
     access_checked_at: DateTime<Utc>,
     prepared_at: DateTime<Utc>,
     clock: Arc<dyn crate::DelegationClock>,
+    caller: DelegationCommandCaller,
+    authorizer: Arc<dyn DelegationCommandAuthorizer>,
 }
 impl PreparedDelegationCommand {
+    /// Reobserve current source permission after identity/grant lock waits.
+    /// The exact prepared intent and prior snapshot remain sealed; a successful
+    /// observation can shorten, but never renew, the original access deadline.
+    /// Only this read-only call is bounded by an application timeout, never COMMIT.
+    pub(crate) async fn recheck_access(
+        &mut self,
+        database_now: Option<DateTime<Utc>>,
+    ) -> Result<(), RepositoryError> {
+        self.check_access(database_now)?;
+        let started_at = self.clock.now();
+        let access = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.authorizer.authorize_mutation(
+                &self.caller,
+                &self.result.command.intent,
+                self.mutation.previous.as_ref(),
+                started_at,
+            ),
+        )
+        .await
+        .map_err(|_| RepositoryError::CommandAccessExpired)?
+        .map_err(|_| RepositoryError::CommandAccessExpired)?;
+        access
+            .check(started_at, self.clock.now())
+            .map_err(|_| RepositoryError::CommandAccessExpired)?;
+        self.access = VerifiedDelegationCommandAccess {
+            observed_at: access.observed_at,
+            valid_until: self.access.valid_until.min(access.valid_until),
+        };
+        self.access_checked_at = started_at;
+        // The earlier database sample precedes this new observation. A fresh
+        // database clock is checked again after writes and before COMMIT.
+        self.check_access(None)
+    }
+
     pub(crate) fn check_access(
         &self,
         database_now: Option<DateTime<Utc>>,
@@ -608,6 +649,8 @@ impl DelegationCommandService {
                             access_checked_at,
                             prepared_at,
                             clock: self.lifecycle.command_clock(),
+                            caller: caller.clone(),
+                            authorizer: self.authorizer.clone(),
                         }
                     }
                     Err(error) => {

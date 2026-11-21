@@ -29,6 +29,11 @@ pub async fn migrate_organization_schema(pool: &PgPool) -> Result<(), Organizati
     sqlx::raw_sql(include_str!("../migrations/0003_agent_directory.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0004_managed_agent_enrollment.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -67,6 +72,9 @@ async fn validate_connection(
         "agent_identities",
         "agent_identity_keys",
         "agent_identity_history",
+        "agent_enrollment_challenges",
+        "agent_enrollment_outcomes",
+        "agent_enrollment_invalidations",
     ];
     let table_rows = sqlx::query(
         "SELECT table_name FROM information_schema.tables WHERE table_schema='organization_service'",
@@ -172,6 +180,34 @@ async fn validate_connection(
     if !agent_version || agent_guards != 8 || !active_key_index {
         return Err(incompatible(
             "agent directory migration or lifecycle guards are missing",
+        ));
+    }
+    let enrollment_version: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM organization_service.rust_schema_versions WHERE version='rust_organization_managed_enrollment_0004')",
+    ).fetch_one(&mut *connection).await?;
+    let enrollment_guards: i64 = sqlx::query_scalar(
+        "WITH expected(table_name,trigger_name,function_name,trigger_type,deferred) AS (VALUES
+            ('agent_enrollment_challenges','agent_enrollment_challenge_guard','guard_agent_enrollment_challenge',7,false),
+            ('agent_enrollment_challenges','agent_enrollment_challenge_immutable','reject_agent_directory_mutation',58,false),
+            ('agent_enrollment_challenges','agent_enrollment_challenge_commit','check_agent_enrollment_commit',5,true),
+            ('agent_enrollment_outcomes','agent_enrollment_outcome_guard','guard_agent_enrollment_outcome',7,false),
+            ('agent_enrollment_outcomes','agent_enrollment_outcome_immutable','reject_agent_directory_mutation',58,false),
+            ('agent_enrollment_outcomes','agent_enrollment_outcome_commit','check_agent_enrollment_commit',5,true),
+            ('agent_enrollment_invalidations','agent_enrollment_invalidation_guard','guard_agent_enrollment_invalidation',7,false),
+            ('agent_enrollment_invalidations','agent_enrollment_invalidation_immutable','reject_agent_directory_mutation',58,false)
+        ) SELECT count(*) FROM expected e
+          JOIN pg_trigger t ON t.tgrelid=to_regclass('organization_service.'||e.table_name) AND t.tgname=e.trigger_name
+          JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+          WHERE NOT t.tgisinternal AND t.tgenabled='O' AND t.tgqual IS NULL AND t.tgtype=e.trigger_type
+            AND t.tgnargs=0 AND t.tgattr=''::int2vector AND t.tgdeferrable=e.deferred AND t.tginitdeferred=e.deferred
+            AND (t.tgconstraint<>0)=e.deferred
+            AND t.tgfoid=to_regprocedure('organization_service.'||e.function_name||'()')
+            AND NOT p.prosecdef AND p.prorettype='trigger'::regtype AND p.prokind='f'
+            AND l.lanname='plpgsql' AND p.proconfig=ARRAY['search_path=pg_catalog']::text[]",
+    ).fetch_one(&mut *connection).await?;
+    if !enrollment_version || enrollment_guards != 8 {
+        return Err(incompatible(
+            "managed enrollment retention or commit guards are missing",
         ));
     }
     Ok(())

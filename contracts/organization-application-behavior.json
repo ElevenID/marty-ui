@@ -17,8 +17,8 @@
       "plan": "free",
       "is_discoverable": true,
       "owner_status": "active",
-      "permission_count": 113,
-      "required_permission_keys": ["application:manage-ownership", "external-observation:manage", "audit:ingest", "mdoc-certificate:issue-iaca", "mdoc-certificate:issue"]
+      "permission_count": 127,
+      "required_permission_keys": ["application:manage-ownership", "external-observation:manage", "audit:ingest", "mdoc-certificate:issue-iaca", "mdoc-certificate:issue", "agent-identity:enroll", "delegation-grant:create", "delegation-grant:suspend", "delegation-grant:reinstate", "delegation-grant:revoke"]
     }
   },
   "update": {

@@ -4469,6 +4469,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-oid4vp-contract",
  "marty-passport-auth",
+ "marty-principal-runtime-binding",
  "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
@@ -4797,7 +4798,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
+ "ed25519-dalek 2.2.0",
  "libc",
  "marty-api-key-policy",
  "marty-key-material-policy",
@@ -4943,6 +4946,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "ed25519-dalek 2.2.0",
  "p256",
  "serde",
  "serde_json",

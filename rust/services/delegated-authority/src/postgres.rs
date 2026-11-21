@@ -216,13 +216,13 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
 
     async fn commit_command(
         &self,
-        prepared: PreparedDelegationCommand,
+        mut prepared: PreparedDelegationCommand,
     ) -> Result<CommittedDelegationCommand, RepositoryError> {
         prepared.result.validate()?;
         if prepared.result.grant != prepared.mutation.grant {
             return Err(RepositoryError::CorruptData);
         }
-        let identity = &prepared.result.identity;
+        let identity = prepared.result.identity.clone();
         let mut transaction = self.pool.begin().await.map_err(map_database)?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             .execute(&mut *transaction)
@@ -235,7 +235,7 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
             .execute(&mut *transaction)
             .await
             .map_err(map_database)?;
-        if let Some(original) = load_command_result(&mut *transaction, identity).await? {
+        if let Some(original) = load_command_result(&mut *transaction, &identity).await? {
             if original.command.digest() != prepared.result.command.digest() {
                 return Err(RepositoryError::CommandConflict);
             }
@@ -245,9 +245,7 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
                 recovered: true,
             });
         }
-        let mutation = &prepared.mutation;
-        let grant = &mutation.grant;
-        if let Some(previous) = &mutation.previous {
+        if let Some(previous) = &prepared.mutation.previous {
             let row = sqlx::query(
                 "SELECT id,organization_id,status,revision,terms_digest,grant_document,
                  (created_at = (grant_document ->> 'created_at')::TIMESTAMPTZ
@@ -259,13 +257,23 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
             if &current != previous {
                 return Err(RepositoryError::RevisionConflict);
             }
-            validate_transition(&current, grant)?;
-            check_activation_guard(grant, mutation.activation.as_ref(), None)?;
-            let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-                .fetch_one(&mut *transaction)
-                .await
-                .map_err(map_database)?;
-            prepared.check_access(Some(database_now))?;
+            validate_transition(&current, &prepared.mutation.grant)?;
+            check_activation_guard(
+                &prepared.mutation.grant,
+                prepared.mutation.activation.as_ref(),
+                None,
+            )?;
+        } else {
+            validate_initial(&prepared.mutation.grant)?;
+        }
+        let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(map_database)?;
+        prepared.recheck_access(Some(database_now)).await?;
+        let mutation = &prepared.mutation;
+        let grant = &mutation.grant;
+        if let Some(previous) = &mutation.previous {
             let updated = sqlx::query(
                 "UPDATE delegated_authority_service.delegation_grants
                  SET status=$1,revision=$2,grant_document=$3,updated_at=($4::text)::TIMESTAMPTZ
@@ -285,12 +293,6 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
                 return Err(RepositoryError::RevisionConflict);
             }
         } else {
-            validate_initial(grant)?;
-            let database_now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-                .fetch_one(&mut *transaction)
-                .await
-                .map_err(map_database)?;
-            prepared.check_access(Some(database_now))?;
             sqlx::query(
                 "INSERT INTO delegated_authority_service.delegation_grants
                  (id,organization_id,status,revision,terms_digest,grant_document,created_at,updated_at)
@@ -304,7 +306,7 @@ impl DelegationGrantRepository for PgDelegationGrantRepository {
             "INSERT INTO delegated_authority_service.command_results
              (organization_id,actor_type,actor_id,command_id,command_digest,command_document,grant_id,grant_revision,result_document)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-            .bind(identity.organization_id).bind(actor_type(identity)?).bind(&identity.actor.id)
+            .bind(identity.organization_id).bind(actor_type(&identity)?).bind(&identity.actor.id)
             .bind(identity.command_id).bind(prepared.result.command.digest()).bind(&prepared.result.command.document)
             .bind(grant.id).bind(revision(grant.revision)?).bind(encode(grant)?)
             .execute(&mut *transaction).await.map_err(map_database)?;

@@ -57,6 +57,8 @@ include!("../tests/support/template_issuer_options_behavior.rs");
 include!("../tests/support/organization_defaults_behavior.rs");
 include!("../tests/support/ob3_client_contract_behavior.rs");
 include!("../tests/support/agent_administration_behavior.rs");
+include!("../tests/support/delegation_command_behavior.rs");
+include!("../tests/support/agent_enrollment_behavior.rs");
 use std::{
     collections::BTreeSet,
     sync::atomic::{AtomicBool, Ordering},

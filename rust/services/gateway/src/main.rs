@@ -83,6 +83,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.agent_admin_enabled,
         config.delegation_approval_enabled,
     )?;
+    marty_gateway::agent_administration::add_enrollment_routes(
+        &mut routes,
+        config.agent_enrollment_enabled,
+    )?;
+    marty_gateway::agent_administration::add_enrollment_routes(
+        &mut proxy_routes,
+        config.agent_enrollment_enabled,
+    )?;
+    marty_gateway::delegation_commands::add_routes(
+        &mut routes,
+        config.delegation_commands_enabled,
+    )?;
+    marty_gateway::delegation_commands::add_routes(
+        &mut proxy_routes,
+        config.delegation_commands_enabled,
+    )?;
     let registry = StaticServiceRegistry::from_urls(&config.service_urls)?;
     let upstream = ReqwestUpstream::new(config.maximum_response_bytes)?;
     let proxy_config = ProxyConfig {
@@ -201,6 +217,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.agent_admin_enabled,
             config.delegation_approval_enabled,
         )?
+        .with_delegation_commands(config.delegation_commands_enabled)?
+        .with_agent_enrollment(config.agent_enrollment_enabled)?
         .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
         .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
         .with_service_sign_grant_minter(service_sign_grant_minter)

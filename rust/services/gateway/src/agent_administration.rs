@@ -32,8 +32,10 @@ use crate::{
     runtime::GatewayRuntimeState,
 };
 
+#[path = "agent_enrollment_response.rs"]
+mod enrollment_response;
 #[path = "agent_administration_response.rs"]
-mod response_contract;
+pub(crate) mod response_contract;
 
 pub const MAXIMUM_BODY_BYTES: usize = 16_384;
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
@@ -49,6 +51,9 @@ pub enum Operation {
     Revoke,
     Retire,
     RotateKey,
+    CreateEnrollmentChallenge,
+    InspectEnrollmentChallenge,
+    CompleteEnrollment,
     ReviewApproval,
     ConfirmApproval,
     WithdrawApproval,
@@ -57,7 +62,10 @@ pub enum Operation {
 impl Operation {
     pub fn permission(self) -> &'static str {
         match self {
-            Self::List | Self::Inspect | Self::History => "agent-identity:view",
+            Self::List | Self::Inspect | Self::History | Self::InspectEnrollmentChallenge => {
+                "agent-identity:view"
+            }
+            Self::CreateEnrollmentChallenge | Self::CompleteEnrollment => "agent-identity:enroll",
             Self::Register => "agent-identity:create",
             Self::Update => "agent-identity:update",
             Self::Suspend => "agent-identity:suspend",
@@ -74,8 +82,28 @@ impl Operation {
             Self::ReviewApproval | Self::ConfirmApproval | Self::WithdrawApproval
         )
     }
+    fn is_enrollment(self) -> bool {
+        matches!(
+            self,
+            Self::CreateEnrollmentChallenge
+                | Self::InspectEnrollmentChallenge
+                | Self::CompleteEnrollment
+        )
+    }
     fn read(self) -> bool {
-        matches!(self, Self::List | Self::Inspect | Self::History)
+        matches!(
+            self,
+            Self::List | Self::Inspect | Self::History | Self::InspectEnrollmentChallenge
+        )
+    }
+    fn enabled(self, state: &GatewayRuntimeState) -> bool {
+        if self.is_enrollment() {
+            state.agent_enrollment_enabled
+        } else if self.is_approval() {
+            state.delegation_approval_enabled
+        } else {
+            state.agent_admin_enabled
+        }
     }
 }
 
@@ -87,7 +115,7 @@ pub struct AdminRoute {
     pub operation: Operation,
 }
 
-fn canonical_uuid(value: &str) -> Option<Uuid> {
+pub(crate) fn canonical_uuid(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
         .ok()
         .filter(|id| !id.is_nil() && id.to_string() == value)
@@ -121,6 +149,17 @@ pub fn route(method: &str, path: &str) -> Option<AdminRoute> {
         ("POST", "agents", 7, Some("revoke")) => Operation::Revoke,
         ("POST", "agents", 7, Some("retire")) => Operation::Retire,
         ("POST", "agents", 7, Some("rotate-key")) => Operation::RotateKey,
+        ("POST", "agents", 7, Some("enrollment-challenges")) => {
+            Operation::CreateEnrollmentChallenge
+        }
+        ("GET", "agents", 8, Some("enrollment-challenges")) if canonical_uuid(p[7]).is_some() => {
+            Operation::InspectEnrollmentChallenge
+        }
+        ("POST", "agents", 9, Some("enrollment-challenges"))
+            if canonical_uuid(p[7]).is_some() && p[8] == "complete" =>
+        {
+            Operation::CompleteEnrollment
+        }
         ("POST", "delegation-grants", 7, Some("approval-reviews")) => Operation::ReviewApproval,
         ("POST", "delegation-grants", 9, Some("approval-reviews"))
             if canonical_uuid(p[7]).is_some() && p[8] == "confirm" =>
@@ -137,7 +176,7 @@ pub fn route(method: &str, path: &str) -> Option<AdminRoute> {
     Some(AdminRoute {
         organization_id,
         resource_id,
-        linked_id: if p.len() == 9 {
+        linked_id: if p.len() >= 8 {
             canonical_uuid(p[7])
         } else {
             None
@@ -199,7 +238,38 @@ pub fn add_routes(
     directory: bool,
     approval: bool,
 ) -> Result<(), PlatformError> {
-    for (method, path, service) in paths(directory, approval) {
+    install_routes(table, paths(directory, approval))
+}
+
+pub fn add_enrollment_routes(table: &mut RouteTable, enabled: bool) -> Result<(), PlatformError> {
+    install_routes(table, enrollment_paths(enabled))
+}
+
+fn enrollment_paths(enabled: bool) -> Vec<(HttpMethod, String, &'static str)> {
+    if !enabled {
+        return Vec::new();
+    }
+    let base = "/v1/organizations/{organization_id}/agents/{agent_id}/enrollment-challenges";
+    vec![
+        (HttpMethod::Post, base.into(), "organizations"),
+        (
+            HttpMethod::Get,
+            format!("{base}/{{challenge_id}}"),
+            "organizations",
+        ),
+        (
+            HttpMethod::Post,
+            format!("{base}/{{challenge_id}}/complete"),
+            "organizations",
+        ),
+    ]
+}
+
+fn install_routes(
+    table: &mut RouteTable,
+    routes: Vec<(HttpMethod, String, &'static str)>,
+) -> Result<(), PlatformError> {
+    for (method, path, service) in routes {
         table.add(RouteConfig {
             name: format!("agent-administration:{method:?}:{path}"),
             pattern: path,
@@ -227,9 +297,11 @@ struct AuthorizedAdmin {
     request_id: String,
     route: AdminRoute,
     submitted: Option<Value>,
+    session_ref: String,
+    valid_until: i64,
 }
 
-fn rejection(status: u16, code: &'static str, request_id: &str) -> Response {
+pub(crate) fn rejection(status: u16, code: &'static str, request_id: &str) -> Response {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut response = (
         status,
@@ -245,7 +317,7 @@ fn rejection(status: u16, code: &'static str, request_id: &str) -> Response {
     response
 }
 
-fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut values = headers.get_all(name).iter();
     let first = values.next()?.to_str().ok()?;
     (values.next().is_none()).then_some(first)
@@ -259,11 +331,7 @@ pub fn preflight(state: &GatewayRuntimeState, path: &str, headers: &HeaderMap) -
     let Some(selected) = route(method, path) else {
         return rejection(404, "not_found", &request_id);
     };
-    if !(if selected.operation.is_approval() {
-        state.delegation_approval_enabled
-    } else {
-        state.agent_admin_enabled
-    }) {
+    if !selected.operation.enabled(state) {
         return rejection(404, "not_found", &request_id);
     }
     let Some(origin) =
@@ -308,7 +376,7 @@ pub fn preflight(state: &GatewayRuntimeState, path: &str, headers: &HeaderMap) -
     response
 }
 
-fn session_cookie(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_cookie(headers: &HeaderMap) -> Option<String> {
     let mut result = None;
     for header in headers.get_all("cookie") {
         for pair in header.to_str().ok()?.split(';') {
@@ -354,11 +422,7 @@ pub async fn admit(state: &GatewayRuntimeState, request: Request) -> Result<Requ
     let fail = |status, code| rejection(status, code, &request_id);
     let selected = route(request.method().as_str(), request.uri().path())
         .ok_or_else(|| fail(404, "not_found"))?;
-    if !(if selected.operation.is_approval() {
-        state.delegation_approval_enabled
-    } else {
-        state.agent_admin_enabled
-    }) {
+    if !selected.operation.enabled(state) {
         return Err(fail(404, "not_found"));
     }
     if state
@@ -424,9 +488,13 @@ pub async fn admit(state: &GatewayRuntimeState, request: Request) -> Result<Requ
     )
     .map_err(|_| fail(403, "action_not_authorized"))?;
     let (parts, body) = request.into_parts();
-    let body = to_bytes(body, MAXIMUM_BODY_BYTES.min(state.maximum_body_bytes))
-        .await
-        .map_err(|_| fail(413, "payload_too_large"))?;
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        to_bytes(body, MAXIMUM_BODY_BYTES.min(state.maximum_body_bytes)),
+    )
+    .await
+    .map_err(|_| fail(408, "request_timeout"))?
+    .map_err(|_| fail(413, "payload_too_large"))?;
     validate_body(&selected, &body).map_err(|_| fail(400, "invalid_administration_request"))?;
     let valid_until = expires.min(observed.saturating_add(30));
     if Utc::now().timestamp() >= valid_until {
@@ -453,6 +521,21 @@ pub async fn admit(state: &GatewayRuntimeState, request: Request) -> Result<Requ
         upstream
             .headers
             .insert("content-type".into(), "application/json".into());
+    }
+    let session_ref = format!(
+        "urn:marty:session:sha256:{:x}",
+        Sha256::digest(cookie.as_bytes())
+    );
+    if selected.operation.is_enrollment() {
+        for (name, value) in [
+            ("x-marty-enrollment-organization-id", organization.clone()),
+            ("x-marty-enrollment-user-id", identity.user_id.clone()),
+            ("x-marty-enrollment-session-ref", session_ref.clone()),
+            ("x-marty-enrollment-observed-at", instant(observed)),
+            ("x-marty-enrollment-valid-until", instant(valid_until)),
+        ] {
+            upstream.headers.insert(name.into(), value);
+        }
     }
     if selected.operation.is_approval() {
         for (name, value) in [
@@ -489,11 +572,13 @@ pub async fn admit(state: &GatewayRuntimeState, request: Request) -> Result<Requ
         request_id,
         route: selected,
         submitted,
+        session_ref,
+        valid_until,
     });
     Ok(request)
 }
 
-fn instant(unix: i64) -> String {
+pub(crate) fn instant(unix: i64) -> String {
     DateTime::<Utc>::from_timestamp(unix, 0)
         .expect("validated session instant")
         .to_rfc3339_opts(SecondsFormat::Secs, true)
@@ -507,6 +592,9 @@ pub async fn dispatch(state: Arc<GatewayRuntimeState>, request: Request) -> Resp
             &Uuid::new_v4().to_string(),
         );
     };
+    if Utc::now().timestamp() >= authorized.valid_until {
+        return rejection(403, "session_observation_expired", &authorized.request_id);
+    }
     let Some(token) = state.service_token.as_ref() else {
         return rejection(503, "administration_unavailable", &authorized.request_id);
     };
@@ -552,6 +640,7 @@ pub async fn dispatch(state: Arc<GatewayRuntimeState>, request: Request) -> Resp
                 &authorized.route,
                 &authorized.identity,
                 authorized.submitted.as_ref(),
+                &authorized.session_ref,
                 &value.0,
             ) =>
         {
@@ -583,7 +672,7 @@ pub async fn dispatch(state: Arc<GatewayRuntimeState>, request: Request) -> Resp
     result
 }
 
-fn fields(value: &Map<String, Value>, required: &[&str], optional: &[&str]) -> bool {
+pub(crate) fn fields(value: &Map<String, Value>, required: &[&str], optional: &[&str]) -> bool {
     required.iter().all(|name| value.contains_key(*name))
         && value
             .keys()
@@ -594,12 +683,12 @@ fn text_field(value: &Value) -> bool {
         !text.trim().is_empty() && text.len() <= 2_048 && !text.chars().any(char::is_control)
     })
 }
-fn revision(value: &Value) -> bool {
+pub(crate) fn revision(value: &Value) -> bool {
     value
         .as_u64()
         .is_some_and(|number| (1..=MAX_REVISION).contains(&number))
 }
-fn digest(value: &Value) -> bool {
+pub(crate) fn digest(value: &Value) -> bool {
     value
         .as_str()
         .and_then(|v| v.strip_prefix("sha256:"))
@@ -696,8 +785,17 @@ pub fn validate_body(route: &AdminRoute, raw: &[u8]) -> Result<(), &'static str>
                 && revision(&value["expected_revision"])
                 && public_key(&value["public_key_jwk"])
         }
-        Operation::Suspend | Operation::Revoke | Operation::Retire => {
+        Operation::Suspend
+        | Operation::Revoke
+        | Operation::Retire
+        | Operation::CreateEnrollmentChallenge => {
             fields(value, &["expected_revision"], &[]) && revision(&value["expected_revision"])
+        }
+        Operation::CompleteEnrollment => {
+            fields(value, &["proof"], &[])
+                && value["proof"]
+                    .as_str()
+                    .is_some_and(enrollment_response::compact_proof)
         }
         Operation::ReviewApproval => {
             fields(value, &["grant"], &[])
@@ -769,7 +867,9 @@ fn valid_agent(value: &Value, organization: Uuid, expected_id: Option<Uuid>) -> 
             value["status"].as_str(),
             Some("PROVISIONED" | "ACTIVE" | "SUSPENDED" | "REVOKED" | "RETIRED")
         )
-        && !(value["kind"] == "MANAGED" && value["status"] == "ACTIVE")
+        && !(value["kind"] == "MANAGED"
+            && value["status"] == "ACTIVE"
+            && value["provenance"]["managed_enrollment"] != "KEY_CONTROL_VERIFIED")
         && value["provenance"].as_object().is_some_and(|provenance| {
             fields(
                 provenance,
@@ -782,7 +882,9 @@ fn valid_agent(value: &Value, organization: Uuid, expected_id: Option<Uuid>) -> 
                 ],
                 &[],
             ) && provenance["kind"] == "OPERATOR_DECLARATION"
-                && provenance["managed_enrollment"] == "NOT_ASSESSED"
+                && (provenance["managed_enrollment"] == "NOT_ASSESSED"
+                    || (value["kind"] == "MANAGED"
+                        && provenance["managed_enrollment"] == "KEY_CONTROL_VERIFIED"))
                 && provenance["external_authentication"] == "NOT_ASSESSED"
         })
         && value["keys"].as_array().is_some_and(|keys| {
@@ -810,12 +912,18 @@ fn valid_response(
     route: &AdminRoute,
     identity: &TrustedIdentityContext,
     submitted: Option<&Value>,
+    session_ref: &str,
     value: &Value,
 ) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
     match route.operation {
+        Operation::CreateEnrollmentChallenge
+        | Operation::InspectEnrollmentChallenge
+        | Operation::CompleteEnrollment => {
+            enrollment_response::valid_response(route, identity, submitted, session_ref, value)
+        }
         Operation::List | Operation::History => {
             fields(object, &["items", "total", "limit", "offset"], &[])
                 && value["total"].as_u64().is_some()
@@ -912,7 +1020,7 @@ fn valid_response(
 }
 
 /// Value projection which rejects duplicate names at every depth, including JWKs.
-struct UniqueValue(Value);
+pub(crate) struct UniqueValue(pub(crate) Value);
 impl<'de> Deserialize<'de> for UniqueValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Strict;
@@ -966,7 +1074,15 @@ impl<'de> Deserialize<'de> for UniqueValue {
 
 /// Candidate documentation is attached only when the matching opt-in is enabled.
 pub fn extend_openapi(document: &mut Value, directory: bool, approval: bool) {
-    for (method, path, service) in paths(directory, approval) {
+    document_routes(document, paths(directory, approval));
+}
+
+pub fn extend_enrollment_openapi(document: &mut Value, enabled: bool) {
+    document_routes(document, enrollment_paths(enabled));
+}
+
+fn document_routes(document: &mut Value, routes: Vec<(HttpMethod, String, &'static str)>) {
+    for (method, path, service) in routes {
         let method = match method {
             HttpMethod::Get => "get",
             HttpMethod::Patch => "patch",
@@ -987,7 +1103,7 @@ pub fn extend_openapi(document: &mut Value, directory: bool, approval: bool) {
             route(&method.to_ascii_uppercase(), &concrete).expect("declared candidate route");
         let mut operation = json!({
             "tags":["Candidate agent administration"], "security":[{"sessionCookie":[]}],
-            "description":"Opt-in human administration. Requires a current own non-impersonated session and exact tenant/action membership. Mutations require an allowed Origin. API keys cannot administer agents or supply approval. Directory metadata is an operator declaration; managed enrollment, external authentication, delegated use and runtime qualification remain NOT_ASSESSED.",
+            "description":"Opt-in human administration. Requires a current own non-impersonated session and exact tenant/action membership. Mutations require an allowed Origin. API keys cannot administer agents or supply approval. Directory metadata is an operator declaration. Explicit enrollment verifies registered key control only; external issuer/host trust, operational machine policy and delegated authority remain separate. Historical enrollment results do not authorize current use.",
             "x-marty-upstream-service":service, "x-marty-runtime-qualification":"NOT_ASSESSED",
             "responses":{"200":{"description":"Authorized administration result"},"400":{"description":"Invalid strict request"},"403":{"description":"Session, tenant, action or Origin denied"},"409":{"description":"Revision or confirmation conflict"},"503":{"description":"Dependency unavailable"}}
         });
@@ -1052,6 +1168,10 @@ fn request_schema(operation: Operation) -> Value {
             json!({"confirmation_id":uuid,"terms_digest":digest,"decision":{"const":"CONFIRM"}}),
         ),
         Operation::WithdrawApproval => (vec![], json!({})),
+        Operation::CompleteEnrollment => (
+            vec!["proof"],
+            json!({"proof":{"type":"string","description":"Compact JWS over the exact server-retained enrollment payload. Signed only by the registered runtime key; never send a private key.","maxLength":16000}}),
+        ),
         _ => (
             vec!["expected_revision"],
             json!({"expected_revision":revision}),

@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use crate::{
     agent_directory::{
-        decode_agent_request, AgentDirectoryError, AgentDirectoryService, AgentLifecycleAction,
-        AgentLifecycleRequest, RegisterAgentRequest, RotateAgentKeyRequest,
+        decode_agent_request, AgentDirectoryError, AgentDirectoryService, AgentEnrollmentSession,
+        AgentLifecycleAction, AgentLifecycleRequest, CompleteAgentEnrollment,
+        CreateAgentEnrollmentChallenge, RegisterAgentRequest, RotateAgentKeyRequest,
         UpdateAgentMetadataRequest,
     },
     authenticate_forwarded_http_request, ForwardedPrincipal,
@@ -53,6 +54,14 @@ pub fn organization_agent_admin_router(state: AgentDirectoryHttpState) -> Router
         )
         .route(
             "/v1/organizations/{organization_id}/agents/{agent_id}/{action}",
+            any(handle),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/agents/{agent_id}/enrollment-challenges/{challenge_id}",
+            any(handle),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/agents/{agent_id}/enrollment-challenges/{challenge_id}/complete",
             any(handle),
         )
         .with_state(state)
@@ -96,11 +105,17 @@ enum Operation {
     Update,
     Rotate,
     Transition(AgentLifecycleAction),
+    EnrollmentCreate,
+    EnrollmentInspect(Uuid),
+    EnrollmentComplete(Uuid),
 }
 impl Operation {
     fn permission(self) -> &'static str {
         match self {
-            Self::List | Self::Inspect | Self::History => "agent-identity:view",
+            Self::List | Self::Inspect | Self::History | Self::EnrollmentInspect(_) => {
+                "agent-identity:view"
+            }
+            Self::EnrollmentCreate | Self::EnrollmentComplete(_) => "agent-identity:enroll",
             Self::Register => "agent-identity:create",
             Self::Update => "agent-identity:update",
             Self::Rotate => "agent-identity:rotate-key",
@@ -110,7 +125,16 @@ impl Operation {
         }
     }
     fn read(self) -> bool {
-        matches!(self, Self::List | Self::Inspect | Self::History)
+        matches!(
+            self,
+            Self::List | Self::Inspect | Self::History | Self::EnrollmentInspect(_)
+        )
+    }
+    fn enrollment(self) -> bool {
+        matches!(
+            self,
+            Self::EnrollmentCreate | Self::EnrollmentInspect(_) | Self::EnrollmentComplete(_)
+        )
     }
 }
 
@@ -135,9 +159,43 @@ fn route(method: &str, path: &str) -> Option<(Uuid, Option<Uuid>, Operation)> {
         ("POST", 7, Some("suspend")) => Operation::Transition(AgentLifecycleAction::Suspend),
         ("POST", 7, Some("revoke")) => Operation::Transition(AgentLifecycleAction::Revoke),
         ("POST", 7, Some("retire")) => Operation::Transition(AgentLifecycleAction::Retire),
+        ("POST", 7, Some("enrollment-challenges")) => Operation::EnrollmentCreate,
+        ("GET", 8, Some("enrollment-challenges")) => {
+            Operation::EnrollmentInspect(canonical(parts[7])?)
+        }
+        ("POST", 9, Some("enrollment-challenges")) if parts[8] == "complete" => {
+            Operation::EnrollmentComplete(canonical(parts[7])?)
+        }
         _ => return None,
     };
     Some((org, id, operation))
+}
+
+fn enrollment_session(
+    headers: &HeaderMap,
+    organization: Uuid,
+    principal: &ForwardedPrincipal,
+) -> Option<AgentEnrollmentSession> {
+    let organization_id = canonical(single(headers, "x-marty-enrollment-organization-id")?)?;
+    let user_id = canonical(single(headers, "x-marty-enrollment-user-id")?)?;
+    if organization_id != organization
+        || !matches!(principal, ForwardedPrincipal::User {user_id: forwarded} if forwarded==&user_id.to_string())
+    {
+        return None;
+    }
+    let timestamp = |name| {
+        chrono::DateTime::parse_from_rfc3339(single(headers, name)?)
+            .ok()
+            .map(|value| value.with_timezone(&chrono::Utc))
+    };
+    AgentEnrollmentSession::new(
+        organization_id,
+        user_id,
+        single(headers, "x-marty-enrollment-session-ref")?.into(),
+        timestamp("x-marty-enrollment-observed-at")?,
+        timestamp("x-marty-enrollment-valid-until")?,
+    )
+    .ok()
 }
 
 fn pagination(operation: Operation, raw: Option<&str>) -> Result<(u32, u32), AgentDirectoryError> {
@@ -187,6 +245,9 @@ async fn handle(State(state): State<AgentDirectoryHttpState>, request: Request) 
     let Some((org, id, operation)) = route(request.method().as_str(), request.uri().path()) else {
         return error(StatusCode::NOT_FOUND, "not_found", request_id);
     };
+    if operation.enrollment() && !state.directory.enrollment_enabled() {
+        return error(StatusCode::NOT_FOUND, "not_found", request_id);
+    }
     if request.headers().contains_key("x-api-key-id")
         || single(request.headers(), "x-user-id")
             .and_then(canonical)
@@ -211,6 +272,20 @@ async fn handle(State(state): State<AgentDirectoryHttpState>, request: Request) 
                 )
             }
         };
+    let enrollment = if operation.enrollment() {
+        match enrollment_session(request.headers(), org, &principal) {
+            Some(session) => Some(session),
+            None => {
+                return error(
+                    StatusCode::FORBIDDEN,
+                    "human_session_context_required",
+                    request_id,
+                )
+            }
+        }
+    } else {
+        None
+    };
     if !operation.read()
         && single(request.headers(), "content-type")
             .is_none_or(|value| value.split(';').next().map(str::trim) != Some("application/json"))
@@ -294,13 +369,50 @@ async fn handle(State(state): State<AgentDirectoryHttpState>, request: Request) 
                     )
                     .await?,
             ),
+            Operation::EnrollmentCreate => serde_json::to_value(
+                service
+                    .create_enrollment_challenge(
+                        org,
+                        &principal,
+                        enrollment.as_ref().expect("enrollment route"),
+                        id.expect("item route"),
+                        decode_agent_request::<CreateAgentEnrollmentChallenge>(&body)?,
+                    )
+                    .await?,
+            ),
+            Operation::EnrollmentInspect(challenge) => serde_json::to_value(
+                service
+                    .inspect_enrollment_challenge(
+                        org,
+                        &principal,
+                        enrollment.as_ref().expect("enrollment route"),
+                        id.expect("item route"),
+                        challenge,
+                    )
+                    .await?,
+            ),
+            Operation::EnrollmentComplete(challenge) => serde_json::to_value(
+                service
+                    .complete_enrollment(
+                        org,
+                        &principal,
+                        enrollment.as_ref().expect("enrollment route"),
+                        id.expect("item route"),
+                        challenge,
+                        decode_agent_request::<CompleteAgentEnrollment>(&body)?,
+                    )
+                    .await?,
+            ),
         };
         value.map_err(|_| AgentDirectoryError::CorruptData)
     }
     .await;
     match result {
         Ok(value) => reply(
-            if matches!(operation, Operation::Register) {
+            if matches!(operation, Operation::Register)
+                || matches!(operation, Operation::EnrollmentCreate)
+                    && value.get("recovered") == Some(&json!(false))
+            {
                 StatusCode::CREATED
             } else {
                 StatusCode::OK

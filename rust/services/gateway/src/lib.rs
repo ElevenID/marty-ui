@@ -6,6 +6,7 @@ pub mod config;
 pub mod contract;
 pub mod credential_metadata;
 pub mod credential_template_contract;
+pub mod delegation_commands;
 pub mod external_association;
 pub mod external_observation;
 pub mod template_issuer_options;

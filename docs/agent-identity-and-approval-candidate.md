@@ -10,13 +10,19 @@ Machine Authentication Policy, delegated execution or receipt profiles are
 qualified. Existing public MIP remains 0.5.0. The independent optional protocol
 source lock remains at `6126da7619e057be2ff58dd38a5d50f49891d1b3`.
 
+The independently selected [managed enrollment and human command follow-on](managed-agent-enrollment-candidate.md)
+now adds signed key-control enrollment and a separate human lifecycle command
+host. The standalone directory/approval behavior below remains the baseline when
+those additional switches are off; registration still starts managed entries as
+`PROVISIONED`/`NOT_ASSESSED`.
+
 ## Implemented scope and responsibility
 
 | Area | Behavior in this slice | Remaining boundary |
 | --- | --- | --- |
-| Agent directory | Tenant inventory, attributable human administration, metadata, public-key replacement, suspension, revocation, retirement and immutable history | No managed enrollment, machine proof verification, MAP API, connection/grant aggregation or runtime orchestration |
+| Agent directory | Tenant inventory, attributable human administration, metadata, public-key replacement, suspension, revocation, retirement and immutable history | Signed enrollment is a separate opt-in; operational machine proof/MAP, connection/grant aggregation and runtime orchestration remain separate |
 | Organization approval | Exact grant review, explicit confirmation, independent current representation authority, withdrawal and original confirmation recovery | One configured organization, canonical UUID human grantor, organization subject/issuer and KEY binding only |
-| Hosting | Opt-in Gateway routes, mandatory service authentication, separate database roles, real Auth session expiry and readiness | No public lifecycle command, START_USE, FINALIZE_USE or receipt-signing endpoint |
+| Hosting | Opt-in Gateway routes, mandatory service authentication, separate database roles, real Auth session expiry and readiness | Human lifecycle command hosting is separately selected; no START_USE, FINALIZE_USE or receipt-signing endpoint |
 | Console | Directory administration and a separate exact-terms approval page | Build selection and backend selection are both required; no discovery or deployment qualification follows from a UI build |
 
 Marty owns identity inventory, proof/authority checks, immutable grant and
@@ -37,8 +43,10 @@ source provenance are retained as registration history.
 External entries begin administratively `ACTIVE`; that state is eligibility for
 an independent authentication/authority check. It does not authenticate the
 declared issuer, subject or runtime. Managed entries begin `PROVISIONED` with
-enrollment `NOT_ASSESSED`. There is no public activation or enrollment-success
-switch. Both kinds retain `authority_status: NOT_ASSESSED`.
+enrollment `NOT_ASSESSED`. There is no caller-set activation or enrollment-success
+flag. The optional enrollment follow-on verifies the registered key against a
+retained challenge before changing eligibility. Both kinds retain
+`authority_status: NOT_ASSESSED`.
 
 Only descriptive metadata can be edited. Tenant, principal, original owner,
 source issuer/subject and runtime instance references are immutable. Each

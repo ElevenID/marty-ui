@@ -9,7 +9,7 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 122);
+    assert_eq!(catalog.len(), 127);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
     assert!(keys.contains("application:manage-ownership"));
@@ -31,11 +31,15 @@ fn shared_permission_catalog_is_unique_and_complete() {
         "revoke",
         "retire",
         "rotate-key",
+        "enroll",
     ] {
         assert!(keys.contains(&format!("agent-identity:{action}")));
     }
     assert!(keys.contains("delegation-grant:view"));
     assert!(keys.contains("delegation-grant:approve"));
+    for action in ["create", "suspend", "reinstate", "revoke"] {
+        assert!(keys.contains(&format!("delegation-grant:{action}")));
+    }
 }
 
 #[test]
@@ -69,6 +73,20 @@ fn system_role_templates_preserve_intended_entitlements() {
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
     for template in &templates {
+        for key in [
+            "agent-identity:enroll",
+            "delegation-grant:create",
+            "delegation-grant:suspend",
+            "delegation-grant:reinstate",
+            "delegation-grant:revoke",
+        ] {
+            assert_eq!(
+                template.permission_keys.contains(key),
+                matches!(template.name, "owner" | "admin"),
+                "unexpected enrollment or delegated lifecycle permission for {}",
+                template.name
+            );
+        }
         assert_eq!(
             template
                 .permission_keys

@@ -976,6 +976,8 @@ async fn regression_after_preparation_cannot_commit_a_future_snapshot() {
         access_checked_at,
         prepared_at,
         clock: f.clock.clone(),
+        caller: f.caller.clone(),
+        authorizer: service.authorizer.clone(),
     };
     // Remains after the original auth observation, but before the latest
     // preparation observation and the new grant's creation time.
@@ -996,4 +998,43 @@ async fn regression_after_preparation_cannot_commit_a_future_snapshot() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn consent_expiry_during_locked_source_recheck_cannot_activate_memory_grant() {
+    let f = Fixture::memory();
+    let original = f.execute(&f.create).await.unwrap();
+    *f.consent.deadline.lock().unwrap() = Some(f.clock.now() + Duration::seconds(5));
+    let service = DelegationCommandService::new(
+        f.lifecycle.clone(),
+        Arc::new(AdvanceDuringAuthorization(f.clock.clone())),
+        Some(Arc::new(Confirmation(f.confirmation_id))),
+    );
+    // Initial authorization advances four seconds and consent is still valid.
+    // The locked recheck advances four more; access remains valid but consent
+    // expired while awaiting that read. The entire mutation must remain absent.
+    let command = f.transition("APPROVE_GRANT", grant(&original));
+    assert!(matches!(
+        service
+            .execute(&f.caller, &serde_json::to_vec(&command).unwrap())
+            .await,
+        Err(DelegationCommandError::Unavailable)
+    ));
+    assert_eq!(
+        f.repository
+            .get(f.caller.organization_id, grant(&original).id)
+            .await
+            .unwrap()
+            .unwrap(),
+        *grant(&original)
+    );
+    assert!(f
+        .repository
+        .command_result(&DelegationCommandIdentity::new(
+            &f.caller,
+            command["command_id"].as_str().unwrap().parse().unwrap(),
+        ))
+        .await
+        .unwrap()
+        .is_none());
 }

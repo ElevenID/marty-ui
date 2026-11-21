@@ -160,15 +160,20 @@ internal context with no `Deserialize` implementation. Its constructor validates
 shape only. It does not authenticate a caller, and the principal/runtime binding
 consistency validator does not establish authentication either. A qualified
 Gateway/runtime adapter must authenticate them independently before invoking
-this service; there is no new public route or capability advertisement.
+this service. The optional [separate command host](COMMAND_HOST.md) composes the
+human-session lifecycle subset behind the Gateway; it is default off and does
+not advertise a delegated-use capability.
 
 Every new mutation requires `DelegationCommandAuthorizer`. It receives the exact
 intent and current grant resource; access is checked before disclosing a grant
 revision/digest conflict. It returns a trusted observation and deadline, bounded
 to 30 seconds. Read-only preparation has a five-second time budget. The sealed
 preparation retains the authorization bound and its latest trusted clock sample.
-Repositories check those under their write boundary; PostgreSQL samples fresh
-database time after lock waits and after all grant/journal/result writes. An
+Repositories check those under their write boundary and reobserve source
+mutation permission after identity/grant lock waits for the exact sealed intent
+and prior grant. The new observation cannot renew the original deadline.
+PostgreSQL samples fresh database time after lock waits and after all
+grant/journal/result writes. An
 expired observation or regressed clock rolls the entire mutation back. These
 are bounded observations of the configured authorization owner, not a global
 revocation transaction with that owner. Deployment must qualify the source's
@@ -179,7 +184,9 @@ which resolves an immutable confirmation identifier from its trusted producer.
 A UUID alone never supplies `ApprovalEvidence`. The existing approval lifecycle
 still requires the authenticated actor to equal the complete typed grantor, and
 `ConsentEvidenceVerifier` checks consent and independent current representation
-authority. No default production authorizer or confirmation producer is supplied.
+authority. The optional command host uses the independently current Organization
+permission authorizer and immutable confirmation/source adapter. It contains no
+consent or authority producer write credential.
 
 The existing lifecycle APIs and command path share the same sealed preparation,
 consent verification and transition validation. PostgreSQL migration 0004 adds

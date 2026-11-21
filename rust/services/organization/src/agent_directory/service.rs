@@ -16,8 +16,9 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AgentDirectoryService {
-    store: PostgresOrganizationStore,
-    request_id: Option<Uuid>,
+    pub(super) store: PostgresOrganizationStore,
+    pub(super) request_id: Option<Uuid>,
+    pub(super) enrollment: Option<AgentEnrollmentConfiguration>,
 }
 
 enum Mutation {
@@ -58,12 +59,21 @@ impl AgentDirectoryService {
         Self {
             store,
             request_id: None,
+            enrollment: None,
         }
     }
     /// Correlation only: this does not authenticate a caller or deduplicate work.
     pub fn with_request_id(mut self, request_id: Uuid) -> Self {
         self.request_id = Some(request_id);
         self
+    }
+    /// Explicit local selection; enrollment remains unavailable by default.
+    pub fn with_enrollment(mut self, configuration: AgentEnrollmentConfiguration) -> Self {
+        self.enrollment = Some(configuration);
+        self
+    }
+    pub fn enrollment_enabled(&self) -> bool {
+        self.enrollment.is_some()
     }
 
     pub async fn register(
@@ -279,7 +289,10 @@ impl AgentDirectoryService {
             return Err(AgentDirectoryError::AccessDenied);
         }
         let identity = load(&mut tx, organization_id, id, true).await?;
-        if identity.status != AgentIdentityStatus::Active || identity.kind != AgentKind::External {
+        if identity.status != AgentIdentityStatus::Active
+            || (identity.kind == AgentKind::Managed
+                && identity.provenance.managed_enrollment != "KEY_CONTROL_VERIFIED")
+        {
             return Err(AgentDirectoryError::AccessDenied);
         }
         let current = identity
@@ -305,7 +318,7 @@ impl AgentDirectoryService {
         })
     }
 
-    async fn begin(&self) -> Result<Transaction<'_, Postgres>, AgentDirectoryError> {
+    pub(super) async fn begin(&self) -> Result<Transaction<'_, Postgres>, AgentDirectoryError> {
         let mut tx = self.store.pool().begin().await.map_err(database_error)?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             .execute(&mut *tx)
@@ -324,7 +337,7 @@ impl AgentDirectoryService {
 
     /// Use existing membership/RBAC and hold the consulted rows through commit.
     /// No caller-created AuthorizationContext or cached permission list is used.
-    async fn authorize(
+    pub(super) async fn authorize(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         organization_id: Uuid,
@@ -500,11 +513,27 @@ impl AgentDirectoryService {
                     return Err(AgentDirectoryError::Conflict);
                 }
                 next.keys = vec![replacement];
+                if next.kind == AgentKind::Managed {
+                    next.provenance.managed_enrollment = "NOT_ASSESSED".into();
+                    if next.status == AgentIdentityStatus::Active {
+                        next.status = AgentIdentityStatus::Provisioned;
+                    }
+                }
             }
         }
         if previous.is_some() {
             next.revision += 1;
             next.updated_at = observed;
+        }
+        if previous.is_some() {
+            super::enrollment_store::invalidate_pending(
+                &mut tx,
+                organization_id,
+                next.id,
+                observed,
+                "REVISION_CHANGED",
+            )
+            .await?;
         }
         validate_snapshot(&next)?;
         let document = serde_json::to_value(&next).map_err(|_| AgentDirectoryError::CorruptData)?;
@@ -549,13 +578,15 @@ fn paging(limit: u32, offset: u32) -> Result<(), AgentDirectoryError> {
     }
     Ok(())
 }
-async fn now(connection: &mut PgConnection) -> Result<DateTime<Utc>, AgentDirectoryError> {
+pub(super) async fn now(
+    connection: &mut PgConnection,
+) -> Result<DateTime<Utc>, AgentDirectoryError> {
     sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(connection)
         .await
         .map_err(database_error)
 }
-async fn load(
+pub(super) async fn load(
     connection: &mut PgConnection,
     organization: Uuid,
     id: Uuid,

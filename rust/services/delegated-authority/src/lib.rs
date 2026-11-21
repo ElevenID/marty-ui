@@ -2,15 +2,20 @@
 //!
 //! Owns authoritative grant state, consent-evidence admission and ephemeral
 //! operation evaluation with Marty OID4VP and MMF Cedar adapters. A successful
-//! evaluation is not a bearer permit or an operation commit. Authenticated
-//! runtime composition, final-use replay/revision enforcement, signed receipts
-//! and public Gateway hosting remain separate qualification milestones.
+//! evaluation is not a bearer permit or an operation commit. Default-off human
+//! approval and lifecycle-command hosts compose behind the Gateway. Delegated-use
+//! runtime composition, final-use replay/revision enforcement and signed receipts
+//! remain separate qualification milestones.
 pub mod approval;
 pub mod approval_host_config;
 pub mod approval_http;
 pub mod approval_postgres;
 pub mod authorization;
 pub mod challenge;
+pub mod command_host_config;
+pub mod command_http;
+pub mod command_postgres;
+mod command_role_boundary;
 pub mod commands;
 pub mod consent;
 pub mod consent_postgres;

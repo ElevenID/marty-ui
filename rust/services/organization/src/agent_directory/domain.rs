@@ -358,11 +358,20 @@ pub(crate) fn validate_snapshot(value: &AgentIdentity) -> Result<(), AgentDirect
                 AgentKind::External => "EXTERNAL",
                 AgentKind::Managed => "SERVICE_ACCOUNT",
             }
-        || value.kind == AgentKind::Managed && value.status == AgentIdentityStatus::Active
+        || value.kind == AgentKind::Managed
+            && value.status == AgentIdentityStatus::Active
+            && value.provenance.managed_enrollment != "KEY_CONTROL_VERIFIED"
         || value.provenance.kind != "OPERATOR_DECLARATION"
         || value.provenance.registered_by != value.created_by
         || value.provenance.registration_ref != format!("urn:marty:agent-registration:{}", value.id)
-        || value.provenance.managed_enrollment != "NOT_ASSESSED"
+        || !matches!(
+            value.provenance.managed_enrollment.as_str(),
+            "NOT_ASSESSED" | "KEY_CONTROL_VERIFIED"
+        )
+        || value.kind == AgentKind::External
+            && value.provenance.managed_enrollment != "NOT_ASSESSED"
+        || value.status == AgentIdentityStatus::Provisioned
+            && value.provenance.managed_enrollment != "NOT_ASSESSED"
         || value.provenance.external_authentication != "NOT_ASSESSED"
         || value.keys.len() != usize::from(!value.status.terminal())
     {

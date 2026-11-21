@@ -6,10 +6,23 @@ Marty principal/runtime-binding v1 profile at protocol revision
 It advances the M02 foundation: strict parsing, typed fingerprints, and binding
 consistency against independently supplied configuration and state.
 
-This is not a completed agent directory or administration milestone. It adds no
-public route, enrollment lifecycle, gateway authentication mode, discovery
-capability, or runtime qualification claim. The existing global protocol/API
+The consistency foundation alone does not complete agent administration or
+operational authentication. Its parsing/consistency functions add no public route,
+Gateway authentication mode, discovery capability, or runtime qualification claim. The existing global protocol/API
 version and unsupported MachineIdentity/MAP/ADR product statuses are unchanged.
+
+## Follow-on enrollment proof module
+
+The `managed_enrollment` module now separately verifies a versioned signed
+challenge for managed enrollment key control. Its opaque, non-cloneable proof
+result must be consumed by the Organization service's retained challenge
+transaction. This does not change the consistency-only semantics of
+`validate_binding` or promote the resulting identity to an operational MAP
+appraisal or delegated authorization. The exact signature, source, freshness and
+local signer contracts are documented in
+[managed-enrollment-proof](../rust/crates/principal-runtime-binding/docs/managed-enrollment-proof.md).
+The [application enrollment candidate](managed-agent-enrollment-candidate.md)
+owns the optional HTTP/lifecycle integration.
 
 ## Relationship to existing Marty identities
 

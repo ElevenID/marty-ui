@@ -300,3 +300,24 @@ Deliberate corruption is confined to synthetic test records. These cases prove
 that inspection rejects inconsistent history without repairing it; they are not
 production repair instructions. Without the explicit database setting the tests
 are skipped, which must not be reported as live database validation.
+
+
+## Optional human lifecycle command host
+
+The separate `marty-delegation-commands` executable uses the same checksum-verified
+Delegated Authority migrations through 0005. It introduces no new Delegated
+Authority migration and is disabled by default. Provision a restricted command
+writer plus distinct evidence and Organization readers as described in
+[COMMAND_HOST.md](../rust/services/delegated-authority/COMMAND_HOST.md). The command
+host does not receive either consent/authority producer writer credential.
+
+Existing read-only preflight remains the owner/request/confirmation/authority
+migration inspection. The new host's startup/readiness checks additionally check
+its actual connected roles, same delegated storage identity and source mutation
+boundaries. Running one check is not a substitute for the other.
+
+Managed enrollment is an Organization-owned additive migration 0004 and separate
+opt-in. See [the enrollment operator contract](managed-agent-enrollment-candidate.md).
+Preserve retained challenges/outcomes and the existing original command results
+when disabling either feature or rolling back application traffic. Historical
+results do not restore expired/revoked authority.

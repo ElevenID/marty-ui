@@ -139,11 +139,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         marty_organization_id: Some(config.marty_organization_id),
     };
     let agent_admin = if config.agent_admin_enabled {
+        let mut directory = marty_organization::agent_directory::AgentDirectoryService::new(
+            application.store().clone(),
+        );
+        if let Some(enrollment) = &config.agent_enrollment {
+            directory = directory.with_enrollment(enrollment.clone());
+        }
         marty_organization::agent_directory_http::organization_agent_admin_router(
             marty_organization::agent_directory_http::AgentDirectoryHttpState::new(
-                marty_organization::agent_directory::AgentDirectoryService::new(
-                    application.store().clone(),
-                ),
+                directory,
                 config
                     .service_token
                     .clone()

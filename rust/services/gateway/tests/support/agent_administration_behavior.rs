@@ -79,6 +79,11 @@ impl OrganizationMembershipProvider for AgentAdminProvider {
                     "agent-identity:revoke".into(),
                     "agent-identity:retire".into(),
                     "agent-identity:rotate-key".into(),
+                    "agent-identity:enroll".into(),
+                    "delegation-grant:create".into(),
+                    "delegation-grant:suspend".into(),
+                    "delegation-grant:reinstate".into(),
+                    "delegation-grant:revoke".into(),
                     "delegation-grant:view".into(),
                     "delegation-grant:approve".into(),
                 ])
@@ -171,8 +176,10 @@ impl UpstreamClient for AgentAdminUpstream {
     }
 }
 
-fn agent_admin_test_state(
+fn candidate_admin_test_state(
     enabled: bool,
+    commands: bool,
+    enrollment: bool,
 ) -> (
     Arc<GatewayRuntimeState>,
     Arc<AgentAdminProvider>,
@@ -185,8 +192,16 @@ fn agent_admin_test_state(
     let mut proxy_routes = contract.proxy_route_table().unwrap();
     crate::agent_administration::add_routes(&mut routes, enabled, enabled).unwrap();
     crate::agent_administration::add_routes(&mut proxy_routes, enabled, enabled).unwrap();
+    crate::agent_administration::add_enrollment_routes(&mut routes, enrollment).unwrap();
+    crate::agent_administration::add_enrollment_routes(&mut proxy_routes, enrollment).unwrap();
+    crate::delegation_commands::add_routes(&mut routes, commands).unwrap();
+    crate::delegation_commands::add_routes(&mut proxy_routes, commands).unwrap();
     let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([
         ("organizations".into(), "http://organizations:8002".into()),
+        (
+            "delegated-commands".into(),
+            "http://delegated-commands:8020".into(),
+        ),
         (
             "delegated-authority".into(),
             "http://delegated-authority:8088".into(),
@@ -224,8 +239,21 @@ fn agent_admin_test_state(
     .with_service_token(Some("s".repeat(32)))
     .unwrap()
     .with_agent_administration(enabled, enabled)
+    .unwrap()
+    .with_delegation_commands(commands)
+    .unwrap()
+    .with_agent_enrollment(enrollment)
     .unwrap();
     (Arc::new(state), provider, upstream)
+}
+fn agent_admin_test_state(
+    enabled: bool,
+) -> (
+    Arc<GatewayRuntimeState>,
+    Arc<AgentAdminProvider>,
+    Arc<AgentAdminUpstream>,
+) {
+    candidate_admin_test_state(enabled, false, false)
 }
 fn admin_request(method: &str, path: &str, body: &str) -> Request {
     Request::builder()

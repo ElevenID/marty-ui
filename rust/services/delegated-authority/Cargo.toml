@@ -13,6 +13,11 @@ name = "marty-delegation-approval"
 path = "src/main.rs"
 test = false
 
+[[bin]]
+name = "marty-delegation-commands"
+path = "src/command_main.rs"
+test = false
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
