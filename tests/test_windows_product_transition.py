@@ -21,10 +21,35 @@ def candidate(tmp_path):
             './scripts/ui-selfhost-start.sh:/docker-entrypoint.d/40-ui-selfhost.sh:ro']}
     images = {role: 'example.invalid/'+role+'@sha256:'+'2'*64 for role in before['services']
               if role not in product.PROVIDER_ROLES}
+    images['ui'] = product.composition.ui.COMMERCE_IMAGE+'@sha256:'+'2'*64
+    # Complete, deliberately unsigned metadata shared with the real NTFS
+    # journal fixture. Only verified_package may admit actual release inputs.
+    source, private_source = '1'*40, '2'*40
+    producer = product.composition.web.producer(source, {'source_sha': private_source}, '1', '1')
     admitted = {'schema': product.composition.SCHEMA, 'platform': 'linux/amd64', 'kms_provider': 'openbao',
         'production_pages': 'full', 'images': images, 'openbao_didcomm_image': 'example.invalid/bao@sha256:'+'3'*64,
-        'application': {'image': {'uri': images['ui'].split('@')[0], 'digest': 'sha256:'+'2'*64, 'platform': 'linux/amd64'}}}
+        'producer': deepcopy(producer), 'route_contract': {'version': 1, 'sha256': 'sha256:'+'2'*64},
+        'website': {'revision': product.composition.web.revision(source, private_source), 'source_sha': source,
+            'image': {'uri': product.composition.web.COMMERCE_IMAGE, 'digest': 'sha256:'+'2'*64, 'platform': 'linux/amd64'},
+            'release_sha256': 'sha256:'+'3'*64, 'producer': deepcopy(producer)},
+        'application': {'source_sha': source,
+            'image': {'uri': images['ui'].split('@')[0], 'digest': 'sha256:'+'2'*64, 'platform': 'linux/amd64'},
+            'release_sha256': 'sha256:'+'3'*64, 'compatibility_sha256': 'sha256:'+'3'*64,
+            'producer': deepcopy(producer)},
+        'backend': {'source_sha': source, 'release_tag': 'v1.2.3', 'repository': product.composition.ui.REPOSITORY,
+            'workflow': product.composition.stable.WORKFLOW, 'run_id': 1, 'run_attempt': 1,
+            'inventory_sha256': 'sha256:'+'3'*64, 'bundle_root': 'bundle'},
+        'qualification': {'runtime_tested': False, 'billing_journey_tested': False},
+        'files': {name: {'sha256': 'sha256:'+'3'*64, 'bytes': 1} for name in product.composition.PAYLOAD_NAMES}}
+    admitted['composition_id'] = product.composition.ui.digest(product.composition.ui.canonical(admitted))
     return before, admitted
+
+
+def test_synthetic_runtime_composition_matches_real_record_schema(tmp_path):
+    # Run before the platform-specific fixture can skip, including on Linux CI.
+    args = runtime_candidate(tmp_path)
+    assert product.composition.validate_record(args[4]) == args[4]
+    product.checked_runtime_change(*args, expected_project='marty-production-synthetic')
 
 
 def test_exact_image_update_replaces_local_ui_code_but_preserves_all_other_inputs(tmp_path):

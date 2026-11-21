@@ -25,13 +25,6 @@ def installed(monkeypatch, *, publish=True):
         before, after, old_model, new_model, admitted, ids = runtime_candidate(root)
         # Real metadata parser, deliberately unsigned synthetic payloads. Only
         # verified_package may authorize a fresh deployment of actual artifacts.
-        admitted.update(producer={'repository': product.composition.ui.REPOSITORY,
-            'workflow': product.composition.ui.WORKFLOW, 'source_sha': '1'*40,
-            'ref': 'refs/heads/main', 'run_id': '1', 'run_attempt': '1'},
-            route_contract={'version': 1, 'sha256': 'sha256:'+'2'*64}, website={}, backend={},
-            qualification={'runtime_tested': False, 'billing_journey_tested': False},
-            files={name: {'sha256': 'sha256:'+'3'*64, 'bytes': 1} for name in product.composition.PAYLOAD_NAMES})
-        admitted['composition_id'] = product.composition.ui.digest(product.composition.ui.canonical(admitted))
         product.composition.validate_record(admitted)
         hashes = {'old': {}, 'new': {}}
         for side, rows, value in [('old', before, '3'*64), ('new', after, '4'*64)]:
