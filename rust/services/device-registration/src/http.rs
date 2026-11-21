@@ -337,6 +337,8 @@ async fn rotate_holder_credential(
 struct WalletVerifierQuery {
     client_id: String,
     request_uri: Option<String>,
+    #[serde(default)]
+    device_scope: bool,
 }
 
 async fn wallet_verifier_authority(
@@ -353,24 +355,39 @@ async fn wallet_verifier_authority(
         .wallet_verifier_trust
         .as_ref()
         .ok_or(DeviceError::AuthorizationUnavailable)?;
-    if let Some(locator) = query.request_uri.as_deref() {
+    if query.device_scope || query.request_uri.is_some() {
         let scope = confirmations.governance_for_bearer(bearer).await?;
         state
             .memberships
             .require_active(&scope.user_id, &scope.organization_id)
             .await?;
-        let snapshot = trust
-            .fetch_managed(
-                scope
-                    .verifier_trust_profile_id
-                    .as_deref()
-                    .ok_or(DeviceError::AuthorizationUnavailable)?,
-                &scope.organization_id,
-                &scope.user_id,
-                &query.client_id,
-                locator,
-            )
-            .await?;
+        let verifier = scope
+            .verifier_trust_profile_id
+            .as_deref()
+            .ok_or(DeviceError::AuthorizationUnavailable)?;
+        let snapshot = match query.request_uri.as_deref() {
+            Some(locator) => {
+                trust
+                    .fetch_managed(
+                        verifier,
+                        &scope.organization_id,
+                        &scope.user_id,
+                        &query.client_id,
+                        locator,
+                    )
+                    .await?
+            }
+            None => {
+                trust
+                    .fetch(
+                        verifier,
+                        &scope.organization_id,
+                        &scope.user_id,
+                        &query.client_id,
+                    )
+                    .await?
+            }
+        };
         state
             .memberships
             .require_active(&scope.user_id, &scope.organization_id)
