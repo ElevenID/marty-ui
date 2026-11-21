@@ -346,15 +346,17 @@ async fn check_isolated_role(
           WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER')) AND (
             r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
             OR r.rolreplication OR left(r.rolname,3)='pg_'
-            OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
+            OR EXISTS(SELECT 1 FROM pg_namespace n WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema'
               AND (n.nspowner=r.oid OR has_schema_privilege(r.oid,n.oid,'CREATE')))
             OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-              WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND p.prosecdef
+              WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND p.prosecdef
               AND has_function_privilege(r.oid,p.oid,'EXECUTE'))
             OR EXISTS(SELECT 1 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace
-              WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
+              WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema'
               AND t.relkind IN ('r','p','v','m','f','S') AND (
-                t.relowner=r.oid OR (
+                t.relowner=r.oid
+                OR CASE WHEN current_setting('server_version_num')::INT>=170000 THEN has_table_privilege(r.oid,t.oid,'MAINTAIN') ELSE false END
+                OR (
                   NOT EXISTS(SELECT 1 FROM jsonb_array_elements($1::jsonb) a
                     WHERE a->>0=n.nspname AND a->>1=t.relname)
                   AND (has_table_privilege(r.oid,t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')

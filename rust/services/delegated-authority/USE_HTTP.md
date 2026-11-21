@@ -16,6 +16,20 @@ document. It uses the existing closed P03 decoder and passes the original bytes
 to `DelegationUseCommandService`; it does not normalize intent, create replacement
 command IDs, retry work or supply successful proof/authorization flags.
 
+## Explicit authentication selection
+
+`DelegationUseHttpState::with_authenticator` accepts the reusable
+`DelegationUseHttpAuthenticator`. The selected `mutual_tls` mode derives the
+machine actor from a verified leaf certificate and an exact configured URI and
+certificate digest mapping. The mandatory-client-certificate listener and its
+remote keyless server identity are documented in [USE_MTLS.md](USE_MTLS.md).
+HTTP actor headers cannot override that identity. The same authenticator protects
+[Flow request retrieval and proof submission](../flow/DELEGATED_USE_INGRESS.md).
+
+The existing `DelegationUseHttpState::new` constructor retains the explicit
+`trusted_forwarder` selection described below. These are separate trust models;
+neither is selected automatically by an executable.
+
 ## Authenticated forwarding contract
 
 The deployment configures one organization and one dedicated service credential
@@ -86,7 +100,7 @@ All responses are marked `Cache-Control: no-store`, `Pragma: no-cache` and
 | HTTP status | Condition |
 | --- | --- |
 | 400 | Invalid/unsupported closed command or malformed transport metadata |
-| 401 | Missing, duplicate or invalid service credential |
+| 401 | Missing or invalid selected transport authentication, including duplicate service credentials in forwarding mode |
 | 403 | Forbidden actor/context, expired transport observation, or denied current source access |
 | 404 | No retained original result |
 | 408 / 413 / 415 | Body timeout, excessive body, or wrong media type |
@@ -99,16 +113,21 @@ and authority decision; it does not execute a Rifare operation.
 
 ## Qualification and next host work
 
-Local tests cover authenticated typed forwarding, exact original bytes, strict
-metadata/wire rejection, real HTTP body-read expiry, actual PostgreSQL completion
-and recovery, source access loss, invalid source observations and expiry across
-preparation/signing waits. Current actor, consent and domain-policy sources in
-these integration tests are explicitly synthetic trusted fixtures.
+Local tests cover authenticated typed forwarding, actual mutual-TLS handshakes,
+exact original bytes, strict metadata/wire rejection, body-read expiry, actual
+PostgreSQL completion and recovery, current access loss, invalid source
+observations and expiry across preparation/signing waits. Separate integration
+cases exercise the actual Organization use-access owner/source and protected
+Flow ingress. Grant/consent and broader domain-policy inputs in those transport
+fixtures remain explicit trusted test inputs.
 
-The next host must compose independently owned full-machine/MAP and credential
-status sources, required attestation and active policy sources, the audited
-machine verifier, reviewed database roles and qualified managed custody. It
-must separately authenticate wallet request retrieval and immutable proof
-submission. This candidate supplies neither those owner contracts nor a public
-host. See [retained commands](USE_COMMANDS.md), [machine audit](MACHINE_AUTH.md),
-[credential verification](MACHINE_CREDENTIALS.md) and [receipt custody](RECEIPT_SIGNING.md).
+Concrete full-machine/MAP, Trust Profile/Issuance credential, machine-policy,
+machine-use access and exact-operation delegated-use policy owners now exist.
+The next executable must compose these sources with the audited verifier,
+protected Flow ingress, reviewed database roles and managed custody. Required
+attestation, production CA/revocation/pin rotation, deployed signing custody and
+public wallet transport remain separate qualification. See
+[retained commands](USE_COMMANDS.md), [machine audit](MACHINE_AUTH.md),
+[credential verification](MACHINE_CREDENTIALS.md),
+[current use policy](DELEGATION_POLICY_SOURCE.md) and
+[receipt custody](RECEIPT_SIGNING.md).

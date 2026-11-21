@@ -414,15 +414,16 @@ impl PgMachineAuthorizationPolicySource {
             OR EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member=r.oid AND m.admin_option)
             OR EXISTS(SELECT 1 FROM pg_database d WHERE d.datname=current_database() AND d.datdba=r.oid)
             OR has_database_privilege(r.oid,current_database(),'CREATE,CREATE WITH GRANT OPTION,CONNECT WITH GRANT OPTION,TEMPORARY WITH GRANT OPTION')
-            OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
+            OR EXISTS(SELECT 1 FROM pg_namespace n WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema'
                 AND (n.nspowner=r.oid OR has_schema_privilege(r.oid,n.oid,'CREATE,CREATE WITH GRANT OPTION,USAGE WITH GRANT OPTION')))
             OR EXISTS(SELECT 1 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace
-                WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND t.relkind IN('r','p','v','m','f','S') AND (
+                WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND t.relkind IN('r','p','v','m','f','S') AND (
                   t.relowner=r.oid OR has_table_privilege(r.oid,t.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,DELETE WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION,TRIGGER WITH GRANT OPTION')
+                  OR CASE WHEN current_setting('server_version_num')::INT>=170000 THEN has_table_privilege(r.oid,t.oid,'MAINTAIN') ELSE false END
                   OR has_any_column_privilege(r.oid,t.oid,'INSERT,UPDATE,REFERENCES,SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION')
                   OR ((n.nspname<>'organization_service' OR NOT(t.relname=ANY($1))) AND (has_table_privilege(r.oid,t.oid,'SELECT') OR has_any_column_privilege(r.oid,t.oid,'SELECT')))))
             OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-                WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND
+                WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND
                   (p.proowner=r.oid OR has_function_privilege(r.oid,p.oid,'EXECUTE WITH GRANT OPTION') OR (p.prosecdef AND has_function_privilege(r.oid,p.oid,'EXECUTE'))))))
           AND has_schema_privilege(current_user,'organization_service','USAGE')
           AND NOT EXISTS(SELECT 1 FROM unnest($1::TEXT[]) name WHERE NOT has_table_privilege(current_user,'organization_service.'||name,'SELECT'))")

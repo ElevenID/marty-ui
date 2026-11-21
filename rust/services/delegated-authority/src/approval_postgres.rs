@@ -804,6 +804,7 @@ pub(crate) async fn check_role_boundary_mutations(
           OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
               WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f') AND (
                 c.relowner=r.oid OR has_table_privilege(r.oid,c.oid,'DELETE,TRUNCATE,TRIGGER,REFERENCES')
+                OR CASE WHEN current_setting('server_version_num')::INT>=170000 THEN has_table_privilege(r.oid,c.oid,'MAINTAIN') ELSE false END
                 OR has_any_column_privilege(r.oid,c.oid,'REFERENCES')
                 OR ((has_table_privilege(r.oid,c.oid,'UPDATE') OR has_any_column_privilege(r.oid,c.oid,'UPDATE')) AND NOT (c.relname=ANY($4::TEXT[])))
                 OR has_table_privilege(r.oid,c.oid,'SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,DELETE WITH GRANT OPTION,TRUNCATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION,TRIGGER WITH GRANT OPTION')

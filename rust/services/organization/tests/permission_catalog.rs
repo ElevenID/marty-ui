@@ -9,7 +9,7 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 139);
+    assert_eq!(catalog.len(), 148);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
     assert!(keys.contains("application:manage-ownership"));
@@ -35,7 +35,12 @@ fn shared_permission_catalog_is_unique_and_complete() {
     ] {
         assert!(keys.contains(&format!("agent-identity:{action}")));
     }
-    for resource in ["machine-identity", "machine-authorization-policy"] {
+    for resource in [
+        "machine-identity",
+        "machine-authorization-policy",
+        "machine-use-access",
+        "delegation-use-policy",
+    ] {
         for action in ["create", "update", "view"] {
             assert!(keys.contains(&format!("{resource}:{action}")));
         }
@@ -90,6 +95,13 @@ fn system_role_templates_preserve_intended_entitlements() {
             "machine-authorization-policy:update",
             "machine-authorization-policy:activate",
             "machine-authorization-policy:archive",
+            "machine-use-access:create",
+            "machine-use-access:update",
+            "machine-use-access:revoke",
+            "delegation-use-policy:create",
+            "delegation-use-policy:update",
+            "delegation-use-policy:activate",
+            "delegation-use-policy:archive",
         ] {
             assert_eq!(
                 template.permission_keys.contains(key),

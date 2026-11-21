@@ -374,6 +374,20 @@ async fn postgres_audit_role_and_all_guards_are_required_for_readiness() {
     db.sql(&format!("ALTER ROLE {} NOREPLICATION", db.role))
         .await;
     db.evidence.readiness().await.unwrap();
+    let pg_version: i32 = sqlx::query_scalar("SELECT current_setting('server_version_num')::INT")
+        .fetch_one(&db.owner)
+        .await
+        .unwrap();
+    if pg_version >= 170000 {
+        db.sql(&format!(
+            "GRANT MAINTAIN ON delegated_authority_service.machine_authentication_evidence TO {}",
+            db.role
+        ))
+        .await;
+        assert!(db.evidence.readiness().await.is_err());
+        db.sql(&format!("REVOKE MAINTAIN ON delegated_authority_service.machine_authentication_evidence FROM {}", db.role)).await;
+        db.evidence.readiness().await.unwrap();
+    }
     let masked_role = db.role.clone();
     let masked_owner = PgPoolOptions::new()
         .max_connections(1)
@@ -456,20 +470,19 @@ async fn postgres_audit_role_and_all_guards_are_required_for_readiness() {
         assert!(db.evidence.readiness().await.is_err());
         db.sql(&format!("REVOKE {grant} FROM {}", db.role)).await;
     }
-    db.sql("CREATE SCHEMA synthetic_machine_audit_source; CREATE TABLE synthetic_machine_audit_source.current_state(id INT);
-        CREATE FUNCTION synthetic_machine_audit_source.forge_state() RETURNS INT LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT 1';
-        REVOKE ALL ON FUNCTION synthetic_machine_audit_source.forge_state() FROM PUBLIC;").await;
+    db.sql("CREATE SCHEMA pgx_machine_audit_source; CREATE TABLE pgx_machine_audit_source.current_state(id INT);
+        CREATE FUNCTION pgx_machine_audit_source.forge_state() RETURNS INT LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT 1';
+        REVOKE ALL ON FUNCTION pgx_machine_audit_source.forge_state() FROM PUBLIC;").await;
     for grant in [
-        "SELECT ON synthetic_machine_audit_source.current_state",
-        "INSERT ON synthetic_machine_audit_source.current_state",
-        "EXECUTE ON FUNCTION synthetic_machine_audit_source.forge_state()",
+        "SELECT ON pgx_machine_audit_source.current_state",
+        "INSERT ON pgx_machine_audit_source.current_state",
+        "EXECUTE ON FUNCTION pgx_machine_audit_source.forge_state()",
     ] {
         db.sql(&format!("GRANT {grant} TO {}", db.role)).await;
         assert!(db.evidence.readiness().await.is_err());
         db.sql(&format!("REVOKE {grant} FROM {}", db.role)).await;
     }
-    db.sql("DROP SCHEMA synthetic_machine_audit_source CASCADE")
-        .await;
+    db.sql("DROP SCHEMA pgx_machine_audit_source CASCADE").await;
     db.evidence.readiness().await.unwrap();
 }
 

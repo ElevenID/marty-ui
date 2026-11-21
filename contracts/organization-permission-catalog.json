@@ -695,6 +695,51 @@
       "resource": "machine-authorization-policy",
       "action": "view",
       "description": "Inspect machine authorization policy revisions"
+    },
+    {
+      "resource": "machine-use-access",
+      "action": "create",
+      "description": "Grant explicit machine access to delegated commands and Flow ingress"
+    },
+    {
+      "resource": "machine-use-access",
+      "action": "update",
+      "description": "Replace the explicit delegated-use rights of a registered machine"
+    },
+    {
+      "resource": "machine-use-access",
+      "action": "revoke",
+      "description": "Revoke a machine delegated-use access assignment"
+    },
+    {
+      "resource": "machine-use-access",
+      "action": "view",
+      "description": "Inspect machine delegated-use access and revision history"
+    },
+    {
+      "resource": "delegation-use-policy",
+      "action": "create",
+      "description": "Create an organization delegated-use admission policy"
+    },
+    {
+      "resource": "delegation-use-policy",
+      "action": "update",
+      "description": "Revise an organization delegated-use admission policy"
+    },
+    {
+      "resource": "delegation-use-policy",
+      "action": "activate",
+      "description": "Activate an organization delegated-use admission policy"
+    },
+    {
+      "resource": "delegation-use-policy",
+      "action": "archive",
+      "description": "Archive an organization delegated-use admission policy"
+    },
+    {
+      "resource": "delegation-use-policy",
+      "action": "view",
+      "description": "Inspect organization delegated-use policy revisions"
     }
   ]
 }

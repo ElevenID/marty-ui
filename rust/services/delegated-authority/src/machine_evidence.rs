@@ -94,14 +94,15 @@ impl PgMachineAuthenticationEvidenceRepository {
         let excessive:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_roles r
             WHERE (r.rolname=$1 OR pg_has_role($1::TEXT,r.oid,'MEMBER')) AND (
               EXISTS(SELECT 1 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace
-                WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND t.relkind IN ('r','p','v','m','f','S')
+                WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND t.relkind IN ('r','p','v','m','f','S')
                   AND NOT (n.nspname='delegated_authority_service' AND t.relname IN ('schema_migrations','machine_authentication_evidence','machine_authorization_evidence'))
                   AND (t.relowner=r.oid OR has_table_privilege(r.oid,t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                    OR CASE WHEN current_setting('server_version_num')::INT>=170000 THEN has_table_privilege(r.oid,t.oid,'MAINTAIN') ELSE false END
                     OR has_any_column_privilege(r.oid,t.oid,'SELECT,INSERT,UPDATE,REFERENCES')))
-              OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
+              OR EXISTS(SELECT 1 FROM pg_namespace n WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema'
                   AND (n.nspowner=r.oid OR has_schema_privilege(r.oid,n.oid,'CREATE')))
               OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-                  WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND p.prosecdef
+                  WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND p.prosecdef
                     AND has_function_privilege(r.oid,p.oid,'EXECUTE'))))")
             .bind(role).fetch_one(&self.pool).await.map_err(unavailable)?;
         if excessive {

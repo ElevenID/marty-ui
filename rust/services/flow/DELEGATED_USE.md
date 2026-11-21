@@ -59,13 +59,20 @@ does not independently qualify a public wallet retrieval host.
 
 ## Proof source and finalization
 
-`record_proof_submission` is an internal ingress for a separately authenticated
+`record_proof_submission` is a low-level internal port for a separately authenticated
 and authorized caller. Constructing `DelegationCommandCaller` validates shape;
 it does not authenticate a network request. The ingress matches the full typed
 actor and tenant to the original Flow, retains bounded exact proof bytes and a
 SHA-256 digest, and generates the submission UUID on the server. Repeating the
 same bytes recovers the original ID. Raw proof bytes are absent from the return
 projection and retained in a restricted source table.
+
+The explicitly assembled [authenticated delegated ingress](DELEGATED_USE_INGRESS.md)
+now supplies current source-authorized request retrieval and proof submission.
+It retains one request-signing claim before external work, exact request bytes,
+and fresh proof-ingress bounds under additive migration 0006. Ordinary Flow and
+paired-wallet request retrieval reject delegated instances; existing executables
+and public discovery do not select the new internal router.
 
 Storing bytes does not verify their signature or create authority. Finalization
 resolves those original bytes, checks the actual Core OID4VP proof through the

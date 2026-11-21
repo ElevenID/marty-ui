@@ -503,6 +503,13 @@ async fn machine_policy_audit_guards_and_role_boundaries_reject_rewrite_or_missi
     // These predefined capabilities do not appear as application-table writes
     // or security-definer function access. No source needs them. Exercise real
     // role grants/attributes without invoking any privileged functionality.
+    sqlx::raw_sql("CREATE SCHEMA pgx_machine_policy_probe; CREATE FUNCTION pgx_machine_policy_probe.unused_probe() RETURNS INT LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT 1'; REVOKE ALL ON FUNCTION pgx_machine_policy_probe.unused_probe() FROM PUBLIC;")
+        .execute(&f.pool).await.unwrap();
+    let server_version: i32 =
+        sqlx::query_scalar("SELECT current_setting('server_version_num')::INT")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
     for (role, is_reader) in [(&writer_role, false), (&reader_role, true)] {
         assert!(role.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
         for capability in ["pg_execute_server_program", "pg_monitor"] {
@@ -550,7 +557,66 @@ async fn machine_policy_audit_guards_and_role_boundaries_reject_rewrite_or_missi
             allowed,
             "minimal privileges recover after removing replication"
         );
+        sqlx::raw_sql(AssertSqlSafe(format!("GRANT USAGE ON SCHEMA pgx_machine_policy_probe TO {role}; GRANT EXECUTE ON FUNCTION pgx_machine_policy_probe.unused_probe() TO {role};")))
+            .execute(&f.pool).await.unwrap();
+        let allowed = if is_reader {
+            policy_reader.readiness().await.is_ok()
+        } else {
+            f.evidence.readiness().await.is_ok()
+        };
+        assert!(
+            !allowed,
+            "custom pgx schemas cannot hide executable security-definer authority"
+        );
+        // The security-definer function is never invoked.
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            "REVOKE EXECUTE ON FUNCTION pgx_machine_policy_probe.unused_probe() FROM {role}"
+        )))
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        if server_version >= 170000 {
+            let table = if is_reader {
+                "organization_service.policy_sets"
+            } else {
+                "delegated_authority_service.machine_authorization_evidence"
+            };
+            sqlx::raw_sql(AssertSqlSafe(format!(
+                "GRANT MAINTAIN ON {table} TO {role}"
+            )))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+            let allowed = if is_reader {
+                policy_reader.readiness().await.is_ok()
+            } else {
+                f.evidence.readiness().await.is_ok()
+            };
+            assert!(
+                !allowed,
+                "source reader/evidence writer cannot maintain owner tables"
+            );
+            sqlx::raw_sql(AssertSqlSafe(format!(
+                "REVOKE MAINTAIN ON {table} FROM {role}"
+            )))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        }
+        let allowed = if is_reader {
+            policy_reader.readiness().await.is_ok()
+        } else {
+            f.evidence.readiness().await.is_ok()
+        };
+        assert!(
+            allowed,
+            "minimal privileges recover after scope/maintenance revocation"
+        );
     }
+    sqlx::raw_sql("DROP SCHEMA pgx_machine_policy_probe CASCADE")
+        .execute(&f.pool)
+        .await
+        .unwrap();
     let history = f
         .evidence
         .recover(f.org, &result.evidence_ref)

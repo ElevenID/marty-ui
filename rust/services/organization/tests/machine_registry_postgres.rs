@@ -876,6 +876,50 @@ async fn machine_registry_rejects_predefined_role_membership_and_replication() {
     // Permission inspection only: no server-file or server-program function is
     // invoked. The existing source instance must observe privilege drift.
     sqlx::raw_sql(AssertSqlSafe(format!(
+        "CREATE SCHEMA pgx_registry_role_probe;
+         CREATE FUNCTION pgx_registry_role_probe.owner_function() RETURNS INT LANGUAGE SQL SECURITY DEFINER SET search_path=pg_catalog AS 'SELECT 1';
+         REVOKE ALL ON FUNCTION pgx_registry_role_probe.owner_function() FROM PUBLIC;
+         GRANT USAGE ON SCHEMA pgx_registry_role_probe TO {role};
+         GRANT EXECUTE ON FUNCTION pgx_registry_role_probe.owner_function() TO {role};"
+    )))
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        source.readiness().await.unwrap_err(),
+        MachineRegistryError::AccessDenied
+    );
+    assert!(source.observe(scope.clone(), Utc::now()).await.is_err());
+    sqlx::raw_sql("DROP SCHEMA pgx_registry_role_probe CASCADE")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    source.readiness().await.unwrap();
+    let server_version: i32 =
+        sqlx::query_scalar("SELECT current_setting('server_version_num')::INT")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    if server_version >= 170000 {
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            "GRANT MAINTAIN ON organization_service.machine_registry_entries TO {role}"
+        )))
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            source.readiness().await.unwrap_err(),
+            MachineRegistryError::AccessDenied
+        );
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            "REVOKE MAINTAIN ON organization_service.machine_registry_entries FROM {role}"
+        )))
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        source.readiness().await.unwrap();
+    }
+    sqlx::raw_sql(AssertSqlSafe(format!(
         "GRANT pg_execute_server_program TO {role}"
     )))
     .execute(&f.pool)

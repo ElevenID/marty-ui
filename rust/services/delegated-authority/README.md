@@ -151,9 +151,11 @@ service or its human executable. The separate internal
 [`DelegationUseCommandService`](USE_COMMANDS.md) implements the bounded KEY use
 composition without installing a use host or Gateway route.
 
-The [internal use HTTP router](USE_HTTP.md) authenticates a dedicated forwarding
-workload and carries its original 30-second-bounded observation into source
-rechecks and COMMIT guards. It is not registered in an executable. Full-machine
+The [internal use HTTP router](USE_HTTP.md) selects either
+[mandatory mutual TLS](USE_MTLS.md) with exact leaf certificate identity mapping
+or a separately trusted forwarding workload. It carries the original bounded
+authentication observation into source rechecks and COMMIT guards. It is not
+registered in an executable. Full-machine
 use additionally requires the [audited machine gate](MACHINE_AUTH.md): migration
 0007 retains exact immutable audit bytes and rejects machine receipts without a
 matching retained record. The selected [nested JWT-VC adapter](MACHINE_CREDENTIALS.md)
@@ -165,6 +167,13 @@ Trust Profile, issuer/key/status ownership explicitly configured. The concrete
 those internal owner paths. Migration 0008 requires retained source/evaluation
 evidence for selected machine authorization. No use executable or public route
 is installed by these adapters.
+
+The [machine-use access owner](../organization/MACHINE_USE_ACCESS.md) now supplies
+current full-machine/deployment access for commands and Flow ingress. The
+[delegated-use policy source](DELEGATION_POLICY_SOURCE.md) selects an actual
+Organization-owned exact-operation Cedar revision with retained observations.
+[Protected Flow ingress](../flow/DELEGATED_USE_INGRESS.md) retains the original
+signed request and immutable proof bytes under independent current rights.
 
 The service accepts original request bytes. It reuses the bounded JSON reader
 before normal deserialization, rejects duplicate/unknown fields, explicit nulls,
@@ -492,13 +501,14 @@ idempotency with its own commit and coordinate those boundaries; a remote grant
 read is not atomic with a domain write. Do not cache or reuse this result to
 authorize another operation.
 
-The MMF Cedar execution adapter is implemented; its active-policy/entity-source
-port must be implemented by the consuming domain integration (for example, the
-separate Commerce Gateway) or its organization-owned policy provider. The
-provider must bind its entity graph to the complete typed actor and exact tenant
-and resource. ElevenID does not own commerce action/resource policy or domain
-execution. The adapters still require authenticated runtime composition and
-end-to-end qualification; they are not deployed authorization endpoints.
+The MMF Cedar execution adapter now has a concrete Organization-owned
+[exact-operation policy source](DELEGATION_POLICY_SOURCE.md). Its fixed schema
+binds the complete typed actor, tenant, grant and requested operation; it supplies
+no business roles or domain resource attributes. A consumer domain integration
+must independently own and qualify external context, entity graphs and domain
+permissions when selected. ElevenID does not own commerce execution. These
+adapters still require authenticated runtime composition and end-to-end
+qualification; they are not deployed authorization endpoints.
 
 ## OID4VP delegate proof verification
 
@@ -602,8 +612,9 @@ authorization.
 
 The concrete `FlowDelegatedUseOwner` operates through the supplied PostgreSQL
 connection, checks its immutable storage identity and retains nonce, proof and
-consumption state. Its immutable proof-submission API requires a separately
-authenticated ingress; submitted bytes become evidence only after the configured
+consumption state. Its immutable proof-submission API now has an explicitly
+assembled [authenticated ingress](../flow/DELEGATED_USE_INGRESS.md); submitted
+bytes become verified evidence only after the configured
 cryptographic verifier runs. All current state comparisons and deadlines are
 rechecked at the local commit boundary. The resulting response has
 `semantics: EVIDENCE_ONLY` and asserts no business side effect.
@@ -613,10 +624,11 @@ rechecked at the local commit boundary. The resulting response has
 strict full-machine/MAP consistency and every selected credential, attestation
 and machine-authorization requirement. `MmfMachineAuthorizationVerifier` runs
 the selected machine policy through MMF Cedar; separate delegated/domain policy
-evaluation remains required. The current SERVICE_ACCOUNT enrollment inventory
-does not satisfy the full MachineIdentity source contract. Its aggregate proof
-reference binds all machine qualification observations, but durable storage of
-that audit record still belongs to the consuming host.
+evaluation remains required. The SERVICE_ACCOUNT enrollment inventory does not
+satisfy the full MachineIdentity source contract; the separate concrete registry
+owns that state. `AuditedMachineOid4vpProofVerifier` durably retains the exact
+aggregate audit before returning authenticated proof. Its referenced source
+records remain independently retained by their actual owners.
 
 These are internal composition APIs. The human administration executable and
 Gateway continue rejecting use commands; no default machine source, signer or
@@ -719,17 +731,19 @@ from enabling these approval administration routes.
 - Configure external-authority/status and external-constraint sources where
   selected, plus the consuming domain's active Cedar policy and typed entities.
   Verify freshness and revocation behavior across those independent owners.
-- Compose an explicit use executable with authenticated callers, request
-  retrieval and immutable proof ingress, the concrete same-database Flow owner,
-  restricted use writer and independent source credentials. The human command
-  executable and Gateway lifecycle surface must continue rejecting use commands.
-- Retain the machine audit document and referenced evidence durably before
-  returning a qualified machine result; its aggregate hash alone is not storage.
-  Establish attributed audit delivery and a separate reconciliation design for
-  retained pending claims without silently retrying external work.
+- Compose an explicit default-off use executable with the implemented mutual-TLS
+  boundary, current use-access/policy owners, protected request/proof ingress,
+  concrete same-database Flow owner, restricted use writer and independent source
+  credentials. Qualify production certificate issuance/revocation and pin
+  rotation. The human command executable and Gateway lifecycle surface must
+  continue rejecting use commands.
+- Qualify deployed machine-audit and referenced-source retention. Establish
+  attributed audit delivery and a separate reconciliation design for retained
+  pending command and request-signing claims without retrying external work.
 - Qualify live managed receipt custody and its separate mint/verify authority,
   exact issuer/key pins, rotation and unavailable/replay behavior. The implemented
-  HTTP adapter and local signature tests do not qualify OpenBao/AWS/Redis operation.
+  disposable OpenBao/Redis gate qualifies its actual router/kernel composition;
+  deployed outer HTTPS, production credentials and AWS/IAM remain separate.
 - Qualify public Gateway contracts, independent receipt consumers and deployment
   behavior before capability discovery changes. Rifare must retain its own
   operation idempotency and business commit contract; the local evidence/nonce

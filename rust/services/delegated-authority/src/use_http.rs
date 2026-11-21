@@ -34,6 +34,7 @@ pub struct AuthenticatedDelegationUseContext {
     caller: DelegationCommandCaller,
     observed_at: DateTime<Utc>,
     valid_until: DateTime<Utc>,
+    workload_identity_ref: Option<String>,
 }
 impl AuthenticatedDelegationUseContext {
     pub fn caller(&self) -> &DelegationCommandCaller {
@@ -45,7 +46,12 @@ impl AuthenticatedDelegationUseContext {
     pub fn valid_until(&self) -> DateTime<Utc> {
         self.valid_until
     }
-    fn check(&self, now: DateTime<Utc>) -> Result<(), UseHttpError> {
+    /// Certificate authentication provenance, separate from human approval
+    /// sessions and from the machine key proof required by finalization.
+    pub fn workload_identity_ref(&self) -> Option<&str> {
+        self.workload_identity_ref.as_deref()
+    }
+    pub fn check(&self, now: DateTime<Utc>) -> Result<(), UseHttpError> {
         if self.observed_at > now
             || self.valid_until <= now
             || self
@@ -88,12 +94,26 @@ impl DelegationUseHttpApplication for DelegationUseCommandService {
 #[derive(Clone)]
 pub struct DelegationUseHttpState {
     application: Arc<dyn DelegationUseHttpApplication>,
-    authenticator: Arc<ServiceTokenAuthenticator>,
+    authenticator: Arc<DelegationUseHttpAuthenticator>,
+}
+
+/// Explicit transport selection shared by commands and the Flow ingress. The
+/// mutual-TLS mode derives the actor from an authenticated leaf certificate;
+/// the older service-forwarding mode remains a separate trusted-adapter choice.
+#[derive(Clone)]
+pub struct DelegationUseHttpAuthenticator {
+    mode: UseAuthenticationMode,
     organization_id: Uuid,
 }
-impl DelegationUseHttpState {
-    pub fn new(
-        application: Arc<dyn DelegationUseHttpApplication>,
+
+#[derive(Clone)]
+enum UseAuthenticationMode {
+    TrustedForwarder(Arc<ServiceTokenAuthenticator>),
+    MutualTls(Arc<crate::use_mtls::DelegatedUseWorkloadBindings>),
+}
+
+impl DelegationUseHttpAuthenticator {
+    pub fn trusted_forwarder(
         service_token: String,
         organization_id: Uuid,
     ) -> Result<Self, DelegationUseCommandError> {
@@ -106,10 +126,99 @@ impl DelegationUseHttpState {
         let authenticator = ServiceTokenAuthenticator::new(Some(service_token), true)
             .map_err(|_| DelegationUseCommandError::InvalidCommand)?;
         Ok(Self {
-            application,
-            authenticator: Arc::new(authenticator),
+            mode: UseAuthenticationMode::TrustedForwarder(Arc::new(authenticator)),
             organization_id,
         })
+    }
+
+    pub fn mutual_tls(
+        organization_id: Uuid,
+        bindings: crate::use_mtls::DelegatedUseWorkloadBindings,
+    ) -> Result<Self, DelegationUseCommandError> {
+        if organization_id.is_nil() {
+            return Err(DelegationUseCommandError::InvalidCommand);
+        }
+        Ok(Self {
+            mode: UseAuthenticationMode::MutualTls(Arc::new(bindings)),
+            organization_id,
+        })
+    }
+
+    pub fn authenticate(
+        &self,
+        organization: &str,
+        request: &Request,
+    ) -> Result<AuthenticatedDelegationUseContext, UseHttpError> {
+        match &self.mode {
+            UseAuthenticationMode::TrustedForwarder(authenticator) => authenticate_forwarded(
+                self.organization_id,
+                authenticator,
+                organization,
+                request.headers(),
+            ),
+            UseAuthenticationMode::MutualTls(bindings) => {
+                let organization_id = canonical_uuid(organization)?;
+                if organization_id != self.organization_id
+                    || request.headers().keys().any(|key| {
+                        matches!(
+                            key.as_str(),
+                            "authorization"
+                                | "cookie"
+                                | "x-service-token"
+                                | "x-user-id"
+                                | "x-api-key-id"
+                                | "x-workload-identity"
+                                | "x-client-cert"
+                                | "x-forwarded-client-cert"
+                        ) || key.as_str().starts_with("x-marty-use-")
+                            || key.as_str().starts_with("x-marty-command-")
+                            || key.as_str().starts_with("x-marty-approval-")
+                    })
+                {
+                    return Err(denied());
+                }
+                let peer = request
+                    .extensions()
+                    .get::<crate::use_mtls::AuthenticatedUseTlsPeer>()
+                    .ok_or_else(authentication_required)?;
+                let now = Utc::now();
+                let (caller, valid_until) = bindings.authenticate(organization_id, peer, now)?;
+                let context = AuthenticatedDelegationUseContext {
+                    caller,
+                    observed_at: now,
+                    valid_until,
+                    workload_identity_ref: Some(peer.identity_ref()),
+                };
+                context.check(now)?;
+                Ok(context)
+            }
+        }
+    }
+}
+
+impl DelegationUseHttpState {
+    pub fn new(
+        application: Arc<dyn DelegationUseHttpApplication>,
+        service_token: String,
+        organization_id: Uuid,
+    ) -> Result<Self, DelegationUseCommandError> {
+        Ok(Self::with_authenticator(
+            application,
+            Arc::new(DelegationUseHttpAuthenticator::trusted_forwarder(
+                service_token,
+                organization_id,
+            )?),
+        ))
+    }
+
+    pub fn with_authenticator(
+        application: Arc<dyn DelegationUseHttpApplication>,
+        authenticator: Arc<DelegationUseHttpAuthenticator>,
+    ) -> Self {
+        Self {
+            application,
+            authenticator,
+        }
     }
 }
 
@@ -145,7 +254,7 @@ async fn execute(
     Path(organization): Path<String>,
     request: Request,
 ) -> Result<Json<DelegationUseCommandResponse>, UseHttpError> {
-    let context = authenticate(&state, &organization, request.headers())?;
+    let context = state.authenticator.authenticate(&organization, &request)?;
     if request.uri().query().is_some() {
         return Err(invalid());
     }
@@ -179,14 +288,14 @@ async fn execute(
     Ok(Json(state.application.execute(&context, &raw).await?))
 }
 
-fn authenticate(
-    state: &DelegationUseHttpState,
+fn authenticate_forwarded(
+    configured_organization_id: Uuid,
+    authenticator: &ServiceTokenAuthenticator,
     organization: &str,
     headers: &HeaderMap,
 ) -> Result<AuthenticatedDelegationUseContext, UseHttpError> {
     let token = single_header(headers, "x-service-token").map_err(|_| authentication_required())?;
-    state
-        .authenticator
+    authenticator
         .authenticate(Some(token))
         .map_err(|_| authentication_required())?;
     // These are different authentication paths; no user session or caller API
@@ -203,7 +312,7 @@ fn authenticate(
         return Err(denied());
     }
     let organization_id = canonical_uuid(organization)?;
-    if organization_id != state.organization_id
+    if organization_id != configured_organization_id
         || single_header(headers, "x-marty-use-organization-id")? != organization
     {
         return Err(denied());
@@ -225,6 +334,7 @@ fn authenticate(
         caller,
         observed_at: timestamp(single_header(headers, "x-marty-use-observed-at")?)?,
         valid_until: timestamp(single_header(headers, "x-marty-use-valid-until")?)?,
+        workload_identity_ref: None,
     };
     context.check(Utc::now())?;
     Ok(context)
@@ -262,6 +372,11 @@ fn timestamp(value: &str) -> Result<DateTime<Utc>, UseHttpError> {
 
 #[derive(Debug)]
 pub struct UseHttpError(StatusCode, &'static str);
+impl UseHttpError {
+    pub fn new(status: StatusCode, public_code: &'static str) -> Self {
+        Self(status, public_code)
+    }
+}
 fn invalid() -> UseHttpError {
     UseHttpError(StatusCode::BAD_REQUEST, "invalid_delegation_use_command")
 }

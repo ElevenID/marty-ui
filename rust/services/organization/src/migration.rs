@@ -42,6 +42,12 @@ pub async fn migrate_organization_schema(pool: &PgPool) -> Result<(), Organizati
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0007_machine_use_access.sql"))
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0008_delegation_use_policy.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -224,6 +230,12 @@ async fn validate_connection(
     crate::machine_authorization::validate_machine_authorization_schema(connection)
         .await
         .map_err(|_| incompatible("machine authorization policy schema or guards are missing"))?;
+    crate::machine_use_access::validate_machine_use_access_schema(connection)
+        .await
+        .map_err(|_| incompatible("machine use access schema or guards are missing"))?;
+    crate::delegation_use_policy::validate_delegation_use_policy_schema(connection)
+        .await
+        .map_err(|_| incompatible("delegation use policy schema or guards are missing"))?;
     Ok(())
 }
 

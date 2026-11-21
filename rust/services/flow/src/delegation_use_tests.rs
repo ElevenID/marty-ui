@@ -2,6 +2,9 @@
 //! Consent, access and domain policy ports are synthetic trusted fixtures; this
 //! is not a deployment qualification of those sources or a live KMS.
 
+#[path = "delegation_use_ingress_tests.rs"]
+mod authenticated_ingress;
+
 use super::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_delegated_authority::{
@@ -152,6 +155,11 @@ struct Integrated {
 
 impl Integrated {
     async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::new_with_actor_type(PrincipalType::ServiceAccount).await
+    }
+    async fn new_with_actor_type(
+        principal_type: PrincipalType,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let url = std::env::var("FLOW_POSTGRES_TEST_URL")?;
         let options = PgConnectOptions::from_str(&url)?;
         assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
@@ -177,11 +185,12 @@ impl Integrated {
             "sha256:{}",
             hex::encode(URL_SAFE_NO_PAD.decode(thumbprint)?)
         );
-        let fixture = Fixture::new_with_repository(
+        let fixture = Fixture::new_with_typed_repository(
             Utc::now() - Duration::milliseconds(1),
             "https://agents.example/registered-runtime".into(),
             thumbprint,
             grants,
+            principal_type,
         )
         .await;
         // This fixture spans independent real database/application clocks. Its

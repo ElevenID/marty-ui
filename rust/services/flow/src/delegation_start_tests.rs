@@ -110,6 +110,23 @@ impl Fixture {
         key_thumbprint: String,
         repository: Arc<dyn marty_delegated_authority::DelegationGrantRepository>,
     ) -> Self {
+        Self::new_with_typed_repository(
+            now,
+            delegate_id,
+            key_thumbprint,
+            repository,
+            PrincipalType::ServiceAccount,
+        )
+        .await
+    }
+
+    async fn new_with_typed_repository(
+        now: DateTime<Utc>,
+        delegate_id: String,
+        key_thumbprint: String,
+        repository: Arc<dyn marty_delegated_authority::DelegationGrantRepository>,
+        principal_type: PrincipalType,
+    ) -> Self {
         let clock = Arc::new(Clock(Mutex::new(now), AtomicBool::new(false)));
         let consent_until = Arc::new(Mutex::new(now + Duration::seconds(60)));
         let lifecycle = Arc::new(
@@ -145,7 +162,7 @@ impl Fixture {
                         id: "urn:example:represented-organization".into(),
                     },
                     delegate: Principal {
-                        principal_type: PrincipalType::ServiceAccount,
+                        principal_type,
                         id: delegate_id,
                     },
                     binding: Binding {

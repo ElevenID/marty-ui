@@ -70,6 +70,9 @@ pub async fn migrate_flow_schema_for_organization(
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0006_delegated_use_ingress.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
@@ -211,6 +214,9 @@ async fn validate_connection(
             "Delegated-use immutable/commit guards are missing",
         ));
     }
+    crate::delegation_use_ingress::validate_delegated_use_ingress_connection(connection)
+        .await
+        .map_err(|_| incompatible("Delegated-use ingress schema or guards are missing"))?;
     let seed: Option<String> = sqlx::query_scalar(
         "SELECT version FROM flow_service.rust_seed_versions \
          WHERE version='rust_flow_seed_0001'",

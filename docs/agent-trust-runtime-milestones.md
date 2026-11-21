@@ -12,7 +12,10 @@ durable machine-audit retention, concurrency-safe Flow finalization and managed
 receipt signing qualified against disposable OpenBao/Redis. The next source-owner
 slice adds explicit full-machine/MAP registration, concrete Trust Profile and
 Issuance credential observations, and a named Organization machine-policy owner
-with retained MMF evaluation. Public delegated execution remains gated.
+with retained MMF evaluation. The current serving-path slice adds explicit
+machine-use rights, a current exact-operation delegated-use policy owner,
+certificate-authenticated transport and protected original request/proof ingress.
+Public delegated execution remains gated.
 
 ## Implemented in this application slice
 
@@ -29,7 +32,10 @@ with retained MMF evaluation. Public delegated execution remains gated.
 | M02 full-machine source owner | Distinct Organization registry, explicit deployment MAP assignment, attributable human administration, immutable revision/key history, and exact retained source observations | Internal APIs only; no inventory promotion, public registration route, workload authentication or attestation claim |
 | M02 credential authority source | Explicit nested JWT-VC Trust Profile authorization, current issuer/key and exact original Issuance artifact/status binding, separate retained source evidence | Concrete PostgreSQL owner composition; no SD-JWT widening, external issuer transport or public host enablement |
 | M02 machine-policy source owner | Named Organization MACHINE_AUTHORIZATION policy, fixed context-only Cedar schema, immutable revisions, concrete MMF evaluation and retained source/evaluation linkage | General policy CRUD cannot write this type; domain/use authorization and public proof ingress remain separate |
-| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition only; router is not installed by an executable, wallet/proof ingress remains separate, and unresolved claims are never automatically retried |
+| P03 retained use candidate | Original command claims, START_USE correlation, FINALIZE_USE PERMIT/DENY receipts, authenticated internal command router and immutable recovery; concrete Flow owner commits nonce/proof/result state on the supplied transaction while preserving bounded retrieval progress | Internal KEY-grant composition only; router is not installed by an executable, public wallet transport remains separate, and unresolved claims are never automatically retried |
+| P03 machine-use access owner | Five independent rights administered against actual full-machine/deployment registration, current RBAC and immutable history; concrete command and ingress authorizer | Component access is separate from transport identity, cryptographic machine proof and Rifare business permission |
+| P03 delegated-use policy owner | Dedicated exact-operation Cedar policy lifecycle, fixed schema, retained current observations and real MMF evaluation | Consumer domain attributes and EXTERNAL_PROFILE adapters remain independently owned |
+| P03 authenticated request/proof ingress | Mandatory mTLS listener with exact leaf certificate binding; protected Flow request retrieval and immutable proof retention, durable one-sign request claims and original deadline checks through COMMIT | Explicit library assembly; production CA/pin management, serving executable and public wallet contracts remain unqualified |
 | Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Default off; deployed outer HTTPS adapter, production custody/credentials and executable host qualification remain pending |
 
 The source pin is Protocol commit
@@ -67,13 +73,15 @@ administration paths. The next application packages still need:
   separate. Enrollment key possession does not satisfy these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
   establishment beyond the implemented human/organization KEY profile.
-- Qualified workload/caller sources, protected service-hop deployment and an
-  executable selecting the implemented internal use router. Human command authorization/confirmation is
-  implemented; the human administration host does not accept machine use calls.
+- An explicit default-off executable selecting the implemented internal command
+  and Flow ingress routers, mutual-TLS identity mapping and concrete current
+  access/policy sources. Qualify production CA issuance/revocation and pin
+  rotation. The human administration host does not accept machine use calls.
 - Deployment of retained `START_USE`/`FINALIZE_USE`, the concrete same-database
   Flow owner and managed receipt signer with reviewed serving privileges,
-  authenticated request retrieval/proof submission, deployed signing-provider
-  qualification beyond the passing disposable gate, and a separately reviewed pending-claim reconciliation design.
+  the implemented authenticated request/proof ingress, deployed signing-provider
+  qualification beyond the passing disposable gate, and a separately reviewed
+  pending-claim reconciliation design.
   Ordinary Flow finalization remains guarded.
 - Public delegated-use hosting, packaged public clients, independent consumer
   verification and explicit capability qualification. Human lifecycle commands,
@@ -469,3 +477,93 @@ The new migrations are Organization 0005–0006, Delegated Authority 0008, Trust
 Profile 0004 and the new credential-source schema 0001. Existing audit, receipt,
 Flow and signing contracts remain intact. The commit uses `[skip ci]`; no hosted
 workflow is dispatched, and production/capability qualification is unchanged.
+
+## Current access, delegated policy and authenticated ingress follow-on
+
+The follow-on to `c44579a` implements the remaining internal access, policy and
+request/proof boundary owners in parallel. It adds four concrete components:
+
+| Component | Delivered behavior |
+| --- | --- |
+| Machine-use access owner/source | Human administration of five independent entrypoint rights against the real full-machine registry and immutable deployment assignment; current tenant, identity, key and access checks, attributed history and historical result recovery |
+| Delegated-use policy owner/source | Dedicated Organization policy lifecycle with a fixed finite-action EXACT_OPERATION schema, immutable revisions, retained exact observations and real MMF Cedar evaluation |
+| Mutual-TLS identity boundary | Mandatory client-certificate listener using the existing remote keyless server identity; exact verified leaf URI and certificate digest mapping to a full machine; request-time certificate bounds and rejection of HTTP identity overrides |
+| Protected Flow request/proof ingress | Separate current rights for request retrieval and proof submission, a durable request claim before signing, exact original JWS recovery without another signature, immutable proof retention and original bounds through locks and COMMIT |
+
+The new Organization sources use distinct restricted connections. Neither
+machine component access nor transport authentication provides machine-key
+proof, grant consent or Rifare domain permission. Completed delegated evaluation
+still follows the existing proof, consent, constraint and signed-receipt path.
+The concrete delegated-use source deliberately rejects EXTERNAL_PROFILE rather
+than inventing consumer domain attributes.
+
+Flow's ordinary request and paired-wallet endpoints now reject delegated
+instances, closing an alternate retrieval path around the new ingress boundary.
+Original request/response URIs are preserved. This is an internal candidate;
+public wallet routing and the complete live serving composition remain separate
+work. Unresolved request-signing claims survive failure, cancellation and expiry,
+just like unresolved command claims, and cannot trigger automatic signing retry.
+
+Actual role probes also exposed two privilege-check gaps. PostgreSQL 17+
+MAINTAIN now fails the selected source/evidence/ingress role checks. The former
+`pg_%` LIKE filter treated its underscore as a wildcard and excluded application
+schemas such as `pgx_*`; affected checks now exclude only the literal `pg_`
+system prefix. Regression tests grant and revoke these privileges and confirm
+denial and recovery. The benign security-definer probe is never invoked, and no
+privileged server-file, server-program or maintenance operation is executed.
+
+Organization migrations 0007–0008 and Flow migration 0006 are additive. All 24
+previously published migrations across Organization, Delegated Authority, Flow,
+Trust Profile and the credential-source schema preserve exact bytes. Delegated
+Authority remains at migration 0008. The 812 existing dependency package
+identities, versions, sources and checksums are unchanged; new Cargo entries
+refer only to packages already in the locked graph.
+
+See [machine-use access](../rust/services/organization/MACHINE_USE_ACCESS.md),
+[delegated-use policy](../rust/services/delegated-authority/DELEGATION_POLICY_SOURCE.md),
+[mutual-TLS transport](../rust/services/delegated-authority/USE_MTLS.md), and
+[protected Flow ingress](../rust/services/flow/DELEGATED_USE_INGRESS.md).
+
+The next serving milestone is an explicit default-off executable that composes
+these owners, routers and restricted credentials with the existing same-database
+Flow finalizer, machine verifier and managed receipt signer. Production CA
+issuance/revocation, certificate-pin rotation, required attestation, deployed
+request/receipt custody, public wallet contracts and independent consumer
+qualification remain open. Public MIP 0.5.0, the Protocol source pin, capability
+discovery and Rifare's execution boundary remain unchanged.
+
+### Access, policy and ingress validation
+
+Local validation used Rust 1.95 and disposable PostgreSQL 17.12 with the locked
+graph offline. The views below overlap and are not one independent test total.
+
+| Check | Result |
+| --- | --- |
+| Full Delegated Authority library, including PostgreSQL and real mTLS | 225 passed, none failed or ignored; one unchanged external private-protocol command corpus case explicitly filtered |
+| Protected Flow integration | 24 passed, none failed or ignored; includes 17 existing delegated start/use/HTTP cases and all 7 new ingress cases |
+| Broader normal Flow library | 93 passed; 26 fixture-gated cases ignored in that normal run; the selected delegated cases were executed separately above |
+| Actual machine-use access owner/source | 4 passed with all five rights, immutable history, current permission/identity loss, authorized historical recovery and actual role/schema drift |
+| Actual delegated-use policy owner/source | 5 passed with current human permissions, fixed schema, immutable lifecycle/observations, role/schema drift and cancellation during final COMMIT |
+| Existing full-machine registry regression | 12 passed, including the new MAINTAIN and custom-schema privilege checks |
+| Existing credential-source and composed machine-gate regression | 4 passed, including real signatures and all three restricted-role privilege regressions |
+| Organization library and permission catalog | 71 library tests and 2 catalog tests passed; the catalog now has 148 explicit permissions |
+| Read-only Delegated Authority upgrade preflight | 157 passed against actual PostgreSQL; these checks retain their documented Delegated Authority schema scope |
+| All-targets compilation | Passed for Organization, Delegated Authority, Flow, machine credential source, Trust Profile, Issuance and OID4VP contract |
+| Compatibility and hygiene | All 24 historical migrations and all 812 package identities/versions/sources/checksums preserved; scoped formatting of 36 Rust files, diff checks, local documentation links and OSS commerce boundary passed |
+
+The Delegated Authority aggregate includes five new mTLS cases, two real
+Organization access-adapter cases and two real policy-source/MMF cases. The Flow
+cross-owner case uses the actual Organization registry and access owner/source,
+revokes access during request signing, and verifies denied persistence while
+earlier evidence stays unchanged. Actual TLS body expiry, signing cancellation,
+row-lock expiry and deferred-COMMIT expiry are exercised. Ephemeral test keys and
+explicit fixture grant/consent/domain inputs do not qualify production custody
+or a complete deployed grant-to-business-operation flow.
+
+Test setup was corrected for a shared advisory-lock identifier during
+cross-owner migration, SQL GRANT syntax and PostgreSQL's rewritten CHECK
+pretty-printing. The final selected gates passed with the original production
+lock and strict schema checks intact. Independent review found no additional
+concrete blocker. Public wallet transport, production deployment and capability
+promotion remain outside this validation. Publication uses `[skip ci]` and
+does not dispatch a hosted workflow.

@@ -32,9 +32,9 @@ lifecycle history.
 ## Prepare the maintenance boundary
 
 1. Select the exact reviewed application artifact and its matching migration and
-   preflight files. Keep migrations 0001–0006 byte-for-byte unchanged. The new
-   machine-audit migration is additive; rewriting an applied migration is not
-   an upgrade strategy.
+   preflight files. Keep Delegated Authority migrations 0001–0008 byte-for-byte
+   unchanged. New Organization and Flow owner migrations are additive; rewriting
+   an applied migration is not an upgrade strategy.
 2. Stop new lifecycle writes and drain in-flight request transactions. Also
    pause confirmation, withdrawal, authority-refresh and authority-revocation
    producers, any selected internal use writer and background lifecycle jobs. Confirm the old process and its
@@ -391,7 +391,7 @@ The separate `marty-delegation-commands` executable uses the same checksum-verif
 Delegated Authority migrations, now through 0008, and is disabled by default.
 It continues to support human lifecycle commands only. Its restricted command
 writer additionally needs SELECT/INSERT on the shared `command_identities`
-registry, whose trigger prevents lifecycle/use identity collisions. Provision that writer
+registry, whose trigger prevents lifecycle/use identity collisions. Provision that
 writer plus distinct evidence and Organization readers as described in
 [COMMAND_HOST.md](../rust/services/delegated-authority/COMMAND_HOST.md). The command
 host does not receive either consent/authority producer writer credential.
@@ -443,3 +443,44 @@ See [USE_COMMANDS.md](../rust/services/delegated-authority/USE_COMMANDS.md),
 [Flow's retained-use contract](../rust/services/flow/DELEGATED_USE.md), and
 [the candidate milestone](delegated-use-runtime-candidate.md) for transaction,
 source freshness, managed signing and remaining runtime qualification gates.
+
+## Machine-use access, policy and protected Flow ingress
+
+The current follow-on adds Organization migrations
+`0007_machine_use_access.sql` and `0008_delegation_use_policy.sql`, plus Flow
+`0006_delegated_use_ingress.sql`. Delegated Authority remains at migration 0008;
+its existing four-role preflight does not qualify these additional schemas or
+serving identities. Run each concrete owner's readiness check through its
+actual restricted login before serving. A privileged operator connection is
+not a substitute for the request process's credentials.
+
+The use-access reader has SELECT only on its six explicit Organization metadata,
+tenant, registry and access tables. The delegated-use policy source reads its
+five selected tables and can INSERT only its retained observation table. Human
+administration uses current Organization permissions and does not run through
+either source identity. Preserve the exact current records and their immutable
+attributed history together.
+
+The protected Flow ingress login has selected Flow metadata and binding reads,
+INSERT on immutable proof/ingress records, and column-only UPDATE on instance
+progress. It receives EXECUTE on the one migration-owned definition-lock helper;
+that helper has a fixed body and search path and grants no definition mutation.
+It receives no Organization source or Delegated Authority ledger privileges.
+See [the exact ingress role contract](../rust/services/flow/DELEGATED_USE_INGRESS.md)
+before provisioning it. Readiness rejects unrelated application privileges,
+including custom schemas whose names start with `pgx`, and PostgreSQL 17+
+MAINTAIN grants. It checks the actual authenticated login and reachable roles.
+
+Flow request signing commits one immutable claim before calling the signer.
+Preserve claims, exact signed request results, proof ingress records and their
+original bounds during disablement, rollback or restore reconciliation. An
+unresolved claim is retained after cancellation, expiry or ambiguous signing.
+Do not delete it, repeat signing or downgrade guards to make another attempt.
+Completed historical reads require current access and never renew authority.
+
+The explicit mutual-TLS listener and internal routers are library components.
+Database installation does not enable an executable, a public route or a
+capability. Production CA/key/pin handling and serving-role deployment require
+their own qualification; see [the transport contract](../rust/services/delegated-authority/USE_MTLS.md),
+[machine-use access](../rust/services/organization/MACHINE_USE_ACCESS.md), and
+[delegated-use policy ownership](../rust/services/organization/DELEGATION_USE_POLICY.md).

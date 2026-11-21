@@ -31,6 +31,12 @@ p256 = { workspace = true, features = ["ecdsa"] }
 ed25519-dalek.workspace = true
 reqwest.workspace = true
 axum.workspace = true
+axum-server.workspace = true
+marty-crypto.workspace = true
+mmf-platform.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+tower.workspace = true
 marty-oid4vci = { workspace = true, features = ["verifier"] }
 marty-verification.workspace = true
 chrono.workspace = true
@@ -44,6 +50,7 @@ sqlx.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 tokio.workspace = true
 tower.workspace = true

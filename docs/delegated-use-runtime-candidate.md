@@ -1,16 +1,16 @@
 # Retained delegated-use runtime candidate
 
-The retained-use baseline at `085d65ca3298db17989710b3136eaedf9e6e3c26`
-implemented internal `START_USE`/`FINALIZE_USE`, the concrete Flow transaction
-owner, selected full-machine authentication and managed decision-receipt signing.
-The current follow-on adds authenticated internal command transport, actual
-nested JWT-VC verification, immutable machine-audit storage, safe concurrent
-request retrieval and live disposable OpenBao/Redis receipt qualification. It
-does not install a delegated-use executable or public route.
+The retained-use candidate combines internal `START_USE`/`FINALIZE_USE`, the
+concrete Flow transaction owner, full-machine authentication, actual credential
+and policy sources, immutable machine audit and managed decision-receipt signing.
+The current follow-on adds explicit machine-use access rights, a concrete current
+delegated-use Cedar policy owner, certificate-authenticated internal transport,
+and protected request retrieval/proof submission with retained original results.
+It does not install a delegated-use executable or public route.
 
 The human `marty-delegation-commands` executable and its Gateway surface still
-reject use commands. There is no default caller authorizer, machine evidence
-source or selected receipt signer. Public MIP remains 0.5.0; support levels and
+reject use commands. Each current source, transport, database role and receipt
+signer still requires explicit composition. Public MIP remains 0.5.0; support levels and
 capability discovery remain unchanged. The Protocol source stays pinned at
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`.
 
@@ -18,23 +18,31 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 
 | Component | Implemented responsibility | Boundary that remains explicit |
 | --- | --- | --- |
-| `DelegationUseCommandService` | Strict P03 use intent, durable original command claims, current caller authorization, sealed START admission, final PERMIT/DENY evaluation and original-result recovery | Internal KEY-grant API; no automatic host or caller authentication |
-| `delegated_use_command_router` | Dedicated service-hop authentication, exact typed forwarding, strict original JSON and observation bounds propagated through current source checks and COMMIT | Explicit assembly only; workload identity source, protected deployment hop and executable remain separate |
+| `DelegationUseCommandService` | Strict P03 use intent, durable original command claims, current caller authorization, sealed START admission, final PERMIT/DENY evaluation and original-result recovery | Internal KEY-grant API; requires explicit authenticated host composition |
+| `OrganizationDelegationUseCommandAuthorizer` | Current active tenant/full-machine/deployment and five explicitly assigned entrypoint rights, including historical result recovery | Does not authenticate the transport or grant consumer business rights |
+| `delegated_use_command_router` | Explicit mutual-TLS or trusted-forwarder authentication, strict original JSON and observation bounds propagated through current source checks and COMMIT | No automatic executable/public Gateway installation |
+| `BoundDelegatedUseMtlsServer` | Mandatory client certificate verification, exact leaf URI/digest-to-machine mapping and original certificate validity bounds; remote keyless server identity | CA issuance, revocation, pin rotation and deployed custody remain operator qualification |
 | `PgDelegationUseRepository` | Shared lifecycle/use command identity, immutable admission/receipt/result records and deferred deadline checks | Requires separately provisioned privileges and the same PostgreSQL database as its Flow owner |
-| `FlowDelegatedUseOwner` | Actual Flow challenge preparation, immutable proof submission, frozen definition/proof checks, retained nonce admission and final consumption on the supplied connection | Proof ingress must authenticate the caller; storing proof bytes does not verify them |
+| `FlowDelegatedUseOwner` | Actual Flow challenge preparation, immutable proof submission, frozen definition/proof checks, retained nonce admission and final consumption on the supplied connection | Storing proof bytes does not verify them |
+| `FlowDelegatedUseIngress` | Authenticated current-authorized request retrieval and proof submission; exact retained request JWS; durable preparation claim before signing; deadline checks through COMMIT | Internal routes only; public wallet/request/response transport remains separate |
 | `MartyMachineOid4vpProofVerifier` | Concrete Core OID4VP verification plus selected full-machine MAP, key/runtime and required evidence checks | Full-machine, credential and attestation providers must be independently qualified |
 | `MartyNestedJwtVcMachineCredentialVerifier` | Actual issuer and holder signatures under the selected nested JWT-VC profile; exact registered credential, current Trust Profile/issuer/key/status and all operation scope | Trusted source owner remains explicit; existing SD-JWT owners are not silently broadened |
 | `AuditedMachineOid4vpProofVerifier` | Concrete machine verification followed by committed exact audit bytes and a post-COMMIT original-deadline check | Separate restricted audit writer; source evidence records remain owned and retained by their actual producers |
-| `MmfMachineAuthorizationVerifier` | Actual MMF Cedar evaluation of the selected `MACHINE_AUTHORIZATION` policy and typed context | Requires a current trusted policy/schema/entity source; delegated/domain authorization still runs separately |
+| `AuditedMmfMachineAuthorizationVerifier` | Actual MMF evaluation against the concrete current Organization machine policy and retained source/evaluation evidence | Machine authentication eligibility remains distinct from delegated-use policy |
+| `OrganizationDelegationCedarPolicySource` | Concrete current Organization policy, immutable attributed revisions and exact retained source scope; real MMF compilation under a fixed context schema | Selected EXACT_OPERATION only; external-domain attributes and permissions remain separate consumer adapters |
 | `HttpManagedDelegatedReceiptSigner` | Pinned managed issuer/key, separate signing-grant origin, remote signing and independent verification of the returned signature | Explicit deployment selection, key provisioning and live provider qualification remain required |
 
 The component contracts are documented in
 [retained use commands](../rust/services/delegated-authority/USE_COMMANDS.md),
 [internal authenticated transport](../rust/services/delegated-authority/USE_HTTP.md),
+[certificate-authenticated transport](../rust/services/delegated-authority/USE_MTLS.md),
+[explicit machine use access](../rust/services/organization/MACHINE_USE_ACCESS.md),
+[current delegated-use policy](../rust/services/delegated-authority/DELEGATION_POLICY_SOURCE.md),
 [selected machine authentication](../rust/services/delegated-authority/MACHINE_AUTH.md),
 [selected credential verification](../rust/services/delegated-authority/MACHINE_CREDENTIALS.md),
 [managed receipt signing](../rust/services/delegated-authority/RECEIPT_SIGNING.md)
-and the [Flow delegated-use owner](../rust/services/flow/DELEGATED_USE.md).
+the [Flow delegated-use owner](../rust/services/flow/DELEGATED_USE.md), and
+[protected request/proof ingress](../rust/services/flow/DELEGATED_USE_INGRESS.md).
 
 ## Original intent and retained outcomes
 
@@ -75,8 +83,14 @@ nonce cleanup.
 
 ### Proof submission and FINALIZE_USE
 
-An authenticated future ingress may call `record_proof_submission` to retain
-bounded proof bytes against the original tenant, actor and challenge. Repeating
+The explicit `FlowDelegatedUseIngress` authenticates and authorizes retrieval
+and proof submission against the original tenant, actor and challenge. Its
+request preparation claim precedes external signing. A completed retrieval
+returns the exact original signed request; an unresolved claim never signs
+again automatically. Generic and paired-wallet request handlers reject delegated
+instances, preserving this boundary. See [protected Flow ingress](../rust/services/flow/DELEGATED_USE_INGRESS.md).
+
+The internal `record_proof_submission` owner retains bounded proof bytes. Repeating
 the same bytes returns the retained submission identity. The public projection
 contains identifiers, digest and submission time; raw proof bytes stay in the
 restricted Flow source table. That storage step establishes no authentication
@@ -112,12 +126,14 @@ retry is introduced.
 
 ## Internal HTTP authentication
 
-The explicitly assembled internal router requires a dedicated authenticated
-forwarding workload, configured organization and singleton complete typed actor
-metadata. It rejects human credentials, foreign organizations, duplicate
-metadata, query strings and malformed P03 commands. Original authentication
-observation and expiry travel through the application; both remain clock bounds
-after body reads, source observations and lock waits.
+The explicitly assembled internal router selects either verified mutual TLS
+with an exact leaf certificate/URI-to-machine mapping or the earlier separately
+trusted forwarding workload. The mutual-TLS path derives its typed actor from
+deployment configuration and rejects HTTP identity overrides. The forwarding
+path requires its dedicated service credential and singleton complete typed
+actor metadata. Both preserve the configured tenant, strict P03 input and
+original authentication observation/expiry through body reads, source
+observations and lock waits.
 
 Current source access is independently validated before its deadline is
 shortened to the earlier authentication expiry. A short service-hop lifetime
@@ -141,11 +157,12 @@ an assigned deployment, current active registered public key and a MAP selecting
 is the Flow verifier client ID; the relying operation audience remains a
 separately bound value.
 
-The current Organization inventory remains `SERVICE_ACCOUNT`. Its ACTIVE and
+The Organization SERVICE_ACCOUNT inventory remains separate. Its ACTIVE and
 `KEY_CONTROL_VERIFIED` enrollment state does not manufacture a full
-MachineIdentity. No automatic conversion or fallback directory source is
-provided. A deployment must independently source the full machine record,
-current key/runtime state and actual MAP assignment.
+MachineIdentity. The concrete full-machine registry explicitly owns a separate
+machine record, current key/runtime state and deployment MAP assignment, with
+retained source observations. No automatic inventory conversion or fallback
+directory source is provided.
 
 Every selected credential type must be authenticated under the configured Trust
 Profile and associated with a currently registered machine credential. Required
@@ -167,8 +184,9 @@ holder signatures for one registered credential covering every required MAP
 type. Current authority binds all machine-operation scope, the original compact
 credential digest, Trust Profile and issuer key; unknown/revoked/suspended status
 fails closed. Its source port requires independently retained authority/status
-evidence. No full-machine registry or JWT-VC status owner is inferred from the
-existing Organization or managed SD-JWT contracts.
+evidence. The concrete source composes the actual Trust Profile and Issuance
+owners for this explicit nested JWT-VC selection. Existing managed SD-JWT
+contracts are not broadened.
 
 The concrete audited composition retains the canonical machine audit bytes,
 document, digest, original times and complete scope in PostgreSQL before
@@ -228,8 +246,10 @@ use ledger. Flow migration 0005 adds its storage identity, immutable challenge
 and proof records, consumption evidence and guards. Additive Delegated Authority
 migration 0007 adds exact machine audit retention and receipt linkage. Migration
 0008 binds selected machine authorization to retained source and MMF evaluation
-records. Earlier
-migration bytes are preserved. Follow the
+records. Organization migrations 0007–0008 add dedicated machine-use access and
+delegated-use policy ownership. Flow migration 0006 adds immutable request
+preparation claims, exact request results and proof-ingress authorization.
+Earlier migration bytes are preserved. Follow the
 [read-only upgrade and rollback procedure](delegated-authority-upgrade.md);
 readiness never repairs missing historical evidence.
 
@@ -271,7 +291,7 @@ The following are separate verification views and overlap; do not add them into
 one aggregate. Rust checks use the locked dependency graph offline. Hosted
 Actions and production deployment are outside this evidence. This table records
 the prior `085d65c` baseline; the current follow-on checks are recorded in the
-[milestone checkpoint](agent-trust-runtime-milestones.md#machine-evidence-and-authenticated-transport-follow-on).
+[milestone checkpoint](agent-trust-runtime-milestones.md#current-access-delegated-policy-and-authenticated-ingress-follow-on).
 
 | Check | Result |
 | --- | --- |
@@ -312,14 +332,15 @@ external HTTPS deployment remain open.
 
 ## Remaining runtime milestones
 
-1. Qualify the independently authenticated full-machine/MAP source, credential
-   issuer/status sources, required attestation and active machine/domain policy
-   sources. Connection/grant aggregation and broader authority/session profiles
-   retain their separate contracts.
-2. Compose the implemented internal router into an explicit executable after
-   authoritative workload sources are qualified. Separately authenticate wallet
-   request retrieval and immutable proof submission; provision reviewed use,
-   Flow, audit and source credentials. The human administration host must
+1. Qualify the concrete full-machine/MAP, credential, machine-policy, use-access
+   and delegated-use policy sources in a deployed composition. Implement and
+   qualify required attestation when selected. External domain policy,
+   connection/grant aggregation and broader authority/session profiles retain
+   their separate contracts.
+2. Assemble an explicit, default-off executable using the implemented internal
+   command and request/proof routers, mandatory mutual TLS, exact certificate
+   bindings and reviewed use, Flow, audit and source credentials. Qualify CA
+   issuance/revocation and pin rotation. The human administration host must
    continue rejecting use commands.
 3. Qualify deployed HTTPS and production custody/credentials beyond the passing
    disposable OpenBao/Redis gate, including the outer receipt adapter and any

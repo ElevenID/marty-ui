@@ -138,6 +138,8 @@ grant/use/Flow access, unrelated table access, destructive privileges, schema
 creation, executable security-definer escape or reachable administrative role.
 Predefined PostgreSQL roles and replication privilege are also rejected; this
 source needs no server-file, server-program or other predefined-role capability.
+PostgreSQL 17 `MAINTAIN` is rejected. The catalog scan excludes only the literal
+`pg_` schema prefix; application schemas such as `pgx_*` remain fully inspected.
 These checks run for each observation, including roles reachable with SET ROLE.
 The source reads through MVCC and does not receive UPDATE merely to take row
 locks. The administration connection remains distinct from this source identity.
