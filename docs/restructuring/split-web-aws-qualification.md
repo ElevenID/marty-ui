@@ -42,8 +42,11 @@ digest-pinned public nginx images.
 Use fresh, separate source worktrees or checkouts for the exact commits above.
 Do not reuse a live development mount or another run's installed dependencies.
 The runner rejects dirty source, untracked source files, existing application
-or website `node_modules`, existing website output/evidence and actual dotenv
-files. Checked-in `.env*.example` files remain allowed. Place the evidence
+or website `node_modules`, existing website output/evidence and unreviewed dotenv
+files. The tracked Marty baseline inputs `.env.native` and `ui/.env.test` are
+admitted only with their exact reviewed SHA-256 hashes, after the clean source
+commit/tree check. Other actual dotenv files, including ignored `.env` and
+`.env.local`, remain refused. Checked-in `.env*.example` files remain allowed. Place the evidence
 directory outside all checkouts; it must not exist before execution.
 
 The frontend checks do not require a healthy application backend. The application

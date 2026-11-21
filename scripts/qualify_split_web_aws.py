@@ -27,6 +27,12 @@ MARTY_SHA = "b1095e8c86389929cf1a93c4ed04d9eb784f3a6d"
 MARTY_TREE = "f450e69dd64fc5e6bad0226bc3c1d4ec8d7d5635"
 WEBSITE_SHA = "14ec367ea74048f40a709d7c2b4415181dc454e5"
 WEBSITE_TREE = "819242ebcd0de1d196f5325dec12f2506c54e016"
+# These tracked test inputs are part of the exact b1095e8c source contract.
+# Admit their reviewed bytes, never other host-supplied dotenv configuration.
+MARTY_REVIEWED_DOTENV = {
+    ".env.native": "7c3791afb4eaa80e945ea5e50bc9435885e5b317c803e55848843e8c3d29266b",
+    "ui/.env.test": "eaa8503379c11ade6ef8d7b77ef64e8d9772ce183cc7704ebc42a58b2f358693",
+}
 NGINX_FIXTURE = "nginx@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606"
 CHROME = "/usr/bin/google-chrome"
 SCHEMA = "marty.split-web-host-qualification/v1"
@@ -135,6 +141,17 @@ def source_identity(root: Path, sha: str, tree: str, env: dict) -> dict:
     return {"root": str(root), "commit": sha, "tree": tree, "clean": True}
 
 
+def validate_dotenv_inputs(root: Path, reviewed: dict[str, str]) -> None:
+    for directory in (root, root / "ui"):
+        for candidate in directory.glob(".env*"):
+            if candidate.name.endswith(".example"):
+                continue
+            relative = candidate.relative_to(root).as_posix()
+            require(relative in reviewed, "Existing dotenv file is not an admitted test input: " + relative)
+            require(fingerprint(candidate)["sha256"] == reviewed[relative],
+                    "Reviewed dotenv input bytes differ: " + relative)
+
+
 def preflight(options, roots) -> tuple[dict, dict, dict]:
     marty, website, evidence = roots
     require(sys.platform == "linux" and platform.machine() == "x86_64", "Linux x86_64 is required")
@@ -163,9 +180,7 @@ def preflight(options, roots) -> tuple[dict, dict, dict]:
                             (website, ("node_modules", ".qualification", "ui/dist-website"))):
         for relative in forbidden:
             require(not os.path.lexists(root / relative), "Use a fresh dedicated checkout: " + str(root / relative))
-        for directory in (root, root / "ui"):
-            for candidate in directory.glob(".env*"):
-                require(candidate.name.endswith(".example"), "Existing dotenv file is not an admitted test input")
+        validate_dotenv_inputs(root, MARTY_REVIEWED_DOTENV if root == marty else {})
     runtime = Path(env["XDG_RUNTIME_DIR"])
     socket = Path(options.docker_socket)
     require(socket == runtime / "docker.sock", "Select this user's /run/user/UID/docker.sock")
