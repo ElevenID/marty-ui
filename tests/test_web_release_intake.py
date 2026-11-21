@@ -14,7 +14,7 @@ import zipfile
 import pytest
 import yaml
 
-from tests.test_package_web_composition import candidate, standalone_website, write_json
+from tests.test_package_web_composition import candidate, standalone_website, full_standalone_website, write_json
 import package_web_composition as composition
 import ui_release as ui
 import web_release_intake as intake
@@ -22,12 +22,15 @@ import website_release as web
 import website_producer_policy as policy
 
 
-@pytest.fixture(params=["legacy", "standalone"])
+@pytest.fixture(params=["legacy", "standalone", "full-standalone"])
 def producer_artifact(candidate, tmp_path, request):
     kwargs, calls, _, _ = candidate
     release = web.read(kwargs["website_assets"] / "website-release.json")
     if request.param == "standalone":
         release = standalone_website(release["source_sha"], web.read(kwargs["website_assets"] / "web-surface-routes.json"))
+        write_json(kwargs["website_assets"] / "website-release.json", release)
+    elif request.param == "full-standalone":
+        release = full_standalone_website(release["source_sha"], web.read(kwargs["website_assets"] / "web-surface-routes.json"))
         write_json(kwargs["website_assets"] / "website-release.json", release)
     producer = release["producer"]
     run = {"id": int(producer["run_id"]), "run_attempt": int(producer["run_attempt"]), "status": "completed",
