@@ -9,7 +9,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_windows_failed_current_inspection import failed_current
 import selfhost_windows_renewal_native as native
 import selfhost_windows_selection as selection
+import selfhost_windows_staging_recovery as staging
 from selfhost_windows_staging_recovery import stage_recovery_generation, inspect_failed_current
+
+
+def test_unsupported_recovery_namespace_refuses_before_failed_attempt_inspection(monkeypatch, tmp_path):
+    calls = []
+    def forbidden(*_args, **_kwargs):
+        calls.append('failed-attempt inspection')
+        raise AssertionError('Invalid namespace reached custody inspection')
+    monkeypatch.setattr(staging, '_failed_current_inputs', forbidden)
+    with pytest.raises(ValueError):
+        stage_recovery_generation(tmp_path/'existing.json', tmp_path/'unused-attempt',
+                                  'marty-production-synthetic')
+    assert not calls and not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize('fault', [None, 'producer', 'candidate'])

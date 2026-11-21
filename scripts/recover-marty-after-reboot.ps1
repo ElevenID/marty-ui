@@ -42,7 +42,7 @@ if ($RecoveryConfigurationFile) {
             }
             $ManagedRecoverySettings = $configuration
             if ([bool]$RenewCredentials -ne [bool]$LogicalTlsProject -or
-                ($RenewCredentials -and $LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z')) {
+                ($RenewCredentials -and $LogicalTlsProject -cnotmatch '\Amarty-selfhost-[a-z0-9][a-z0-9-]{0,59}\z')) {
                 throw 'managed renewal requires its enrolled logical TLS namespace'
             }
         } else {

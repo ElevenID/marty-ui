@@ -12,7 +12,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if ($RenewCredentials) {
-    if (-not $ManagedPython -or $LogicalTlsProject -cnotmatch '\Amarty-(selfhost|production)-[a-z0-9][a-z0-9-]{0,59}\z' -or
+    if (-not $ManagedPython -or $LogicalTlsProject -cnotmatch '\Amarty-selfhost-[a-z0-9][a-z0-9-]{0,59}\z' -or
         $RenewalIntervalMinutes -lt 15 -or $RenewalIntervalMinutes -gt 240 -or
         ($FirstRenewalDelaySeconds -ne 0 -and ($FirstRenewalDelaySeconds -lt 15 -or
             $FirstRenewalDelaySeconds -gt 60*$RenewalIntervalMinutes)) -or

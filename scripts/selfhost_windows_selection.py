@@ -53,6 +53,12 @@ def require(value):
         raise ValueError(REFUSAL)
 
 
+def require_logical_tls_project(value):
+    """Validate new TLS work against the existing selfhost-renew producer."""
+    require(isinstance(value, str)
+            and re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}', value))
+
+
 def decode(raw):
     def pairs(items):
         value = {}
@@ -745,7 +751,7 @@ def _stage(config,choice,values,record,root,logical_project,stack):
     require(not renewal.recovery_pending(config) and not list(root.iterdir()))
     # The signed selfhost-renew TLS helper requires this prefix before it can
     # provision any credentials. Refuse incompatible input before journaling.
-    require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',logical_project))
+    require_logical_tls_project(logical_project)
     stack.enter_context(renewal.hold_storage_namespace(root))
     with _held_private_input(root,directory=True):pass
     observed=_inspect(config,choice,values,stack,expected_data=record['data_sha256'])
@@ -1061,6 +1067,9 @@ def _handoff_staged(config_path,sha,sequence,intent_sha):
 
 def renew_once(config_path,logical_project):
     """One online candidate cycle; never retry a pending/uncertain operation."""
+    # Reject unsupported TLS work before a lease, continuation or attempt exists.
+    # The Compose project may independently use the marty-production-* prefix.
+    require_logical_tls_project(logical_project)
     with selected_inputs(config_path) as lease:
         continued=lease.sequence>=MAX_SELECTIONS
         if continued:lease.continue_journal()

@@ -189,7 +189,11 @@ Explicit online renewal uses the same entrypoint:
   -RenewCredentials -LogicalTlsProject $EnrolledLogicalTlsProject
 ```
 
-The namespace must be the existing enrollment, not a new project name. The CLI
+The logical TLS namespace must be the existing `marty-selfhost-*` enrollment,
+which is distinct from the Compose project; a `marty-production-*` Compose
+project remains supported. Renewal and task validation reject an unsupported
+logical namespace before starting the runner or allocating a renewal attempt.
+Do not rename an enrollment to satisfy input validation. The CLI
 holds the unchanged managed manifest, finishes any engine-wait lease, then calls
 the existing `renew_once` owner under its own fresh lease. It emits metadata only
 after all held-input exits. Adding `-CheckOnly` verifies configuration without

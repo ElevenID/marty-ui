@@ -19,7 +19,7 @@ def recorder(tmp_path_factory):
     legacy.native_docker_recorder.__wrapped__(tmp_path_factory)
 
 
-def invoke(tmp_path,*,check=False,wait=False,renew=False,bad=None):
+def invoke(tmp_path,*,check=False,wait=False,renew=False,bad=None,logical='marty-selfhost-synthetic'):
     selection=tmp_path/'private selector.json';selection.touch()
     config=tmp_path/'retained managed.json'
     value={'schema':'marty.windows-managed-recovery/v1','selection_file':str(selection)}
@@ -34,7 +34,7 @@ def invoke(tmp_path,*,check=False,wait=False,renew=False,bad=None):
     if bad!='no-python':script+=' -ManagedPython '+legacy.quote(legacy.NATIVE_DOCKER)
     if check:script+=' -CheckOnly'
     if wait:script+=' -WaitForEngine'
-    if renew:script+=" -RenewCredentials -LogicalTlsProject 'marty-selfhost-synthetic'"
+    if renew:script+=' -RenewCredentials -LogicalTlsProject '+legacy.quote(logical)
     env={**os.environ,'MARTY_TEST_DOCKER_LOG':str(log)}
     p=subprocess.run([legacy.POWERSHELL,'-NoProfile','-NonInteractive','-EncodedCommand',
         base64.b64encode(script.encode('utf-16le')).decode()],capture_output=True,text=True,env=env,timeout=30)
@@ -67,3 +67,10 @@ def test_renewal_flags_reach_only_existing_managed_owner(tmp_path,check):
     if check:expected+=['--check-only']
     expected+=['--wait-for-engine','--renew-once','--logical-project','marty-selfhost-synthetic']
     assert calls==[expected]
+
+
+@pytest.mark.parametrize('check', [False, True])
+def test_unsupported_renewal_namespace_never_dispatches_the_runner(tmp_path, check):
+    result, calls, _config = invoke(tmp_path, check=check, wait=True, renew=True,
+                                    logical='marty-production-synthetic')
+    assert result.returncode != 0 and not calls

@@ -464,8 +464,8 @@ def main(argv=None):
         if not args.expired_current:
             selection.require(bool(args.logical_project)==args.renew_once)
             selection.require(not any((args.attempt_directory,args.source_journal,args.operator_successor_file)))
-        if args.renew_once:
-            selection.require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',args.logical_project))
+        if args.renew_once or args.expired_current=='stage':
+            selection.require_logical_tls_project(args.logical_project)
         with renewal.hold_private_input(Path(args.configuration)) as raw:
             config=selection.decode(raw)
             selection.require(set(config)=={'schema','selection_file'}
