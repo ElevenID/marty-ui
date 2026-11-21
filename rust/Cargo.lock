@@ -4190,6 +4190,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-oid4vp-contract",
  "marty-organization",
+ "marty-presentation-policy",
  "marty-principal-runtime-binding",
  "marty-service-runtime",
  "marty-signing-grant",

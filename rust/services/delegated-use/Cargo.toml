@@ -34,6 +34,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 marty-credential-template = { path = "../credential-template" }
+marty-presentation-policy = { path = "../presentation-policy" }
 marty-delegated-receipt-consumer = { path = "../../crates/delegated-receipt-consumer" }
 ed25519-dalek.workspace = true
 marty-issuance-service = { path = "../issuance" }

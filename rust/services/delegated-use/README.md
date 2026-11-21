@@ -355,7 +355,69 @@ refusal for invalid remote service credentials, workload identity, availability
 or selected public key. It asserts actual remote TLS signing while request and
 receipt signing, signing-grant minting and command admission remain absent.
 It qualifies this startup/readiness boundary; the full lifecycle across actual
-template/presentation-policy owners and production custody remains separate.
+template/presentation-policy owners is exercised by the separate gate below.
+Production custody qualification remains separate.
+
+### Actual executable and managed lifecycle qualification
+
+`tests/live_lifecycle.rs` runs the selected operation through the actual
+executable, its production `connect` path and protected HTTP routes. It adds
+production Credential Template and Presentation Policy gRPC services backed by
+their actual repositories, fresh machine credential issuance, and three
+purpose-separated managed signing keys behind the real Signing Keys HTTPS
+service. The host uses its own
+`spiffe://marty.internal/service/delegated-use` workload identity. The policy
+service permits that identity to read the selected policy, while presentation
+evaluation remains restricted to its existing callers.
+
+Build before provisioning the short-lived providers, then run with the same
+explicit disposable loopback PostgreSQL fixture used above:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle --no-run
+python3 scripts/with_disposable_delegated_use_lifecycle.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle -- --ignored --exact actual_executable_runs_managed_machine_use_and_recovers_independent_receipt --test-threads=1
+```
+
+Fresh issuance invokes the real in-process initiation, pre-authorized token exchange,
+PostgreSQL nonce and transaction owners, native holder-proof verifier, managed
+signing grant and HTTP credential builder. The builder selects the explicit
+native Signing Keys owner API and independently opts into the selected machine
+nested VC2 JWT profile. That producer selection binds the nested `vc.id` and
+signed `jti` to the same reserved credential ID; legacy issuance defaults remain
+unchanged. Original credential bytes and status are retained by Issuance; the
+gate does not insert a completed credential or sign it with a local issuer key.
+The selected credential is a one-day, no-status `MachineCredential`.
+
+The machine caller performs START_USE, retrieves and independently verifies the
+signed request, submits its real holder proof, finalizes the exact operation,
+recovers the original receipt, and verifies it with the independent consumer.
+Consumer expectations come from provisioned public trust, the original grant,
+authenticated command responses and the verified request nonce. Later SQL
+inspection checks persistence and audit linkage; it supplies no consumer trust.
+Provider audit counts distinguish request, credential and receipt signing
+invocations from remote TLS signatures. Exact command/request/proof retries and
+receipt recovery must preserve bytes and produce no additional artifact signatures.
+
+The gate also checks a grant revoked after proof submission, historical receipt
+recovery after revocation, current access withdrawal, wrong recovery digests,
+unmapped caller certificates and identity-header spoofing. Denied finalization
+must leave the pending proof unconsumed and retain the previously issued receipt.
+
+This is an internal selected-operation qualification with explicit setup
+boundaries. Organization/registry/trust/grant and active catalog records are
+provisioned under disposable administrator authority. The fourteen restricted
+database identities belong to the delegated-use child; the in-process catalog
+servers and Issuance bootstrap use the disposable administrator pool. Their
+separately provisioned serving-role qualification remains outside this gate.
+Human authentication and the machine holder are test actors. The selected
+no-status issuance lifecycle
+ports are closed bootstrap fixtures; Issuance's public HTTP handlers, human
+catalog administration, Compliance evaluation, revocation publication and
+Presentation Policy evaluation are not qualified here. Four unselected reference providers share
+one authenticated readiness-only fixture origin; attempted record reads fail
+and are asserted absent. The unchanged public Flow wallet
+URIs are not followed by this internal caller. Public routing, production
+deployment and Rifare's business execution remain separate gates.
 
 Stopping or disabling the process preserves every command/request claim, nonce,
 proof, source observation, evaluation and signed result. An uncertain signing

@@ -49,7 +49,7 @@ fn decode_template_reference(
         credential_type: response.credential_type,
         vct: response.vct,
         doctype: response.doctype,
-        supported_formats: response.supported_formats,
+        supported_formats: decode_template_formats(response.supported_formats)?,
         claims: response
             .claims
             .into_iter()
@@ -72,6 +72,37 @@ fn decode_template_reference(
         wallet_configurations: bounded_json(&response.wallet_configs_json, "credential_template")?,
         issuer_algorithm: nonempty(response.issuer_algorithm),
     })
+}
+
+fn decode_template_formats(formats: Vec<String>) -> Result<Vec<String>, FlowProviderError> {
+    formats
+        .into_iter()
+        .map(|format| {
+            // Credential Template publishes public wire names; the selected
+            // Flow capabilities use canonical names. Translate only known
+            // aliases, preserving the direct/nested JWT distinction and list
+            // cardinality. Unknown capabilities must not disappear silently.
+            let canonical = match format.as_str() {
+                "MDOC" | "mdoc" | "mso_mdoc" => "MDOC",
+                "SD_JWT_VC" | "sd_jwt_vc" | "dc+sd-jwt" | "vc+sd-jwt" => "SD_JWT_VC",
+                "VC_JWT" | "jwt_vc" | "jwt_vc_json" | "jwt_vc_json_ld" => "VC_JWT",
+                "VC_JWT_DIRECT_V1" | "vc_jwt_direct_v1" | "application/vc+jwt" => {
+                    "VC_JWT_DIRECT_V1"
+                }
+                "JSON_LD" | "ldp_vc" => "JSON_LD",
+                "ZK_MDOC" | "zk_mdoc" | "zkp_mdoc" => "ZK_MDOC",
+                "VDS_NC" | "vds_nc" | "vds_nc_barcode" => "VDS_NC",
+                "ICAO_EMRTD" | "icao_emrtd" => "ICAO_EMRTD",
+                _ => {
+                    return Err(invalid_response(
+                        "credential_template",
+                        "unknown supported credential format",
+                    ))
+                }
+            };
+            Ok(canonical.to_owned())
+        })
+        .collect()
 }
 
 fn decode_policy_reference(
@@ -1333,7 +1364,7 @@ mod tests {
             status: "active".into(),
             credential_type: "MemberCredential".into(),
             credential_payload_format: "vc_jwt_direct_v1".into(),
-            supported_formats: vec!["VC_JWT_DIRECT_V1".into()],
+            supported_formats: vec!["vc_jwt_direct_v1".into()],
             jwt_vc_profile_json: serde_json::to_string(
                 &marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap(),
             )
@@ -1362,13 +1393,86 @@ mod tests {
         }
         template.jwt_vc_profile_json.clear();
         template.credential_payload_format = "jwt_vc".into();
-        template.supported_formats = vec!["VC_JWT".into()];
+        template.supported_formats = vec!["jwt_vc".into()];
         let legacy = decode_template_reference("template-1", template).unwrap();
+        assert_eq!(legacy.credential_format, "jwt_vc");
+        assert_eq!(legacy.supported_formats, ["VC_JWT"]);
         assert!(legacy.jwt_vc_profile.is_none());
         assert!(serde_json::to_value(legacy)
             .unwrap()
             .get("jwt_vc_profile")
             .is_none());
+    }
+
+    #[test]
+    fn actual_template_owner_format_spellings_and_existing_aliases_cross_the_protobuf_boundary() {
+        use prost::Message;
+        for (canonical, wire_names) in [
+            ("MDOC", vec!["mdoc", "mso_mdoc"]),
+            ("SD_JWT_VC", vec!["sd_jwt_vc", "dc+sd-jwt", "vc+sd-jwt"]),
+            ("VC_JWT", vec!["jwt_vc", "jwt_vc_json", "jwt_vc_json_ld"]),
+            (
+                "VC_JWT_DIRECT_V1",
+                vec!["vc_jwt_direct_v1", "application/vc+jwt"],
+            ),
+            ("JSON_LD", vec!["ldp_vc"]),
+            ("ZK_MDOC", vec!["zk_mdoc", "zkp_mdoc"]),
+            ("VDS_NC", vec!["vds_nc", "vds_nc_barcode"]),
+            ("ICAO_EMRTD", vec!["icao_emrtd"]),
+        ] {
+            for wire in std::iter::once(canonical).chain(wire_names) {
+                let response = crate::credential_template_proto::TemplateResponse {
+                    id: "template-1".into(),
+                    organization_id: "org-1".into(),
+                    supported_formats: vec![wire.into()],
+                    wallet_configs_json: "[]".into(),
+                    ..Default::default()
+                };
+                let encoded = response.encode_to_vec();
+                let decoded = decode_template_reference(
+                    "template-1",
+                    crate::credential_template_proto::TemplateResponse::decode(encoded.as_slice())
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(decoded.supported_formats, [canonical]);
+            }
+        }
+    }
+
+    #[test]
+    fn template_wire_formats_reject_unknown_values_and_preserve_distinct_capabilities() {
+        let response = |formats: &[&str]| crate::credential_template_proto::TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            supported_formats: formats.iter().map(|value| (*value).into()).collect(),
+            wallet_configs_json: "[]".into(),
+            ..Default::default()
+        };
+        for unknown in [
+            "",
+            "unknown",
+            "vc_jwt_direct_v2",
+            "application/vc+jwt;profile=other",
+            "jwt_vc ",
+        ] {
+            for known in ["jwt_vc", "vc_jwt_direct_v1"] {
+                assert!(matches!(
+                    decode_template_reference("template-1", response(&[known, unknown])),
+                    Err(FlowProviderError::InvalidResponse {
+                        provider: "credential_template",
+                        ..
+                    })
+                ));
+            }
+        }
+        let distinct =
+            decode_template_reference("template-1", response(&["jwt_vc", "vc_jwt_direct_v1"]))
+                .unwrap();
+        assert_eq!(distinct.supported_formats, ["VC_JWT", "VC_JWT_DIRECT_V1"]);
+        let duplicate =
+            decode_template_reference("template-1", response(&["jwt_vc", "VC_JWT"])).unwrap();
+        assert_eq!(duplicate.supported_formats, ["VC_JWT", "VC_JWT"]);
     }
 
     fn flow_issuance_fixture(name: &str) -> String {

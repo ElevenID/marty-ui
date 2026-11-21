@@ -1,6 +1,8 @@
-//! Real owner records for the selected exact-operation profile. Only remote
-//! presentation metadata, transport authentication and signing custody are
-//! explicit fixtures; current permissions/consent/policy are actual owners.
+//! Real owner records for the selected exact-operation profile. Legacy `seed`
+//! uses named credential, metadata, transport and signing fixtures. The split
+//! identity/credential constructor lets the network gate supply fresh managed
+//! issuance and actual catalog owners. Permissions, consent and policies use
+//! their real owners in both paths.
 use std::sync::{atomic::AtomicUsize, Arc};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -78,26 +80,20 @@ pub fn all_rights() -> Vec<MachineUsePermission> {
     ]
 }
 
-pub struct Owned {
+/// Independently provisioned organization and holder identity. This phase does
+/// not create a credential, machine registry entry, grant or Flow definition.
+pub struct OwnedIdentity {
     pub organization: Uuid,
     pub user: Uuid,
     pub human: ForwardedPrincipal,
-    pub deployment: Uuid,
-    pub machine_id: Uuid,
     pub principal: Principal,
     pub machine_key: SigningKey,
     pub machine_jwk: Value,
     pub machine_thumbprint: String,
-    pub credential: String,
-    pub delegated_policy: Uuid,
-    pub flow: DelegatedVerificationStartConfiguration,
-    pub approval: OrganizationApprovalConfiguration,
-    pub authority: Authority,
-    pub ports: Arc<FlowPorts>,
-    pub receipts: Arc<ReceiptSigner>,
+    binding_key: Value,
 }
 
-impl Owned {
+impl OwnedIdentity {
     pub async fn seed(admin: &PgPool) -> TestResult<Self> {
         let time = now();
         let user = Uuid::new_v4();
@@ -122,54 +118,6 @@ impl Owned {
         let human = ForwardedPrincipal::User {
             user_id: user.to_string(),
         };
-        let machine_policy = MachineAuthorizationPolicyOwner::new(store.clone());
-        let policy = machine_policy
-            .create(
-                organization.id,
-                &human,
-                MachineAuthorizationPolicyInput {
-                    name: "Exact host machine authentication".into(),
-                    description: None,
-                    policies: vec![CedarPolicyDocument {
-                        policy_id: "selected-machine".into(),
-                        effect: "permit".into(),
-                        cedar_text: format!(
-                            "permit(principal is MartyMachine::Principal, action == MartyMachine::Action::\"urn:marty:machine:authenticate\", resource is MartyMachine::Identity) when {{ context.grant_revision > 0 && context.requested_action == \"{ACTION}\" }};"
-                        ),
-                        description: None,
-                        enabled: true,
-                    }],
-                },
-            )
-            .await?;
-        machine_policy
-            .activate(organization.id, &human, policy.policy_set_id, 1)
-            .await?;
-        let use_policy = DelegationUsePolicyOwner::new(store.clone());
-        let delegated_policy = use_policy
-            .create(
-                organization.id,
-                &human,
-                DelegationUsePolicyInput {
-                    name: "Exact host delegated operation".into(),
-                    description: None,
-                    actions: vec![ACTION.into()],
-                    policies: vec![CedarPolicyDocument {
-                        policy_id: "selected-use".into(),
-                        effect: "permit".into(),
-                        cedar_text: format!(
-                            "permit(principal is MartyDelegatedUse::Principal, action == MartyDelegatedUse::Action::\"{ACTION}\", resource == MartyDelegatedUse::Resource::\"{RESOURCE}\") when {{ context.audience == \"{AUDIENCE}\" && context.delegate_proof_verified && context.consent_and_authority_verified }};"
-                        ),
-                        description: None,
-                        enabled: true,
-                    }],
-                },
-            )
-            .await?;
-        use_policy
-            .activate(organization.id, &human, delegated_policy.policy_id, 1)
-            .await?;
-
         let machine_key = signing_key();
         let machine_jwk = public_jwk(&machine_key);
         let principal = Principal {
@@ -188,15 +136,145 @@ impl Owned {
             "basis":"JWK_RFC7638_SHA256","encoding":"BASE64URL_SHA256",
             "value":thumb.reencode(ThumbprintEncoding::Base64urlSha256).encoded_value()
         });
-        let (trust_profile, credential_id, credential, credential_issuer, credential_public_jwk) =
-            credential(admin, organization.id, &principal.id).await?;
+        Ok(Self {
+            organization: organization.id,
+            user,
+            human,
+            principal,
+            machine_key,
+            machine_jwk,
+            machine_thumbprint,
+            binding_key: key,
+        })
+    }
+}
+
+/// Explicit credential bootstrap from either the named legacy fixture or the
+/// actual managed issuance owner. The selected types come from configuration.
+pub struct MachineCredentialMaterial {
+    pub trust_profile_id: Uuid,
+    pub credential_id: Uuid,
+    pub compact: String,
+    pub issuer: String,
+    pub public_jwk: Value,
+    pub required_types: Vec<String>,
+}
+
+pub struct Owned {
+    pub organization: Uuid,
+    pub user: Uuid,
+    pub human: ForwardedPrincipal,
+    pub deployment: Uuid,
+    pub machine_id: Uuid,
+    pub principal: Principal,
+    pub machine_key: SigningKey,
+    pub machine_jwk: Value,
+    pub machine_thumbprint: String,
+    pub credential: String,
+    pub delegated_policy: Uuid,
+    pub flow: DelegatedVerificationStartConfiguration,
+    pub approval: OrganizationApprovalConfiguration,
+    pub authority: Authority,
+    pub ports: Arc<FlowPorts>,
+    pub receipts: Arc<ReceiptSigner>,
+}
+
+impl Owned {
+    pub async fn seed(admin: &PgPool) -> TestResult<Self> {
+        let identity = OwnedIdentity::seed(admin).await?;
+        let material = credential(admin, identity.organization, &identity.principal.id).await?;
+        Self::seed_with_credential(admin, identity, material, PRESENTATION_POLICY, PUBLIC_BASE)
+            .await
+    }
+
+    /// The network lifecycle supplies a newly issued managed credential and
+    /// real catalog UUIDs. The older assembly/startup suites retain their named
+    /// local bootstrap through `seed`; it is never called by this constructor.
+    pub async fn seed_with_credential(
+        admin: &PgPool,
+        identity: OwnedIdentity,
+        material: MachineCredentialMaterial,
+        presentation_policy_id: &str,
+        public_base_url: &str,
+    ) -> TestResult<Self> {
+        let time = now();
+        let OwnedIdentity {
+            organization: organization_id,
+            user,
+            human,
+            principal,
+            machine_key,
+            machine_jwk,
+            machine_thumbprint,
+            binding_key: key,
+        } = identity;
+        let MachineCredentialMaterial {
+            trust_profile_id: trust_profile,
+            credential_id,
+            compact: credential,
+            issuer: credential_issuer,
+            public_jwk: credential_public_jwk,
+            required_types,
+        } = material;
+        if required_types.is_empty() || required_types.iter().any(|value| value.is_empty()) {
+            return Err("selected machine credential types are absent".into());
+        }
+        let store = PostgresOrganizationStore::new(admin.clone());
+        let machine_policy = MachineAuthorizationPolicyOwner::new(store.clone());
+        let policy = machine_policy
+            .create(
+                organization_id,
+                &human,
+                MachineAuthorizationPolicyInput {
+                    name: "Exact host machine authentication".into(),
+                    description: None,
+                    policies: vec![CedarPolicyDocument {
+                        policy_id: "selected-machine".into(),
+                        effect: "permit".into(),
+                        cedar_text: format!(
+                            "permit(principal is MartyMachine::Principal, action == MartyMachine::Action::\"urn:marty:machine:authenticate\", resource is MartyMachine::Identity) when {{ context.grant_revision > 0 && context.requested_action == \"{ACTION}\" }};"
+                        ),
+                        description: None,
+                        enabled: true,
+                    }],
+                },
+            )
+            .await?;
+        machine_policy
+            .activate(organization_id, &human, policy.policy_set_id, 1)
+            .await?;
+        let use_policy = DelegationUsePolicyOwner::new(store.clone());
+        let delegated_policy = use_policy
+            .create(
+                organization_id,
+                &human,
+                DelegationUsePolicyInput {
+                    name: "Exact host delegated operation".into(),
+                    description: None,
+                    actions: vec![ACTION.into()],
+                    policies: vec![CedarPolicyDocument {
+                        policy_id: "selected-use".into(),
+                        effect: "permit".into(),
+                        cedar_text: format!(
+                            "permit(principal is MartyDelegatedUse::Principal, action == MartyDelegatedUse::Action::\"{ACTION}\", resource == MartyDelegatedUse::Resource::\"{RESOURCE}\") when {{ context.audience == \"{AUDIENCE}\" && context.delegate_proof_verified && context.consent_and_authority_verified }};"
+                        ),
+                        description: None,
+                        enabled: true,
+                    }],
+                },
+            )
+            .await?;
+        use_policy
+            .activate(organization_id, &human, delegated_policy.policy_id, 1)
+            .await?;
+
         let deployment = Uuid::new_v4();
         let machine_id = Uuid::new_v4();
         let runtime = format!("urn:test:host-runtime:{machine_id}");
         let documents = json!({
             "configuration":{
                 "profile":"urn:marty:principal-runtime-binding-configuration:v1",
-                "organization_id":organization.id,"deployment_profile_id":deployment,"principal":principal,
+                "organization_id":organization_id,"deployment_profile_id":deployment,"principal":principal,
                 "authentication_source":{"issuer":principal.id,"subject":principal.id},
                 "allowed_audiences":[VERIFIER_CLIENT_ID],
                 "runtime":{"kind":"MANAGED","instance_ref":runtime,"machine_identity_id":machine_id,
@@ -204,23 +282,23 @@ impl Owned {
                 "expected_key_algorithm":"ES256","expected_key_thumbprint":key,"shared_runtime":false
             },
             "record":{
-                "profile":"urn:marty:principal-runtime-binding:v1","organization_id":organization.id,
+                "profile":"urn:marty:principal-runtime-binding:v1","organization_id":organization_id,
                 "principal":principal,"authentication":{"issuer":principal.id,"subject":principal.id,
                     "audience":VERIFIER_CLIENT_ID,"key_algorithm":"ES256","key_thumbprint":key},
                 "runtime":{"kind":"MANAGED","instance_ref":runtime,"machine_identity_id":machine_id}
             },
             "machine":{
-                "id":machine_id,"organization_id":organization.id,"machine_id":principal.id,
+                "id":machine_id,"organization_id":organization_id,"machine_id":principal.id,
                 "display_name":"Actual host machine","machine_type":"SECURE_PROCESSING_RUNTIME","status":"ACTIVE",
                 "identity_keys":[{"key_id":"host-machine-key","thumbprint":machine_thumbprint,"algorithm":"ES256",
                     "status":"ACTIVE","public_key_jwk":machine_jwk,"valid_from":time-Duration::minutes(1),
                     "valid_until":time+Duration::hours(1)}],
-                "assignments":{"deployment_profile_id":deployment,"operator_organization_id":organization.id},
+                "assignments":{"deployment_profile_id":deployment,"operator_organization_id":organization_id},
                 "credential_ids":[credential_id],"created_at":time-Duration::minutes(1)
             },
             "map":{
-                "id":Uuid::new_v4(),"organization_id":organization.id,"name":"Selected host machine MAP",
-                "trust_profile_id":trust_profile,"required_credential_types":["MachineCredential","RuntimeMembership"],
+                "id":Uuid::new_v4(),"organization_id":organization_id,"name":"Selected host machine MAP",
+                "trust_profile_id":trust_profile,"required_credential_types":required_types,
                 "allowed_machine_types":["SECURE_PROCESSING_RUNTIME"],
                 "machine_binding":{"binding_methods":["MACHINE_KEY"],"proof_profiles":["OID4VP_VERIFIABLE_PRESENTATION"],
                     "proof_freshness":{"challenge_required":true,"audience_binding_required":true,
@@ -231,7 +309,7 @@ impl Owned {
         });
         MachineRegistryService::new(store.clone())
             .register(
-                organization.id,
+                organization_id,
                 &human,
                 MachineRegistryDocuments {
                     binding_record: serde_json::to_vec(&documents["record"])?,
@@ -243,7 +321,7 @@ impl Owned {
             .await?;
         MachineUseAccessOwner::new(store)
             .grant(
-                organization.id,
+                organization_id,
                 &human,
                 machine_id,
                 MachineUseAccessInput {
@@ -256,10 +334,10 @@ impl Owned {
 
         let mut definition = create_definition_record(
             parse_request(json!({
-                "organization_id":organization.id,
+                "organization_id":organization_id,
                 "name":"Selected host delegated verification",
                 "flow_type":"oid4vp_presentation",
-                "presentation_policy_id":PRESENTATION_POLICY
+                "presentation_policy_id":presentation_policy_id
             }))?,
             time,
         )?;
@@ -271,18 +349,18 @@ impl Owned {
         options.request_object.strict_client_metadata = true;
         let flow = DelegatedVerificationStartConfiguration {
             definition: VerificationDefinitionBinding {
-                organization_id: organization.id.to_string(),
+                organization_id: organization_id.to_string(),
                 definition_id: definition.id.clone(),
                 version: definition.version,
             },
             issuer_did: REQUEST_ISSUER.into(),
-            public_base_url: PUBLIC_BASE.into(),
+            public_base_url: public_base_url.into(),
             allow_http_loopback: false,
             options,
         };
         let approval = OrganizationApprovalConfiguration::new(
-            organization.id,
-            organization_principal(organization.id),
+            organization_id,
+            organization_principal(organization_id),
             ApprovalAdapterPin {
                 profile: "urn:test:host-organization-approval:v1".into(),
                 version: "1.0.0".into(),
@@ -294,7 +372,7 @@ impl Owned {
         )?;
         let authority = Authority {
             mode: AuthorityMode::Managed,
-            issuer: organization_principal(organization.id),
+            issuer: organization_principal(organization_id),
             status_ref: "https://delegated-host.example.test/status".into(),
             source_profile: None,
             source_evidence_ref: None,
@@ -302,7 +380,7 @@ impl Owned {
             source_expires_at: None,
         };
         let ports = Arc::new(FlowPorts {
-            organization: organization.id,
+            organization: organization_id,
             principal_id: principal.id.clone(),
             credential_issuer: credential_issuer.clone(),
             credential_public_jwk,
@@ -310,7 +388,7 @@ impl Owned {
             calls: AtomicUsize::new(0),
         });
         let receipts = Arc::new(ReceiptSigner {
-            organization: organization.id,
+            organization: organization_id,
             issuer: Principal {
                 principal_type: PrincipalType::Organization,
                 id: RECEIPT_ISSUER.into(),
@@ -319,7 +397,7 @@ impl Owned {
             calls: AtomicUsize::new(0),
         });
         Ok(Self {
-            organization: organization.id,
+            organization: organization_id,
             user,
             human,
             deployment,
@@ -482,19 +560,36 @@ impl Owned {
     }
 }
 
-async fn credential(
+/// Explicit privileged Trust Profile provisioning from an independently
+/// configured issuer selection. It does not infer authority from credential or
+/// receipt bytes, and does not mint or persist an issuance artifact.
+pub async fn authorize_credential_issuer(
     admin: &PgPool,
     organization: Uuid,
-    subject: &str,
-) -> TestResult<(Uuid, Uuid, String, String, Value)> {
-    let issued = DateTime::from_timestamp(Utc::now().timestamp() - 10, 0).unwrap();
-    let expires = issued + Duration::hours(1);
-    let signer = signing_key();
-    let issuer_name = format!("did:web:{}.issuer.example.test", Uuid::new_v4().simple());
-    let kid = format!("{issuer_name}#credential");
-    let mut key = public_jwk(&signer);
+    issuer_name: &str,
+    public_jwk: &Value,
+    kid: &str,
+    algorithm: &str,
+    credential_types: &[String],
+) -> TestResult<Uuid> {
+    if credential_types.is_empty()
+        || credential_types.iter().any(|value| value.is_empty())
+        || !matches!(algorithm, "ES256" | "EdDSA")
+        || !kid
+            .strip_prefix(issuer_name)
+            .is_some_and(|tail| tail.starts_with('#') && tail.len() > 1)
+        || public_jwk.as_object().is_none_or(|key| {
+            key.keys()
+                .any(|name| !matches!(name.as_str(), "kty" | "crv" | "x" | "y"))
+        })
+    {
+        return Err("invalid explicit credential issuer selection".into());
+    }
+    let issued = now() - Duration::minutes(1);
+    let expires = issued + Duration::hours(2);
+    let mut key = public_jwk.clone();
     key["kid"] = json!(kid);
-    key["alg"] = json!("ES256");
+    key["alg"] = json!(algorithm);
     key["use"] = json!("sig");
     let mut profile = TrustProfile {
         id: Uuid::new_v4(),
@@ -527,9 +622,9 @@ async fn credential(
     let issuer = IssuerEntity {
         id: Uuid::new_v4(),
         organization_id: Some(organization.to_string()),
-        issuer_id: issuer_name.clone(),
+        issuer_id: issuer_name.to_owned(),
         issuer_type: IssuerEntityType::Organization,
-        display_name: "Host fixture credential issuer".into(),
+        display_name: "Explicit host credential issuer".into(),
         description: None,
         is_system_issuer: false,
         compliance_status: IssuerEntityComplianceStatus::Compliant,
@@ -554,7 +649,7 @@ async fn credential(
         relationship_status: TrustRelationshipStatus::Trusted,
         cascade_revocation_policy: CascadeRevocationPolicy::Manual,
         metadata: json!({
-            MACHINE_NESTED_JWT_AUTHORIZATIONS:["MachineCredential","RuntimeMembership"]
+            MACHINE_NESTED_JWT_AUTHORIZATIONS:credential_types
         }),
         created_at: issued,
         updated_at: issued,
@@ -563,6 +658,30 @@ async fn credential(
     repository.save_profile(&profile, None).await?;
     repository.save_issuer_entity(&issuer).await?;
     repository.save_profile_issuer(&relationship).await?;
+    Ok(profile.id)
+}
+
+async fn credential(
+    admin: &PgPool,
+    organization: Uuid,
+    subject: &str,
+) -> TestResult<MachineCredentialMaterial> {
+    let issued = DateTime::from_timestamp(Utc::now().timestamp() - 10, 0).unwrap();
+    let expires = issued + Duration::hours(1);
+    let signer = signing_key();
+    let issuer_name = format!("did:web:{}.issuer.example.test", Uuid::new_v4().simple());
+    let kid = format!("{issuer_name}#credential");
+    let required_types = vec!["MachineCredential".into(), "RuntimeMembership".into()];
+    let trust_profile_id = authorize_credential_issuer(
+        admin,
+        organization,
+        &issuer_name,
+        &public_jwk(&signer),
+        &kid,
+        "ES256",
+        &required_types,
+    )
+    .await?;
     let credential_id = Uuid::new_v4();
     let credential_uri = format!("urn:uuid:{credential_id}");
     let credential = compact_jws(
@@ -608,11 +727,12 @@ async fn credential(
     .bind(expires)
     .execute(admin)
     .await?;
-    Ok((
-        profile.id,
+    Ok(MachineCredentialMaterial {
+        trust_profile_id,
         credential_id,
-        credential,
-        issuer_name,
-        public_jwk(&signer),
-    ))
+        compact: credential,
+        issuer: issuer_name,
+        public_jwk: public_jwk(&signer),
+        required_types,
+    })
 }

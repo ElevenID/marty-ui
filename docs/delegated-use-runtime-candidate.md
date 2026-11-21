@@ -17,6 +17,15 @@ fresh and historical evidence types. The actual executable also has a disposable
 remote-custody startup/readiness gate; its metadata wire fixtures are explicitly
 separate from qualification of full deployed owner services.
 
+A separate managed lifecycle gate now uses actual template/policy gRPC owners,
+fresh managed machine issuance and the real Signing Keys HTTPS service for
+request, credential and receipt signatures. The actual host serves the full
+internal use/recovery sequence and the independent consumer verifies the
+returned receipt. Privileged catalog/trust/identity setup, in-process Issuance
+bootstrap and readiness-only reference fixtures are documented in the
+[host qualification runbook](../rust/services/delegated-use/README.md#actual-executable-and-managed-lifecycle-qualification).
+Public wallet routing and production deployment remain separate.
+
 The human `marty-delegation-commands` executable and its Gateway surface still
 reject use commands. Each current source, transport, database role and receipt
 signer still requires explicit composition. Public MIP remains 0.5.0; support levels and
@@ -330,7 +339,7 @@ The following are separate verification views and overlap; do not add them into
 one aggregate. Rust checks use the locked dependency graph offline. Hosted
 Actions and production deployment are outside this evidence. This table records
 the prior `085d65c` baseline; the current follow-on checks are recorded in the
-[milestone checkpoint](agent-trust-runtime-milestones.md#current-receipt-recovery-verification-and-executable-qualification-follow-on).
+[milestone checkpoint](agent-trust-runtime-milestones.md#current-managed-network-lifecycle-follow-on).
 
 | Check | Result |
 | --- | --- |
@@ -380,9 +389,11 @@ external HTTPS deployment remain open.
    mandatory mutual TLS, exact certificate bindings and separately provisioned
    use, Flow, audit and source credentials. Qualify CA issuance/revocation and
    pin rotation. The human administration host continues rejecting use commands.
-3. Qualify deployed HTTPS and production custody/credentials beyond the passing
-   disposable OpenBao/Redis gate, including the outer receipt adapter and any
-   selected AWS/IAM or network-timeout profile.
+3. Qualify production custody/credentials beyond the disposable complete host
+   lifecycle, including production HTTPS origins, restart/outage behavior and
+   any selected AWS/IAM or network-timeout profile. The local lifecycle already
+   exercises the outer request/credential/receipt HTTPS adapters with separate
+   managed keys; it does not select production credentials.
 4. Qualify the implemented protected receipt recovery and independent verifier
    across deployed services, together with source freshness, public clients and
    the selected public request/response contract. Pending command reconciliation needs its own reviewed

@@ -22,6 +22,11 @@ The next consumer slice adds protected recovery of the exact original signed
 receipt and a standalone verifier with separate fresh and historical evidence
 types. Actual-executable startup/readiness qualification now has a disposable
 OpenBao/Redis harness with explicit metadata wire fixtures.
+The separate managed lifecycle gate replaces selected template/policy wire
+fixtures with actual owner services, issues a fresh managed machine credential,
+and joins protected HTTP use, request/receipt signing, recovery and independent
+verification. Its privileged bootstrap and readiness-only reference fixtures remain
+explicit; it does not qualify public wallet routing or production deployment.
 
 ## Implemented in this application slice
 
@@ -43,9 +48,10 @@ OpenBao/Redis harness with explicit metadata wire fixtures.
 | P03 delegated-use policy owner | Dedicated exact-operation Cedar policy lifecycle, fixed schema, retained current observations and real MMF evaluation | Consumer domain attributes and EXTERNAL_PROFILE adapters remain independently owned |
 | P03 authenticated request/proof ingress | Mandatory mTLS listener with exact leaf certificate binding; protected Flow request retrieval and immutable proof retention, durable one-sign request claims and original deadline checks through COMMIT | Selected by the explicit host; production CA/pin management and public wallet contracts remain unqualified |
 | P03 explicit serving candidate | Default-off `marty-delegated-use` executable, fourteen actual restricted database identities, concrete local-owner and protected-provider assembly, bounded read-only readiness and mandatory mTLS before serving | Selected managed organization / full-machine / KEY / EXACT_OPERATION profile; production network, custody, roles and public consumers remain separate gates |
-| Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures and passing actual OpenBao/Redis router/kernel gate for Ed25519 and ES256 | Selected by the default-off host; deployed outer HTTPS adapter and production custody/credentials remain pending |
+| Managed decision receipt candidate | Dedicated signing-grant origin, pinned remote key, strict transcript binding, independently verified signatures, OpenBao/Redis router/kernel qualification for Ed25519 and ES256, and selected ES256 HTTPS host lifecycle | Production custody, credentials and deployment remain pending |
 | P03 original receipt delivery | Protected read-only recovery of exact FINAL_USE compact JWS bytes, current RECOVER_RESULT access checked around awaited reads, original response/digest/timestamps retained | Internal mTLS host; recovery preserves original evidence under current read access and supplies no renewed grant authority; no additional permission or migration |
 | Independent receipt consumer | Standalone ES256/EdDSA verification with independently pinned trust, exact request context, retained original-byte digest and explicit clock/freshness policy | Sealed fresh/history evidence types; no service, database or Core dependency; public client packaging and business execution remain separate |
+| P03 managed network lifecycle | Actual executable and mTLS use routes, real template/policy gRPC owners, fresh managed issuance, separate remote request/credential/receipt keys, exact recovery and independent consumption | Internal selected operation with privileged setup, in-process Issuance bootstrap and named readiness-only reference fixtures; no public wallet, production or Rifare execution claim |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -77,7 +83,7 @@ administration paths. The next application packages still need:
   audited credential gates. Concrete full-machine/MAP, Trust Profile/issuer/key,
   Issuance status and machine-policy source owners now exist, with their own
   retained evidence and restricted connection checks. Required attestation,
-  protected live service connections and production role qualification remain.
+  production service connections and production role qualification remain.
   Connection/grant aggregation and independent directory qualification remain
   separate. Enrollment key possession does not satisfy these operational checks.
 - Broader approval/authority profiles and qualified represented-subject session
@@ -837,3 +843,177 @@ Rifare's business-execution boundary remain unchanged. Publication uses
 5. Promote public support only after the relevant gates pass, then integrate
    Rifare's own domain permission, budget, replay/idempotency and business-commit
    boundary. Marty evidence does not perform or attest a business outcome.
+
+
+## Current managed network lifecycle follow-on
+
+The follow-on to `0a1ef66` joins the selected operation across the actual
+`marty-delegated-use` executable, production template/policy gRPC owners and
+managed Signing Keys HTTPS service. The earlier startup gate and local-owner
+acceptance remain separate regression views. Three parallel tracks built owner
+integration, custody/issuance and network acceptance; coordinated review exposed
+and corrected real transport mismatches that synthetic metadata had concealed.
+
+### Actual selected-operation path
+
+1. Provision the disposable organization, machine holder, active catalog records
+   and three independently selected signing keys. The template/policy services
+   serve their actual repositories and serializers over remotely held TLS keys.
+2. Invoke the real Issuance initiation, pre-authorized token exchange, nonce and
+   credential applications against PostgreSQL. Native holder-proof verification
+   precedes the purpose-bound managed credential signature and atomic issuance
+   retention. The helper does not insert a completed credential or sign one with
+   a local issuer key. This bootstrap invokes application services in-process;
+   it does not exercise Issuance's public HTTP handlers.
+3. Independently authorize the selected issuer/key/type in Trust Profile, register
+   the full machine/MAP, grant its explicit use rights, and create/approve exact
+   operation terms through the actual Organization and Delegated Authority
+   owners. Human authentication and privileged setup remain test boundaries.
+4. Launch the actual executable with its production configuration, fourteen
+   separately restricted PostgreSQL roles, exact caller certificate mapping and
+   its own delegated-use outbound workload identity. Complete authenticated
+   readiness before accepting commands.
+5. Call START_USE, retrieve the protected managed-signed request, independently
+   verify its signature and selected DCQL requirement/profile/types, submit the
+   machine's real holder proof, and finalize the operation over mTLS HTTP.
+6. Recover the original signed receipt through the protected route and verify it
+   with the independent consumer. Expected trust, actor, operation, grant, policy,
+   nonce and retention binding come from independent provisioning and the
+   authenticated workflow. Database reads are only later audit assertions.
+
+The selected credential is one-day `MachineCredential` under the existing
+nested VC2 JWT profile. Request, credential and receipt signers use distinct
+nonexportable OpenBao Transit keys and separate sign-only credentials. Flow,
+Issuance and Delegated Decision have distinct grant-minting roles; Signing Keys
+receives verify-only access and uses its existing Redis one-use verifier.
+The host's remote TLS key is a different key and carries the exact
+`spiffe://marty.internal/service/delegated-use` URI.
+
+Provider audit counters distinguish those artifact-signing and grant-HMAC
+invocations from transport signatures. One credential, two separate requests
+and one final receipt are expected. Exact command/request/proof retries and receipt recovery
+must add no artifact signature or grant. A second submitted proof loses
+finalization authority after actual grant revocation; its bytes remain retained
+and its challenge remains unconsumed. The first receipt remains recoverable as
+history until actual machine-use access is revoked. All protected routes then
+refuse even exact duplicate or historical reads without deleting evidence.
+
+The offline consumer rejects a different operation and expired fresh use while
+preserving historical evidence and original dates. Its temporal freshness test
+does not query current grant revocation or confer Rifare business permission.
+The receipt remains `EVIDENCE_ONLY`.
+
+### Integration corrections
+
+- Presentation Policy now permits the exact delegated-use workload to call
+  `GetPolicy`, without granting `EvaluatePresentation`. Workload authority comes
+  only from the authenticated TLS leaf. Multiple distinct leaf URI SANs fail
+  closed; a Flow URI on an issuing CA cannot grant evaluation authority.
+- Flow's protobuf template reader canonicalizes the finite recognized public
+  format aliases at the boundary. The real owner emits `jwt_vc`, while Flow's
+  selected capability is `VC_JWT`. Nested and direct JWT profiles remain
+  distinct; unknown capabilities are rejected and list cardinality is preserved.
+- Issuance adds explicit native Signing Keys owner constructors. They require an
+  unambiguous HTTPS origin and use the actual POST/JSON `/internal/compat`
+  resolver and signer routes, with tenant ownership checked in the response and
+  organization included in the signing body. Existing gateway constructors keep
+  their original GET/query and signing-query behavior. The purpose-bound grant
+  still binds the exact owner route, operation, organization, issuer, key,
+  algorithm and signing input.
+- The selected strict machine credential verifier requires nested `vc.id` to
+  equal signed `jti`; the legacy issuer's default omits the nested ID. An explicit
+  trusted `with_machine_nested_vc2_jwt_profile()` builder selection uses the
+  existing Core preparation/completion APIs to bind both IDs to the reserved
+  credential. It is independent of HTTP transport selection and rejects other
+  types/formats, direct timing, unsupported algorithms, explicit documents and
+  status-bearing inputs before signing. Existing legacy and direct issuance
+  defaults, verifier rules and status-source rules remain unchanged.
+
+### Explicit qualification boundary
+
+The selected use path consumes real owner state, cryptographic proof, current
+policies, audit and managed signatures. Active catalog records and
+organization/trust/registry/grant setup are privileged fixture provisioning.
+Human catalog administration and its activation dependencies, including
+Compliance evaluation, are not exercised; unused administration and Presentation
+Policy evaluation ports deny access.
+The fourteen restricted database identities belong to the delegated-use child.
+The in-process catalog servers and Issuance bootstrap use the disposable
+administrator pool; their separately provisioned serving-role qualification
+remains outside this gate.
+The no-status issuance lifecycle dependencies are closed bootstrap fixtures
+bound to the exact stored template, organization, issuer and subject. This gate
+does not qualify revocation publication, broader delivery modes or public
+Issuance routing.
+
+Four unselected reference providers share one authenticated readiness-only
+fixture origin. Any attempted record read fails, is counted, and must remain
+absent. The selected Flow omits the optional human-only catalog references;
+actual Trust Profile and
+Issuance checks still run through restricted sources. The test also asserts
+zero calls to the older ephemeral request/receipt signers.
+
+The caller uses protected internal request/proof routes and does not follow the
+unchanged public Flow wallet URIs. No public Gateway contract, capability
+promotion, production CA/custody/role qualification or Rifare business operation
+is established by this local gate. The executable stays default-off, public MIP
+stays 0.5.0, and the Protocol source pin is unchanged.
+
+### Managed lifecycle validation
+
+Local validation on 2026-11-21 completed with the reviewed dependency graph:
+
+| Gate | Result |
+| --- | --- |
+| Combined delegated-use, Flow and Issuance library/test target build | Passed with `--locked --offline` |
+| Actual executable managed network lifecycle | 1 passed, 0 failed, 0 ignored; 11.15 seconds |
+| Actual executable startup/readiness regression | 1 passed, 0 failed, 0 ignored; 11.99 seconds |
+| Existing actual-owner PostgreSQL acceptance | 3 passed, 0 failed, 0 ignored |
+| Delegated-use library and host smoke | 12 + 3 passed, no failures or ignored cases |
+| Issuance library | 477 passed, 0 failed, 12 existing fixture-dependent cases ignored |
+| Credential signing behavior | 16 passed, 0 failed, 0 ignored |
+| Flow library | 97 passed, 0 failed, 26 existing fixture-dependent cases ignored |
+| Presentation Policy library | 121 passed, 0 failed, 3 existing fixture-dependent cases ignored |
+
+The explicitly enabled network gate exercised the positive managed lifecycle,
+original-byte retries and historical recovery, independent consumer rejection
+of a different operation and expired fresh use, wrong recovery digest, unmapped
+caller and spoofed identity headers. After grant revocation, new START_USE
+returns access denied; a pending FINALIZE_USE returns the existing grant-snapshot
+conflict before inserting a finalization claim. Provider invocation counters
+remain unchanged, no second receipt is produced, and the pending proof remains
+unconsumed. Current access withdrawal then denies all tested protected recovery,
+duplicate and read paths while preserving the artifacts.
+
+The Issuance suite includes four native-owner transport/ownership/grant tests
+and the new real-signature machine profile regression. The latter preserves the
+legacy omitted-ID output, verifies the selected profile with the native
+verifier, rejects a modified signature, and prevents signing for seventeen
+incompatible selections. Presentation Policy includes four leaf-identity and
+method-authorization checks; Flow tests actual protobuf format spellings,
+direct/nested distinction and unknown-format rejection.
+
+All 814 dependency identity/version/source/checksum tuples, all 62 SQL
+migrations and the reviewed Core/Protocol source pins remain unchanged. The
+lockfile adds only the existing local Presentation Policy test dependency edge.
+Scoped Rust formatting, both wrapper syntax checks, documentation links, OSS
+commerce boundary and source-pin/probe-lock checks passed. Disposable wrapper
+failure cleanup also propagated the child exit code, closed the provider ports
+and removed its token directory. No production deployment or public support
+promotion is included.
+
+### Remaining next milestones
+
+1. Define and qualify the public delegated request/response and wallet routing
+   contract. Package the public client and independent receipt verifier without
+   exposing internal storage or private service APIs to Rifare.
+2. Qualify production CA issuance/revocation, pin/key rotation, separately
+   provisioned roles, custody, outage and restart behavior. A pending-claim
+   reconciliation contract is still required before any takeover or re-signing;
+   this change introduces neither.
+3. Implement and qualify separately selected required-attestation,
+   external-authority/domain and represented-subject SESSION profiles. Their
+   schemas alone do not establish a runtime adapter.
+4. Promote public support only for qualified profiles, then integrate Rifare's
+   own domain permission, budget, replay/idempotency and business-commit rules.
+   Marty evidence does not perform or attest the business outcome.

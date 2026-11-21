@@ -128,7 +128,7 @@ def provision(bao, root: Path, address: str) -> dict[str, str]:
     return environment
 
 
-def execute(bao_binary: Path, redis_binary: Path, command: list[str]) -> int:
+def execute(bao_binary: Path, redis_binary: Path, command: list[str], *, provisioner=provision) -> int:
     with tempfile.TemporaryDirectory(prefix="marty-delegated-use-runtime-") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
@@ -154,7 +154,7 @@ def execute(bao_binary: Path, redis_binary: Path, command: list[str]) -> int:
                            if not key.startswith(("BAO_", "VAULT_", "MARTY_TEST_", "DELEGATED_USE_"))
                            and key != "MARTY_DELEGATED_USE_ENABLED"
                            and key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
-            environment.update(provision(bao, root, address))
+            environment.update(provisioner(bao, root, address))
             port, password, nonce = receipt.available_port(), secrets.token_hex(32), secrets.token_hex(32)
             redis_config = receipt.write_private(root, "redis.conf", "\n".join([
                 "bind 127.0.0.1", f"port {port}", "protected-mode yes", f"requirepass {password}",
