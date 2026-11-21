@@ -10,6 +10,9 @@ import pytest
 from scripts import passport_supported_native_batch_preflight as preflight
 
 
+pytestmark = pytest.mark.usefixtures("rootful_docker_environment")
+
+
 NOW = datetime(2026, 9, 30, tzinfo=timezone.utc)
 PROJECT = "marty-passport-acceptance-base-abcdef"
 NATIVE_ID = "a" * 64

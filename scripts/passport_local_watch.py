@@ -17,14 +17,16 @@ import sys
 
 from passport_supported_certificate_rehearsal import validate_certificate_setup
 from passport_supported_disposable_ceremony import bootstrap_certificate_chain
+from passport_remote_tls import accept_remote_tls
 from passport_supported_infra_rehearsal import (
-    INFRA, ROOT, _accept_bootstrap_files, _bootstrap_args, _compose_args,
-    _local_docker_environment, _prepare_bootstrap_output, _remove_bootstrap_output,
+    INFRA, ROOT, _accept_bootstrap_files, _bootstrap_args, _compose_args, _inspect_local,
+    _prepare_bootstrap_output, _remove_bootstrap_output,
     _require_empty_project, _staged_environment,
 )
 from passport_supported_provisioning_producer import (
-    _remove_staged_inputs, stage_disposable_inputs,
+    _remove_staged_inputs, _tls_bootstrap_args, stage_disposable_inputs,
 )
+import passport_watch_prepare as preparation
 
 
 def run(args: list[str], env: dict[str, str], log: Path, timeout: int) -> bool:
@@ -32,9 +34,10 @@ def run(args: list[str], env: dict[str, str], log: Path, timeout: int) -> bool:
         output.write(("\nCOMMAND: " + " ".join(args[:3]) + " ...\n").encode())
         output.flush()
         try:
-            result = subprocess.run(args, env=env, stdout=output, stderr=output,
+            result = subprocess.run(args, env=preparation.docker_environment(env),
+                                    stdout=output, stderr=output,
                                     timeout=timeout, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             output.write(f"\nERROR: {type(exc).__name__}\n".encode())
             return False
         output.write(f"\nEXIT: {result.returncode}\n".encode())
@@ -43,8 +46,15 @@ def run(args: list[str], env: dict[str, str], log: Path, timeout: int) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--plan", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--prepare", action="store_true",
+                        help="prepare the local dependency image before obtaining a disposable plan")
+    dependency_input = parser.add_mutually_exclusive_group()
+    dependency_input.add_argument("--private-forks-token-file", type=Path,
+                        help="owned mode-0600 reader file outside the checkout; --prepare only")
+    dependency_input.add_argument("--git-source-seed", type=Path,
+                        help="private exact-lock Git seed exported by passport_watch_git_seed.py; --prepare only")
+    parser.add_argument("--plan", type=Path)
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--port", type=int, default=29878)
     parser.add_argument("--resume", action="store_true",
                         help="reuse this project's already staged local resources")
@@ -53,6 +63,25 @@ def main() -> int:
     parser.add_argument("--stop", action="store_true",
                         help="remove this disposable project and its staged secrets")
     args = parser.parse_args()
+    # The native policy subprocess also inherits this process environment.
+    # Preparation uses only its explicit file; later phases receive no reader.
+    safe_environment = preparation.credential_free_environment(dict(os.environ))
+    os.environ.clear()
+    os.environ.update(safe_environment)
+    if args.prepare:
+        if (not (args.private_forks_token_file or args.git_source_seed) or args.plan or args.manifest
+            or args.resume or args.watch_only or args.stop):
+            parser.error("--prepare requires one of --private-forks-token-file or --git-source-seed")
+        try:
+            options = {"git_source_seed": args.git_source_seed} if args.git_source_seed else {}
+            prepared, log = preparation.prepare(ROOT, args.private_forks_token_file, safe_environment, **options)
+        except preparation.WatchPreparationError as exc:
+            raise SystemExit(str(exc)) from None
+        print(f"Prepared local watcher image: {prepared['PASSPORT_WATCH_IMAGE']}", flush=True)
+        print(f"Private preparation log: {log}", flush=True)
+        return 0
+    if not args.plan or not args.manifest or args.private_forks_token_file or args.git_source_seed:
+        parser.error("startup and teardown require --plan and --manifest; dependency inputs are preparation-only")
     if (args.watch_only or args.stop) and not args.resume:
         parser.error("--watch-only and --stop require --resume")
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
@@ -67,11 +96,27 @@ def main() -> int:
             < datetime.fromisoformat(plan["expires_at"]))):
         raise SystemExit("The local source, release manifest, or plan lease differs")
     project = plan["project"]
-    docker_env = _local_docker_environment(os.environ.copy())
+    docker_env = preparation.docker_environment(dict(os.environ))
 
     def inspect(command: list[str]) -> str:
-        return subprocess.check_output(["docker", *command], env=docker_env,
-                                       text=True, timeout=30)
+        return _inspect_local(command, docker_env)
+
+    if args.stop:
+        # Compose down still parses interpolation but does not use an image or
+        # seed. Old/expired projects must remain removable without preparation.
+        prepared = {"PASSPORT_WATCH_IMAGE": "marty-passport-rust-watch:local",
+                    "PASSPORT_WATCH_SEED_ID": "0" * 64,
+                    "PASSPORT_WATCH_LOCK_SHA256": "0" * 64}
+    else:
+        try:
+            preparation.require_resource_limits(docker_env)
+            prepared = preparation.prepared_image(ROOT, docker_env)
+            if args.resume:
+                preparation.require_current_volumes(
+                    project, prepared["PASSPORT_WATCH_SEED_ID"], docker_env,
+                )
+        except preparation.WatchPreparationError as exc:
+            raise SystemExit(str(exc)) from None
 
     if args.resume:
         root = Path("/tmp") / project
@@ -81,13 +126,15 @@ def main() -> int:
     else:
         _require_empty_project(project, inspect)
         root, env_file = stage_disposable_inputs(plan, args.port, now=now)
-    env = _local_docker_environment(_staged_environment(env_file))
+    env = preparation.docker_environment(_staged_environment(env_file))
+    env.update(prepared)
     if args.resume:
         args.port = int(env["PASSPORT_ACCEPTANCE_GATEWAY_PORT"])
     compose = _compose_args(plan, env_file)
     log = root / "local-watch.log"
     output_dir = root / "bootstrap-output"
-    watch = ROOT / "docker-compose.passport-supported-disposable-watch.yml"
+    tls_output_dir = root / "tls-output"
+    watch = ROOT / "deploy/compose/development/docker-compose.passport-supported-disposable-watch.yml"
     if args.stop:
         owned = inspect(["ps", "-aq", "--filter",
                          f"label=com.docker.compose.project={project}"]).split()
@@ -114,6 +161,7 @@ def main() -> int:
         ("OpenBao bootstrap", _bootstrap_args(plan, root, output_dir, args.port), 180),
     )
     if not args.resume:
+        tls_command = _tls_bootstrap_args(plan, root, tls_output_dir, environment=env)
         _prepare_bootstrap_output(output_dir)
         for name, command, timeout in phases:
             print(f"Starting {name}...", flush=True)
@@ -121,6 +169,15 @@ def main() -> int:
                 print(f"{name} failed. Inspect {log} and project containers.", flush=True)
                 return 1
         _accept_bootstrap_files(root, output_dir)
+        _prepare_bootstrap_output(tls_output_dir)
+        print("Starting managed keyless TLS bootstrap...", flush=True)
+        if not run(tls_command, env, log, 180):
+            print(f"Managed keyless TLS bootstrap failed. Inspect {log}.", flush=True)
+            return 1
+        accept_remote_tls(
+            tls_output_dir, root / "secrets",
+            (root / "secrets" / "bao_root_token").read_text(encoding="ascii"),
+        )
         print("Starting managed signer...", flush=True)
         if not run([*compose, "up", "-d", "--wait", "--wait-timeout", "360",
                     "signing-keys"], env, log, 600):
@@ -131,7 +188,7 @@ def main() -> int:
         validate_certificate_setup(certificate, plan, args.port)
     if not args.watch_only:
         print("Starting complete local stack...", flush=True)
-        if not run([*compose, "-f", str(watch), "up", "-d", "--build",
+        if not run([*compose, "-f", str(watch), "up", "-d", "--no-build",
                     "--wait", "--wait-timeout", "1200"],
                    env, log, 1500):
             print(f"Local stack startup failed. Project retained for diagnosis: {project}",
@@ -139,7 +196,7 @@ def main() -> int:
             return 1
     print("Replacing issuance-native with source watcher...", flush=True)
     if not run([*compose, "-f", str(watch), "up", "-d", "--no-deps",
-                "--build", "--force-recreate", "--wait", "--wait-timeout", "1200",
+                "--no-build", "--force-recreate", "--wait", "--wait-timeout", "1200",
                 "issuance-native"], env, log, 1500):
         print(f"Watcher startup failed. Project retained for diagnosis: {project}",
               flush=True)

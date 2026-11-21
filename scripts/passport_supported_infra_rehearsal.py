@@ -21,6 +21,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.passport_disposable_identity import managed_key_reference
+from scripts.local_docker import local_docker_environment
 
 if __package__:
     from .passport_supported_provisioning_producer import (
@@ -54,27 +55,24 @@ JOB_IDENTITIES = frozenset({
 def _run(args: list[str], environment: dict[str, str], timeout: int) -> bool:
     """Run a fixed Docker command without capturing sensitive output."""
     try:
-        result = subprocess.run(args, env=environment, stdout=subprocess.DEVNULL,
+        result = subprocess.run(args, env=local_docker_environment(environment),
+                                stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, check=False, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 
 
 def _local_docker_environment(environment: dict[str, str]) -> dict[str, str]:
-    local = environment.copy()
-    local["DOCKER_HOST"] = "unix:///var/run/docker.sock"
-    for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
-        local.pop(name, None)
-    return local
+    return local_docker_environment(environment)
 
 
 def _inspect_local(args: list[str], environment: dict[str, str]) -> str:
     try:
-        result = subprocess.run(["docker", *args], env=environment,
+        result = subprocess.run(["docker", *args], env=local_docker_environment(environment),
                                 capture_output=True, text=True, encoding="utf-8",
                                 check=True, timeout=25)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise ProducerError("Disposable local Docker inspection failed") from exc
     if len(result.stdout) > 1024 * 1024:
         raise ProducerError("Disposable local Docker inspection is oversized")

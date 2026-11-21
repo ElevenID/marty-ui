@@ -25,9 +25,10 @@ previous=''
 while :; do
   current="$(snapshot)"
   if [[ "$current" != "$previous" ]]; then
+    python3 /workspace/scripts/passport_watch_prepare.py --check-seed
     previous="$current"
     echo 'Passport Rust source changed; rebuilding issuance-native.'
-    if cargo build --locked -p marty-issuance-service --bin marty-issuance-service; then
+    if cargo build --locked --offline -p marty-issuance-service --bin marty-issuance-service; then
       stop_child
       (
         . /workspace/scripts/load-secrets-env.sh
