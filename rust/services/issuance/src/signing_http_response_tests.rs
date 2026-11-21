@@ -583,6 +583,7 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
                 .resolve(&proof_request(true))
                 .await
                 .unwrap()
+                .expect("fixture requires attestation")
                 .key_storage,
             vec!["hardware"]
         );
@@ -628,7 +629,7 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
     peer.set(Reply::json(404, br#"{"detail":"not-found"}"#.as_slice()));
     assert_eq!(
         policy.resolve(&proof_request(true)).await.unwrap(),
-        Default::default()
+        Some(Default::default())
     );
     assert!(matches!(
         resolver

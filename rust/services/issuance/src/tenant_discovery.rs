@@ -45,7 +45,7 @@ pub trait ProofPolicyResolver: Send + Sync {
     async fn resolve(
         &self,
         request: &ProofPolicyRequest,
-    ) -> Result<KeyAttestationRequirements, TenantDiscoveryError>;
+    ) -> Result<Option<KeyAttestationRequirements>, TenantDiscoveryError>;
 }
 
 #[derive(Clone)]
@@ -115,7 +115,7 @@ impl TenantDiscoveryService {
                 );
             }
             let base = plan
-                .build(&policies)
+                .build_with_attestation_policies(&policies)
                 .map_err(|_| TenantDiscoveryError::IncompletePlan)?;
             let configuration = base
                 .credential_configurations_supported
@@ -147,7 +147,7 @@ impl TenantDiscoveryService {
         for request in plan.proof_policy_requests() {
             policies.insert(request.clone(), self.proof_policies.resolve(request).await?);
         }
-        plan.build(&policies)
+        plan.build_with_attestation_policies(&policies)
             .map_err(|_| TenantDiscoveryError::IncompletePlan)
     }
 }

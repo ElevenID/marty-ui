@@ -527,7 +527,7 @@ impl ProofPolicyResolver for ContractProofPolicies {
     async fn resolve(
         &self,
         request: &ProofPolicyRequest,
-    ) -> Result<KeyAttestationRequirements, TenantDiscoveryError> {
+    ) -> Result<Option<KeyAttestationRequirements>, TenantDiscoveryError> {
         self.calls
             .lock()
             .expect("proof policy calls")
@@ -535,11 +535,12 @@ impl ProofPolicyResolver for ContractProofPolicies {
         if self.unavailable {
             return Err(TenantDiscoveryError::ProofPolicyUnavailable);
         }
-        Ok(self
-            .requirements
-            .get(&request.credential_format)
-            .cloned()
-            .unwrap_or_default())
+        Ok(Some(
+            self.requirements
+                .get(&request.credential_format)
+                .cloned()
+                .unwrap_or_default(),
+        ))
     }
 }
 
