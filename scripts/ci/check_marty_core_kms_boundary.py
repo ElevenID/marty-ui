@@ -7,7 +7,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "64601c9513850e3eb60b00f6aa893cae8d9e4b0d"
+CORE_REVISION = "11152cfb83ec47174a21ad76fd4c9e811c93602f"
 CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
@@ -24,7 +24,7 @@ LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
 LINKED_DATA_SOURCE = (
     f"git+https://github.com/ElevenID/ssi-elevenid?rev={LINKED_DATA_REVISION}#{LINKED_DATA_REVISION}"
 )
-SD_JWT_REVISION = "ba5a9a154ae530ddcfcc5b52adf3da71e91b1929"
+SD_JWT_REVISION = "9fc75ab0befe6b7f80987acd8b740baead40ee76"
 SD_JWT_SOURCE = f"git+https://github.com/ElevenID/sd-jwt-rust?rev={SD_JWT_REVISION}#{SD_JWT_REVISION}"
 SSI_COMPANION_PACKAGES = {
     "ssi", "ecdsa", "linked-data", "linked-data-derive",
@@ -52,6 +52,10 @@ FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
 
 
 def check_fork_sources(packages: list[dict]) -> None:
+    jwt = [(package["version"], package.get("source")) for package in packages if package["name"] == "jsonwebtoken"]
+    if jwt != [("11.1.0", "registry+https://github.com/rust-lang/crates.io-index")]:
+        raise ValueError("Expected one reviewed registry jsonwebtoken 11.1.0 package")
+
     isomdl = [package for package in packages if package["name"] == "isomdl"]
     if (
         len(isomdl) != 1
@@ -116,7 +120,7 @@ def check_production_crypto_tree(tree: str) -> None:
     forbidden = (
         r'ecdsa feature "signing"',
         r'(?:p256|p384|p521|k256) feature "ecdsa"',
-        r'jsonwebtoken feature "rust_crypto"',
+        r'jsonwebtoken feature "(?:rust_crypto|aws_lc_rs)"',
         r'ed448-goldilocks-plus feature "(?:signing|default|pkcs8)"',
     )
     if any(re.search(pattern, tree) for pattern in forbidden):
