@@ -2,6 +2,7 @@ use marty_service_runtime::{shutdown_signal, wait_for_shutdown};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_organization::{
+    application::ORGANIZATION_OUTBOX_PARTITIONS,
     migration::{migrate_organization_schema, validate_organization_schema},
     organization_core_router,
     organization_proto::organization_service_server::OrganizationServiceServer,
@@ -41,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
             if command == "migrate" {
                 migrate_organization_schema(&pool).await?;
-                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)?;
+                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", ORGANIZATION_OUTBOX_PARTITIONS)?;
                 outbox.migrate().await?;
                 drop(outbox);
             } else {
