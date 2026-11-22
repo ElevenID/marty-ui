@@ -253,14 +253,14 @@ failure would discard useful evidence.
 
 The migration Job runs existing binary commands as ordered init containers:
 revocation-profile, shared/notification bootstrap, organization,
-credential-template, flow, device-registration and verification. The
+credential-template, presentation-policy, flow, device-registration and verification. The
 Credential Template step uses its explicit `bootstrap` command to migrate,
 reconcile and seed the catalog under the migration-job identity. Presentation
 Policy has separate `migrate` and `bootstrap-builtins` operator steps. Normal
 Credential Template and Presentation Policy service startup is validation-only
 and does not seed or reconcile records. Bounded curl retries then wait for the
-organization and credential-template runtimes before the native issuance
-migration runs. This prevents fresh issuance from permanently seeding an empty
+organization, credential-template and presentation-policy runtimes before the
+native issuance migration runs. This prevents fresh issuance from permanently seeding an empty
 application-template catalog.
 The Job has a deadline and retry limit. It is a regular Job, so `helm --wait`
 can observe the schema-validating applications and migration completion
