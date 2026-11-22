@@ -142,7 +142,8 @@ def runtime(monkeypatch, tmp_path):
             with ExitStack() as held:
                 yield SimpleNamespace(generation_sequence=33, selected_sha256="d" * 64,
                     check_website_composition=lambda assets, **kwargs: website.inspect_composition(
-                        config, "new", values, record, assets, owner_root=OWNER_ROOT, held=held, **kwargs))
+                        config, "new", values, record, assets, owner_root=OWNER_ROOT, held=held,
+                        plan_owner=live.get("plan_owner"), **kwargs))
         finally:
             live["held"] = False
             events.append("lease-exit")
@@ -233,6 +234,48 @@ def test_combined_edge_preflight_withholds_result_on_late_input_failure(runtime)
     runtime.live["late_input_error"] = True
     with pytest.raises(ValueError, match=PRIVATE):
         run(runtime)
+
+
+def test_plan_request_holds_original_proof_files_and_uses_observed_template(runtime, monkeypatch):
+    from contextlib import nullcontext
+    import selfhost_windows_website_plan as plan
+
+    prepare_full_standalone(runtime)
+    assets = runtime.root / "composition"
+    assets.mkdir()
+    proofs = {}
+    for name in website.product_journal.ARTIFACTS:
+        path = assets / name
+        raw = name.encode()
+        path.write_bytes(raw)
+        runtime.live["inputs"][path] = raw
+        proofs[name] = website.selection.digest(raw)
+    routes = runtime.proof.with_name("web-surface-routes.json")
+    routes.write_text('{"synthetic":"routes"}', encoding="utf-8")
+    runtime.live["plan_owner"] = {"identity": "owner-derived"}
+    monkeypatch.setattr(website.renewal, "hold_storage_namespace", lambda _path: nullcontext())
+    monkeypatch.setattr(website, "_held_private_input", lambda _path, **_kwargs: nullcontext())
+    attempt = Path(str(OWNER_ROOT / ("windows-website-" + "a"*32)))
+
+    def from_observation(before, manifest, **kwargs):
+        assert runtime.live["held"] and manifest == runtime.manifest
+        assert kwargs["anchor"] == runtime.live["plan_owner"] and kwargs["attempt_directory"] == attempt
+        assert kwargs["edge_template"] == TEMPLATE_BODY
+        assert kwargs["proof_sha256"] == proofs and kwargs["routes"] == {"synthetic": "routes"}
+        assert before["services"]["edge"]["volumes"][0]["read_only"]
+        assert all(("hold-input", assets / name) in runtime.events for name in proofs)
+        assert "proof-exit" not in runtime.events
+        return {"schema": plan.SCHEMA, "plan_sha256": "a"*64, "states": {}, "proof_sha256": proofs,
+                "attempt_directory": str(attempt)}
+
+    monkeypatch.setattr(plan, "from_observation", from_observation)
+    result = website.check(runtime.root / "selection.json", assets, plan_attempt_directory=attempt, **runtime.kwargs)
+    assert result["transition_plan"] == {"schema": plan.SCHEMA, "plan_sha256": "a"*64,
+                                        "states": {}, "proof_sha256": proofs}
+    assert str(attempt) not in json.dumps(result)
+    assert not result["activation_supported"] and not result["production_admission"]
+    assert all(runtime.events.index("proof-exit") < runtime.events.index(("release-input", assets / name))
+               for name in proofs)
 
 
 def test_authenticated_preflight_preserves_historical_initializer_and_never_claims_activation(runtime):
