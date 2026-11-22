@@ -23,6 +23,14 @@ Flow, Issuance and Trust Profile. The organization survived. The release
 owner still needs to qualify production data recovery and the application
 journeys on the signed full composition.
 
+In the database rollback rehearsal, the v1.1.274 Issuance schema verifier
+refused the migrated database. The other four available v1.1.274 read-only
+schema verifiers passed. All five passed on a separate restore of the
+pre-upgrade PostgreSQL archive, which contained the synthetic organization.
+The full-release rollback plan must account for writes made after the backup.
+An edge-only website rollback can retain the accepted application and database
+generation.
+
 At 22:34 UTC, the original installed recovery caller still selected generation
 33, local sequence 9. A read-only check found the same 31 container IDs in two
 snapshots. Seven services changed runtime state. The installed expired-origin
@@ -45,7 +53,9 @@ The [rollback PR](https://github.com/ElevenID/marty-ui/pull/2059) restores the
 edge under the renewed selection. It verifies combined public and loopback
 routes, authenticated account and organization access, and candidate identity
 before retirement. It repeats the live checks with the candidate absent.
-The next rollback step is to publish the combined selection and release the guard.
+The renewed rollback path publishes the combined model with the current
+credentials and archives its guard after authenticated readback. The installed
+Windows caller and host rehearsal still need to exercise this path.
 Production activation still requires credential
 recovery, healthy application and identity checks, the signed full composition,
 and renewal and reboot rehearsal. Keep [#2017](https://github.com/ElevenID/marty-ui/pull/2017)

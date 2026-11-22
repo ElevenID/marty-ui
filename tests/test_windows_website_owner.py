@@ -667,6 +667,7 @@ def test_readmit_archived_split_guard_and_require_the_exact_fresh_baseline(monke
     ('nonzero', None), ('after-return', None), ('protected-drift', None), ('historical-evidence', None)])
 def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys, fault, retirement_fault):
     import selfhost_windows_website_current_backout as backout
+    import selfhost_windows_website_abort_release as release
     from types import SimpleNamespace
 
     with fixture(monkeypatch) as (root, phase, transaction, outcome, path, config):
@@ -812,7 +813,11 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
                 raise ValueError('HTTP qualification failed')
             runtime, obs = observe(context, proposal, routes, state, before_intent=True)
             del obs['protected_runtime_sha256']
-            return [], runtime, obs, {'application_handoffs_sha256': '9'*64}
+            peer = {'address': '127.0.0.1', 'version': 'TLSv1.3', 'leaf_sha256': '6'*64}
+            auth = {'account_matched': True, 'organization_matched': True, 'authenticated_application_exercised': True,
+                    'account_tls': peer, 'organization_tls': peer}
+            return [], runtime, obs, {'application_handoffs_sha256': '9'*64, 'public_routes_sha256': '8'*64,
+                                      'authenticated_application': auth}
 
         custody = {'candidate_id': '1'*64, 'observed_candidate': {'service': backout.contract.SLOT, 'status': 'running'},
                    'remove_command': ['container', 'rm', '1'*64]}
@@ -835,6 +840,8 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
         assert website.main(verified_args) == 0
         audit = selection.decode(capsys.readouterr().out.encode())
         retire = [*verified_args[:-1], 'retire-candidate', '--qualification-sha256', audit['qualification_sha256']]
+        check_retired = [*verified_args[:-1], 'verify-retirement', '--retired-receipt-sha256']
+        assert website.main([*check_retired, '0'*64]) == 2 and not removals
         assert website.main(retire[:-1] + ['0'*64]) == 2 and not removals
         interruptions['public'] = True
         assert website.main(retire) == 2 and not removals
@@ -842,11 +849,100 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
         assert website.main(retire) == (0 if retirement_fault is None else 2)
         interruptions['post'] = False
         assert website.main(retire) == (2 if retirement_fault == 'missing-return' else 0)
+        if retirement_fault != 'missing-return':
+            last = capsys.readouterr().out.strip().splitlines()[-1]
+            retired_pin = selection.decode(last.encode())['receipt_sha256']
+            with monkeypatch.context() as read_only:
+                def unexpected_write(*args, **kwargs):
+                    pytest.fail('retirement readback attempted to write or dispatch')
+                read_only.setattr(backout.stage, '_material', unexpected_write)
+                read_only.setattr(backout.reconcile, '_remove_candidate', unexpected_write)
+                assert website.main([*check_retired, retired_pin]) == 0
+                verified = selection.decode(capsys.readouterr().out.encode())
+                assert verified['receipt_sha256'] == retired_pin and verified['guard_retained']
+                assert website.main([*check_retired, '0'*64]) == 2
+                interruptions['post'] = True
+                assert website.main([*check_retired, retired_pin]) == 2
+                interruptions['post'] = False
+        else:
+            assert website.main([*check_retired, '0'*64]) == 2
         assert website.main(verified_args) == 2 and removals == ['1'*64]
         assert website.main(reconcile) == 2
         assert renewal.product_transition_guard(config).is_file()
         if retirement_fault is None:
+            capsys.readouterr()
+            select = ['--select-combined', *check_retired[1:-3], '--retired-receipt-sha256', retired_pin]
+            select[select.index('--intent-sha256')] = '--forward-intent-sha256'
+            predecessor = Path(new_journal)
+            before = (predecessor / '000001.selection.json').read_bytes()
+            interruptions['public'] = True
+            assert website.main(select) == 2 and not (predecessor / owner.COMBINED_INTENT).exists()
+            interruptions['public'] = False
+            with monkeypatch.context() as interrupted:
+                def stop_at_rename(*_args):
+                    raise RuntimeError('interrupted after staging the combined owner')
+                interrupted.setattr(owner, '_commit_selection', stop_at_rename)
+                assert website.main(select) == 2
+            link_bytes = (predecessor / owner.COMBINED_INTENT).read_bytes()
+            assert (predecessor / owner.COMBINED_PENDING).is_file()
+            retry = [*select, '--intent-sha256', selection.digest(link_bytes)]
+            assert website.main(retry) == 0
+            chosen = selection.decode(capsys.readouterr().out.encode())
+            assert chosen['schema'] == owner.RENEWED_COMBINED_SCHEMA and chosen['generation_sequence'] == 2
+            assert chosen['selected_sha256'] == continued['owner']['selected_sha256']
+            target = Path(chosen['journal'])
+            current = selection.decode((target / '000001.selection.json').read_bytes())
+            assert current['selected'] == selection.decode(before)['selected']
+            assert current['data_sha256'] == plan['states']['combined']['data_sha256']
+            assert (predecessor / '000001.selection.json').read_bytes() == before
+            assert website.main(retry) == 0 and removals == ['1'*64]
+            assert renewal.product_transition_guard(config).is_file()
             returned = backout._evidence_path(plan, continued['plan_sha256'], 'retire-returned')
+            original_return = returned.read_bytes()
             invalid = dict(selection.decode(returned.read_bytes()), remove_returncode=False)
             returned.write_bytes(selection.packed(invalid))
             assert website.main(retire) == 2 and removals == ['1'*64]
+            assert website.main([*check_retired, retired_pin]) == 2
+            release_args = ['--release-combined', *retry[1:]]
+            assert website.main(release_args) == 2
+            returned.write_bytes(original_return)
+            interruptions['public'] = True
+            assert website.main(release_args) == 2
+            assert renewal.product_transition_guard(config).is_file()
+            interruptions['public'] = False
+            archive = release._archive_guard
+            def interrupted_after_rename(*params):
+                archive(*params)
+                raise RuntimeError('lost acknowledgement after archiving the guard')
+            with monkeypatch.context() as interrupted:
+                interrupted.setattr(release, '_archive_guard', interrupted_after_rename)
+                assert website.main(release_args) == 2
+            assert not renewal.product_transition_guard(config).exists()
+            replay = release_args.copy()
+            for key in ('--session-state-file', '--expected-account-sha256', '--expected-organization-sha256'):
+                index = replay.index(key)
+                del replay[index:index+2]
+            interruptions['public'] = True
+            assert website.main(replay) == 0
+            receipt = selection.decode(capsys.readouterr().out.strip().splitlines()[-1].encode())
+            assert receipt['guard_archived'] and receipt['selected_sha256'] == chosen['selected_sha256']
+            with selection.selected_inputs(path) as lease:
+                assert lease.generation_sequence == 2 and str(lease.journal_path) == chosen['journal']
+                assert lease.compose_file == Path(config['compose_file'])
+                assert lease.secrets_dir == Path(next_config['renewed_secrets'])
+                phase['data'] = plan['states']['combined']['data_sha256']
+                lease.continue_journal()
+            third_path, third = transaction(3)
+            third.update(compose_file=config['compose_file'], compose_sha256=config['compose_sha256'],
+                         tls_init_receipt=config['tls_init_receipt'])
+            third_path.write_bytes(selection.packed(third))
+            selection.prepare(third_path)
+            phase['active'] = Path(third['renewed_secrets'])
+            outcome(third, 'activated')
+            selection.complete(third_path)
+            with selection.selected_inputs(path) as lease:
+                assert lease.generation_sequence == 3 and lease.secrets_dir == phase['active']
+            assert website.main(replay) == 0
+            assert selection.decode(capsys.readouterr().out.encode())['release_sha256'] == receipt['release_sha256']
+            returned.write_bytes(selection.packed(invalid))
+            assert website.main(replay) == 2

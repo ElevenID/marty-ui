@@ -16,6 +16,7 @@ DECISION = 'website-forward.selection.json'
 PENDING = 'website-forward.selection.pending.json'
 FORWARD_FILES = INTENT, DECISION, PENDING
 COMBINED_SCHEMA = 'marty.windows-website-combined-selection/v1'
+RENEWED_COMBINED_SCHEMA = 'marty.windows-website-combined-selection/v2'
 COMBINED_INTENT = 'website-combined.intent.json'
 COMBINED_DECISION = 'website-combined.selection.json'
 COMBINED_PENDING = 'website-combined.selection.pending.json'
@@ -400,9 +401,78 @@ def validate_combined_marker(raw, expected, source, origin):
     return link
 
 
+def renewed_marker(raw, expected, source, ancestry, *, forward_intent_sha256, current_plan_sha256,
+                   retired_receipt_sha256, edge_return_sha256):
+    from selfhost_windows_website_abort_release import _selected_lineage
+
+    require(all(product.sha(pin) for pin in (forward_intent_sha256, current_plan_sha256, retired_receipt_sha256, edge_return_sha256)))
+    _, prior, _, _ = _selected_lineage(ancestry, (source, raw), forward_intent_sha256, 'forward')
+    attempt = Path(prior['attempt_dir'])
+    require(attempt.parent == source.parent == Path(expected['root']))
+    cycle = attempt.name.removeprefix('windows-website-')
+    return {'schema': RENEWED_COMBINED_SCHEMA, 'source_dir': str(source), 'attempt_dir': str(attempt),
+            'target_dir': str(attempt.with_name('.' + expected['project'] + '.generation-website-combined-' + cycle)),
+            'source_sha256': {name: selection.digest(body) for name, body in raw.items() if name not in COMBINED_FILES},
+            'forward_intent_sha256': forward_intent_sha256, 'current_plan_sha256': current_plan_sha256,
+            'retired_receipt_sha256': retired_receipt_sha256, 'edge_return_sha256': edge_return_sha256}
+
+
+def validate_renewed_marker(raw, expected, source, ancestry):
+    link = selection.decode(raw[COMBINED_INTENT])
+    fields = ('forward_intent_sha256', 'current_plan_sha256', 'retired_receipt_sha256', 'edge_return_sha256')
+    expected_link = renewed_marker(raw, expected, source, ancestry, **{key: link[key] for key in fields})
+    require(raw[COMBINED_INTENT] == selection.packed(expected_link))
+    return expected_link
+
+
+def renewed_seed(raw, expected, source, ancestry, link, stack, *, prepare=False):
+    """Replay the released model with the credentials of the selected renewal."""
+    import selfhost_windows_website_current_backout as backout
+    from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
+
+    require(validate_renewed_marker(raw, expected, source, ancestry) == link)
+    current = (source, raw)
+    split_intent, split_record, generation = product.anchor(raw, expected)
+    cfg_raw, cfg = _held_json(Path(split_intent['config_path']), stack, canonical=False)
+    require(selection.digest(cfg_raw) == split_intent['config_file_sha256']
+            and selection.config_digest(cfg) == split_intent['config_sha256']
+            and immutable_binding(selection.binding(cfg)) == immutable_binding(expected))
+    _, records = selection._parse(raw, expected)
+    cfg = effective_config(cfg, history(raw, expected, records)[1])
+    attempt = Path(link['attempt_dir'])
+    _, historical = _held_json(attempt / 'journal' / store.PLAN, stack, maximum=2*1024*1024)
+    plan_pin = link['current_plan_sha256']
+    candidate = backout._read_evidence(backout._evidence_path(historical, plan_pin, 'plan'), stack)
+    edge_return = stack.enter_context(renewal.hold_private_input(backout._evidence_path(historical, plan_pin, 'returned')))
+    require(selection.digest(edge_return) == link['edge_return_sha256'])
+    require(candidate['plan_sha256'] == plan_pin and forward.contract.digest(
+        {key: value for key, value in candidate.items() if key != 'plan_sha256'}) == plan_pin)
+    lineage = candidate['historical_release']
+    attempt_dir, _, archive = backout.release._paths(cfg, historical, 'forward')
+    require(attempt_dir == attempt and historical['attempt_directory'] == str(attempt)
+            and candidate['schema'] == backout.SCHEMA and candidate['operation'] == 'restore-combined-current-generation'
+            and candidate['selected_journal'] == str(source) and lineage['intent_sha256'] == link['forward_intent_sha256'])
+    combined_model, _, proven, _ = backout._released_history(cfg, current, ancestry, historical, attempt, archive,
+        guard_sha256=lineage['guard_sha256'], expected_anchor_sha256=lineage['sealed_anchor_sha256'],
+        intent_sha256=link['forward_intent_sha256'], release_sha256=lineage['release_sha256'], held=stack)
+    require(proven == lineage and candidate['configuration'] == {'combined': combined_model, 'split': model_binding(cfg)})
+    owner = candidate['owner']
+    selected = forward.contract.digest(split_record['selected'])
+    require(owner['selection_sequence'] == split_record['sequence'] and owner['generation_sequence'] == generation
+            and generation > historical['owner']['generation_sequence'] and owner['selected_sha256'] == selected
+            and owner['binding_sha256'] == forward.contract.digest(expected)
+            and owner['journal_sha256'] == forward.contract.digest(link['source_sha256'])
+            and owner['selection_sha256'] == selection.digest(raw[f"{split_record['sequence']:06}.selection.json"])
+            and owner['configuration_sha256'] == selection.digest(cfg_raw)
+            and owner['data_sha256'] == split_record['data_sha256'] == historical['states']['split']['data_sha256'])
+    backout.hold_retired(historical, candidate, link['retired_receipt_sha256'], stack)
+    return _combined_successor(expected, link, attempt, effective_config(cfg, combined_model), combined_model,
+        historical['states']['combined']['data_sha256'], split_intent, split_record, generation, stack, prepare=prepare)
+
+
 def combined_seed(raw, expected, source, origin, link, stack, *, prepare=False):
     """Derive the reverse owner from the original configuration and terminal backout."""
-    from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
+    from selfhost_windows_model import effective_config, history, immutable_binding
     from selfhost_windows_website_backout import CLASSIFICATION, hold_retirement
 
     require(validate_combined_marker(raw, expected, source, origin) == link)
@@ -433,6 +503,15 @@ def combined_seed(raw, expected, source, origin, link, stack, *, prepare=False):
     verify_backout_binding(plan, status, _published_binding(original_raw, forward_link, raw), stack)
     retained, _receipt = hold_retirement(plan, status, stack)
 
+    initial = _combined_successor(expected, link, attempt, config, combined_model, original_record['data_sha256'],
+                                  split_intent, split_record, generation, stack, prepare=prepare)
+    return initial, plan, retained, config, original_record
+
+
+def _combined_successor(expected, link, attempt, config, combined_model, data, split_intent, split_record,
+                        generation, stack, *, prepare):
+    from selfhost_windows_model import immutable_binding, model_binding
+
     root = attempt / 'combined-successor'
     configuration = root / 'config.private.json'
     combined = product.successor_configuration(config, combined_model, root)
@@ -455,10 +534,9 @@ def combined_seed(raw, expected, source, origin, link, stack, *, prepare=False):
     require(checked == combined and model_binding(checked) == combined_model
             and immutable_binding(selection.binding(checked)) == immutable_binding(expected))
     forward._inventory(root, {'activation', 'config.private.json'}, stack)
-    initial = _owner_seed(expected, link, configuration, config_raw, combined, combined_model,
-        original_record['data_sha256'], split_intent, split_record, generation,
+    return _owner_seed(expected, link, configuration, config_raw, combined, combined_model,
+        data, split_intent, split_record, generation,
         operation='website-combined-successor', choice_prefix='website-combined-')
-    return initial, plan, retained, config, original_record
 
 
 def finish_combined(config_path, plan, *, guard_sha256, terminal_sha256, forward_intent_sha256, assets, gh, cosign,
@@ -506,3 +584,153 @@ def finish_combined(config_path, plan, *, guard_sha256, terminal_sha256, forward
             'forward_intent_sha256': forward_intent_sha256, 'intent_sha256': link_pin, 'journal': str(target),
             'guards_retained': True, 'generation_sequence': plan['owner']['generation_sequence'],
             'selected_sha256': plan['owner']['selected_sha256']}
+
+
+def stage_renewed_selection(source, raw, expected, ancestry, historical, pins, pending_pin, stack, coordination):
+    from selfhost_windows_website_current_backout import _evidence_path
+    edge_return = stack.enter_context(renewal.hold_private_input(_evidence_path(historical, pins['current_plan_sha256'], 'returned')))
+    link = renewed_marker(raw, expected, source, ancestry, forward_intent_sha256=pins['intent_sha256'],
+        current_plan_sha256=pins['current_plan_sha256'], retired_receipt_sha256=pins['retired_receipt_sha256'],
+        edge_return_sha256=selection.digest(edge_return))
+    body = selection.packed(link)
+    if COMBINED_INTENT in raw:
+        require(raw[COMBINED_INTENT] == body and pending_pin == selection.digest(body))
+    else:
+        require(pending_pin is None)
+    initial = renewed_seed({**raw, COMBINED_INTENT: body}, expected, source, ancestry, link, stack, prepare=True)
+    pending = _stage_selection(source, raw, link, initial, stack, coordination, COMBINED_FILES)
+    return source, pending, link, initial
+
+
+def finish_renewed(config_path, plan, *, forward_intent_sha256, intent_sha256=None, **pins):
+    from selfhost_windows_continuation import checkpoint
+    from selfhost_windows_website_current_backout import edge_guard
+
+    require(intent_sha256 is None or product.sha(intent_sha256))
+    pins['intent_sha256'] = forward_intent_sha256
+    marker = edge_guard(plan, pins['current_plan_sha256'])
+    marker_pin = forward.contract.digest(marker)
+    with ExitStack() as coordination:
+        with selection._selected_inputs(config_path, _coordination=coordination,
+                _current_website_backout=(plan, 'verify-retirement', pins),
+                _renewed_publication={'intent_sha256': intent_sha256}) as staged:
+            source, pending, link, initial = staged
+        _commit_selection(source, pending, COMBINED_FILES)
+    with selection._session(config_path, _pending_website_sha256=marker_pin, _current_edge_guard=marker) as (
+            _, _, _, active, entries, _stack):
+        require(active == Path(link['target_dir']) and all(entries.get(name) == body for name, body in initial.items()))
+        first = selection.decode(initial['000001.selection.json'])
+        generation = checkpoint(initial)['sequence_offset'] + 1
+    return {'schema': RENEWED_COMBINED_SCHEMA, 'result': 'website-combined-selected-guarded', 'guard_sha256': marker_pin,
+            'forward_intent_sha256': forward_intent_sha256, 'intent_sha256': forward.contract.digest(link),
+            'journal': str(active), 'guards_retained': True, 'generation_sequence': generation,
+            'selected_sha256': forward.contract.digest(first['selected'])}
+
+
+def _renewed_release_binding(source, raw, expected, ancestry, pins, intent_pin, entries, held):
+    from selfhost_windows_continuation import CHECKPOINT, checkpoint
+    from selfhost_windows_website_current_backout import _evidence_path, _read_evidence, edge_guard
+
+    link = validate_renewed_marker(raw, expected, source, ancestry)
+    require(product.sha(intent_pin) and selection.digest(raw[COMBINED_INTENT]) == intent_pin
+            and COMBINED_PENDING not in raw and link['forward_intent_sha256'] == pins['intent_sha256']
+            and link['current_plan_sha256'] == pins['current_plan_sha256']
+            and link['retired_receipt_sha256'] == pins['retired_receipt_sha256'])
+    initial = {name: entries[name] for name in ('owner.json', CHECKPOINT, '000001.intent.json', '000001.selection.json')}
+    require(raw[COMBINED_DECISION] == selection.packed(decision(link, initial)))
+    carry = checkpoint(initial)
+    require(carry['intent_sha256'] == intent_pin and carry['schema'] == RENEWED_COMBINED_SCHEMA)
+    attempt = Path(link['attempt_dir'])
+    _, original = _held_json(attempt / 'journal' / store.PLAN, held, maximum=2*1024*1024)
+    plan = _read_evidence(_evidence_path(original, pins['current_plan_sha256'], 'plan'), held)
+    prior = plan['historical_release']
+    require(prior['guard_sha256'] == pins['guard_sha256'] and prior['sealed_anchor_sha256'] == pins['expected_anchor_sha256']
+            and prior['release_sha256'] == pins['release_sha256'] and prior['intent_sha256'] == link['forward_intent_sha256'])
+    return {'schema': 'marty.windows-website-renewed-combined-release/v1', 'forward_intent_sha256': link['forward_intent_sha256'],
+            'historical_plan_sha256': original['plan_sha256'], 'current_plan_sha256': pins['current_plan_sha256'],
+            'retired_receipt_sha256': link['retired_receipt_sha256'], 'combined_intent_sha256': intent_pin,
+            'combined_decision_sha256': selection.digest(raw[COMBINED_DECISION]), 'combined_journal': link['target_dir'],
+            'selected_sha256': forward.contract.digest(carry['first_selection']['selected']),
+            'generation_sequence': carry['sequence_offset'] + 1,
+            'guard_sha256': forward.contract.digest(edge_guard(original, pins['current_plan_sha256']))}
+
+
+def _hold_renewed_release(path, binding, held):
+    from selfhost_windows_website_current_backout import check_http_proof
+
+    _, receipt = _held_json(path, held)
+    require(product.sha(receipt['fresh_http_sha256'])
+            and selection.packed(receipt) == selection.packed({**binding, 'fresh_http_sha256': receipt['fresh_http_sha256']}))
+    _, proof = _held_json(path.with_name('combined-release-proof-' + receipt['fresh_http_sha256'] + '.json'), held)
+    require(forward.contract.digest(proof) == receipt['fresh_http_sha256'])
+    check_http_proof(proof)
+    return receipt
+
+
+def prepare_renewed_release(source, raw, expected, ancestry, pins, intent_pin, fresh_http, stack, coordination):
+    link = validate_renewed_marker(raw, expected, source, ancestry)
+    target = Path(link['target_dir'])
+    coordination.enter_context(renewal.hold_storage_namespace(target))
+    coordination.enter_context(_held_private_input(target, directory=True))
+    entries = selection._read(target, coordination)
+    initial = renewed_seed(raw, expected, source, ancestry, link, stack)
+    require(entries == initial)
+    binding = _renewed_release_binding(source, raw, expected, ancestry, pins, intent_pin, initial, stack)
+    attempt = Path(link['attempt_dir'])
+    coordination.enter_context(renewal.hold_storage_namespace(attempt))
+    path = attempt / ('current-edge-' + pins['current_plan_sha256'] + '-combined-release.json')
+    if not renewal.namespace_entry_exists(path):
+        proof_pin = forward.contract.digest(fresh_http)
+        forward.stage._material(attempt / ('combined-release-proof-' + proof_pin + '.json'), fresh_http, stack)
+        forward.stage._material(path, {**binding, 'fresh_http_sha256': proof_pin}, stack)
+    return _hold_renewed_release(path, binding, coordination)
+
+
+def release_renewed(config_path, plan, *, forward_intent_sha256, intent_sha256, **pins):
+    from selfhost_windows_website_abort_release import _archive_guard, _paths
+    from selfhost_windows_website_current_backout import edge_guard, _evidence_path
+
+    require(all(product.sha(pin) for pin in (forward_intent_sha256, intent_sha256, pins['guard_sha256'],
+        pins['current_plan_sha256'], pins['release_sha256'], pins['expected_anchor_sha256'], pins['retired_receipt_sha256'])))
+    pins['intent_sha256'] = forward_intent_sha256
+    config = selection.decode(renewal.read_private_bytes(Path(config_path)))
+    selection.binding(config)
+    attempt, active, _ = _paths(config, plan, 'combined')
+    marker = edge_guard(plan, pins['current_plan_sha256'])
+    original = selection.packed(marker)
+    archive = active.with_name('.' + config['project'] + '.website-combined-retired-' + pins['current_plan_sha256'] + '.json')
+    with ExitStack() as coordination:
+        if renewal.namespace_entry_exists(active):
+            with selection._selected_inputs(config_path, _coordination=coordination,
+                    _current_website_backout=(plan, 'verify-retirement', pins),
+                    _renewed_publication={'intent_sha256': intent_sha256, 'release': True}) as receipt:
+                require(coordination.enter_context(renewal.hold_private_input(attempt / 'journal' / store.PLAN,
+                        max_bytes=2*1024*1024)) == selection.packed(plan))
+                identities = _path_identities(active)
+            _archive_guard(config, active, archive, original, identities, coordination)
+        else:
+            ancestry = []
+            with selection._session(config_path, _coordination=coordination, _preserve_history=ancestry.extend) as (
+                    base, _, _, current, raw, stack):
+                require(_paths(base, plan, 'combined')[:2] == (attempt, active)
+                        and stack.enter_context(renewal.hold_private_input(archive)) == original)
+                require(stack.enter_context(renewal.hold_private_input(attempt / 'journal' / store.PLAN,
+                        max_bytes=2*1024*1024)) == selection.packed(plan))
+                matches = [i for i, (_, entries) in enumerate(ancestry)
+                           if COMBINED_INTENT in entries and selection.digest(entries[COMBINED_INTENT]) == intent_sha256]
+                require(len(matches) == 1)
+                index = matches[0]
+                source, sealed = ancestry[index]
+                expected = selection.decode(sealed['owner.json'])['binding']
+                target, entries = (ancestry + [(current, raw)])[index + 1]
+                binding = _renewed_release_binding(source, sealed, expected, ancestry[:index], pins, intent_sha256, entries, stack)
+                require(str(target) == binding['combined_journal'] and binding['historical_plan_sha256'] == plan['plan_sha256'])
+                if pins.get('session_state_file') is not None:
+                    _, retired = _held_json(_evidence_path(plan, pins['retired_receipt_sha256'], 'retired'), stack)
+                    require(forward.contract.digest(retired) == pins['retired_receipt_sha256']
+                            and retired['account_sha256'] == pins['expected_account_sha256']
+                            and retired['organization_sha256'] == pins['expected_organization_sha256'])
+                receipt = _hold_renewed_release(_evidence_path(plan, pins['current_plan_sha256'], 'combined-release'), binding, stack)
+        require(not renewal.namespace_entry_exists(active))
+    return {**receipt, 'result': 'website-combined-guard-archived', 'guard_archived': True,
+            'release_sha256': forward.contract.digest(receipt)}

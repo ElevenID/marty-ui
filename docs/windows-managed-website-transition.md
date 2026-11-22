@@ -444,9 +444,27 @@ the retirement intent. It stops and removes the exact candidate, records the
 returned result, and checks the combined runtime and authenticated endpoints
 again. After a recorded successful removal, the same invocation can finish an
 interrupted readback. A retirement intent without a successful return requires
-operator reconciliation even when the container is absent. The receipt leaves
-the guard active. Publishing the combined selection with the renewed credentials
-and releasing the guard remain pending.
+operator reconciliation even when the container is absent. Keep the returned
+retirement receipt digest. With the same account, organization, session and
+current plan, pass it as `--retired-receipt-sha256` to
+`--backout-phase verify-retirement` in place of the qualification digest.
+This read-only phase checks the completed removal, surviving services and live
+authenticated combined routes while the guard is held.
+
+Use `--select-combined` with the current plan, retirement receipt and original
+forward release pins. Supply the original forward publication as
+`--forward-intent-sha256`. Keep the original guard and sealed anchor pins.
+The owner rechecks the live combined deployment, then publishes the restored
+Compose configuration with the selected renewed credentials. If publication
+was interrupted after its intent was recorded, verify the existing combined
+intent and supply its digest as `--intent-sha256` for reconciliation.
+
+Use `--release-combined` with the same inputs and the committed combined
+intent digest. The owner requires the exact selected destination and fresh
+authenticated evidence before archiving the guard. After the archive, the
+same release pins can replay the recorded outcome without a session, including
+after a later ordinary renewal or journal continuation. Keep the prior forward
+release, both selection journals and the archived guard for recovery.
 
 ## Required integration before activation
 

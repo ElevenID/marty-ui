@@ -36,6 +36,13 @@ def _history(config, current, ancestry, historical_plan, *, guard_sha256, expect
         require(not renewal.namespace_entry_exists(active))
     else:
         require(held.enter_context(renewal.hold_private_input(active)) == selection.packed(active_guard))
+    return _released_history(config, current, ancestry, historical_plan, attempt, archive,
+        guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256, intent_sha256=intent_sha256,
+        release_sha256=release_sha256, held=held)
+
+
+def _released_history(config, current, ancestry, historical_plan, attempt, archive, *, guard_sha256,
+                      expected_anchor_sha256, intent_sha256, release_sha256, held):
     marker = selection.packed(guard.marker(historical_plan))
     require(selection.digest(marker) == guard_sha256
             and held.enter_context(renewal.hold_private_input(archive)) == marker)
@@ -143,14 +150,18 @@ def _observe(context, proposal, routes, state, *, before_intent):
 def prepare(config, choice, values, record, owner, current, ancestry, historical_plan, *, guard_sha256,
             expected_anchor_sha256, intent_sha256, release_sha256, assets, gh, cosign, registry_config,
             authority_file=None, held, operation='plan', current_plan_sha256=None, session_state_file=None,
-            expected_account_sha256=None, expected_organization_sha256=None, qualification_sha256=None):
+            expected_account_sha256=None, expected_organization_sha256=None, qualification_sha256=None,
+            retired_receipt_sha256=None, _capture_http=False):
     """Qualify the current owner before planning, dispatching or reconciling edge restoration."""
-    acceptance = operation in {'verify-combined', 'retire-candidate'}
+    readback = operation == 'verify-retirement'
+    require(not _capture_http or readback)
+    acceptance = readback or operation in {'verify-combined', 'retire-candidate'}
     require(acceptance or operation in {'plan', 'restore', 'reconcile'})
     identity = (expected_account_sha256, expected_organization_sha256)
     require((session_state_file is not None and all(contract.sha(v) for v in identity)) if acceptance
             else session_state_file is None and identity == (None, None))
     require(contract.sha(qualification_sha256) if operation == 'retire-candidate' else qualification_sha256 is None)
+    require(contract.sha(retired_receipt_sha256) if readback else retired_receipt_sha256 is None)
     require(current_plan_sha256 is None if operation == 'plan' else contract.sha(current_plan_sha256))
     require(all(contract.sha(pin) for pin in (guard_sha256, expected_anchor_sha256, intent_sha256, release_sha256)))
     require(owner['generation_sequence'] > historical_plan['owner']['generation_sequence']
@@ -180,8 +191,8 @@ def prepare(config, choice, values, record, owner, current, ancestry, historical
         # the candidate appears absent. A fresh command cannot replay it.
         intent, returned = (renewal.namespace_entry_exists(_evidence_path(historical_plan, current_plan_sha256, name))
                             for name in ('retire-intent', 'retire-returned'))
-        if intent or returned:
-            require(operation == 'retire-candidate' and intent and returned)
+        if readback or intent or returned:
+            require((readback or operation == 'retire-candidate') and intent and returned)
             state = 'combined'
     def live_context(model_state):
         return _context(config, choice, values, record, historical_plan, docker, layouts, proposal, held,
@@ -191,8 +202,13 @@ def prepare(config, choice, values, record, owner, current, ancestry, historical
     if operation == 'reconcile' or acceptance:
         plan = _hold_dispatch(value, current_plan_sha256, historical_plan, context, held)
         if acceptance:
+            retired = None
+            if readback:
+                retired = hold_retired(historical_plan, plan, retired_receipt_sha256, held)
+                qualification_sha256 = retired['qualification_sha256']
             return _accept_combined(plan, historical_plan, context, routes, proposal, state, config, held,
-                                    session_state_file, identity, qualification_sha256, live_context)
+                                    session_state_file, identity, qualification_sha256, live_context, retired=retired,
+                                    capture_http=_capture_http)
         return _finish(plan, historical_plan, context, routes, proposal, held, resumed=True)
     _, observation = _observe(context, proposal, routes, state, before_intent=True)
     value['observation'] = observation
@@ -280,6 +296,59 @@ def _read_evidence(path, held):
     return value
 
 
+def _successful_removal(custody):
+    return {'candidate_id': custody['candidate_id'], 'remove_returncode': 0,
+            'stop_completed': custody['observed_candidate']['status'] in {'running', 'restarting'},
+            'completed_cli_job': True, 'candidate_absent': True}
+
+
+def check_http_proof(proof):
+    require(set(proof) == {'public_routes_sha256', 'application_handoffs_sha256', 'authenticated_application'}
+            and all(contract.sha(proof[key]) for key in ('public_routes_sha256', 'application_handoffs_sha256')))
+    auth = proof['authenticated_application']
+    require(set(auth) == {'account_matched', 'organization_matched', 'authenticated_application_exercised',
+                          'account_tls', 'organization_tls'}
+            and all(auth[key] is True for key in ('account_matched', 'organization_matched', 'authenticated_application_exercised')))
+    for peer in (auth['account_tls'], auth['organization_tls']):
+        require(set(peer) == {'address', 'version', 'leaf_sha256'} and type(peer['address']) is str
+                and peer['version'] in {'TLSv1.2', 'TLSv1.3'} and contract.sha(peer['leaf_sha256']))
+
+
+def hold_retired(historical, plan, receipt_pin, held):
+    """Reconstruct the original retirement evidence without accessing a live session."""
+    pin = plan['plan_sha256']
+    def read(key, name):
+        return _read_evidence(_evidence_path(historical, key, name), held)
+
+    receipt = read(receipt_pin, 'retired')
+    require(contract.digest(receipt) == receipt_pin)
+    restored = read(pin, 'restored')
+    verified_pin = receipt['qualification_sha256']
+    verified = read(verified_pin, 'verified')
+    binding = {'current_plan_sha256': pin, 'restored_sha256': contract.digest(restored),
+               'guard_sha256': contract.digest(edge_guard(historical, pin)), 'selected_sha256': plan['owner']['selected_sha256'],
+               'generation_sequence': plan['owner']['generation_sequence'], 'account_sha256': receipt['account_sha256'],
+               'organization_sha256': receipt['organization_sha256']}
+    require(all(contract.sha(binding[name]) for name in ('account_sha256', 'organization_sha256'))
+            and restored['schema'] == 'marty.windows-website-current-edge-restored/v1'
+            and all(selection.packed(restored[k]) == selection.packed(binding[k]) for k in
+                    ('current_plan_sha256', 'guard_sha256', 'selected_sha256', 'generation_sequence'))
+            and verified['schema'] == 'marty.windows-website-current-combined-verified/v1'
+            and contract.digest(verified) == verified_pin and selection.packed(verified['binding']) == selection.packed(binding))
+    custody = verified['custody']
+    returned = _successful_removal(custody)
+    require(selection.packed(read(pin, 'retire-intent')) == selection.packed(
+        {'qualification_sha256': verified_pin, 'candidate_id': custody['candidate_id']}))
+    require(selection.packed(read(pin, 'retire-returned')) == selection.packed(returned))
+    expected = {**binding, 'qualification_sha256': verified_pin, 'retained_runtime_sha256': verified['retained_runtime_sha256'],
+                'retirement_sha256': contract.digest(returned), 'http': receipt['http'],
+                'schema': 'marty.windows-website-current-candidate-retired/v1'}
+    require(selection.packed(expected) == selection.packed(receipt))
+    check_http_proof(verified['http'])
+    check_http_proof(receipt['http'])
+    return receipt
+
+
 def _http_acceptance(context, routes, proposal, state, held, session_file, identity):
     model = context.layouts[state][1]
     items = context.check(before_intent=True)
@@ -319,7 +388,8 @@ def _retirement_inputs(context, items, config, proposal):
 
 
 def _accept_combined(plan, historical, context, routes, proposal, state, config, held, session_file,
-                     identity, qualification_sha256, live_context):
+                     identity, qualification_sha256, live_context, *, retired=None, capture_http=False):
+    require(retired is None or state == 'combined')
     pin = plan['plan_sha256']
 
     def path(name):
@@ -366,9 +436,7 @@ def _accept_combined(plan, historical, context, routes, proposal, state, config,
         context, routes = live_context('combined')
 
     custody = qualified['custody']
-    expected_return = {'candidate_id': custody['candidate_id'], 'remove_returncode': 0,
-                       'stop_completed': custody['observed_candidate']['status'] in {'running', 'restarting'},
-                       'completed_cli_job': True, 'candidate_absent': True}
+    expected_return = _successful_removal(custody)
     intent = {'qualification_sha256': qualification_sha256, 'candidate_id': custody['candidate_id']}
     require(held.enter_context(renewal.hold_private_input(path('retire-intent'))) == selection.packed(intent))
     require(held.enter_context(renewal.hold_private_input(path('retire-returned'))) == selection.packed(expected_return))
@@ -379,6 +447,16 @@ def _accept_combined(plan, historical, context, routes, proposal, state, config,
     acceptance = {**binding, 'qualification_sha256': qualification_sha256, 'retained_runtime_sha256': observed['runtime_sha256'],
                   'retirement_sha256': contract.digest(expected_return), 'http': http,
                   'schema': 'marty.windows-website-current-candidate-retired/v1'}
+    if retired is not None:
+        # A fresh session and TLS peer may differ from the original observation.
+        # Both observations authenticate the same pinned account and organization.
+        require(selection.packed(retired) == selection.packed({**acceptance, 'http': retired['http']}))
+        check_http_proof(http)
+        result = {'result': 'current-generation-retirement-verified', 'receipt_sha256': contract.digest(retired),
+                  'fresh_http_sha256': contract.digest(http), 'current_plan_sha256': pin, 'guard_retained': True}
+        if capture_http:
+            result['fresh_http'] = http
+        return result
     receipt_pin = contract.digest(acceptance)
     stage._material(_evidence_path(historical, receipt_pin, 'retired'), acceptance, held)
     return {'result': 'current-generation-candidate-retired', 'receipt_sha256': receipt_pin,

@@ -365,12 +365,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-organization-sha256")
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--qualification-sha256")
+    parser.add_argument("--retired-receipt-sha256")
     parser.add_argument("--intent-sha256")
     parser.add_argument("--forward-intent-sha256")
     parser.add_argument("--release-sha256")
     parser.add_argument("--current-plan-sha256")
     parser.add_argument("--readmission-sha256")
-    parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate"))
+    parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate", "verify-retirement"))
     args = parser.parse_args(argv)
     operation, error = None, ERROR
     if args.release_abort:
@@ -399,13 +400,26 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.restore_current_website_edge, BACKOUT_ERROR
     try:
         renewed_backout = args.backout_published and args.current_plan_sha256 is not None
+        renewed_selection = args.select_combined and args.current_plan_sha256 is not None
+        renewed_release = args.release_combined and args.current_plan_sha256 is not None
+        renewed_owner = renewed_selection or renewed_release
         if renewed_backout:
-            selection.require(args.backout_phase in {'verify-combined', 'retire-candidate'})
+            selection.require(args.backout_phase in {'verify-combined', 'retire-candidate', 'verify-retirement'})
             operation = selection.backout_current_website
+        verify_retirement = args.backout_phase == 'verify-retirement'
+        if verify_retirement:
+            selection.require(renewed_backout and product_journal.sha(args.retired_receipt_sha256))
+        elif renewed_owner:
+            selection.require(product_journal.sha(args.retired_receipt_sha256) and product_journal.sha(args.release_sha256))
+        else:
+            selection.require(args.retired_receipt_sha256 is None)
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
         forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward or args.release_forward
-        selection.require(all(forward.values()) if forward_operation or renewed_backout else not any(forward.values()))
+        if renewed_release:
+            selection.require(all(forward.values()) or not any(forward.values()))
+        else:
+            selection.require(all(forward.values()) if forward_operation or renewed_backout or renewed_selection else not any(forward.values()))
         pins = {'candidate_sha256': args.candidate_sha256, 'qualification_sha256': args.qualification_sha256}
         if args.seal_forward or args.publish_forward:
             selection.require(all(product_journal.sha(pin) for pin in pins.values()))
@@ -416,8 +430,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             selection.require(not any(pins.values()))
         current_edge = args.restore_current_edge or args.reconcile_current_edge
-        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge or renewed_backout else args.current_plan_sha256 is None)
-        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge or renewed_backout)
+        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge or renewed_backout or renewed_owner else args.current_plan_sha256 is None)
+        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge or renewed_backout or renewed_owner)
         selection.require(args.readmission_sha256 is None or (
             args.backout_published and args.backout_phase == "restore-combined" and product_journal.sha(args.readmission_sha256)))
         if renewed_backout:
@@ -425,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
                               and args.forward_intent_sha256 is None and args.readmission_sha256 is None)
             extra = dict(forward, intent_sha256=args.intent_sha256, release_sha256=args.release_sha256,
                          current_plan_sha256=args.current_plan_sha256, backout_phase=args.backout_phase)
+            if verify_retirement:
+                extra['retired_receipt_sha256'] = args.retired_receipt_sha256
         elif args.readmit_backout or args.plan_current_backout or current_edge:
             selection.require(all(product_journal.sha(pin) for pin in (args.release_sha256, args.intent_sha256))
                               and args.forward_intent_sha256 is None and args.backout_phase is None)
@@ -432,16 +448,22 @@ def main(argv: list[str] | None = None) -> int:
             if current_edge:
                 extra.update(current_plan_sha256=args.current_plan_sha256, reconcile=args.reconcile_current_edge)
         elif args.release_forward or args.release_combined:
-            selection.require(product_journal.sha(args.intent_sha256) and args.forward_intent_sha256 is None
-                              and args.backout_phase is None)
+            selection.require(product_journal.sha(args.intent_sha256) and args.backout_phase is None)
+            selection.require(product_journal.sha(args.forward_intent_sha256) if renewed_release else args.forward_intent_sha256 is None)
             mode = 'forward' if args.release_forward else 'combined'
             extra = {'mode': mode, 'intent_sha256': args.intent_sha256}
+            if renewed_release:
+                extra.update(forward, forward_intent_sha256=args.forward_intent_sha256, current_plan_sha256=args.current_plan_sha256,
+                             release_sha256=args.release_sha256, retired_receipt_sha256=args.retired_receipt_sha256)
             if args.release_forward:
                 extra.update(forward)
         elif args.select_combined:
             selection.require(product_journal.sha(args.forward_intent_sha256) and args.backout_phase is None
                               and (args.intent_sha256 is None or product_journal.sha(args.intent_sha256)))
             extra = {'forward_intent_sha256': args.forward_intent_sha256, 'intent_sha256': args.intent_sha256}
+            if renewed_selection:
+                extra.update(forward, current_plan_sha256=args.current_plan_sha256, release_sha256=args.release_sha256,
+                             retired_receipt_sha256=args.retired_receipt_sha256)
         elif args.backout_published:
             selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256)
                               and args.forward_intent_sha256 is None)

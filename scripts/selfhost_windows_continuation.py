@@ -29,8 +29,8 @@ def checkpoint(raw):
                                                   'first_intent', 'first_selection'})
     from selfhost_windows_product_journal import SCHEMA as product_schema
     from selfhost_windows_recovery_journal import SCHEMA as recovery_schema
-    from selfhost_windows_website_owner import COMBINED_SCHEMA, SCHEMA as website_schema
-    require(value['schema'] in {SCHEMA, product_schema, recovery_schema, website_schema, COMBINED_SCHEMA} and Path(value['source_dir']).is_absolute()
+    from selfhost_windows_website_owner import COMBINED_SCHEMA, RENEWED_COMBINED_SCHEMA, SCHEMA as website_schema
+    require(value['schema'] in {SCHEMA, product_schema, recovery_schema, website_schema, COMBINED_SCHEMA, RENEWED_COMBINED_SCHEMA} and Path(value['source_dir']).is_absolute()
             and re.fullmatch(r'[0-9a-f]{64}', value['intent_sha256'])
             and type(value['sequence_offset']) is int and value['sequence_offset'] >= 0)
     require(value['first_intent'] == selection.decode(raw['000001.intent.json'])
@@ -171,8 +171,11 @@ def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_con
         if has_website or has_combined:
             if has_combined:
                 require(ancestry)
-                origin = ancestry[-1]
-                link = website.validate_combined_marker(raw, expected, root, origin)
+                renewed = selection.decode(raw[website.COMBINED_INTENT])['schema'] == website.RENEWED_COMBINED_SCHEMA
+                if renewed:
+                    link = website.validate_renewed_marker(raw, expected, root, ancestry)
+                else:
+                    link = website.validate_combined_marker(raw, expected, root, ancestry[-1])
                 intent_name, decision_name, _ = website.COMBINED_FILES
             else:
                 link = website.validate_marker(raw, expected, root)
@@ -183,8 +186,10 @@ def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_con
                         and model_binding(config) in accepted)
                 return expected, root, raw, accepted
             require(decision_name in raw)
-            if has_combined:
-                initial = website.combined_seed(raw, expected, root, origin, link, stack)[0]
+            if has_combined and renewed:
+                initial = website.renewed_seed(raw, expected, root, ancestry, link, stack)
+            elif has_combined:
+                initial = website.combined_seed(raw, expected, root, ancestry[-1], link, stack)[0]
             else:
                 initial = website.seed(raw, expected, current_model, root, link, stack, historical_forward=True)
             require(raw[decision_name] == selection.packed(website.decision(link, initial)))
