@@ -27,7 +27,7 @@ const result = await Bun.build({
 if (!result.success) throw new Error("Static JavaScript build failed");
 const csp = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'",
-  `connect-src 'self' ${config.supabaseUrl}`, "img-src 'none'",
+  `connect-src 'self' ${config.supabaseUrl}`, "img-src 'self'",
   "font-src 'none'", "base-uri 'none'", "form-action 'none'",
   "frame-ancestors 'none'", "object-src 'none'", "upgrade-insecure-requests",
 ].join("; ");
@@ -40,9 +40,30 @@ const headers = `/*
   Cloudflare-CDN-Cache-Control: no-store
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
 `;
+// Keycloak renders these slots with FreeMarker. Pages only inserts trusted
+// build-time markup. Interactive account and client values remain DOM text.
+const theme = resolve(root, "../../config/keycloak/themes/11id/login");
+const [layout, page, loading, sharedCss, formCss] = await Promise.all([
+  readFile(resolve(theme, "auth-layout.ftl"), "utf8"),
+  readFile(resolve(root, "public/index.html"), "utf8"),
+  readFile(resolve(root, "public/loading.html"), "utf8"),
+  readFile(resolve(theme, "resources/css/auth-layout.css"), "utf8"),
+  readFile(resolve(root, "public/app.css"), "utf8"),
+]);
+function replaceOnce(source, marker, replacement) {
+  if (source.split(marker).length !== 2) throw new Error(`Expected one layout marker: ${marker}`);
+  return source.replace(marker, () => replacement);
+}
+let shell = replaceOnce(layout.trim(), "<#macro authLayout>", "");
+shell = replaceOnce(shell, "</#macro>", "");
+shell = replaceOnce(shell, '<#nested "actions">', "");
+shell = replaceOnce(shell, '<#nested "content">', loading.trim());
+if (/<[#@]|<\/[#@]|\$\{/.test(shell)) throw new Error("Unsupported directive in the shared login layout");
+const html = replaceOnce(page, "<!-- auth-layout -->", shell.trim());
 await Promise.all([
-  writeFile(resolve(output, "index.html"), await readFile(resolve(root, "public/index.html"))),
-  writeFile(resolve(output, "app.css"), await readFile(resolve(root, "public/app.css"))),
+  writeFile(resolve(output, "index.html"), html),
+  writeFile(resolve(output, "favicon.ico"), await readFile(resolve(theme, "resources/img/favicon.ico"))),
+  writeFile(resolve(output, "app.css"), `${sharedCss}\n${formCss}`),
   writeFile(resolve(output, "config.json"), `${JSON.stringify(config, null, 2)}\n`),
   writeFile(resolve(output, "_headers"), headers),
   writeFile(resolve(output, "_redirects"), "/oauth/consent /index.html 200\n/oauth/consent/ /index.html 200\n"),

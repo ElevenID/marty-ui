@@ -9,6 +9,13 @@ bun test
 bun build.mjs --config public/config.example.json
 ```
 
+Build from a repository checkout. Keycloak and Pages use the same header, main
+landmark, responsive layout and brand colors from `config/keycloak/themes/11id/login/auth-layout.ftl`
+and `resources/css/auth-layout.css` under that directory. Keycloak supplies its
+language selector and provider forms through FreeMarker slots. The static build
+fills the content slot with the loading screen, then the browser renders the
+sign-in, TOTP and consent forms. The Helm chart packages the same theme files.
+
 The example is deliberately synthetic and uses reserved `.invalid` domains.
 The build makes no provider requests. `dist/` contains static assets, public
 configuration, Cloudflare `_headers` and exact consent-path rewrites. It has no
