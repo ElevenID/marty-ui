@@ -1462,7 +1462,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         assert jobs[name]["if"]
 
     gate_needs = set(jobs["ci-gate"]["needs"])
-    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight"}
+    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight", "test-windows-owner-source"}
     gate_script = jobs["ci-gate"]["steps"][0]["run"]
     assert (
         'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
@@ -1517,6 +1517,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "release-preflight",
         "public-protocol-contract",
         "test-release-contracts",
+        "test-windows-owner-source",
     } | set().union(*groups.values())
     assert (
         "needs.changes.outputs.ui == 'true'" in jobs["public-protocol-contract"]["if"]
@@ -1565,6 +1566,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         leaf_only=False,
         flow_only=False,
         selfhost_only=False,
+        repository_private=False,
     ):
         selected = set(flags)
         if "ui" in selected:
@@ -1574,6 +1576,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         ):
             selected.add("rust_runtime")
         active = {"changes", "lint", "release-preflight"}
+        if not repository_private:
+            active.add("test-windows-owner-source")
         for flag, names in groups.items():
             if flag in selected:
                 active.update(names)
@@ -1594,6 +1598,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         )
         environment.update(selection_overrides or {})
         environment.setdefault("WEBSITE_ONLY", "false")
+        environment["REPOSITORY_PRIVATE"] = str(repository_private).lower()
         environment.setdefault("ROLLBACK_TEST_ONLY", "false")
         environment.setdefault("DIDCOMM_RELEASE_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
@@ -1609,7 +1614,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or len(gate["needs"]))
+        assert len(values[:result_count]) == (result_count or len(gate["needs"]))
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -1742,6 +1747,16 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), {"release-preflight": "skipped"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=16).returncode != 0
+    for event, flags in (("pull_request", ()), ("merge_group", tuple(selections.values()))):
+        for bad_result in ("failure", "cancelled", "skipped", ""):
+            assert exercise(flags, {"test-windows-owner-source": bad_result}, event=event).returncode != 0
+        assert exercise(flags, event=event, repository_private=True).returncode == 0
+        assert exercise(flags, {"test-windows-owner-source": "success"}, event=event,
+                        repository_private=True).returncode != 0
+    assert exercise(tuple(selections.values()), {"security": "skipped"}, event="merge_group",
+                    repository_private=True).returncode != 0
+    for visibility in ("", "TRUE", "public"):
+        assert exercise(selection_overrides={"REPOSITORY_PRIVATE": visibility}).returncode != 0
     didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
     assert exercise(("release",), selection_overrides=didcomm_mode).returncode == 0
     assert (

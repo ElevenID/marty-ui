@@ -2,14 +2,16 @@ name: Windows owner source
 
 on:
   pull_request:
-  merge_group:
-    types: [checks_requested]
+    branches-ignore: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  # A called workflow inherits github.workflow from its caller. Use a distinct
+  # group so this job cannot cancel the required CI workflow that called it.
+  group: windows-owner-source-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -25,6 +25,7 @@ finally:
 
 def environment(event="pull_request"):
     return {"EVENT_NAME": event, "SOURCE_SHA": "a" * 40, "HEAD_SHA": "a" * 40,
+            "REPOSITORY_PRIVATE": "false",
             "BASE_SHA": "b" * 40 if event in {"pull_request", "merge_group"} else ""}
 
 
@@ -41,6 +42,7 @@ def plan(event="pull_request", website=False):
 def results(value):
     needs = {j: {"result": "success" if j in value["selected_jobs"] else "skipped", "outputs": {}}
              for j in CI.JOB_FLAGS}
+    needs[CI.PUBLIC_JOB] = {"result": "success"}
     needs["changes"]["outputs"] = {f: str(v).lower() for f, v in value["flags"].items()}
     needs["changes"]["outputs"]["rust_matrix"] = json.dumps(value["rust_matrix"])
     return needs
@@ -83,13 +85,48 @@ def test_plan_is_closed_and_self_consistent(mutation):
     with pytest.raises(ValueError): CI.validate_plan(value, environment())
 
 
-@pytest.mark.parametrize("job", sorted(CI.JOB_FLAGS))
+@pytest.mark.parametrize("job", sorted(set(CI.JOB_FLAGS) | {CI.PUBLIC_JOB}))
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", ""])
 def test_selected_jobs_must_complete_successfully(job, result):
     value = plan()
     needs = results(value)
     needs[job]["result"] = result
     with pytest.raises(ValueError): CI.check_results(value, needs, environment())
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize("website", [False, True])
+def test_public_native_lane_is_required_even_for_a_narrow_component_plan(event, website):
+    value = plan(event, website=website)
+    needs = results(value)
+    for result in ("skipped", "failure", "cancelled", ""):
+        needs[CI.PUBLIC_JOB]["result"] = result
+        with pytest.raises(ValueError, match=CI.PUBLIC_JOB):
+            CI.check_results(value, needs, environment(event))
+    del needs[CI.PUBLIC_JOB]
+    with pytest.raises(ValueError, match="roster"):
+        CI.check_results(value, needs, environment(event))
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "schedule", "workflow_dispatch"])
+def test_private_repository_requires_native_skip_and_preserves_every_other_result(event):
+    value = plan(event)
+    env = {**environment(event), "REPOSITORY_PRIVATE": "true"}
+    needs = results(value)
+    with pytest.raises(ValueError, match=CI.PUBLIC_JOB):
+        CI.check_results(value, needs, env)
+    needs[CI.PUBLIC_JOB]["result"] = "skipped"
+    CI.check_results(value, needs, env)
+    needs["test-rust-services"]["result"] = "skipped"
+    with pytest.raises(ValueError, match="test-rust-services"):
+        CI.check_results(value, needs, env)
+
+
+@pytest.mark.parametrize("visibility", [None, "", "TRUE", "public", False])
+def test_native_gate_refuses_missing_or_ambiguous_repository_visibility(visibility):
+    env = {**environment(), "REPOSITORY_PRIVATE": visibility}
+    with pytest.raises(ValueError, match="repository visibility"):
+        CI.check_results(plan(), results(plan()), env)
 
 
 @pytest.mark.parametrize("mutation", ["extra-job", "missing-job", "unexpected-success", "flag-output", "matrix-output"])
@@ -257,7 +294,8 @@ new AsyncFunction('core','context','require','process',payload.script)(
 
 def test_workflow_closes_the_same_roster_and_builds_every_surface():
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    assert set(jobs["ci-gate"]["needs"]) == set(CI.JOB_FLAGS)
+    assert set(jobs["ci-gate"]["needs"]) == set(CI.JOB_FLAGS) | {CI.PUBLIC_JOB}
+    assert jobs["ci-gate"]["env"]["REPOSITORY_PRIVATE"] == "${{ github.event.repository.private }}"
     assert jobs["test-website"]["needs"] == ["changes", "release-preflight"]
     assert jobs["test-website"]["if"] == "needs.changes.outputs.website == 'true'"
     commands = "\n".join(step.get("run", "") for step in jobs["test-website"]["steps"])

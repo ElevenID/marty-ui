@@ -36,10 +36,10 @@ def native_step():
 def test_windows_source_workflow_uses_only_public_native_synthetic_execution():
     document = workflow()
     events = document.get('on') or document[True]
-    assert events == {'pull_request': None, 'merge_group': {'types': ['checks_requested']}}
+    assert events == {'pull_request': {'branches-ignore': ['main']}, 'workflow_call': None}
     assert document['permissions'] == {'contents': 'read'}
     assert document['concurrency'] == {
-        'group': '${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}',
+        'group': 'windows-owner-source-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}',
         'cancel-in-progress': "${{ github.event_name == 'pull_request' }}",
     }
     assert set(document['jobs']) == {'source-custody'}
@@ -73,6 +73,25 @@ def test_windows_source_workflow_uses_only_public_native_synthetic_execution():
     diagnostic = next(step for step in steps if step.get('name') == 'Diagnose synthetic Windows fixture custody')
     assert 'python scripts/ci/probe_windows_source_environment.py' in diagnostic['run']
     assert steps.index(diagnostic) < steps.index(native_step())
+
+
+def test_native_workflow_is_a_required_same_commit_ci_dependency():
+    ci = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+    events = ci.get('on') or ci[True]
+    assert events['pull_request'] == {'branches': ['main']}
+    assert events['merge_group'] == {'types': ['checks_requested']}
+    job = ci['jobs']['test-windows-owner-source']
+    assert job == {'name': 'Windows owner source',
+                   'if': 'github.event.repository.private == false',
+                   'uses': './.github/workflows/windows-owner-source.yml'}
+    gate = ci['jobs']['ci-gate']
+    assert 'test-windows-owner-source' in gate['needs']
+    assert gate['env']['WINDOWS_SOURCE_RESULT'] == '${{ needs.test-windows-owner-source.result }}'
+    assert gate['env']['REPOSITORY_PRIVATE'] == '${{ github.event.repository.private }}'
+    assert gate['if'] == 'always()' and not gate.get('continue-on-error')
+    # The caller and callee must not share a cancellation group.
+    assert workflow()['concurrency']['group'] != ci['concurrency']['group']
+    assert '${{ github.workflow }}' not in workflow()['concurrency']['group']
 
 
 @pytest.mark.parametrize('fault', [None, 'additional-case', 'missing', 'empty', 'skipped',
