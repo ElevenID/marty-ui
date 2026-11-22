@@ -26,7 +26,7 @@ use crate::migration::{validate_organization_schema, OrganizationMigrationError}
 use crate::postgres::{PostgresOrganizationStore, RepositoryError};
 
 const OUTBOX_SOURCE: &str = "organization";
-const OUTBOX_PARTITIONS: u32 = 16;
+pub const ORGANIZATION_OUTBOX_PARTITIONS: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateOrganizationCommand {
@@ -359,7 +359,7 @@ impl OrganizationApplication {
         cache: OrganizationCache,
     ) -> Result<Self, OrganizationApplicationError> {
         let outbox =
-            PostgresOutboxStore::new(store.pool().clone(), OUTBOX_SOURCE, OUTBOX_PARTITIONS)?;
+            PostgresOutboxStore::new(store.pool().clone(), OUTBOX_SOURCE, ORGANIZATION_OUTBOX_PARTITIONS)?;
         Ok(Self {
             store,
             outbox,
