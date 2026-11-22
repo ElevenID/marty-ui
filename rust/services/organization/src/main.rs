@@ -47,9 +47,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
             pool.close().await;
             return Ok(());
         }
+        if command == "bootstrap" {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let organization_id = std::env::var("MARTY_ORG_ID")
+                .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+                .parse::<uuid::Uuid>()?;
+            let organization_name = std::env::var("MARTY_ORG_NAME")
+                .unwrap_or_else(|_| "Marty".into());
+            let organization_slug = marty_service_runtime::config::canonical_slug(
+                &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
+                "marty",
+            );
+            let admin_email = std::env::var("MARTY_ORG_ADMIN_EMAIL").ok();
+            let reviewer_email = std::env::var("MARTY_ORG_REVIEWER_EMAIL").ok();
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            validate_organization_schema(&pool).await?;
+            let store = PostgresOrganizationStore::new(pool.clone());
+            let startup = reconcile_organization_startup(
+                &store,
+                organization_id,
+                &organization_name,
+                &organization_slug,
+                admin_email.as_deref(),
+                reviewer_email.as_deref(),
+                chrono::Utc::now(),
+            )
+            .await?;
+            info!(
+                default_organization_created = startup.default_organization_created,
+                organizations = startup.organizations_reconciled,
+                bootstrap_memberships = startup.bootstrap_memberships_reconciled,
+                "Organization catalog bootstrapped"
+            );
+            drop(store);
+            pool.close().await;
+            return Ok(());
+        }
     }
     if !arguments.is_empty() {
-        return Err("unsupported Organization command".into());
+        return Err("supported commands: migrate, verify-owned-schema, bootstrap".into());
     }
 
     let config = OrganizationServiceConfig::from_env().map_err(|error| {
@@ -95,22 +134,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     application.outbox().health().await?;
     runtime.mark_healthy(OrganizationDependency::TransactionalOutbox)?;
 
-    let startup = reconcile_organization_startup(
-        application.store(),
-        config.marty_organization_id,
-        &config.marty_organization_name,
-        &config.marty_organization_slug,
-        config.marty_admin_email.as_deref(),
-        config.marty_reviewer_email.as_deref(),
-        chrono::Utc::now(),
-    )
-    .await?;
-    info!(
-        default_organization_created = startup.default_organization_created,
-        organizations = startup.organizations_reconciled,
-        bootstrap_memberships = startup.bootstrap_memberships_reconciled,
-        "Organization startup state reconciled"
-    );
+    // Organization records and bootstrap memberships are provisioned by the
+    // explicit operator command; runtime startup performs no catalog writes.
 
     let event_transport = Arc::new(
         EventStreamTransport::new(
