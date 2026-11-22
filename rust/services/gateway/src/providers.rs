@@ -85,6 +85,10 @@ impl HttpGatewayProvider {
         }
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
+            // Readiness and owner observations belong to the configured
+            // source. A redirect cannot substitute liveness or another peer,
+            // and must not forward service credentials to a different target.
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|_| {
@@ -251,7 +255,14 @@ impl ReadinessProvider for HttpGatewayProvider {
                 continue;
             };
             let base = base.trim_end_matches('/').to_owned();
-            let status = match self.client.get(format!("{base}/health")).send().await {
+            // The candidate approval producer's /health is liveness only.
+            // Its /ready additionally checks source and role separation.
+            let path = if service == "delegated-authority" {
+                "/ready"
+            } else {
+                "/health"
+            };
+            let status = match self.client.get(format!("{base}{path}")).send().await {
                 Ok(response) => ReadinessServiceStatus {
                     status: if response.status() == reqwest::StatusCode::OK {
                         "healthy".into()
@@ -459,6 +470,9 @@ impl GatewayIdentityProvider for GrpcIdentityProvider {
         Ok(Some(SessionIdentity {
             user_id: user.user_id,
             authentication_time_unix: response.authentication_time_unix,
+            expires_at_unix: chrono::DateTime::parse_from_rfc3339(&response.expires_at)
+                .ok()
+                .map(|value| value.timestamp()),
             non_impersonated_session: response.non_impersonated_session,
             email: optional_string(user.email),
             username: optional_string(user.username),
@@ -718,6 +732,10 @@ mod tests {
     async fn provider_fixture(request: AxumRequest) -> impl IntoResponse {
         match request.uri().path() {
             "/health" => (StatusCode::OK, Json(json!({"status": "healthy"}))),
+            "/ready" => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status":"not_ready"})),
+            ),
             "/internal/v1/resource-owners/trust-profiles/profile-1"
             | "/internal/v1/resource-owners/presentation-policies/policy-1"
                 if request
@@ -851,6 +869,90 @@ mod tests {
                 .expect("fixture server");
         });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn agent_approval_readiness_does_not_accept_liveness_in_place_of_source_readiness() {
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("delegated-authority".into(), fixture_url().await)]),
+            "internal-secret",
+            None,
+            Some("service-secret".into()),
+            Some(4096),
+        )
+        .unwrap();
+        let result = provider
+            .check_services(&["delegated-authority".into()])
+            .await;
+        assert_eq!(result["delegated-authority"].status, "unhealthy");
+        assert_eq!(result["delegated-authority"].status_code, Some(503));
+    }
+
+    #[tokio::test]
+    async fn source_observations_never_follow_redirects_or_forward_trusted_credentials() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reached = Arc::new(AtomicUsize::new(0));
+        let health_reached = reached.clone();
+        let owner_reached = reached.clone();
+        let app = Router::new()
+            .route(
+                "/ready",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/health") }),
+            )
+            .route(
+                "/health",
+                axum::routing::get(move || {
+                    let reached = health_reached.clone();
+                    async move {
+                        reached.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::OK
+                    }
+                }),
+            )
+            .route(
+                "/redirect-owner",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/owner") }),
+            )
+            .route(
+                "/owner",
+                axum::routing::get(move || {
+                    let reached = owner_reached.clone();
+                    async move {
+                        reached.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"organization_id":"org-1"}))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("delegated-authority".into(), format!("http://{address}"))]),
+            "internal-secret",
+            None,
+            Some("service-secret".into()),
+            Some(4096),
+        )
+        .unwrap();
+        let result = provider
+            .check_services(&["delegated-authority".into()])
+            .await;
+        assert_eq!(result["delegated-authority"].status, "unhealthy");
+        assert_eq!(result["delegated-authority"].status_code, Some(307));
+        assert!(matches!(
+            provider
+                .resolve_organization(
+                    "delegated-authority",
+                    "/redirect-owner",
+                    &ResourceOwnerContext::default()
+                )
+                .await,
+            Err(SecurityError::ProviderUnavailable(_))
+        ));
+        assert_eq!(reached.load(Ordering::SeqCst), 0);
+        server.abort();
     }
 
     #[tokio::test]

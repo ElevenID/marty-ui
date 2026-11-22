@@ -773,6 +773,8 @@ pub enum PolicySetType {
     AccessControl,
     CredentialVerification,
     ApprovalRules,
+    /// Dedicated attributable owner only; ordinary policy CRUD rejects it.
+    MachineAuthorization,
     Custom,
 }
 
@@ -783,6 +785,7 @@ impl PolicySetType {
             Self::AccessControl => "ACCESS_CONTROL",
             Self::CredentialVerification => "CREDENTIAL_VERIFICATION",
             Self::ApprovalRules => "APPROVAL_RULES",
+            Self::MachineAuthorization => "MACHINE_AUTHORIZATION",
             Self::Custom => "CUSTOM",
         }
     }

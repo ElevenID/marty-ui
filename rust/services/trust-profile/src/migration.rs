@@ -96,6 +96,8 @@ pub async fn run_migrations(
     .await?;
     sqlx::query("INSERT INTO trust_profile_service.native_migrations(version) VALUES($1) ON CONFLICT(version) DO NOTHING")
         .bind(WALLET_ISSUER_AUTHORITY_MIGRATION_VERSION).execute(&mut *transaction).await?;
+    sqlx::query("INSERT INTO trust_profile_service.native_migrations(version) VALUES($1) ON CONFLICT(version) DO NOTHING")
+        .bind("trust-profile-machine-jwt-vc-authority-v1").execute(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(summary)
 }

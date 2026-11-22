@@ -16,6 +16,7 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
+marty-delegated-authority = { path = "../delegated-authority" }
 futures-core.workspace = true
 hex.workspace = true
 marty-crypto.workspace = true
@@ -59,6 +60,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-organization = { path = "../organization" }
 # Registered cross-owner fixture exercises the actual policy kernel/evaluator;
 # this dependency must remain absent from production and build dependencies.
 marty-presentation-policy = { path = "../presentation-policy" }

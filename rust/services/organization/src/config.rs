@@ -38,6 +38,8 @@ pub struct OrganizationServiceConfig {
     pub event_stream_ca_certificate: Option<PathBuf>,
     pub event_stream_timeout_seconds: u64,
     pub organization_creation_enabled: bool,
+    pub agent_admin_enabled: bool,
+    pub agent_enrollment: Option<crate::agent_directory::AgentEnrollmentConfiguration>,
     pub marty_organization_id: Uuid,
     pub marty_organization_name: String,
     pub marty_organization_slug: String,
@@ -104,6 +106,39 @@ impl OrganizationServiceConfig {
             redis_database,
         )?;
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
+        let agent_admin_enabled = boolean(&values, "MARTY_AGENT_ADMIN_ENABLED", false)?;
+        if agent_admin_enabled && service_token.as_ref().is_none_or(|token| token.len() < 32) {
+            return Err(OrganizationConfigError::Missing {
+                name: "GRPC_SERVICE_TOKEN",
+            });
+        }
+        let agent_enrollment = if boolean(&values, "MARTY_AGENT_ENROLLMENT_ENABLED", false)? {
+            if !agent_admin_enabled {
+                return Err(invalid("MARTY_AGENT_ENROLLMENT_ENABLED"));
+            }
+            let audience = value(&values, "MARTY_AGENT_ENROLLMENT_AUDIENCE").ok_or(
+                OrganizationConfigError::Missing {
+                    name: "MARTY_AGENT_ENROLLMENT_AUDIENCE",
+                },
+            )?;
+            let max_age = number(&values, "MARTY_AGENT_ENROLLMENT_MAX_AGE_SECONDS", 120u32)?;
+            if !(1..=300).contains(&max_age) {
+                return Err(invalid("MARTY_AGENT_ENROLLMENT_MAX_AGE_SECONDS"));
+            }
+            Some(
+                crate::agent_directory::AgentEnrollmentConfiguration::new(
+                    audience.into(),
+                    value(&values, "MARTY_AGENT_ENROLLMENT_POLICY_PROFILE")
+                        .unwrap_or("urn:marty:managed-key-enrollment-policy:v1")
+                        .into(),
+                    number(&values, "MARTY_AGENT_ENROLLMENT_POLICY_REVISION", 1u64)?,
+                    max_age,
+                )
+                .map_err(|_| invalid("MARTY_AGENT_ENROLLMENT_CONFIGURATION"))?,
+            )
+        } else {
+            None
+        };
         if environment.is_deployed() && service_token.is_none() {
             return Err(OrganizationConfigError::Missing {
                 name: "GRPC_SERVICE_TOKEN",
@@ -162,6 +197,8 @@ impl OrganizationServiceConfig {
             event_stream_ca_certificate,
             event_stream_timeout_seconds: number(&values, "ES_GRPC_TIMEOUT_SECONDS", 5)?,
             organization_creation_enabled: boolean(&values, "ORGANIZATION_CREATION_ENABLED", true)?,
+            agent_admin_enabled,
+            agent_enrollment,
             marty_organization_id,
             marty_organization_name: value(&values, "MARTY_ORG_NAME")
                 .unwrap_or("Marty")

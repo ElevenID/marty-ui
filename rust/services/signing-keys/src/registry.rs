@@ -1379,7 +1379,7 @@ impl RegistryStore {
             }
             purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
             let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
-            validate_lti_bindings(&normalized_bindings)?;
+            validate_exclusive_purpose_bindings(&normalized_bindings)?;
             registry["key_reference_purposes"] = json!(normalized_bindings);
 
             if set_defaults {
@@ -2123,7 +2123,7 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
     let Some(raw_services) = body.get("services").and_then(Value::as_array) else {
         let mut registry = empty_registry();
         let bindings = normalize_bindings(body.get("key_reference_purposes"));
-        validate_lti_bindings(&bindings)?;
+        validate_exclusive_purpose_bindings(&bindings)?;
         registry["key_reference_purposes"] = json!(bindings);
         include_operation_bindings(&mut registry, value)?;
         return Ok(registry);
@@ -2144,7 +2144,7 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
         }
     }
     let bindings = normalize_bindings(body.get("key_reference_purposes"));
-    validate_lti_bindings(&bindings)?;
+    validate_exclusive_purpose_bindings(&bindings)?;
     let mut registry = json!({
         "services": services,
         "default_service_id": optional_string(body.get("default_service_id")),
@@ -2423,11 +2423,19 @@ fn normalize_bindings(value: Option<&Value>) -> BTreeMap<String, BTreeMap<String
     normalized
 }
 
-fn validate_lti_bindings(
+fn validate_exclusive_purpose_bindings(
     bindings: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
 ) -> Result<(), RegistryError> {
     for (service_id, references) in bindings {
         for (reference, purposes) in references {
+            let receipt_purpose = marty_signing_grant::delegated_decision::KEY_PURPOSE;
+            if purposes.iter().any(|purpose| purpose == receipt_purpose)
+                && purposes.as_slice() != [receipt_purpose]
+            {
+                return Err(RegistryError::Invalid(format!(
+                    "Key reference '{reference}' in service '{service_id}' must be reserved exclusively for delegated receipt signing."
+                )));
+            }
             if purposes.iter().any(|purpose| purpose == "lti_tool_signing")
                 && purposes.as_slice() != ["lti_tool_signing"]
             {
@@ -2465,6 +2473,10 @@ fn formats_for_purposes(purposes: &[String]) -> Vec<String> {
     let definitions = key_purposes();
     let mut formats = Vec::new();
     for purpose in purposes {
+        if purpose == marty_signing_grant::delegated_decision::KEY_PURPOSE {
+            // Only an explicitly selected internal purpose gets this format.
+            formats.push(marty_signing_grant::delegated_decision::WIRE_FORMAT.to_string());
+        }
         if let Some(definition) = definitions.iter().find(|value| value.id == purpose) {
             for format in definition.credential_formats {
                 // Historical services do not acquire a new capability by default.
@@ -2481,7 +2493,8 @@ fn formats_for_purposes(purposes: &[String]) -> Vec<String> {
 }
 
 fn is_key_purpose(value: &str) -> bool {
-    key_purposes().iter().any(|purpose| purpose.id == value)
+    value == marty_signing_grant::delegated_decision::KEY_PURPOSE
+        || key_purposes().iter().any(|purpose| purpose.id == value)
 }
 
 pub(crate) fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
@@ -2942,6 +2955,44 @@ mod tests {
                 case["name"]
             );
         }
+    }
+
+    #[test]
+    fn delegated_receipt_service_and_key_require_explicit_registration() {
+        use marty_signing_grant::delegated_decision::{KEY_PURPOSE, WIRE_FORMAT};
+        let mut value = json!({"services":[{"id":"receipt-service","service_type":"openbao-transit","endpoint":"https://receipt-bao.example","auth_mode":"token","auth_reference":"synthetic-registration-token","key_reference":"receipt-key","key_purposes":[KEY_PURPOSE],"algorithms":["ES256"]}],"key_reference_purposes":{"receipt-service":{"receipt-key":[KEY_PURPOSE]}}});
+        let normalized = normalize_requested_registry(&value).unwrap();
+        assert_eq!(
+            normalized["services"][0]["key_purposes"],
+            json!([KEY_PURPOSE])
+        );
+        assert_eq!(
+            normalized["services"][0]["credential_formats"],
+            json!([WIRE_FORMAT])
+        );
+        assert_eq!(
+            normalized["key_reference_purposes"]["receipt-service"]["receipt-key"],
+            json!([KEY_PURPOSE])
+        );
+        value["key_reference_purposes"]["receipt-service"]["receipt-key"] =
+            json!([KEY_PURPOSE, "vc_jwt_issuer"]);
+        assert!(normalize_requested_registry(&value).is_err());
+        let managed = managed_openbao_service("org-1", "https://bao.example", &[], true);
+        assert!(!managed["key_purposes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(KEY_PURPOSE)));
+        assert!(!managed["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(WIRE_FORMAT)));
+        assert!(!crate::domain::key_purposes()
+            .iter()
+            .any(|purpose| purpose.id == KEY_PURPOSE));
+        assert_eq!(
+            crate::domain::managed_key_prefix_for_purpose(KEY_PURPOSE),
+            None
+        );
     }
 
     #[test]

@@ -1,0 +1,42 @@
+{
+  "purpose": "New locally generated application test public keys; no private material is serialized",
+  "keys": {
+    "external_worker": {
+      "jwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "n8dTWA2bFf1mlIs9RN_mTZPq5ojx5mpbbtmPhPsSaCU"
+      },
+      "rfc7638_sha256_base64url": "_bBTskCmkgQOietWpQwXEeGWMTrlyq-7xhNizo9epuc",
+      "rfc7638_sha256_hex": "sha256:fdb053b240a692040e89eb56a50c1711e196313ae5caafbbc61362ce8f5ea6e7"
+    },
+    "managed_worker": {
+      "jwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "unPJ9ULpvU0f_1lwt90H2wh0Suyy7V-ebOWJUv3ihQo"
+      },
+      "rfc7638_sha256_base64url": "-rEJ7d0Gi6bZDOnuRkY1YJoCP8vkvKwGLnWR8rsH2zQ",
+      "rfc7638_sha256_hex": "sha256:fab109eddd068ba6d90ce9ee464635609a023fcbe4bcac062e7591f2bb07db34"
+    },
+    "support_session": {
+      "jwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "TBBFd9ycjr1Y-7Eu9JutT3LHOwuvQOrKVSMKmwqXBmw"
+      },
+      "rfc7638_sha256_base64url": "_Dl-cEP89vekj4sNOQvBAq1-4S6dTCYLy6cNEhRc5Bs",
+      "rfc7638_sha256_hex": "sha256:fc397e7043fcf6f7a48f8b0d390bc102ad7ee12e9d4c260bcba70d12145ce41b"
+    },
+    "rotation_candidate": {
+      "jwk": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "Mr8wdupwl-l2jw8i1g1ViOXIDXEJbI-eBo2-SR9_c_g",
+        "y": "pmqaOrU2U7bmC5SrvlxPuug_F8cFZmPkqZ9IHeu2w2E"
+      },
+      "rfc7638_sha256_base64url": "b1PMhKP50BAJQhrPxRh6q-nf0ozLfPut_OZIywKSmFY",
+      "rfc7638_sha256_hex": "sha256:6f53cc84a3f9d01009421acfc5187aabe9dfd28ccb7cfbadfce648cb02929856"
+    }
+  }
+}

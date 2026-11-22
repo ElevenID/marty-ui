@@ -1,0 +1,1189 @@
+{
+  "report_format_version": 1,
+  "report_id": "agent-trust-ci-followup-2026-11-22",
+  "recorded_at_utc": "2026-11-22T08:22:41.149506+00:00",
+  "status": "LATER_CI_STAGES_RECONCILED_LOCAL_CHECKS_PASSED_FINAL_PROTECTED_CI_REQUIRED",
+  "source": {
+    "base_candidate": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+    "base_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+    "effective_verified_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
+    "production_cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+    "changed_files": [
+      {
+        "path": "rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+        "sha256": "d434b79f5b6a98b967d118a53e8f57e6b122d926df4a7fb953111bcac8139dd2"
+      },
+      {
+        "path": "scripts/application_release_inputs.mjs",
+        "sha256": "ccce57e6d7fce0317188909052987f4161f6e6301e45fde5b5dfd193d03e79f4"
+      },
+      {
+        "path": "ui/scripts/application-package-consumer.test.mjs",
+        "sha256": "eccae9963ed580a3d99fbea002e64ab3600df8a84f57c0ba13fe315984cae76d"
+      }
+    ],
+    "source_identity_note": "The enrollment sequence captured the exact effective tree with its sole uncommitted Rust line change and verified that identity before and after execution. The website bridge and evidence files were changed afterward; the final Rust subtree must match the recorded effective Rust tree. Final whole-tree/commit identity is supplied by the published commit, not predicted here."
+  },
+  "ci_run": "https://github.com/ElevenID/marty-ui/actions/runs/45001443762",
+  "summary": [
+    "The hosted corrective run cleared the stale lockfile, original exporter CLI and RBAC failures. The actual frozen feature probe passed both frozen/offline executions, exact output comparison, output contract and target-size guard on af92f2b. No measurement absent from the CI log is invented.",
+    "The previously unexecuted workspace Clippy stage rejected one unnecessary_sort_by expression in managed-enrollment canonicalization. The one-line replacement compares the same borrowed String keys using Ord. No value, normalization, allocation, canonical ordering or permission changes. Four distinct UTF-16 comparators remain untouched.",
+    "On the resulting effective Rust tree, two principal-binding library tests and seventeen managed-enrollment tests passed. Both unchanged MMF/Core guards passed, the normal serving binary was built last, and all four before/after binary hash comparisons matched. All seven commands exited zero.",
+    "The later Website image-input stage still pinned the historical 296 total. It now uses the existing hash-approved applicationSourceTestPolicy(manifest) with strict equality: current 26-file/321-case profile and immutable historical 24-file/296-case profile. Exactly 13 administration/approval and 12 Gateway client/retry cases account for the difference; no historical contract or original selected file changed.",
+    "The bridge regression first reproduced 321 versus 296, then all sixteen focused tests passed, including wrong counts, altered/missing rosters and unknown contract rejection. Synthetic validator arguments remain in memory; retained fixture reports remain fixture-passed and no production receipt was created."
+  ],
+  "local_results": {
+    "principal_binding_library_tests": 2,
+    "managed_enrollment_tests": 17,
+    "consumer_and_bridge_tests": 16,
+    "normal_host_sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91",
+    "normal_host_hash_checks": 4,
+    "workspace_rustfmt_1_95_check_exit_code": 0,
+    "production_lock_or_dependency_pin_changed": false
+  },
+  "hosted_native_windows_observation": {
+    "candidate": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+    "job_url": "https://github.com/ElevenID/marty-ui/actions/runs/45001443762/job/137143793984",
+    "conclusion": "success",
+    "native_cases_qualified": 49,
+    "private_log_sha256": "f2ae7fd275bfecb6a76517d43ba6d97f8edadadd715df0be2ab8c0db482d00a7",
+    "scope": "This is a prior-head observation; final-head Windows CI remains required."
+  },
+  "records": {
+    "enrollment_sort": {
+      "original_export": {
+        "file_name": "summary.json",
+        "bytes": 12688,
+        "sha256": "fc36a6a909923b9d34fe88c651d53765d6bc982a73517c926d44aa5e5032d71b"
+      },
+      "data": {
+        "schema_version": 1,
+        "status": "PASSED",
+        "started_at_utc": "2026-11-22T08:17:06.358478+00:00",
+        "scope": "Local verification of one borrowed-key sorting correction. AWS qualification remains bound to source 3c8a9386.",
+        "execution": {
+          "uid": 1000,
+          "gid": 1000,
+          "rust_toolchain": "1.95.0",
+          "cargo_jobs": 2,
+          "offline": true,
+          "incremental": false,
+          "driver_sha256": "d6b1c1d7318604acad2589b12402f5903d9fec46014a23a33fdc486e0815594b"
+        },
+        "commands": [
+          {
+            "name": "metadata",
+            "command": [
+              "cargo",
+              "metadata",
+              "--locked",
+              "--offline",
+              "--manifest-path",
+              "rust/Cargo.toml",
+              "--format-version",
+              "1"
+            ],
+            "started_at_utc": "2026-11-22T08:17:06.400129+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 2.003,
+            "completed_at_utc": "2026-11-22T08:17:08.403807+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/cargo-metadata.json",
+              "bytes": 4697444,
+              "sha256": "ef758a5fe67cd35bed1b4b4ea7d7cb7dda3125526069a03c72fd692f103f0995"
+            },
+            "stderr": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/metadata.stderr.log",
+              "bytes": 1962,
+              "sha256": "931d1583010d9abde8e537b09d4cc7de4defdaf99ce46e0884ff381c7011cbe9"
+            }
+          },
+          {
+            "name": "principal-harness-build",
+            "command": [
+              "cargo",
+              "test",
+              "--locked",
+              "--offline",
+              "--manifest-path",
+              "rust/Cargo.toml",
+              "-p",
+              "marty-principal-runtime-binding",
+              "--lib",
+              "--test",
+              "managed_enrollment",
+              "--no-run",
+              "--message-format=json"
+            ],
+            "started_at_utc": "2026-11-22T08:17:08.524609+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 21.046,
+            "completed_at_utc": "2026-11-22T08:17:29.571155+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/principal-artifacts.jsonl",
+              "bytes": 105953,
+              "sha256": "20a439646650c9396f804ee1436d9b66ed525dd27946c97c7219c7a2fddb716c"
+            },
+            "stderr": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/principal-harness-build.stderr.log",
+              "bytes": 4297,
+              "sha256": "7166be20fe4b4c85170792da37ed63510425f0456d11f39542af3aa49392912d"
+            }
+          },
+          {
+            "name": "check-mmf-security-features",
+            "command": [
+              "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+              "scripts/ci/check_mmf_security_features.py"
+            ],
+            "started_at_utc": "2026-11-22T08:17:29.571820+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 1.006,
+            "completed_at_utc": "2026-11-22T08:17:30.578246+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/check-mmf-security-features.log",
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          },
+          {
+            "name": "check-marty-core-kms-boundary",
+            "command": [
+              "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python",
+              "scripts/ci/check_marty_core_kms_boundary.py"
+            ],
+            "started_at_utc": "2026-11-22T08:17:30.581439+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 1.003,
+            "completed_at_utc": "2026-11-22T08:17:31.585335+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/check-marty-core-kms-boundary.log",
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          },
+          {
+            "name": "normal-host-last",
+            "command": [
+              "cargo",
+              "build",
+              "--locked",
+              "--offline",
+              "--manifest-path",
+              "rust/Cargo.toml",
+              "-p",
+              "marty-delegated-use",
+              "--bin",
+              "marty-delegated-use",
+              "--message-format=json"
+            ],
+            "started_at_utc": "2026-11-22T08:17:31.585979+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 50.089,
+            "completed_at_utc": "2026-11-22T08:18:21.675200+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/production-artifacts.jsonl",
+              "bytes": 687769,
+              "sha256": "319339f033b87a73fc8713e4b992396fa6b525182619526e091796bdb6a73ac9"
+            },
+            "stderr": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/normal-host-last.stderr.log",
+              "bytes": 2803,
+              "sha256": "603cecd6d4b407cdb17dd458cbda9634f38fb367dc96775c4640bb83ef797fda"
+            }
+          },
+          {
+            "name": "principal-library",
+            "command": [
+              "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/marty_principal_runtime_binding-1fca8d68a0fa69d3",
+              "--nocapture",
+              "--test-threads=1"
+            ],
+            "started_at_utc": "2026-11-22T08:18:22.578459+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 1.028,
+            "completed_at_utc": "2026-11-22T08:18:23.607444+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/principal-library.log",
+              "bytes": 307,
+              "sha256": "482f2ccd9c3dae380d150e04506ea7bfae9c2a3d01abd826500e2d3d8dd8d1c1"
+            }
+          },
+          {
+            "name": "managed-enrollment",
+            "command": [
+              "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/managed_enrollment-8d440b3b2979b3a2",
+              "--nocapture",
+              "--test-threads=1"
+            ],
+            "started_at_utc": "2026-11-22T08:18:24.860819+00:00",
+            "exit_code": 0,
+            "cleanup": {
+              "all_owned_processes_stopped": true,
+              "forced_kill": false
+            },
+            "seconds": 1.017,
+            "completed_at_utc": "2026-11-22T08:18:25.879152+00:00",
+            "stdout": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/managed-enrollment.log",
+              "bytes": 1452,
+              "sha256": "9b1b562b5e91bc305322ffeb582897280d090a50b7af20a6c798473943181f60"
+            }
+          }
+        ],
+        "test_gates": [
+          {
+            "name": "principal-library",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 0,
+            "seconds": 0.0,
+            "log": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/principal-library.log",
+              "bytes": 307,
+              "sha256": "482f2ccd9c3dae380d150e04506ea7bfae9c2a3d01abd826500e2d3d8dd8d1c1"
+            }
+          },
+          {
+            "name": "managed-enrollment",
+            "passed": 17,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 0,
+            "seconds": 0.22,
+            "log": {
+              "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/managed-enrollment.log",
+              "bytes": 1452,
+              "sha256": "9b1b562b5e91bc305322ffeb582897280d090a50b7af20a6c798473943181f60"
+            }
+          }
+        ],
+        "host_checks": [
+          {
+            "gate": "principal-library",
+            "position": "before",
+            "sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91"
+          },
+          {
+            "gate": "principal-library",
+            "position": "after",
+            "sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91"
+          },
+          {
+            "gate": "managed-enrollment",
+            "position": "before",
+            "sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91"
+          },
+          {
+            "gate": "managed-enrollment",
+            "position": "after",
+            "sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91"
+          }
+        ],
+        "first_failure": null,
+        "source_before": {
+          "head": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+          "committed_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+          "effective_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
+          "effective_repository_tree": "57a857f9c1c354fd9b0f76b1ca704d2ea1f2a132",
+          "rust_status": "M rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+          "changed_file": "rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+          "changed_blob": "728e6c19454f174c0c6188b400c1119b27c3009a",
+          "changed_file_sha256": "d434b79f5b6a98b967d118a53e8f57e6b122d926df4a7fb953111bcac8139dd2",
+          "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+          "rust_diff_sha256": "4bc0de14ed89a95ef5b0f52d1bdd28527d5ee0f701d2f92a99e50cd87c0629cc"
+        },
+        "harnesses": {
+          "marty_principal_runtime_binding": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/marty_principal_runtime_binding-1fca8d68a0fa69d3",
+            "bytes": 9448640,
+            "sha256": "c255586ad380db7c74ffd98f8d07577f2001458cb648d222d8e5e5a21b9e91df",
+            "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/crates/principal-runtime-binding#marty-principal-runtime-binding@0.1.0",
+            "target": "marty_principal_runtime_binding",
+            "kind": "lib",
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": "line-tables-only",
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": []
+          },
+          "managed_enrollment": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/managed_enrollment-8d440b3b2979b3a2",
+            "bytes": 15294496,
+            "sha256": "6da792670e3be6823b0c0ed50d8ea4267debc2bfb29a19103c96bd33114d14db",
+            "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/crates/principal-runtime-binding#marty-principal-runtime-binding@0.1.0",
+            "target": "managed_enrollment",
+            "kind": "test",
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": "line-tables-only",
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": []
+          }
+        },
+        "normal_host": {
+          "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/marty-delegated-use",
+          "bytes": 245798672,
+          "sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91",
+          "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "target": "marty-delegated-use",
+          "kind": "bin",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": false
+          },
+          "features": []
+        },
+        "artifact_manifests": [
+          {
+            "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/cargo-metadata.json",
+            "bytes": 4697444,
+            "sha256": "ef758a5fe67cd35bed1b4b4ea7d7cb7dda3125526069a03c72fd692f103f0995"
+          },
+          {
+            "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/principal-artifacts.jsonl",
+            "bytes": 105953,
+            "sha256": "20a439646650c9396f804ee1436d9b66ed525dd27946c97c7219c7a2fddb716c"
+          },
+          {
+            "path": "$LOCAL_QUALIFICATION_ROOT/ci-45001443762/enrollment-sort-verification/production-artifacts.jsonl",
+            "bytes": 687769,
+            "sha256": "319339f033b87a73fc8713e4b992396fa6b525182619526e091796bdb6a73ac9"
+          }
+        ],
+        "source_after": {
+          "head": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+          "committed_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+          "effective_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
+          "effective_repository_tree": "57a857f9c1c354fd9b0f76b1ca704d2ea1f2a132",
+          "rust_status": "M rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+          "changed_file": "rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+          "changed_blob": "728e6c19454f174c0c6188b400c1119b27c3009a",
+          "changed_file_sha256": "d434b79f5b6a98b967d118a53e8f57e6b122d926df4a7fb953111bcac8139dd2",
+          "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+          "rust_diff_sha256": "4bc0de14ed89a95ef5b0f52d1bdd28527d5ee0f701d2f92a99e50cd87c0629cc"
+        },
+        "total_passed": 19,
+        "completed_at_utc": "2026-11-22T08:18:26.612460+00:00",
+        "seconds": 80.254
+      }
+    },
+    "image_input_profiles": {
+      "original_export": {
+        "file_name": "application-release-inputs-reconciliation.json",
+        "bytes": 7818,
+        "sha256": "82b80cec61e7c38225319b682eb8fa04cacc852bb570cee5a7243c1fc52c3fb4"
+      },
+      "data": {
+        "schema": "marty.application-release-inputs-ci-reconciliation/v1",
+        "source": {
+          "failed_ci_head": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+          "accepted_main": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+          "validator_before_identical_to_accepted_main": true,
+          "source_paths_changed": [
+            "scripts/application_release_inputs.mjs",
+            "ui/scripts/application-package-consumer.test.mjs"
+          ]
+        },
+        "hosted_failure": {
+          "run_id": 45001443762,
+          "job_id": 137143833205,
+          "job_url": "https://github.com/ElevenID/marty-ui/actions/runs/45001443762/job/137143833205",
+          "first_failed_step": "Freeze the production application image inputs",
+          "step_number": 14,
+          "error": "Application producer validation failed: Application release inputs failed: Expected values to be strictly equal: 321 !== 296",
+          "prior_source_packaging_passed": true,
+          "prior_restored_consumer_passed": true,
+          "prior_restored_runtime_passed": true,
+          "private_log": {
+            "name": "website-surface-137143833205-first.log",
+            "bytes": 71513,
+            "sha256": "85c1688d5ceb52d9e58dd088bb275c73baeebdad0ffb9ab663d3abbcd47e8d65"
+          }
+        },
+        "authority": {
+          "selector": "applicationSourceTestPolicy(manifest)",
+          "selector_module": "ui/scripts/export-application-source.mjs",
+          "strict_equality": true,
+          "minimum_count_permitted": false,
+          "current": {
+            "path": "contracts/application-source-export.json",
+            "selected_files": 26,
+            "assertions": 321,
+            "bytes": 174475,
+            "sha256": "7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41"
+          },
+          "historical": {
+            "path": "contracts/application-source-export-history/initial-v1.json",
+            "selected_files": 24,
+            "assertions": 296,
+            "bytes": 173093,
+            "sha256": "3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad",
+            "byte_identical_to_accepted_main": true
+          },
+          "original_24_test_files_unchanged": true,
+          "added_case_inventory_basis": "unchanged named test declarations, including the two explicit uncertain-mutation parameters; this is source inventory, not an additional local UI execution",
+          "added_groups": [
+            {
+              "path": "ui/src/components/console/agents/AgentTrustPages.test.tsx",
+              "group": "optional agent administration and explicit approval",
+              "case_count": 13,
+              "case_names": [
+                "blocks private key material in the browser before registration",
+                "can deliberately withdraw the original journaled consent after old-session recovery is denied",
+                "does not approve an expired review",
+                "does not enable registration before the current inventory can be inspected",
+                "does not load protected inventory when disabled or permission checks fail",
+                "ignores a previous tenant response after an organization switch",
+                "makes the absence of a resume action explicit before suspension",
+                "offers original recovery after reload without automatically confirming",
+                "rejects another approver and clears an older review before a failed replacement",
+                "requires a successful current-state reload after an uncertain commit_unknown mutation, even after dialog dismissal",
+                "requires a successful current-state reload after an uncertain invalid_response mutation, even after dialog dismissal",
+                "requires explicit review and consent, and retains the same confirmation on a lost reply",
+                "separates access eligibility from runtime activity"
+              ],
+              "bytes": 15979,
+              "sha256": "a0a4f66f98b35affc78210ff953848f7adc5d1aab63d7448d61e8b670f47c990"
+            },
+            {
+              "path": "ui/src/services/__tests__/agentTrustApi.test.ts",
+              "group": "agent trust Gateway client bindings and retry policy",
+              "case_count": 12,
+              "case_names": [
+                "does not retry a write after a transport failure or ambiguous 503",
+                "never accepts an approval result for a different review or terms digest",
+                "preserves only accepted public key profiles and compatible optional metadata",
+                "refuses a cross-tenant directory response",
+                "refuses a different identity returned from a metadata update",
+                "rejects a mismatched grant reference before showing review terms",
+                "rejects entire JWKs containing private, unknown or incompatible members before either key write",
+                "rejects unsafe revisions and injected path identifiers before dispatch",
+                "requires complete bounded presentation terms before the human can review consent",
+                "retains the exact original confirmation identity and digest across explicit retry",
+                "sends an exact revision and no caller-supplied identity headers",
+                "withdraws only the retained original confirmation without issuing or retrying consent"
+              ],
+              "bytes": 11193,
+              "sha256": "5d48bff5a3fe015d39316d991eb3655ddbf6a0eac51cef9d500eb19ee4fe6678"
+            }
+          ],
+          "additional_cases": 25
+        },
+        "correction": "Replace the stale bridge-only 296 literal with the existing approved contract policy, retaining strict count equality and exact selected-file checks. No contract, named UI case, historical profile, source/output/cleanup/command/receipt guard is changed.",
+        "local_validation": {
+          "node_version": "v24.22.3",
+          "before": {
+            "command": [
+              "node",
+              "--test",
+              "--test-name-pattern=release input validation keeps exact current and historical test profiles",
+              "ui/scripts/application-package-consumer.test.mjs"
+            ],
+            "exit_code": 1,
+            "tests": 1,
+            "passed": 0,
+            "failed": 1,
+            "skipped": 0,
+            "observed_error": "321 !== 296",
+            "log": {
+              "name": "application-release-inputs-before.log",
+              "bytes": 1739,
+              "sha256": "a8148c7baef141e5c5f600b8622a6c4502fcafd41a014708a958a60461a15645"
+            },
+            "validator_sha256": "fd021d7712946291bec08d1cc3ab95ebb926082fd1659f43420ac944c05bbe59"
+          },
+          "after": {
+            "command": [
+              "node",
+              "--test",
+              "ui/scripts/application-package-consumer.test.mjs"
+            ],
+            "exit_code": 0,
+            "tests": 16,
+            "passed": 16,
+            "failed": 0,
+            "skipped": 0,
+            "log": {
+              "name": "application-release-inputs-after.log",
+              "bytes": 1829,
+              "sha256": "d1680a029bbae2d48038558e3f4daa1633a935db7d9f59d193bdd478ee6e6e15"
+            }
+          }
+        },
+        "regression_coverage": [
+          "current 26-file / 321-case profile accepted",
+          "historical 24-file / 296-case profile accepted",
+          "all original selected file names retained; exactly the two named agent suites added",
+          "cross-profile totals rejected",
+          "one fewer or one additional case rejected",
+          "incomplete completed-file evidence rejected",
+          "altered manifest roster rejected",
+          "unknown contract hash rejected",
+          "injected consumer execution stays fixture-passed with fixture=true in its persisted report; no production receipt is written"
+        ],
+        "final_source_files": {
+          "scripts/application_release_inputs.mjs": {
+            "bytes": 12888,
+            "sha256": "ccce57e6d7fce0317188909052987f4161f6e6301e45fde5b5dfd193d03e79f4"
+          },
+          "ui/scripts/application-package-consumer.test.mjs": {
+            "bytes": 28657,
+            "sha256": "eccae9963ed580a3d99fbea002e64ab3600df8a84f57c0ba13fe315984cae76d"
+          }
+        },
+        "review": {
+          "independent_read_only_patch_review": "passed",
+          "reviewer": "merge_gate_audit",
+          "diff_check": "passed"
+        },
+        "scope_limits": [
+          "These are focused local consumer/bridge tests; full hosted Website Surface rerun remains required.",
+          "No AWS, Rust, source-contract, image publication, production deployment or external mutation was performed for this correction."
+        ]
+      }
+    },
+    "hosted_frozen_probe": {
+      "original_export": {
+        "file_name": "frozen-probe-result.json",
+        "bytes": 1946,
+        "sha256": "1113f8e0daca8762a9fcd22ab5a70a5fe43b4c259ebbb1afdc3d7708a6f9d4e9"
+      },
+      "data": {
+        "schema_version": 1,
+        "recorded_at_utc": "2026-11-22T08:17:23.098Z",
+        "repository": "ElevenID/marty-ui",
+        "candidate_commit": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+        "run_id": 45001443762,
+        "run_attempt": 1,
+        "job": {
+          "id": 137143833328,
+          "name": "Rust Feature Regression Probe",
+          "url": "https://github.com/ElevenID/marty-ui/actions/runs/45001443762/job/137143833328",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-11-22T08:10:47Z",
+          "completed_at": "2026-11-22T08:16:17Z"
+        },
+        "actual_frozen_gate": {
+          "step_number": 6,
+          "conclusion": "success",
+          "operations": [
+            "cargo fetch --locked for the standalone probe manifest",
+            "Two cargo run --frozen --offline --quiet invocations of elevenid-feature-regression-probe",
+            "cmp --silent of both output files",
+            "tests/test_feature_regression_rust_probe.py validation of the emitted JSON contract",
+            "Actual target directory size checked against the manifest budget"
+          ],
+          "failure_mode": "set -euo pipefail; all commands must succeed for the step to pass"
+        },
+        "lock_correction": "The standalone probe lock adds the existing uuid dependency edge to marty-oid4vp-contract without changing the 733 package version/source/checksum identities.",
+        "scope": "Actual GitHub Actions execution on the corrective candidate; closes the earlier local execution limitation caused by uncached exact registry dependencies. No local build or test was run for this observation.",
+        "log": {
+          "file": "frozen-probe-137143833328.log",
+          "representation": "UTF-8 encoding of the exact decoded job log returned by the GitHub connector; timestamps and ANSI/BOM bytes retained.",
+          "bytes": 104336,
+          "sha256": "7b5a47fc78b8efcc534d3966e57a00f67199b8f8982a495fb23475f81a6ab282"
+        },
+        "actions": {
+          "source_edits": false,
+          "reruns": false,
+          "status_mutations": false,
+          "aws_actions": false
+        }
+      }
+    },
+    "first_actual_clippy_failure": {
+      "original_export": {
+        "file_name": "rust-lint-first-failure.json",
+        "bytes": 17442,
+        "sha256": "99ba0c295021c6208a87f484a41d22dadf0b4cf0480257c831d7f06adea3510f"
+      },
+      "data": {
+        "schema_version": 1,
+        "candidate": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+        "rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+        "run_id": 45001443762,
+        "job_id": 137143833385,
+        "job_url": "https://github.com/ElevenID/marty-ui/actions/runs/45001443762/job/137143833385",
+        "failed_step": "Lint Rust services",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "working_directory": "rust",
+        "exit_code": 101,
+        "first_diagnostic_at_utc": "2026-11-22T08:13:18.3846036Z",
+        "rule": "clippy::unnecessary_sort_by",
+        "path": "rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+        "line": 684,
+        "diagnostic": "consider using sort_unstable_by_key",
+        "current": "entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));",
+        "suggested": "entries.sort_unstable_by_key(|(left, _)| *left);",
+        "source_assessment": "Both forms order the unique object member keys using String Ord. Entries are borrowed (&String, &Value) pairs. The suggested key function returns the same borrowed String used by the existing comparison; no allocation, key normalization, serialized value, or canonicalization contract changes.",
+        "observed_passes": [
+          "Fetch locked private fork dependencies",
+          "Check formatting",
+          "Keep MMF security and Marty Core on reviewed feature sets"
+        ],
+        "remaining_steps_skipped": [
+          "Test the opt-in unsigned installer development boundary",
+          "Lint frozen Rust feature-regression probe",
+          "Validate canonical Rust service packaging and migration ordering"
+        ],
+        "edits_performed": false,
+        "reruns_performed": false,
+        "monitor_history": [
+          {
+            "at": "2026-11-22 08:11:40 UTC",
+            "jobs": [
+              {
+                "id": 137143833328,
+                "name": "Rust Feature Regression Probe",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Verify frozen Rust feature-regression probe",
+                    "status": "in_progress",
+                    "conclusion": null,
+                    "number": 6
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 12
+                  }
+                ]
+              },
+              {
+                "id": 137143833385,
+                "name": "Rust Lint and Packaging",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Use mold linker",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 6
+                  },
+                  {
+                    "name": "Enable compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 7
+                  },
+                  {
+                    "name": "Keep Rust lint independent of optional compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 8
+                  },
+                  {
+                    "name": "Check formatting",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 9
+                  },
+                  {
+                    "name": "Keep MMF security and Marty Core on reviewed feature sets",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 10
+                  },
+                  {
+                    "name": "Lint Rust services",
+                    "status": "in_progress",
+                    "conclusion": null,
+                    "number": 11
+                  },
+                  {
+                    "name": "Test the opt-in unsigned installer development boundary",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 12
+                  },
+                  {
+                    "name": "Lint frozen Rust feature-regression probe",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 13
+                  },
+                  {
+                    "name": "Validate canonical Rust service packaging and migration ordering",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 14
+                  },
+                  {
+                    "name": "Report compiler cache effectiveness",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 15
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 30
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "at": "2026-11-22 08:12:42 UTC",
+            "jobs": [
+              {
+                "id": 137143833328,
+                "name": "Rust Feature Regression Probe",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Verify frozen Rust feature-regression probe",
+                    "status": "in_progress",
+                    "conclusion": null,
+                    "number": 6
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 12
+                  }
+                ]
+              },
+              {
+                "id": 137143833385,
+                "name": "Rust Lint and Packaging",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Use mold linker",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 6
+                  },
+                  {
+                    "name": "Enable compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 7
+                  },
+                  {
+                    "name": "Keep Rust lint independent of optional compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 8
+                  },
+                  {
+                    "name": "Check formatting",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 9
+                  },
+                  {
+                    "name": "Keep MMF security and Marty Core on reviewed feature sets",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 10
+                  },
+                  {
+                    "name": "Lint Rust services",
+                    "status": "in_progress",
+                    "conclusion": null,
+                    "number": 11
+                  },
+                  {
+                    "name": "Test the opt-in unsigned installer development boundary",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 12
+                  },
+                  {
+                    "name": "Lint frozen Rust feature-regression probe",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 13
+                  },
+                  {
+                    "name": "Validate canonical Rust service packaging and migration ordering",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 14
+                  },
+                  {
+                    "name": "Report compiler cache effectiveness",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 15
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 30
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "at": "2026-11-22 08:13:36 UTC",
+            "jobs": [
+              {
+                "id": 137143833328,
+                "name": "Rust Feature Regression Probe",
+                "status": "in_progress",
+                "conclusion": null,
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Verify frozen Rust feature-regression probe",
+                    "status": "in_progress",
+                    "conclusion": null,
+                    "number": 6
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "pending",
+                    "conclusion": null,
+                    "number": 12
+                  }
+                ]
+              },
+              {
+                "id": 137143833385,
+                "name": "Rust Lint and Packaging",
+                "status": "completed",
+                "conclusion": "failure",
+                "run_id": 45001443762,
+                "logs_url": null,
+                "steps": [
+                  {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1
+                  },
+                  {
+                    "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2
+                  },
+                  {
+                    "name": "Authorize private fork access",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3
+                  },
+                  {
+                    "name": "Run dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4
+                  },
+                  {
+                    "name": "Fetch locked private fork dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5
+                  },
+                  {
+                    "name": "Use mold linker",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 6
+                  },
+                  {
+                    "name": "Enable compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 7
+                  },
+                  {
+                    "name": "Keep Rust lint independent of optional compiler cache",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 8
+                  },
+                  {
+                    "name": "Check formatting",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 9
+                  },
+                  {
+                    "name": "Keep MMF security and Marty Core on reviewed feature sets",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 10
+                  },
+                  {
+                    "name": "Lint Rust services",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "number": 11
+                  },
+                  {
+                    "name": "Test the opt-in unsigned installer development boundary",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 12
+                  },
+                  {
+                    "name": "Lint frozen Rust feature-regression probe",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 13
+                  },
+                  {
+                    "name": "Validate canonical Rust service packaging and migration ordering",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 14
+                  },
+                  {
+                    "name": "Report compiler cache effectiveness",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 15
+                  },
+                  {
+                    "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 30
+                  },
+                  {
+                    "name": "Complete job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 31
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "private_log": {
+          "file": "rust-lint-first-failure.log",
+          "bytes": 189736,
+          "sha256": "267478b155128ed7eee8b164785f2b10d36d4fbba69793b8e4860ba4cfcc6d26"
+        }
+      }
+    }
+  },
+  "export_encoding": "Each embedded data object preserves original key order. UTF-8 JSON with indent=2 and a final LF reproduces its recorded original-export byte count and SHA-256.",
+  "limits": [
+    "The 210-test AWS result remains tied to 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Neither this later Rust tree nor the website bridge is claimed to have been executed on AWS.",
+    "The 19 local Rust tests repeat the affected existing suites; they are not additional distinct AWS tests. The earlier nine live PostgreSQL tests remain bound to their earlier merged source.",
+    "Local Clippy is unavailable in the installed Rust toolchain. The exact observed lint was corrected without an allow/suppression, but complete final workspace Clippy and later installer/probe-lint/packaging stages remain required in hosted CI.",
+    "The three inherited CodeQL alerts remain open and their reviewed source files are unchanged by the canonical-sort correction. No scanner or protected merge requirement was altered.",
+    "No final-head CI, review or merge result is asserted by this prepared record. Existing squash auto-merge may proceed only through the normal protected gates; no synthetic status or approval is created."
+  ]
+}

@@ -1,0 +1,28 @@
+namespace MartyMachine {
+  entity Principal;
+  entity Identity;
+  action "urn:marty:machine:authenticate" appliesTo {
+    principal: [Principal],
+    resource: [Identity],
+    context: {
+      organization_id: String,
+      machine_identity_id: String,
+      deployment_profile_id: String,
+      runtime_instance_ref: String,
+      key_id: String,
+      key_thumbprint: String,
+      machine_authentication_policy_id: String,
+      machine_authentication_policy_digest: String,
+      grant_id: String,
+      grant_revision: Long,
+      challenge_id: String,
+      challenge_digest: String,
+      proof_evidence_ref: String,
+      requested_action: String,
+      requested_audience: String,
+      requested_resource: String,
+      operation_profile: String,
+      operation_digest: String
+    }
+  };
+}

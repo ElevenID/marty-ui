@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { applicationSourceTestPolicy } from './export-application-source.mjs';
 import { APPLICATION_RETAINED_PUBLIC_FILES } from './application-public-assets.mjs';
 import { applicationInstallationEnvironment, runOwnedInstallCommand } from './application-dependency-install.mjs';
 import {
@@ -22,7 +22,6 @@ import {
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
-const EXPECTED_TESTS = 296;
 const EXPECTED_OUTPUT_FILES = 88;
 const EXPECTED_CONTEXT_FILES = 92;
 const PROFILE_INPUTS = ['ui/package.json', 'ui/package-lock.json'];
@@ -94,6 +93,7 @@ function reportMessages(error) {
 }
 
 export function validateApplicationPackageBaseline(baseline, manifest) {
+  const testPolicy = applicationSourceTestPolicy(manifest);
   require(baseline?.schema === 'marty.application-source-closure-rehearsal/v5' && baseline.status === 'passed'
     && baseline.fixture !== true
     && baseline.plan?.schema === 'marty.application-source-closure-plan/v5', 'Consumer requires a passed v5 application baseline');
@@ -116,10 +116,8 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   }
   assert.deepEqual(baseline.plan.route_contract, manifest.route_contract, 'Consumer route contract differs');
   assert.deepEqual(baseline.plan.test_profile, manifest.test_profile, 'Consumer selected test contract differs');
-  assert.deepEqual(manifest.test_profile.files, [...APPLICATION_TEST_FILES], 'Consumer test roster changed');
-  require(manifest.test_profile.config === APPLICATION_TEST_CONFIG && APPLICATION_TEST_FILES.length === 24
-    && baseline.tests?.result?.test_count === EXPECTED_TESTS, 'Consumer requires all 24 selected files and 296 assertions');
-  assert.deepEqual([...baseline.tests.result.completed_files].sort(), [...APPLICATION_TEST_FILES].sort(), 'Baseline selected tests are incomplete');
+  require(baseline.tests?.result?.test_count === testPolicy.assertions, 'Consumer requires every assertion in the approved source test profile');
+  assert.deepEqual([...baseline.tests.result.completed_files].sort(), [...testPolicy.test_profile.files].sort(), 'Baseline selected tests are incomplete');
   require(baseline.plan.dependency_profile?.name === 'application' && baseline.dependency_profile?.name === 'application'
     && baseline.dependency_profile.output_identical_to_full_profile === true
     && baseline.dependency_profile.baseline_comparison?.output_files_identical === true
@@ -357,8 +355,8 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
     await run('npm-test', 'npm', ['test', '--', '--reporter=json', '--outputFile', path.join(temporary, 'application-tests.json')],
       buildEnvironment, 20 * 60_000);
     readFile(path.join(temporary, 'application-tests.json'));
-    report.tests = verifyApplicationTestResult(temporary, restored);
-    require(report.tests.test_count === EXPECTED_TESTS, 'Consumer did not complete all 296 selected assertions');
+    report.tests = verifyApplicationTestResult(temporary, restored, manifest);
+    require(report.tests.test_count === applicationSourceTestPolicy(manifest).assertions, 'Consumer did not complete all approved selected assertions');
     phase = 'output-comparison';
     report.output = verifyApplicationClosureOutput(restored, baseline.plan);
     report.output_comparison = compareApplicationPackageOutput(report.output, baseline);

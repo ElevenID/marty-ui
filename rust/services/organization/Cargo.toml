@@ -12,6 +12,7 @@ publish = false
 marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
+marty-principal-runtime-binding = { path = "../../crates/principal-runtime-binding" }
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
@@ -43,6 +44,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
 serde_json.workspace = true
 tower.workspace = true
 

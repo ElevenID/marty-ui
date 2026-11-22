@@ -122,6 +122,7 @@ export const ADMIN_VENDOR_NAV = [
     description: 'API Keys, Webhooks, Delivery Destinations',
     children: [
       { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
+      { id: 'agent-identities', label: 'Agent Identities', path: '/console/org/agents', feature: 'agentDirectory', requiredPermission: { resource: 'agent-identity', action: 'view' } },
       { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
       { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'wallet', action: 'view' } },
     ],

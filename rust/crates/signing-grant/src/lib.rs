@@ -12,6 +12,7 @@ mod aws;
 pub mod ceremony;
 pub mod certificate_profile;
 pub mod configuration;
+pub mod delegated_decision;
 pub mod didcomm;
 pub mod minter;
 pub mod provider;
@@ -36,10 +37,22 @@ pub enum SigningOrigin {
     FlowDemoHolder,
     IssuanceCredential,
     IssuancePassport,
+    DelegatedDecision,
 }
 
 impl SigningOrigin {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::GatewayService,
+        Self::GatewayIssuerDid,
+        Self::FlowWalletRequest,
+        Self::FlowDemoHolder,
+        Self::IssuanceCredential,
+        Self::IssuancePassport,
+        Self::DelegatedDecision,
+    ];
+
+    /// Existing deployments do not acquire receipt signing authority by default.
+    pub const DEFAULT: [Self; 6] = [
         Self::GatewayService,
         Self::GatewayIssuerDid,
         Self::FlowWalletRequest,
@@ -56,6 +69,7 @@ impl SigningOrigin {
             Self::FlowDemoHolder => "marty-sign-grant-flow-demo-holder-v1",
             Self::IssuanceCredential => "marty-sign-grant-issuance-credential-v1",
             Self::IssuancePassport => "marty-sign-grant-issuance-passport-v1",
+            Self::DelegatedDecision => "marty-sign-grant-delegated-decision-v1",
         }
     }
 
@@ -65,7 +79,16 @@ impl SigningOrigin {
         if claims.key_purpose == "demo_holder_binding" && self != Self::FlowDemoHolder {
             return false;
         }
+        if claims.key_purpose == delegated_decision::KEY_PURPOSE && self != Self::DelegatedDecision
+        {
+            return false;
+        }
         match self {
+            Self::DelegatedDecision => {
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == delegated_decision::KEY_PURPOSE
+                    && matches!(claims.algorithm.as_str(), "ES256" | "EdDSA")
+            }
             Self::GatewayService => claims
                 .route
                 .strip_prefix("/v1/signing-keys/services/")
@@ -373,6 +396,9 @@ pub fn bound_input(
     {
         return Err(GrantError::BindingMismatch);
     }
+    if claims.origin == SigningOrigin::DelegatedDecision {
+        delegated_decision::validate_bound_input(binding, now_seconds)?;
+    }
     let encoded = serde_json::to_vec(claims).map_err(|_| GrantError::Malformed)?;
     let mut input = Vec::with_capacity(DOMAIN.len() + encoded.len());
     input.extend_from_slice(DOMAIN);
@@ -594,6 +620,7 @@ mod tests {
                 SigningOrigin::IssuanceCredential => {}
                 SigningOrigin::GatewayService => unreachable!("not an issuer-DID origin"),
                 SigningOrigin::GatewayIssuerDid => unreachable!("CSR-only origin"),
+                SigningOrigin::DelegatedDecision => unreachable!("receipt-only origin"),
             }
             let payload = b"exact.payload".to_vec();
             claims.payload_sha256_b64 = payload_digest(&payload);

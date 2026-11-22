@@ -39,6 +39,8 @@ struct AwsOriginKeys {
     flow_demo_holder: Option<String>,
     issuance_credential: String,
     issuance_passport: String,
+    #[serde(default)]
+    delegated_decision: Option<String>,
 }
 
 impl AwsGrantConfiguration {
@@ -92,11 +94,18 @@ impl AwsGrantConfiguration {
             SigningOrigin::FlowDemoHolder => self.keys.flow_demo_holder.as_deref().unwrap_or(""),
             SigningOrigin::IssuanceCredential => &self.keys.issuance_credential,
             SigningOrigin::IssuancePassport => &self.keys.issuance_passport,
+            SigningOrigin::DelegatedDecision => {
+                self.keys.delegated_decision.as_deref().unwrap_or("")
+            }
         }
     }
 
     pub(crate) fn is_configured(&self, origin: SigningOrigin) -> bool {
-        origin != SigningOrigin::FlowDemoHolder || self.keys.flow_demo_holder.is_some()
+        match origin {
+            SigningOrigin::FlowDemoHolder => self.keys.flow_demo_holder.is_some(),
+            SigningOrigin::DelegatedDecision => self.keys.delegated_decision.is_some(),
+            _ => true,
+        }
     }
 
     pub(crate) fn client(
@@ -166,13 +175,25 @@ impl GrantAuthority {
         openbao_token_file: Option<PathBuf>,
         replay: RedisGrantReplayStore,
     ) -> Result<GrantVerifier, GrantProviderError> {
+        self.verifier_with_delegated_decisions(openbao_endpoint, openbao_token_file, replay, false)
+    }
+
+    /// Receipt verification is selected independently; it never borrows an existing origin.
+    pub fn verifier_with_delegated_decisions(
+        &self,
+        openbao_endpoint: Option<&str>,
+        openbao_token_file: Option<PathBuf>,
+        replay: RedisGrantReplayStore,
+        enabled: bool,
+    ) -> Result<GrantVerifier, GrantProviderError> {
         match self {
-            Self::OpenBao => GrantVerifier::for_managed_openbao(
+            Self::OpenBao => GrantVerifier::for_managed_openbao_with_delegated_decisions(
                 openbao_endpoint.ok_or(GrantProviderError::InvalidConfig)?,
                 openbao_token_file.ok_or(GrantProviderError::InvalidConfig)?,
                 replay,
+                enabled,
             ),
-            Self::Aws(config) => GrantVerifier::for_aws(config, replay),
+            Self::Aws(config) => GrantVerifier::for_aws(config, replay, enabled),
         }
     }
 }
@@ -260,6 +281,24 @@ mod tests {
             value["keys"]["flow_demo_holder"] = json!(invalid);
             assert!(decode(&value).is_err());
         }
+    }
+
+    #[test]
+    fn receipt_origin_is_optional_distinct_and_never_borrows_an_existing_key() {
+        let mut legacy = config();
+        legacy["keys"]
+            .as_object_mut()
+            .unwrap()
+            .remove("delegated_decision");
+        let decoded = decode(&legacy).unwrap();
+        assert!(!decoded.is_configured(SigningOrigin::DelegatedDecision));
+        assert!(decoded.client(SigningOrigin::DelegatedDecision).is_err());
+        assert!(decoded.client(SigningOrigin::GatewayService).is_ok());
+        let mut duplicate = config();
+        duplicate["keys"]["delegated_decision"] = duplicate["keys"]["gateway_service"].clone();
+        assert!(decode(&duplicate).is_err());
+        let selected = decode(&config()).unwrap();
+        assert!(selected.client(SigningOrigin::DelegatedDecision).is_ok());
     }
 
     #[test]

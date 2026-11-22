@@ -1,0 +1,1476 @@
+{
+  "report_format_version": 1,
+  "report_id": "agent-trust-qualification-2026-11-21",
+  "report_kind": "SANITIZED_LOCAL_QUALIFICATION_EVIDENCE",
+  "prepared_at_utc": "2026-11-22T05:56:07.430487+00:00",
+  "path_conventions": {
+    "$QUALIFICATION_ROOT": "Operator-owned isolated local qualification workspace containing the Marty checkout, Protocol checkout, tooling and retained evidence. This is a local evidence location, not the AWS host.",
+    "$BOUNDARY_TEST_PYTHON": "Verified Python interpreter used for the Marty boundary and Protocol-consumer pytest invocation.",
+    "$PYTHON3": "Python interpreter used for feature guards and disposable-provider wrappers.",
+    "relative_marty_paths": "Relative paths in Marty commands and source records are relative to $QUALIFICATION_ROOT/marty-qualification.",
+    "relative_protocol_paths": "Relative paths in Protocol commands are relative to $QUALIFICATION_ROOT/protocol-qualification."
+  },
+  "evidence_handling": {
+    "source_record": {
+      "path": "$QUALIFICATION_ROOT/marty-qualification-local-evidence.json",
+      "sha256": "093ebf8428418eed2e50e0b52bbec18dbe30dc758d7215a39dd4e5104e458d64"
+    },
+    "preservation": "All source-record test commands, results, source identities, file/binary/log digests, preserved failures and limits are retained. Local absolute paths are represented by the documented placeholders. AWS status is explicitly marked in progress as requested by the coordinating worker.",
+    "digest_scope": "Recorded log and manifest digests refer to the original retained evidence bytes, not to rewritten or sanitized log files.",
+    "raw_evidence_embedded": false,
+    "raw_evidence_publication": "Raw logs, stopped database state, provider state, credentials and private host/account identifiers are not embedded in this report and must remain outside the public repository.",
+    "qualified_source_scope": "The recorded source identities describe the completed local run before this report. They do not attest a subsequent integration or publication commit."
+  },
+  "recorded_at_utc": "2026-11-22T05:50:58.632808+00:00",
+  "status": "LOCAL_SCOPED_QUALIFICATION_PASSED",
+  "aws_replay": "SCOPED_AWS_QUALIFICATION_PASSED_AND_EXISTING_INSTANCE_STOP_VERIFIED",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "pull_request": 1994,
+    "original_published_head": "3c05227fe0a2da1216c8d4306a9e2ca0f9ea432a",
+    "main_parent": "b57223e44df401025822141b2f2676277c09eece",
+    "local_merge_head": "d71e4c67e2035151885cad18f82008e0014ed403",
+    "remote_integration_commit": "10cc41ac48388afa03759821b36e3c528427072c",
+    "integration_tree": "a1e498d1e211f0c1ca0e4d8cac114ef833d249f3",
+    "qualified_source_tree_before_report": "de1a04b9bbd213bbd4c8a2deb488561343f86a89",
+    "files_changed_from_integration": [
+      {
+        "path": "docs/delegated-use-aws-qualification.md",
+        "mode": "100644",
+        "git_blob": "d7c5db13ef5d24fe79ab2e283d55d03060997d18",
+        "sha256": "cda62f9ac4ab0465d865b07220aa287400e1a123e4f2aacfd8825a6bf75af096"
+      },
+      {
+        "path": "rust/Cargo.lock",
+        "mode": "100644",
+        "git_blob": "8a24e82b2254fabeb5ef126ef0919862709b405f",
+        "sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      {
+        "path": "rust/crates/delegated-receipt-consumer/Cargo.toml",
+        "mode": "100644",
+        "git_blob": "a0b29148f2ee763e13f0b9dc7803df2739d60957",
+        "sha256": "ca2e3da4cc385bb65a0e548c7e898918370f869f56e5fcb5e185e315f697e2d6"
+      },
+      {
+        "path": "rust/crates/delegated-receipt-consumer/src/key.rs",
+        "mode": "100644",
+        "git_blob": "4808b4ecf9da31bd60bb6592bd818439cebbb5ec",
+        "sha256": "fd98606bfb4a62a98e4c27c449b24422f44c8de44a0bba825a3784ec9d23bf14"
+      },
+      {
+        "path": "rust/crates/principal-runtime-binding/Cargo.toml",
+        "mode": "100644",
+        "git_blob": "4cbe7afb609812e40913cbe38a0f1918720e13c6",
+        "sha256": "e27f5ff7859cee8c045ad9217821bca39b4df145f161d007dd0e48ac56970864"
+      },
+      {
+        "path": "rust/crates/principal-runtime-binding/src/managed_enrollment.rs",
+        "mode": "100644",
+        "git_blob": "b5686545ea456d7be90b4e6994a25d1c9a3db613",
+        "sha256": "ced5dc85bba2a1fd5e0c8e34b9329e88b0fa4cfb465abd4fd6451da8d318f327"
+      },
+      {
+        "path": "rust/services/delegated-authority/Cargo.toml",
+        "mode": "100644",
+        "git_blob": "501852ab74075dff994f926f5238421eebfc7a11",
+        "sha256": "26c8a2315ac82ef95dcfa6400c30a4f4a911d9e61c22c7cef4c7d7c641aaf396"
+      },
+      {
+        "path": "rust/services/delegated-authority/src/receipt_signing.rs",
+        "mode": "100644",
+        "git_blob": "e0800826402c9f27fa405b3a800acbf9dd68636a",
+        "sha256": "a51b0e082bcf252ff9bc4a4781fb65bfbbd5bd0b7618c6e15c3bea2efc76c82e"
+      },
+      {
+        "path": "rust/services/delegated-use/README.md",
+        "mode": "100644",
+        "git_blob": "6360a1ad01f1d94ebe29c8624441638e570b7515",
+        "sha256": "c957510f901043ad93f90686ea1e3365a7113bea43641c61dfa8c072e2ba9828"
+      },
+      {
+        "path": "rust/services/delegated-use/tests/live_lifecycle.rs",
+        "mode": "100644",
+        "git_blob": "b2c7a747658d6ab2fad3744fca502312233eaf7a",
+        "sha256": "09a74c9d799de6490bc2874a274f268907b2a9b5971b2bbe41858c00f83ed5f7"
+      },
+      {
+        "path": "scripts/with_disposable_delegated_use_postgres.py",
+        "mode": "100644",
+        "git_blob": "f11c0529b26dbd9c8c1980b855e798e886da28dc",
+        "sha256": "eda08822c504b0e4dd58b60ac1f8c76f105a98936d63e1421dffcbf76e0680bb"
+      }
+    ],
+    "normal_merge_conflicts": [],
+    "locked_package_count": 815,
+    "locked_package_versions_sources_checksums_unchanged_from_integration": true,
+    "lock_dependency_edge_changes": [
+      {
+        "package": "marty-delegated-authority",
+        "added": [
+          "ecdsa"
+        ],
+        "removed": []
+      },
+      {
+        "package": "marty-delegated-receipt-consumer",
+        "added": [
+          "ecdsa"
+        ],
+        "removed": []
+      },
+      {
+        "package": "marty-principal-runtime-binding",
+        "added": [
+          "ecdsa"
+        ],
+        "removed": []
+      }
+    ],
+    "git_dependency_sources": [
+      "git+https://github.com/ElevenID/isomdl-elevenid?rev=fc3aaa2628cd106d4f36f50c957d7f33211f8a5e#fc3aaa2628cd106d4f36f50c957d7f33211f8a5e",
+      "git+https://github.com/ElevenID/marty-core?rev=bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0#bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0",
+      "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821",
+      "git+https://github.com/ElevenID/sd-jwt-rust?rev=9fc75ab0befe6b7f80987acd8b740baead40ee76#9fc75ab0befe6b7f80987acd8b740baead40ee76",
+      "git+https://github.com/ElevenID/ssi-elevenid?rev=6f86efc1579033e14ff2ad7d115ca0857e16a67f#6f86efc1579033e14ff2ad7d115ca0857e16a67f",
+      "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
+    ],
+    "protocol_pin": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+    "protocol_tree": "c5b4073182d6ccca9a7daa105d149b2c5486e0b9",
+    "protocol_merge_commit_verified_by_root": "1952c56e11d2ad1346b139da8c0a5e98cd7a2f73",
+    "protocol_pin_changed": false
+  },
+  "execution": {
+    "environment": "isolated local Linux workspace; native disposable providers; not AWS",
+    "rust_toolchain": "1.95.0",
+    "cargo_jobs": 2,
+    "cargo_incremental": false,
+    "cargo_home": "$QUALIFICATION_ROOT/tooling/cargo",
+    "rustup_home": "$QUALIFICATION_ROOT/tooling/rustup",
+    "cargo_target_dir": "$QUALIFICATION_ROOT/tooling/target",
+    "locked_offline_builds": true,
+    "working_directory": "$QUALIFICATION_ROOT/marty-qualification"
+  },
+  "production_host": {
+    "path": "$QUALIFICATION_ROOT/tooling/target/debug/marty-delegated-use",
+    "sha256": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": "line-tables-only",
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "built_after_all_test_harnesses": true,
+    "unchanged_across_all_actual_host_gates": true
+  },
+  "test_harnesses": [
+    {
+      "target": "marty-delegated-use:marty_delegated_use",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_use-22fe0bcc12f43e6b",
+      "sha256": "724cdb167f119f23bc4faddc6acdf7954e98a0499de1ae9b40e2ea38b6b09229"
+    },
+    {
+      "target": "marty-delegated-use:runtime_postgres",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/runtime_postgres-c2c16b2a41ca9c3f",
+      "sha256": "325f5757e376ee5906888f7405bd6f44a455d2bad22465a6d780883110537418"
+    },
+    {
+      "target": "marty-delegated-use:host_smoke",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/host_smoke-b56666cbb9f8a434",
+      "sha256": "54028e7a91cdcbb5f0651112e7e2ed543a3991ea66cf27a59a3974e475fe5518"
+    },
+    {
+      "target": "marty-delegated-use:live_runtime",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/live_runtime-ffaff2e811b6aaeb",
+      "sha256": "84d56369ea1e91bd14513de0c1af3006791b2a08aa25f100f4e3914a17164c84"
+    },
+    {
+      "target": "marty-delegated-receipt-consumer:consumer",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/consumer-bb5b64d5441ecbfe",
+      "sha256": "939c7fdf8eae23e1e8557d340b7ba23b24804be8551701426f56a9818dad3306"
+    },
+    {
+      "target": "marty-delegated-authority:marty_delegated_authority",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_authority-2ec8fd0557082e55",
+      "sha256": "37349066f2b0997669bc4c735dd909d441d267cb2f4cfa39e3dab6d69c50b4b2"
+    },
+    {
+      "target": "marty-delegated-use-client:client",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/client-dd78e8055e44a554",
+      "sha256": "6fbad80f357815957a3dbfec955869de41c4db110b9e57dc29d2ce817f9969c1"
+    },
+    {
+      "target": "marty-principal-runtime-binding:managed_enrollment",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/managed_enrollment-c8d33bf71214348d",
+      "sha256": "9400aad1a59a91a0215cfdb58780f9bd308fbf638eabbd513cd16ad115b136ef"
+    },
+    {
+      "target": "marty-principal-runtime-binding:marty_principal_runtime_binding",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_principal_runtime_binding-6fdbb121e0e959e1",
+      "sha256": "0f152c1f2201d637ec4ceea11e92c7937ee429028cdf601c733e462313cf5b7e"
+    },
+    {
+      "target": "marty-delegated-use:live_lifecycle",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/live_lifecycle-77c9f379ecb96063",
+      "sha256": "8e419d123787aa42c2e5d3a13e33e1c404d8abdeb37c830e3ebe6081aa3d2310"
+    },
+    {
+      "target": "marty-flow:marty_flow",
+      "path": "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+      "sha256": "3608186643bd220de5384ce134d93b3b45dab7637732c4dee795e68372aa4604"
+    }
+  ],
+  "build_commands": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "marty-flow",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/flow-build.log",
+      "log_sha256": "920f122c22649558e074c074a6c940ab72de93db7369c4a4090c083b88ebfe39"
+    },
+    {
+      "label": "rustfmt-cold-restart-order",
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "rust/services/delegated-use/tests/live_lifecycle.rs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.159,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/rustfmt-cold-restart-order.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "format-cold-restart-order",
+      "command": [
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 6.992,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/format-cold-restart-order.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "test-build-cold-restart-order",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "marty-delegated-use",
+        "-p",
+        "marty-delegated-authority",
+        "-p",
+        "marty-principal-runtime-binding",
+        "-p",
+        "marty-delegated-receipt-consumer",
+        "-p",
+        "marty-delegated-use-client",
+        "--tests",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 8.592,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/test-build-cold-restart-order.log",
+      "log_sha256": "dd2cff2b2b24e6d5702d3e21d0580fcdd354dc85ee44e5e18cd932571b590bdf"
+    },
+    {
+      "label": "production-build-after-cold-restart-order",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "marty-delegated-use",
+        "--bin",
+        "marty-delegated-use",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.994,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/production-build-after-cold-restart-order.log",
+      "log_sha256": "6c67afc474492c77c5d67855064f7debe9672eb6ae4701b63b772ef33b0e195f"
+    }
+  ],
+  "feature_guards": [
+    {
+      "command": [
+        "$PYTHON3",
+        "scripts/ci/check_mmf_security_features.py"
+      ],
+      "stdin": "$QUALIFICATION_ROOT/qualification-evidence/cargo-metadata.json",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/check_mmf_security_features-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "$PYTHON3",
+        "scripts/ci/check_marty_core_kms_boundary.py"
+      ],
+      "stdin": "$QUALIFICATION_ROOT/qualification-evidence/cargo-metadata.json",
+      "exit_code": 0,
+      "seconds": 1.254,
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/check_marty_core_kms_boundary-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "rust_tests": [
+    {
+      "gate": "client",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/client-dd78e8055e44a554",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.304,
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/client.log",
+      "log_sha256": "598b5238aa9bffcc38a1f80aaa3a566192c9298715a83921a89b2b10c23b1a0b",
+      "counts": {
+        "passed": 17,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "receipt-consumer",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/consumer-bb5b64d5441ecbfe",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.742,
+      "summary": [
+        "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/receipt-consumer.log",
+      "log_sha256": "264a3fd79b3decb60ba5a73a2f320439c2d451e3dd6a38626c33f94036e4d813",
+      "counts": {
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "enrollment",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/managed_enrollment-c8d33bf71214348d",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.233,
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/enrollment.log",
+      "log_sha256": "bcae1f239d034739a922bdb1813ad2cf1819a03b9dd66acaac9a6d2c1b326d2d",
+      "counts": {
+        "passed": 17,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "runtime-binding",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_principal_runtime_binding-6fdbb121e0e959e1",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.003,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/runtime-binding.log",
+      "log_sha256": "482f2ccd9c3dae380d150e04506ea7bfae9c2a3d01abd826500e2d3d8dd8d1c1",
+      "counts": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "host-library",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_use-22fe0bcc12f43e6b",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.056,
+      "summary": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/host-library.log",
+      "log_sha256": "1e013c573e12f102b11723123581252a76f74e585575fa181ef49415c5d5396c",
+      "counts": {
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "receipt-signing",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_authority-2ec8fd0557082e55",
+        "receipt_signing::tests",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.167,
+      "summary": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 234 filtered out; finished in 0.16s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/receipt-signing.log",
+      "log_sha256": "5b25b289e020e1bb6e132c0110b0518ed809587734c88ef5d1f55c47dadd7438",
+      "counts": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "command-http",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_authority-2ec8fd0557082e55",
+        "use_http::tests",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.32,
+      "summary": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 232 filtered out; finished in 0.32s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/command-http.log",
+      "log_sha256": "67d7b9937ad953d57fbef7e717dddd905ba035646b9a13ea79f68fc43cf71ef0",
+      "counts": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "receipt-http",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_delegated_authority-2ec8fd0557082e55",
+        "use_receipt_http::tests",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.012,
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 235 filtered out; finished in 0.01s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/receipt-http.log",
+      "log_sha256": "ab12522c37ab1845d25df48123373824940bbf10d0154272bdbef5e2513b91ec",
+      "counts": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "flow-library",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 11.48,
+      "summary": [
+        "test result: ok. 105 passed; 0 failed; 26 ignored; 0 measured; 0 filtered out; finished in 11.42s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/flow-library.log",
+      "log_sha256": "ed19d3b0992cfc5c81265c59d982ee58b70091e38d086f157f8bf8d2e92fb060",
+      "counts": {
+        "passed": 105,
+        "failed": 0,
+        "ignored": 26
+      }
+    },
+    {
+      "gate": "host-smoke",
+      "command": [
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/host_smoke-b56666cbb9f8a434",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.046,
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/host-smoke.log",
+      "log_sha256": "2dcf3442e0e5e6c1f4ed701b47ccbb840c23d1cb740ffde67b882434e9610be7",
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "gate": "lifecycle-fourth",
+      "command": [
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_postgres.py",
+        "--postgres-bin",
+        "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+        "--evidence-dir",
+        "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-fourth",
+        "--",
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_lifecycle.py",
+        "--openbao",
+        "$QUALIFICATION_ROOT/tooling/providers/bao",
+        "--redis-server",
+        "$QUALIFICATION_ROOT/tooling/providers/redis-7.4.12/src/redis-server",
+        "--",
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/live_lifecycle-77c9f379ecb96063",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "expected_passed": 2,
+      "seconds": 42.07,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 37.93s"
+      ],
+      "counts": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "host_sha256_before": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "host_sha256_after": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "cleanup": {
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-fourth/child.log",
+      "log_sha256": "251d8d7060007b4617706b351f4fda9645151efe9dff16cf90b8fb886aac4d43",
+      "wrapper_log": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-fourth-wrapper.log",
+      "wrapper_log_sha256": "d30e2b59a1e26de74b4d89ebeea4dcf75c7081c10f927321b46caa3c6573b50d"
+    },
+    {
+      "gate": "startup",
+      "command": [
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_postgres.py",
+        "--postgres-bin",
+        "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+        "--evidence-dir",
+        "$QUALIFICATION_ROOT/qualification-evidence/startup",
+        "--",
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_runtime.py",
+        "--openbao",
+        "$QUALIFICATION_ROOT/tooling/providers/bao",
+        "--redis-server",
+        "$QUALIFICATION_ROOT/tooling/providers/redis-7.4.12/src/redis-server",
+        "--",
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/live_runtime-ffaff2e811b6aaeb",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "expected_passed": 1,
+      "seconds": 15.276,
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.71s"
+      ],
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "host_sha256_before": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "host_sha256_after": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "cleanup": {
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/startup/child.log",
+      "log_sha256": "36c60dfdfbea2a03eba99a24f502451cc13c5cddf00a062b9a4cdb27b8b50bca",
+      "wrapper_log": "$QUALIFICATION_ROOT/qualification-evidence/startup-wrapper.log",
+      "wrapper_log_sha256": "926b8c4ef905b7efd64cd0ff15203c0a5017880c0451c52f6f18e4e2fabdcb9f"
+    },
+    {
+      "gate": "owners",
+      "command": [
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_postgres.py",
+        "--postgres-bin",
+        "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+        "--evidence-dir",
+        "$QUALIFICATION_ROOT/qualification-evidence/owners",
+        "--",
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/runtime_postgres-c2c16b2a41ca9c3f",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "expected_passed": 3,
+      "seconds": 37.328,
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.25s"
+      ],
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "host_sha256_before": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "host_sha256_after": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "cleanup": {
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/owners/child.log",
+      "log_sha256": "22b44f725486223d8e442a7a4bc4a693fc329f81f4ffd3a81568225cc17b6004",
+      "wrapper_log": "$QUALIFICATION_ROOT/qualification-evidence/owners-wrapper.log",
+      "wrapper_log_sha256": "9127b749b4c9f03138defd4f5e9ac0716eb4f801770793042a81fa68902f0dce"
+    },
+    {
+      "gate": "ingress",
+      "command": [
+        "$PYTHON3",
+        "scripts/with_disposable_delegated_use_postgres.py",
+        "--postgres-bin",
+        "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+        "--evidence-dir",
+        "$QUALIFICATION_ROOT/qualification-evidence/ingress",
+        "--",
+        "$QUALIFICATION_ROOT/tooling/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+        "authenticated_ingress",
+        "--include-ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "expected_passed": 7,
+      "seconds": 14.028,
+      "summary": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 124 filtered out; finished in 11.98s"
+      ],
+      "counts": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "host_sha256_before": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "host_sha256_after": "0040f0e98aa06de17acce098f1e0ad0a5878b94dcd3526d47979f1f6ce489e13",
+      "cleanup": {
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/ingress/child.log",
+      "log_sha256": "3bf939dbbbe4ab01de08b00ee7b9e6887dd66a51ae54d80824a4a9d01b949a31",
+      "wrapper_log": "$QUALIFICATION_ROOT/qualification-evidence/ingress-wrapper.log",
+      "wrapper_log_sha256": "0144868c680fdc07fe778f60a5579d153e0baaf7e9c638cb19fa49b4bc5238f8"
+    }
+  ],
+  "python_tests": {
+    "command": [
+      "$BOUNDARY_TEST_PYTHON",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_marty_core_kms_boundary.py",
+      "tests/test_oss_boundary.py",
+      "tests/test_agent_trust_protocol_consumer.py"
+    ],
+    "environment": {
+      "MARTY_AGENT_TRUST_PROTOCOL_ROOT": "$QUALIFICATION_ROOT/protocol-qualification"
+    },
+    "exit_code": 0,
+    "seconds": 2.027,
+    "log": "$QUALIFICATION_ROOT/qualification-evidence/python-boundaries.log",
+    "sha256": "60fac588177c4b32bb3ab3428cb2ec775b45e1414d0a7ee8b1e9fb86258ae947",
+    "passed": 231,
+    "failed": 0,
+    "skipped": 0
+  },
+  "totals": {
+    "distinct_rust_tests_passed": 210,
+    "python_tests_passed": 231,
+    "final_scoped_gate_failures": 0,
+    "flow_default_suite_passed": 105,
+    "flow_default_suite_ignored": 26,
+    "flow_ignored_ingress_cases_later_executed_and_passed": 7,
+    "flow_fixture_cases_still_unselected": 19
+  },
+  "providers": {
+    "postgresql": {
+      "version": "17.12",
+      "bin": "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+      "package_origin": "official signed Debian package metadata and package hashes verified by qualification worker",
+      "verification_record": {
+        "distribution": "Debian trixie, amd64",
+        "inrelease_url": "https://deb.debian.org/debian/dists/trixie/InRelease",
+        "package_index_url": "https://deb.debian.org/debian/dists/trixie/main/binary-amd64/Packages.xz",
+        "verification_reported_by_qualification_worker": "The downloaded InRelease signature was verified with gpg using the installed Debian archive keyring; package index and package hashes were verified against the signed metadata.",
+        "signature_tool": "gpg (gpgv executable was unavailable in the local qualification environment)",
+        "trust_keyring": "/usr/share/keyrings/debian-archive-keyring.gpg",
+        "installation_scope": "Packages were extracted into isolated qualification tooling; no system PostgreSQL installation was replaced.",
+        "packages": [
+          {
+            "Package": "postgresql-17",
+            "Version": "17.12-0+deb13u1",
+            "Filename": "pool/main/p/postgresql-17/postgresql-17_17.12-0+deb13u1_amd64.deb",
+            "SHA256": "72443dcedfa0bdfa79dafdf414c18498b89929eeee1555e987c87154f3082fea",
+            "Depends": "locales | locales-all, postgresql-client-17, postgresql-common (>= 252~), ssl-cert, tzdata, debconf (>= 0.5) | debconf-2.0, libc6 (>= 2.38), libgcc-s1 (>= 3.0), libgssapi-krb5-2 (>= 1.14+dfsg), libicu76 (>= 76.1-1~), libldap2 (>= 2.6.2), libllvm19 (>= 1:19.1.0), liblz4-1 (>= 0.0~r130), libpam0g (>= 0.99.7.1), libpq5 (>= 17~~), libselinux1 (>= 3.1~), libssl3t64 (>= 3.4.0), libstdc++6 (>= 5.2), libsystemd0, libuuid1 (>= 2.16), libxml2 (>= 2.7.4), libxslt1.1 (>= 1.1.25), libzstd1 (>= 1.5.5), zlib1g (>= 1:1.1.4)"
+          },
+          {
+            "Package": "postgresql-client-17",
+            "Version": "17.12-0+deb13u1",
+            "Filename": "pool/main/p/postgresql-17/postgresql-client-17_17.12-0+deb13u1_amd64.deb",
+            "SHA256": "53466b127f3f6e95c7a30352db7fcdd7b83d2143a03efbdcd005032b5047aa83",
+            "Depends": "libpq5 (>= 17.12), postgresql-client-common (>= 182~), sensible-utils, libc6 (>= 2.38), liblz4-1 (>= 0.0~r127), libreadline8t64 (>= 6.0), libssl3t64 (>= 3.0.0), libzstd1 (>= 1.5.5), zlib1g (>= 1:1.1.4)"
+          }
+        ],
+        "evidence": [
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql-download/packages.json",
+            "sha256": "9c4b105f0a611d165aa7b7f84b4d8587b1f6d279ad63e109f5d5956edfce6748"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql-download/InRelease",
+            "sha256": "bfacad4ca61899ce20d4a0d439f29339f66541561b67506364efb88e27dee870"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql-download/Packages.xz",
+            "sha256": "be3d7d96a040eda0505c1808cccc67f183bbc05dff0842c50f88e6c396557412"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql-download/postgresql-17.deb",
+            "sha256": "72443dcedfa0bdfa79dafdf414c18498b89929eeee1555e987c87154f3082fea"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql-download/postgresql-client-17.deb",
+            "sha256": "53466b127f3f6e95c7a30352db7fcdd7b83d2143a03efbdcd005032b5047aa83"
+          }
+        ],
+        "binary_digests": [
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/postgres",
+            "sha256": "d017c9d01498f3dcb99a9d8c277cdd727764237ccaf2e1cdb5ee7dca51a2c67f"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/initdb",
+            "sha256": "4d3244364a5767e9dfea44907c9ffa796d522688721804b39522a7fcdc177bc8"
+          },
+          {
+            "path": "$QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/psql",
+            "sha256": "4bfe28d58501807a3363442a4986890c9b450620cfb99307f1afb1a230996232"
+          }
+        ]
+      }
+    },
+    "openbao": {
+      "version": "2.5.5",
+      "path": "$QUALIFICATION_ROOT/tooling/providers/bao",
+      "sha256": "4e7e04cc5d13043b9d67850d875242a42fae5c5f01aaff226a6ebba77ccc27bb"
+    },
+    "redis": {
+      "version": "7.4.12",
+      "path": "$QUALIFICATION_ROOT/tooling/providers/redis-7.4.12/src/redis-server",
+      "sha256": "1bdc43ff99eba1d3560beb28cac9b8b57ce8300ca81596e37efa9c9e60cebfe0",
+      "build_origin": {
+        "method": "Native source build from the verified upstream Git release tag; not from a downloaded release tar archive.",
+        "repository": "https://github.com/redis/redis",
+        "release_tag": "7.4.12",
+        "source_commit": "f9bc2f89232fa3fc6147ee732309d2616117b85e",
+        "tag_api_commit_verified": true,
+        "failed_archive_request": "download.redis.io returned HTTP403 Cloudflare1010; no binary or source from that failure used"
+      }
+    },
+    "provenance": {
+      "path": "$QUALIFICATION_ROOT/tooling/providers/provenance.json",
+      "sha256": "6a5b57003b153c50140ee6bd21ef6620ff4f53b186c0f74365c52a07eb2aabcb",
+      "record": {
+        "openbao_archive_sha256": "2c5577707e97fc95c2086950f39880ead5e45b356c94388e5cb606f5a5c2b697",
+        "openbao_primary_fingerprint": "66D15FDD87287219C8E15478D200CD702853E6D0",
+        "openbao_archive_and_checksum_signatures": "valid",
+        "redis_source_repository": "https://github.com/redis/redis",
+        "redis_release_tag": "7.4.12",
+        "redis_source_commit": "f9bc2f89232fa3fc6147ee732309d2616117b85e",
+        "redis_tag_api_commit_verified": true,
+        "redis_archive_host_failure": "download.redis.io returned HTTP403 Cloudflare1010; no binary or source from that failure used"
+      }
+    }
+  },
+  "wrapper_cleanup_safety": {
+    "checks_passed": 8,
+    "evidence": {
+      "path": "$QUALIFICATION_ROOT/qualification-wrapper-checks-v3/summary.json",
+      "sha256": "13457988aeb277fcd6eb8eb05fec3e2addb4aae1aceec14f176f4665ac01277d"
+    },
+    "wrapper_sha256": "eda08822c504b0e4dd58b60ac1f8c76f105a98936d63e1421dffcbf76e0680bb",
+    "scenario_scope": "Eight actual native PostgreSQL 17.12 scenarios; negative scenarios pass by returning the expected nonzero result and preserving failure evidence.",
+    "scenarios": [
+      {
+        "case": "success",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      {
+        "case": "failure",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 37,
+        "postgres_stopped": true,
+        "data_removed": false,
+        "temporary_removed": false
+      },
+      {
+        "case": "timeout",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 124,
+        "postgres_stopped": true,
+        "data_removed": false,
+        "temporary_removed": false,
+        "failure": "timeout"
+      },
+      {
+        "case": "existing_directory_refusal",
+        "exit_code": 1,
+        "existing_evidence_preserved": true
+      },
+      {
+        "case": "SIGTERM_interruption",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 143,
+        "postgres_stopped": true,
+        "data_removed": false,
+        "temporary_removed": false,
+        "failure": "interrupted"
+      },
+      {
+        "case": "owned-temporary-success",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 0,
+        "postgres_stopped": true,
+        "data_removed": true,
+        "temporary_removed": true
+      },
+      {
+        "case": "owned-temporary-failure",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 37,
+        "postgres_stopped": true,
+        "data_removed": false,
+        "temporary_removed": false
+      },
+      {
+        "case": "abrupt-postmaster-exit-with-successful-child",
+        "postgres_version": "(PostgreSQL) 17.12",
+        "exit_code": 1,
+        "postgres_stopped": true,
+        "data_removed": false,
+        "temporary_removed": false,
+        "failure": "postgres_exited_before_cleanup",
+        "owned_postgres_processes_recorded": 6,
+        "owned_postgres_live_processes_after_cleanup": 0
+      }
+    ]
+  },
+  "preserved_failure_runs": [
+    {
+      "gate": "lifecycle-first",
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.28s"
+      ],
+      "log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-first/child.log",
+        "sha256": "e1445207cf3fac217b2c454b4f8eeb786484f1ca5e0c33b7bcfd7ca88e072f99"
+      },
+      "wrapper_log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-first-wrapper.log",
+        "sha256": "ff85405efb2ce17777454cf8f5e567262706356eab3b83a4f92c95933d16a556"
+      },
+      "stopped_private_database_preserved": true
+    },
+    {
+      "gate": "lifecycle-second",
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.48s"
+      ],
+      "log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-second/child.log",
+        "sha256": "7bfa9e3b6251a17984b51a4b21c0e9d58483c5c90c32654f983ec89d4dd1d291"
+      },
+      "wrapper_log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-second-wrapper.log",
+        "sha256": "1c2eef1e3c31182fbba66968f578fc645c44595d3ff0b0978d5e588c2684938e"
+      },
+      "stopped_private_database_preserved": true
+    },
+    {
+      "gate": "lifecycle-third",
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.36s"
+      ],
+      "log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-third/child.log",
+        "sha256": "d097a976f86b730d40dfb272653139e6375f94469c13f49f06cc8fd0c6a39e68"
+      },
+      "wrapper_log": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/lifecycle-third-wrapper.log",
+        "sha256": "c3caf1a2b8472567f312662c77fe411cce48d3b139b2fa57bfa073911b2ab547"
+      },
+      "stopped_private_database_preserved": true
+    }
+  ],
+  "resolved_findings": [
+    {
+      "finding": "Production service graph restored local credential signing through p256 full ECDSA in three normal dependencies.",
+      "change": "Use the existing verification-only ecdsa-core alias in production; full p256 ECDSA remains confined to dev dependencies. Both unchanged feature guards pass. Three local lock edges added; no package pin/version/source/checksum changed."
+    },
+    {
+      "finding": "Fresh receipt verification after cold restart encountered ReceiptVerificationError::Expired.",
+      "first_public_receipt_issued_at": "2026-11-22T05:33:41.195663747Z",
+      "first_public_receipt_recorded_at": "2026-11-22T05:33:41.307443Z",
+      "first_public_receipt_expires_at": "2026-11-22T05:33:43.927949Z",
+      "seconds_remaining_after_commit": 2.620506,
+      "change": "Verify freshness immediately after finalization; preserve explicit expiry rejection; verify the byte-identical recovered artifact historically and compare original digest, issued_at and expires_at."
+    },
+    {
+      "finding": "Stage-labeled rerun confirmed second fresh START_USE returned HTTP403 after the original 15-second approval assertion expired.",
+      "change": "Finish fresh second-use and revocation checks before cold restart, then recover committed commands/receipt/public terminal proof before withdrawing current machine rights. No TTL, authority assertion, or production expiry rule was extended."
+    }
+  ],
+  "evidence_manifests": [
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/test-artifacts.jsonl",
+      "sha256": "03e1b0444f0dfe4a6441460e5bfa152cce66d493c16462c19f8e3316ce394367"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/flow-artifacts.jsonl",
+      "sha256": "f11e77766f162422507337042e7a6e3313516ed735f4ae1120f5936e7dd51718"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/production-artifacts.jsonl",
+      "sha256": "b5557442e6c7b9723a9d25f07c0185dc657caeab35681876b8b9daeb142fc209"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/cargo-metadata.json",
+      "sha256": "ef758a5fe67cd35bed1b4b4ea7d7cb7dda3125526069a03c72fd692f103f0995"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/harnesses.json",
+      "sha256": "9ee5941a333e2c556e504f95463d34f3e8c8bc6d2358323100cc2998e1f34392"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/production-host.json",
+      "sha256": "d3799e978ba2799aedf6b8e1a4931e7e2eb5746a457cb06f2a5dffc383c2ff46"
+    },
+    {
+      "path": "$QUALIFICATION_ROOT/qualification-evidence/live-gates.json",
+      "sha256": "05b825befee112c88f742b4b4ccf5cfb3b661b3174b15f087d2cb20a2f215b44"
+    }
+  ],
+  "limits": [
+    "This record contains local preparation evidence. The separately linked completed AWS report supplies its own runtime, workload-preservation, cleanup and stopped-instance observations.",
+    "Debug-profile normal host with production dependency features; not a release deployment, public ingress qualification, or end-to-end Rifare business operation.",
+    "Selected managed MachineCredential/KEY/exact-operation composition only. Host and public caller remain default-off; receipt semantics remain EVIDENCE_ONLY.",
+    "Actual host uses 14 restricted serving database identities. Catalog/Issuance bootstrap and human approval authentication retain disclosed fixture boundaries.",
+    "Restart covers committed results only; it does not authorize takeover or re-signing of uncertain pending claims.",
+    "Public production CA/revocation, pin/key rotation, provider outage reconciliation, separately provisioned catalog/Issuance roles, and other authority/session profiles remain separate gates.",
+    "Private stopped failure database/provider state is preserved locally and must not be uploaded to GitHub. Only sanitized evidence belongs in the durable report.",
+    "Required GitHub checks/review and protected merge policy remain independent; this record creates no fabricated GitHub status."
+  ],
+  "protocol_qualification": {
+    "repository": "ElevenID/marty-protocol",
+    "pull_request": 38,
+    "pull_request_url": "https://github.com/ElevenID/marty-protocol/pull/38",
+    "merge": {
+      "status": "MERGED",
+      "method": "Normal pull-request merge, reported and verified by the coordinating worker.",
+      "commit": "1952c56e11d2ad1346b139da8c0a5e98cd7a2f73",
+      "qualified_head": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+      "qualified_tree": "c5b4073182d6ccca9a7daa105d149b2c5486e0b9",
+      "qualified_tree_preserved_by_merge": true,
+      "marty_consumer_pin_changed": false
+    },
+    "source_record": {
+      "path": "$QUALIFICATION_ROOT/protocol-qualification-evidence.json",
+      "sha256": "17b215aed828c3d587bfd3be219bec5537669e7681c9e62d8e3557d2c2828dec"
+    },
+    "working_directory": "$QUALIFICATION_ROOT/protocol-qualification",
+    "head": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+    "tree": "c5b4073182d6ccca9a7daa105d149b2c5486e0b9",
+    "base": "a9ce6a1d912f22a5627faebb482c44b9104d840d",
+    "checked_at_utc": "2026-11-22T05:11:18.644123+00:00",
+    "scope": "SOURCE_AND_REFERENCE_CONTRACTS_ONLY",
+    "runtime_qualification": "NOT_ASSESSED",
+    "public_discovery": false,
+    "python": {
+      "passed": 561,
+      "subtests_passed": 156,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 50.82,
+      "command": ".venv/bin/python -m pytest -q"
+    },
+    "rust": {
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "command": "cargo test --locked --manifest-path reference/rust/Cargo.toml",
+      "toolchain": "1.97.1",
+      "jobs": 1
+    },
+    "typescript": {
+      "passed": true,
+      "commands": [
+        "npm ci --prefix reference/typescript --no-audit --no-fund",
+        "npm test --prefix reference/typescript"
+      ],
+      "node": "24.22.3",
+      "npm": "11.19.1"
+    },
+    "manifest": {
+      "source_entries": 355,
+      "sha256": "3d9fc9475050d80ea2e0a835a3c8cf801a642303a063fa4d3014485ceb6b8d37",
+      "command": ".venv/bin/python scripts/agent-trust-manifest.py --check"
+    },
+    "legacy_shell": {
+      "rerun": false,
+      "prior_pr_report": "run-conformance remote schema-reference retrieval stalled; validate also rejected pre-existing illustrative non-UUID example IDs",
+      "unchanged_script_and_existing_inputs_verified": true,
+      "called_by_delegated_authority_workflow": false
+    },
+    "repository_clean": true,
+    "evidence": [
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-qualification-python-tests.log",
+        "sha256": "1181c02ed5976ab7fb016e3ca1506cbbcc2c187f9bc6733a2168df8cec6b8b2c"
+      },
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-qualification-rust-tests.log",
+        "sha256": "8117c4b9bbf26d69e0e7c64d76cb55df02df501cd752a48bea6b4dc041e3fab2"
+      },
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-qualification-typescript-install.log",
+        "sha256": "12e9e3596b0fd9e4e3fa8cfcc7a3b92b0ff517e7d48e6ca1bc0a63a50fbe85cb"
+      },
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-qualification-typescript-tests.log",
+        "sha256": "ee750be889bcb857867c840f9fb94fa030a71ac1c21593d918a2d86bf14a5771"
+      },
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-qualification-manifest.log",
+        "sha256": "e36a798f13bb5a1ca65886fbb06ae50d9e95d39e5d94e60330d800b571787dff"
+      },
+      {
+        "file": "$QUALIFICATION_ROOT/protocol-recovery-verification.json",
+        "sha256": "4823bf784ebc75b9275ead3a7c98aaca4c788948c62882d39c654104374cab1a"
+      }
+    ]
+  },
+  "publication_base_reconciliation": {
+    "recorded_at_utc": "2026-11-22T06:07:15.209547+00:00",
+    "status": "PASSED_AFTER_EXPLICIT_TEST_FIXTURE_REGISTRATION_CORRECTION",
+    "environment": "Local Linux qualification workspace; this section is not AWS or Windows-native execution evidence.",
+    "source": {
+      "qualified_source_and_initial_report_commit": "423c349733b467b4d69b6e7da6ac0177e807d9b9",
+      "integrated_main_commit": "b7ceedc260924a5b88071f5fc6c55839691486e2",
+      "main_change": "Windows owner source work from pull request 2031",
+      "integration_commit_before_report_append": "5344690ce060ecbf0690801495163a14471836d8",
+      "integration_tree_before_report_append": "f7334f254ea6c49f742c5e8da9d293bd59020d84",
+      "merge_parents": [
+        "423c349733b467b4d69b6e7da6ac0177e807d9b9",
+        "b7ceedc260924a5b88071f5fc6c55839691486e2"
+      ],
+      "merge_conflicts": [],
+      "merge_changed_paths_count": 14,
+      "merge_changed_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/windows-owner-source.yml",
+        "docs/windows-owner-source-handoff.md",
+        "docs/windows-owner-source-install.md",
+        "scripts/ci/affected_components.py",
+        "scripts/ci/probe_windows_source_environment.py",
+        "scripts/ci/run_windows_source_tests.py",
+        "scripts/selfhost_windows_source_install.py",
+        "tests/test_affected_components.py",
+        "tests/test_ci_workflow_performance.py",
+        "tests/test_windows_source_install.py",
+        "tests/test_windows_source_install_ntfs.py",
+        "tests/test_windows_source_test_owner.py",
+        "tests/test_windows_source_workflow.py"
+      ],
+      "qualified_commit_rust_tree": "ae3a43f10ba15b9622efef9644c717013734c23d",
+      "integration_commit_rust_tree": "ae3a43f10ba15b9622efef9644c717013734c23d",
+      "rust_trees_identical": true,
+      "working_tree_rust_changes": [],
+      "initial_report_sha256": "3cd3cd2766ff942a7c8982ecc0440b8a044a50df7546b4326f65e4fb7aed1ecb"
+    },
+    "initial_four_file_verification": {
+      "started_at_utc": "2026-11-22T05:58:45.727449+00:00",
+      "completed_at_utc": "2026-11-22T06:01:01.266743+00:00",
+      "head_before": "5344690ce060ecbf0690801495163a14471836d8",
+      "head_after": "5344690ce060ecbf0690801495163a14471836d8",
+      "cwd": "$QUALIFICATION_ROOT/marty-qualification",
+      "command": [
+        "$BOUNDARY_TEST_PYTHON",
+        "-m",
+        "pytest",
+        "-q",
+        "-ra",
+        "--color=no",
+        "tests/test_affected_components.py",
+        "tests/test_ci_workflow_performance.py",
+        "tests/test_windows_source_workflow.py",
+        "tests/test_windows_source_test_owner.py"
+      ],
+      "exit_code": 1,
+      "seconds": 135.536,
+      "summary": [
+        "1 failed, 356 passed, 1 warning in 135.24s (0:02:15)"
+      ],
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-ci.log",
+      "log_sha256": "7869845b98e8ec72f0ec2f0b3ca7125892cf631ae4555bb0e597cb2e36008d58",
+      "counts": {
+        "passed": 356,
+        "failed": 1,
+        "skipped": 0,
+        "warnings": 1
+      },
+      "result_record": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-ci.json",
+        "sha256": "a65248134757507b8f900f1bdcbb4328b4cd3f0123e54cf4c7340f2843a4dd56"
+      }
+    },
+    "initial_failure": {
+      "test": "tests/test_ci_workflow_performance.py::test_service_dev_dependencies_only_allow_registered_composition_edges",
+      "cause": "The exact service dev-dependency registry omitted six existing owner-composition fixture edges in the already qualified Rust source.",
+      "guard_function_unchanged_by_main_merge": true,
+      "guard_function_sha256_before_correction": "369499bb4ddafd81619d480f622787bd4390a4b0280495708e51231deec4ec5f",
+      "failure_log_preserved": true
+    },
+    "approved_registration_correction": {
+      "file": "tests/test_ci_workflow_performance.py",
+      "sha256": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25",
+      "git_blob": "7100b3d31b3f535c639a2b32f1074128af19c241",
+      "lines_added": 31,
+      "lines_removed": 1,
+      "registered_edges": [
+        {
+          "from": "marty-flow",
+          "to": "marty-organization",
+          "dev_path": "../organization",
+          "reason": "The cfg(test) delegated ingress owner suite uses actual Organization machine permissions, a restricted read role, and permission withdrawal during signing and recovery."
+        },
+        {
+          "from": "marty-delegated-use",
+          "to": "marty-credential-template",
+          "dev_path": "../credential-template",
+          "reason": "Actual validated template records, PostgreSQL ownership and authenticated template gRPC reads in lifecycle_owners.rs and fresh issuance setup."
+        },
+        {
+          "from": "marty-delegated-use",
+          "to": "marty-presentation-policy",
+          "dev_path": "../presentation-policy",
+          "reason": "Actual policy records, PostgreSQL ownership and authenticated policy gRPC reads in lifecycle_owners.rs."
+        },
+        {
+          "from": "marty-delegated-use",
+          "to": "marty-issuance-service",
+          "dev_path": "../issuance",
+          "reason": "Actual fresh credential initiation, token exchange, nonce/proof checks, PostgreSQL state and credential building in lifecycle_issuance.rs."
+        },
+        {
+          "from": "marty-delegated-use",
+          "to": "marty-signing-keys",
+          "dev_path": "../signing-keys",
+          "reason": "Actual Signing Keys routes and purpose-separated remote custody for request, credential and receipt signing in lifecycle_signing.rs and live_signing.rs."
+        },
+        {
+          "from": "marty-delegated-use",
+          "to": "marty-trust-profile",
+          "dev_path": "../trust-profile",
+          "reason": "Actual issuer authorization and trust relationship records persisted by the Trust Profile owner in tests/support/owned.rs."
+        }
+      ],
+      "exact_edge_set_equality_retained": true,
+      "unchanged_dependency_guard_helpers": [
+        "_dependency_packages",
+        "_dev_dependency_packages",
+        "_assert_service_fixture_dependency",
+        "_assert_signing_keys_fixture_dependency"
+      ],
+      "each_new_edge_checked_by": "_assert_service_fixture_dependency",
+      "production_restrictions": "Each fixture edge must be the exact top-level dev-dependency path and must remain absent from normal and build dependencies, including renamed, workspace-inherited and target-specific declarations.",
+      "additional_negative_cases": 24,
+      "negative_case_scope": "Added issuance-service, presentation-policy, trust-profile and organization to the existing production/build dependency rejection matrix. Credential-template and signing-keys were already covered.",
+      "rust_or_cargo_changes": false
+    },
+    "focused_registration_and_negative_checks": {
+      "started_at_utc": "2026-11-22T06:03:17.625807+00:00",
+      "completed_at_utc": "2026-11-22T06:03:18.546845+00:00",
+      "head_before": "5344690ce060ecbf0690801495163a14471836d8",
+      "head_after": "5344690ce060ecbf0690801495163a14471836d8",
+      "cwd": "$QUALIFICATION_ROOT/marty-qualification",
+      "command": [
+        "$BOUNDARY_TEST_PYTHON",
+        "-m",
+        "pytest",
+        "-q",
+        "-ra",
+        "--color=no",
+        "tests/test_ci_workflow_performance.py::test_service_dev_dependencies_only_allow_registered_composition_edges",
+        "tests/test_ci_workflow_performance.py::test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps",
+        "tests/test_ci_workflow_performance.py::test_service_fixture_dependencies_reject_production_edges"
+      ],
+      "exit_code": 0,
+      "seconds": 0.919,
+      "summary": [
+        "50 passed, 1 warning in 0.65s"
+      ],
+      "test_source": "tests/test_ci_workflow_performance.py",
+      "test_source_sha256_before": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25",
+      "test_source_sha256_after": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25",
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-fixture-edges.log",
+      "log_sha256": "22b5db285ee9095ecd333114be3fbd97ba02a1a0d44de66e42cb728be8837de1",
+      "counts": {
+        "passed": 50,
+        "failed": 0,
+        "skipped": 0,
+        "warnings": 1
+      },
+      "result_record": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-fixture-edges.json",
+        "sha256": "6129a9be3c6d35da18b69079e8f5f782624d2d3358236447665c947041ca9549"
+      }
+    },
+    "corrected_four_file_verification": {
+      "started_at_utc": "2026-11-22T06:03:52.548079+00:00",
+      "completed_at_utc": "2026-11-22T06:06:11.951613+00:00",
+      "head_before": "5344690ce060ecbf0690801495163a14471836d8",
+      "head_after": "5344690ce060ecbf0690801495163a14471836d8",
+      "cwd": "$QUALIFICATION_ROOT/marty-qualification",
+      "command": [
+        "$BOUNDARY_TEST_PYTHON",
+        "-m",
+        "pytest",
+        "-q",
+        "-ra",
+        "--color=no",
+        "tests/test_affected_components.py",
+        "tests/test_ci_workflow_performance.py",
+        "tests/test_windows_source_workflow.py",
+        "tests/test_windows_source_test_owner.py"
+      ],
+      "exit_code": 0,
+      "seconds": 139.403,
+      "summary": [
+        "381 passed, 1 warning in 139.09s (0:02:19)"
+      ],
+      "source_sha256_before": {
+        "tests/test_affected_components.py": "6be5dafdf6d553027a1f4e70cd81a0eebdf9bc533617aefc599ff53c9b50ee71",
+        "tests/test_ci_workflow_performance.py": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25",
+        "tests/test_windows_source_workflow.py": "8a982a85998051a077b1da933cf34a9ce635dadd885738bccb808a67954e43e6",
+        "tests/test_windows_source_test_owner.py": "e1e194e0227f69a91e139deb78543916b21f01446c2c3abcf79cf1eff7fef195"
+      },
+      "source_sha256_after": {
+        "tests/test_affected_components.py": "6be5dafdf6d553027a1f4e70cd81a0eebdf9bc533617aefc599ff53c9b50ee71",
+        "tests/test_ci_workflow_performance.py": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25",
+        "tests/test_windows_source_workflow.py": "8a982a85998051a077b1da933cf34a9ce635dadd885738bccb808a67954e43e6",
+        "tests/test_windows_source_test_owner.py": "e1e194e0227f69a91e139deb78543916b21f01446c2c3abcf79cf1eff7fef195"
+      },
+      "log": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-ci-corrected.log",
+      "log_sha256": "5efc4eef1c7c2a9b1b2dd274395f692f2a31a82f0ad549929abe791868fd67fe",
+      "counts": {
+        "passed": 381,
+        "failed": 0,
+        "skipped": 0,
+        "warnings": 1
+      },
+      "result_record": {
+        "path": "$QUALIFICATION_ROOT/qualification-evidence/publication-base-reconciliation-ci-corrected.json",
+        "sha256": "a2020b3c9f0d65061d9a045389e1e2a1f1f0706ccbaf5a2b56deb4c031eca330"
+      }
+    },
+    "warning": {
+      "count_per_run": 1,
+      "type": "PytestConfigWarning",
+      "message": "Unknown config option: asyncio_mode",
+      "configuration_or_test_selection_changed_to_suppress_warning": false
+    },
+    "scope_limits": [
+      "The initial failed run is retained separately from the passing corrected runs.",
+      "The only source correction in this reconciliation is the explicitly reviewed test fixture registration and negative-case coverage; all Rust source and Cargo dependencies remain unchanged.",
+      "Verification was limited to the three directly affected guards, followed by one repeat of the original four-file CI suite. No Windows-native test or additional build was performed.",
+      "Source commit and tree identifiers above precede this report append and any subsequent publication metadata; the tested CI file hashes identify the corrected working source.",
+      "AWS replay remains in progress and is not attested by this local CI evidence."
+    ]
+  },
+  "publication_preparation": {
+    "rust_subtree_unchanged_from_local_qualification": "ae3a43f10ba15b9622efef9644c717013734c23d",
+    "additional_changes": [
+      {
+        "path": "docs/delegated-use-aws-qualification.md",
+        "git_blob": "99459592c5ed96045483e8dd01656e19454ff7a6",
+        "sha256": "9eb23ccd5e7eff1572393dd4332a1f2ddd1ee16aa943be4b1d86d5390e4b6bc1"
+      },
+      {
+        "path": "tests/test_ci_workflow_performance.py",
+        "git_blob": "7100b3d31b3f535c639a2b32f1074128af19c241",
+        "sha256": "764855de03b9d9b961cb5dd03b4aa7237f9187423d8209798cb247092493fd25"
+      }
+    ],
+    "aws_execution_mode": "owned unprivileged rootless test container on the existing AWS development host; no AWS test pass attested by this local record",
+    "builder_image_verified_against_vendor_registry": "rust@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1",
+    "builder_probe": {
+      "os": "Debian GNU/Linux 12 (bookworm)",
+      "rustc": "1.95.0",
+      "cargo": "1.95.0",
+      "user": "65534:65534 (nobody:nogroup)"
+    },
+    "reason": "The existing host lacks native C/C++ and Rust tooling. The already cached official image supplies the required compiler without changing host packages or installed workloads."
+  },
+  "aws_qualification_reference": {
+    "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
+    "sha256": "3e47e8a8eec91f32ccedb73e5afec705354a7707565aca51bc3036f182989594",
+    "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+    "aws_rust_tests_passed": 210,
+    "aws_gate_count": 14,
+    "normal_aws_host_sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+    "instance_final_state": "stopped",
+    "separate_original_exports_preserved": true,
+    "post_aws_main_reconciliation": {
+      "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
+      "local_verified_commit": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+      "local_verified_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+      "local_actual_tests_passed": 9,
+      "normal_local_host_sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae",
+      "result_sha256": "c494bad36dcd7dc8dd2f5db121ba207308dbe26212f63fe0b42c813647c25ea8",
+      "aws_qualified_source_remains_separate": true
+    },
+    "post_aws_main_followup": {
+      "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+      "rust_subtree_and_qualification_inputs_unchanged": true,
+      "windows_qualification_remains_separate": true
+    },
+    "post_aws_ci_reconciliation": {
+      "first_ci_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+      "rust_source_and_production_lock_unchanged": true,
+      "local_rbac_tests": 19,
+      "local_exporter_and_closure_tests": 87,
+      "local_probe_source_tests": 8,
+      "actual_probe_and_clippy_remain_final_ci_gates": true
+    },
+    "post_aws_ci_followup": {
+      "repository_path": "docs/agent-trust-ci-followup-2026-11-22.json",
+      "sha256": "c2ff531b8787a22eff563a9bca3ffd19f44e09fa5fba7874f3eb472d0dc7ef2d",
+      "effective_verified_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
+      "local_rust_tests": 19,
+      "local_consumer_bridge_tests": 16
+    },
+    "post_aws_ci_rust_reconciliation": {
+      "repository_path": "docs/agent-trust-ci-rust-reconciliation-2026-11-22.json",
+      "sha256": "5dff31dc3397ec13f6c434a8ffc4792d74c6f4f196d22df3ea71f184b691c5d2",
+      "qualified_correction_rust_tree": "509b793829358ebd1b1c4606fe3e3f03cc5427db",
+      "content_equivalent_public_correction_commit": "d4935ba9adf8bf4c178262df66427ad1fd06497d",
+      "distinct_local_library_database_tests": 257,
+      "original_hosted_failed_cases_reexecuted_and_passed": 23,
+      "accepted_main_commit": "79df832ed1a232cd73d769c18f3bc459f6477c1a",
+      "merged_rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+      "combined_normal_host_build": "PASSED_BUILD_ONLY",
+      "normal_host_sha256": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989",
+      "normal_host_executed_by_this_followup": false,
+      "aws_restarted": false,
+      "organization_fixture_followup": {
+        "failed_published_candidate": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+        "failed_ci_run": 45007827191,
+        "prior_23_postgresql_failures_now_passed_hosted": true,
+        "hosted_authority_library": {
+          "passed": 212,
+          "failed": 0,
+          "existing_ignored": 28
+        },
+        "remaining_failure": "Organization shared fixture expected127 permissions; canonical catalog has148.",
+        "corrected_fixture": "contracts/organization-application-behavior.json",
+        "corrected_fixture_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+        "correction": "One scalar127 to148; every other fixture byte, all Rust source and production lock unchanged.",
+        "rebuilt_existing_consumer_tests": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 0
+        },
+        "normal_host_rebuilt_or_executed": false,
+        "aws_restarted": false,
+        "final_required_ci_and_queue": "PENDING_ON_NEXT_CANDIDATE"
+      }
+    },
+    "post_aws_url_security_followup": {
+      "repository_path": "docs/agent-trust-url-security-followup-2026-11-22.json",
+      "bytes": 210224,
+      "sha256": "fc8b6e33df51bf06b15f1f6c7ea30956055d3e6afbfa13bf616c6e37f4393fa0",
+      "actual_local_execution_base": "b8ee491416272c08f5e53db2409c53f4bc93d5db",
+      "effective_verified_rust_tree": "ac6b83a48fb8ea322584eef03d41ccb94d1413a9",
+      "production_lock_sha256": "20c69485bee06962abc1cff5a3e787065d79d7cdb3dde0971a6324a920407e47",
+      "changed_registry_versions": {
+        "url": "2.5.8 -> 2.5.9",
+        "form_urlencoded": "1.2.2 -> 1.2.3"
+      },
+      "other_production_package_rows_unchanged": 813,
+      "distinct_actual_focused_tests": 20,
+      "unchanged_feature_guards": "PASSED",
+      "exact_unchanged_ci_supply_chain_audit": "PASSED_LOCALLY_ALL_FOUR_CATEGORIES",
+      "normal_serving_build": "PASSED_BUILD_ONLY",
+      "normal_host_sha256": "882ee5f67331d17756ccb89ac9e78850ab6727a12152e7785e198732387415f7",
+      "normal_host_executed": false,
+      "aws_restarted": false,
+      "required_ci_and_queue_on_next_candidate": "PENDING",
+      "frozen_probe_is_a_separate_unchanged_baseline": true
+    }
+  }
+}

@@ -17,6 +17,8 @@ pub const TRUST_PROFILE_MIGRATION: &str = concat!(
     include_str!("../migrations/0002_credential_authority_revisions.sql"),
     "\n",
     include_str!("../migrations/0003_wallet_issuer_authority_revisions.sql"),
+    "\n",
+    include_str!("../migrations/0004_machine_jwt_vc_authority_revisions.sql"),
 );
 
 #[derive(Clone, Debug, PartialEq)]

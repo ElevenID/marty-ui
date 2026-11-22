@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import {
@@ -12,7 +12,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  APPLICATION_SOURCE_MANIFEST_PATH, exportApplicationSourcePackage, parseApplicationSourceJson,
+  APPLICATION_SOURCE_MANIFEST_PATH, applicationSourceTestPolicy, exportApplicationSourcePackage, parseApplicationSourceJson,
   planApplicationSourceExport, restoreApplicationSourcePackage, validateApplicationSourceBaseline,
   validateApplicationSourceInventory, validateApplicationSourcePackageManifest, validateApplicationSourceProducerReceipt,
 } from './export-application-source.mjs';
@@ -107,7 +107,7 @@ function protocolBaseline(plan) {
         output_files_identical: true, public_resources_identical: true, output_inventory_sha256: inventory,
         output_files: files.length, public_resources: publicResources.length } },
     tests: { selected_files: plan.test_profile.files,
-      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 296, report_sha256: digest('Synthetic protocol fixture') } },
+      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 321, report_sha256: digest('Synthetic protocol fixture') } },
     output: { files, inventory_sha256: inventory, public_resources: publicResources },
     resources: { result: { schema: 'marty.application-resource-smoke/v1', status: 'passed', preview: { closed: true },
       qualification: { resources_served: true }, public_resources: publicResources } },
@@ -169,6 +169,64 @@ test('source JSON rejects escaped duplicate keys, non-UTF-8, excessive depth and
   assert.throws(() => parseApplicationSourceJson('{}', { maxBytes: 1 }), /bound/);
 });
 
+test('historical source-map selection preserves its exact inventory and rejects altered or unknown maps', async (t) => {
+  const { root } = sourceFixture(t);
+  const prepared = await planApplicationSourceExport({ repositoryRoot: root });
+  const legacyBytes = readFileSync(path.join(ROOT, 'contracts/application-source-export-history/initial-v1.json'));
+  const legacyContract = parseApplicationSourceJson(legacyBytes);
+  assert.equal(digest(legacyBytes), 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad');
+  // A structural fixture tests archived map selection. It makes no claim that
+  // this current-source synthetic projection was executed or released earlier.
+  const historical = structuredClone(prepared.manifest);
+  historical.contract = { path: CONTRACT, bytes: legacyBytes.length, sha256: digest(legacyBytes), mode: 0o644, git_mode: '100644',
+    blob_oid: createHash('sha1').update(Buffer.from(`blob ${legacyBytes.length}\0`)).update(legacyBytes).digest('hex') };
+  historical.files = legacyContract.inputs.map((wanted) => {
+    const existing = historical.files.find((entry) => entry.path === wanted.path);
+    assert.ok(existing, wanted.path);
+    return { ...existing, ...wanted };
+  });
+  historical.source_inventory_sha256 = digest(canonical(historical.files));
+  historical.test_profile = legacyContract.test_profile;
+  historical.omission_policy.categories = legacyContract.omission_categories;
+  historical.retained_inactive_inputs = legacyContract.retained_inactive_inputs;
+  validateApplicationSourcePackageManifest(historical);
+  assert.equal(historical.files.length, 575);
+  assert.equal(applicationSourceTestPolicy(historical).assertions, 296);
+  const missing = structuredClone(historical); missing.files.pop();
+  missing.source_inventory_sha256 = digest(canonical(missing.files));
+  assert.throws(() => validateApplicationSourcePackageManifest(missing), /inventory is incomplete/);
+  const unknown = structuredClone(historical); unknown.contract.sha256 = `sha256:${'0'.repeat(64)}`;
+  assert.throws(() => validateApplicationSourcePackageManifest(unknown), /unapproved source contract/);
+  const arbitrary = structuredClone(legacyContract); arbitrary.inputs.pop();
+  assert.throws(() => validateApplicationSourcePackageManifest(historical, { contract: arbitrary }), /not an approved/);
+});
+
+test('source exporter CLI resolves its closure import before bounded baseline refusal', (t) => {
+  const { directory, root } = sourceFixture(t);
+  const relative = 'ui/scripts/export-application-source.mjs';
+  const entry = path.join(root, relative);
+  // Exercise the current CLI in a clean, isolated Git fixture, including when
+  // these changes have not been committed to the checkout running this test.
+  writeFileSync(entry, readFileSync(new URL('./export-application-source.mjs', import.meta.url)));
+  git(root, 'add', relative);
+  git(root, 'commit', '--allow-empty', '--quiet', '-m', 'Current source exporter CLI fixture');
+  const output = artifacts(directory, '-cli');
+  const baseline = path.join(directory, 'absent-baseline.json');
+  const child = spawnSync(process.execPath, [entry,
+    '--archive', output.archivePath, '--manifest', output.manifestPath,
+    '--report', output.reportPath, '--baseline-report', baseline],
+  { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.signal, null);
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /Application source export failed: ENOENT:/);
+  assert.ok(child.stderr.includes(baseline), 'The CLI must reach the baseline read after planning');
+  assert.doesNotMatch(child.stderr, /unsettled top-level await/i);
+  assert.equal(child.stdout, '');
+  assert.ok(Object.values(output).every((filename) => !existsSync(filename)));
+  assert.equal(git(root, 'status', '--porcelain'), '');
+});
+
 test('the exact source map exports deterministically and restores a closed ordinary source inventory', async (t) => {
   const { directory, root } = sourceFixture(t);
   const prepared = await planApplicationSourceExport({ repositoryRoot: root });
@@ -182,8 +240,8 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.deepEqual(readFileSync(first.archivePath), readFileSync(second.archivePath));
   assert.deepEqual(readFileSync(first.manifestPath), readFileSync(second.manifestPath));
   const manifest = parseApplicationSourceJson(readFileSync(first.manifestPath));
-  assert.equal(manifest.files.length, 575);
-  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 576);
+  assert.equal(manifest.files.length, 581);
+  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 582);
   assert.equal(manifest.source.commit, git(root, 'rev-parse', 'HEAD').trim());
   const restore = (destination, options = {}) => restoreApplicationSourcePackage({ ...first,
     expectedArchiveSha256: receipt.archive.sha256, expectedManifestSha256: receipt.manifest.sha256, destination, ...options });
@@ -192,7 +250,7 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.equal(existsSync(path.join(destination, 'ui/scripts/application-package-consumer.mjs')), false);
   assert.deepEqual(readFileSync(path.join(destination, 'ui/package.json')),
     readFileSync(path.join(root, 'ui/profiles/application/package.json')));
-  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, 575);
+  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, 581);
   assert.equal(lstatSync(path.join(destination, APPLICATION_SOURCE_MANIFEST_PATH)).mode & 0o777, 0o644);
 
   await t.test('restore rejects incorrect pins and existing destinations without modifying them', () => {
@@ -303,7 +361,7 @@ test('the exact source map exports deterministically and restores a closed ordin
       assert.deepEqual(readFileSync(path.join(selected.root, 'ui/bun.lock')), lockBytes);
       assert.equal(lstatSync(path.join(selected.root, 'LICENSE')).mode & 0o777, 0o644);
       const plan = await planApplicationSourceExport({ repositoryRoot: selected.root });
-      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, 575);
+      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, 581);
       assert.equal(plan.plan.source.working_tree_dirty, false);
     } finally {
       writeFileSync(packagePath, packageBytes); writeFileSync(lockPath, lockBytes);

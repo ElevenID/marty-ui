@@ -1,0 +1,5842 @@
+{
+  "schema": "marty.application-source-export/v1",
+  "repository": "ElevenID/marty-ui",
+  "source_boundary": {
+    "prefixes": [
+      "ui/"
+    ],
+    "additional_files": [
+      "LICENSE",
+      "contracts/application-source-export.json",
+      "contracts/organization-domain-behavior.json",
+      "contracts/web-surface-routes.json",
+      "contracts/website-source-ownership.json",
+      "docs/restructuring/application-package-README.md",
+      "scripts/installer_startup_process.py",
+      "scripts/load-secrets-env.sh",
+      "scripts/ui-production-start.sh"
+    ]
+  },
+  "manifest_path": "application-source-origin.json",
+  "inputs": [
+    {
+      "source": "LICENSE",
+      "path": "LICENSE",
+      "roles": [
+        "license"
+      ]
+    },
+    {
+      "source": "docs/restructuring/application-package-README.md",
+      "path": "README.md",
+      "roles": [
+        "package-documentation"
+      ]
+    },
+    {
+      "source": "contracts/organization-domain-behavior.json",
+      "path": "contracts/organization-domain-behavior.json",
+      "roles": [
+        "shared-contract"
+      ]
+    },
+    {
+      "source": "contracts/web-surface-routes.json",
+      "path": "contracts/web-surface-routes.json",
+      "roles": [
+        "shared-contract"
+      ]
+    },
+    {
+      "source": "contracts/website-source-ownership.json",
+      "path": "contracts/website-source-ownership.json",
+      "roles": [
+        "shared-contract"
+      ]
+    },
+    {
+      "source": "scripts/load-secrets-env.sh",
+      "path": "scripts/load-secrets-env.sh",
+      "roles": [
+        "shared-runtime-input"
+      ]
+    },
+    {
+      "source": "scripts/ui-production-start.sh",
+      "path": "scripts/ui-production-start.sh",
+      "roles": [
+        "shared-runtime-input"
+      ]
+    },
+    {
+      "source": "ui/.env.test",
+      "path": "ui/.env.test",
+      "roles": [
+        "configuration"
+      ]
+    },
+    {
+      "source": "ui/console/index.html",
+      "path": "ui/console/index.html",
+      "roles": [
+        "application-html-entry"
+      ]
+    },
+    {
+      "source": "ui/eslint.config.js",
+      "path": "ui/eslint.config.js",
+      "roles": [
+        "configuration"
+      ]
+    },
+    {
+      "source": "ui/index.html",
+      "path": "ui/index.html",
+      "roles": [
+        "application-html-entry"
+      ]
+    },
+    {
+      "source": "ui/nginx.prod.conf",
+      "path": "ui/nginx.prod.conf",
+      "roles": [
+        "shared-runtime-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package-lock.json",
+      "path": "ui/package-lock.json",
+      "roles": [
+        "application-dependency-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package.json",
+      "path": "ui/package.json",
+      "roles": [
+        "application-dependency-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package-lock.json",
+      "path": "ui/profiles/application/package-lock.json",
+      "roles": [
+        "application-profile-provenance-support"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package.json",
+      "path": "ui/profiles/application/package.json",
+      "roles": [
+        "application-profile-provenance-support"
+      ]
+    },
+    {
+      "source": "ui/public/.well-known/ai-plugin.json",
+      "path": "ui/public/.well-known/ai-plugin.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/apple-touch-icon.png",
+      "path": "ui/public/apple-touch-icon.png",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/config.json",
+      "path": "ui/public/config.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/favicon-96x96.png",
+      "path": "ui/public/favicon-96x96.png",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/favicon.ico",
+      "path": "ui/public/favicon.ico",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/favicon.svg",
+      "path": "ui/public/favicon.svg",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/applicant.json",
+      "path": "ui/public/locales/de/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/common.json",
+      "path": "ui/public/locales/de/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/console.json",
+      "path": "ui/public/locales/de/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/errors.json",
+      "path": "ui/public/locales/de/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/forms.json",
+      "path": "ui/public/locales/de/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/onboarding.json",
+      "path": "ui/public/locales/de/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/de/vendor.json",
+      "path": "ui/public/locales/de/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/applicant.json",
+      "path": "ui/public/locales/en/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/common.json",
+      "path": "ui/public/locales/en/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/console.json",
+      "path": "ui/public/locales/en/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/errors.json",
+      "path": "ui/public/locales/en/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/forms.json",
+      "path": "ui/public/locales/en/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/onboarding.json",
+      "path": "ui/public/locales/en/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/en/vendor.json",
+      "path": "ui/public/locales/en/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/applicant.json",
+      "path": "ui/public/locales/es/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/common.json",
+      "path": "ui/public/locales/es/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/console.json",
+      "path": "ui/public/locales/es/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/errors.json",
+      "path": "ui/public/locales/es/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/forms.json",
+      "path": "ui/public/locales/es/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/onboarding.json",
+      "path": "ui/public/locales/es/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/es/vendor.json",
+      "path": "ui/public/locales/es/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/applicant.json",
+      "path": "ui/public/locales/fr/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/common.json",
+      "path": "ui/public/locales/fr/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/console.json",
+      "path": "ui/public/locales/fr/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/errors.json",
+      "path": "ui/public/locales/fr/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/forms.json",
+      "path": "ui/public/locales/fr/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/onboarding.json",
+      "path": "ui/public/locales/fr/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/fr/vendor.json",
+      "path": "ui/public/locales/fr/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/applicant.json",
+      "path": "ui/public/locales/ja/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/common.json",
+      "path": "ui/public/locales/ja/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/console.json",
+      "path": "ui/public/locales/ja/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/errors.json",
+      "path": "ui/public/locales/ja/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/forms.json",
+      "path": "ui/public/locales/ja/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/onboarding.json",
+      "path": "ui/public/locales/ja/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/ja/vendor.json",
+      "path": "ui/public/locales/ja/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/applicant.json",
+      "path": "ui/public/locales/nl/applicant.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/common.json",
+      "path": "ui/public/locales/nl/common.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/console.json",
+      "path": "ui/public/locales/nl/console.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/errors.json",
+      "path": "ui/public/locales/nl/errors.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/forms.json",
+      "path": "ui/public/locales/nl/forms.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/onboarding.json",
+      "path": "ui/public/locales/nl/onboarding.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/locales/nl/vendor.json",
+      "path": "ui/public/locales/nl/vendor.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/logo192.png",
+      "path": "ui/public/logo192.png",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/logo512.png",
+      "path": "ui/public/logo512.png",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/manifest.json",
+      "path": "ui/public/manifest.json",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/runtime-config.js",
+      "path": "ui/public/runtime-config.js",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/startup.js",
+      "path": "ui/public/startup.js",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/public/test-harness.html",
+      "path": "ui/public/test-harness.html",
+      "roles": [
+        "shared-public-resource"
+      ]
+    },
+    {
+      "source": "ui/scripts/application-test-profile.mjs",
+      "path": "ui/scripts/application-test-profile.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/build-web-surface.mjs",
+      "path": "ui/scripts/build-web-surface.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/checker-worker-cleanup.mjs",
+      "path": "ui/scripts/checker-worker-cleanup.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/dev-server-origin.mjs",
+      "path": "ui/scripts/dev-server-origin.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/patch-checker-worker-cleanup.mjs",
+      "path": "ui/scripts/patch-checker-worker-cleanup.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/production-build-contract.mjs",
+      "path": "ui/scripts/production-build-contract.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/prune-selfhost-dist.mjs",
+      "path": "ui/scripts/prune-selfhost-dist.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/selfhost-build-contract.mjs",
+      "path": "ui/scripts/selfhost-build-contract.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/web-surface-build-contract.mjs",
+      "path": "ui/scripts/web-surface-build-contract.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/web-surface-contract.mjs",
+      "path": "ui/scripts/web-surface-contract.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/website-assets.mjs",
+      "path": "ui/scripts/website-assets.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/scripts/website-source-ownership.mjs",
+      "path": "ui/scripts/website-source-ownership.mjs",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/src/App.jsx",
+      "path": "ui/src/App.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/__tests__/startupRecovery.test.ts",
+      "path": "ui/src/__tests__/startupRecovery.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/applicationFlow.js",
+      "path": "ui/src/application/applications/applicationFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/applicationFormUseCases.js",
+      "path": "ui/src/application/applications/applicationFormUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/credentialCatalog.js",
+      "path": "ui/src/application/applications/credentialCatalog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/index.js",
+      "path": "ui/src/application/applications/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/myApplications.js",
+      "path": "ui/src/application/applications/myApplications.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/myDocuments.js",
+      "path": "ui/src/application/applications/myDocuments.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/orgApplicationsFlow.js",
+      "path": "ui/src/application/applications/orgApplicationsFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/orgApplicationsUseCases.js",
+      "path": "ui/src/application/applications/orgApplicationsUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/applications/walletOfferDialogUseCases.js",
+      "path": "ui/src/application/applications/walletOfferDialogUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/associations/consentCode.js",
+      "path": "ui/src/application/associations/consentCode.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/flows/flowDialogUseCases.js",
+      "path": "ui/src/application/flows/flowDialogUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/flows/flowManager.js",
+      "path": "ui/src/application/flows/flowManager.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/flows/flowManagerRealtime.js",
+      "path": "ui/src/application/flows/flowManagerRealtime.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/flows/flowManagerUseCases.js",
+      "path": "ui/src/application/flows/flowManagerUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/flows/index.js",
+      "path": "ui/src/application/flows/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/issuance/index.js",
+      "path": "ui/src/application/issuance/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/issuance/issuanceDashboardFlow.js",
+      "path": "ui/src/application/issuance/issuanceDashboardFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/issuance/issuanceDashboardUseCases.js",
+      "path": "ui/src/application/issuance/issuanceDashboardUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/index.js",
+      "path": "ui/src/application/onboarding/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/inviteAcceptFlow.js",
+      "path": "ui/src/application/onboarding/inviteAcceptFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/inviteAcceptUseCases.js",
+      "path": "ui/src/application/onboarding/inviteAcceptUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/joinOrganizationFlow.js",
+      "path": "ui/src/application/onboarding/joinOrganizationFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/joinOrganizationUseCases.js",
+      "path": "ui/src/application/onboarding/joinOrganizationUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/onboardingFlow.js",
+      "path": "ui/src/application/onboarding/onboardingFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/onboarding/onboardingUseCases.js",
+      "path": "ui/src/application/onboarding/onboardingUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/orgSettings/index.js",
+      "path": "ui/src/application/orgSettings/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/orgSettings/orgSettingsFlow.js",
+      "path": "ui/src/application/orgSettings/orgSettingsFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/orgSettings/orgSettingsUseCases.js",
+      "path": "ui/src/application/orgSettings/orgSettingsUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/protocolSupportCatalog.js",
+      "path": "ui/src/application/protocolSupportCatalog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/appHandoff.js",
+      "path": "ui/src/application/routing/appHandoff.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/appHandoff.test.ts",
+      "path": "ui/src/application/routing/appHandoff.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/applyEntry.js",
+      "path": "ui/src/application/routing/applyEntry.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/applyEntry.test.ts",
+      "path": "ui/src/application/routing/applyEntry.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/authCallback.js",
+      "path": "ui/src/application/routing/authCallback.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/authCallback.test.ts",
+      "path": "ui/src/application/routing/authCallback.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/guardPolicy.js",
+      "path": "ui/src/application/routing/guardPolicy.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/guardPolicy.test.ts",
+      "path": "ui/src/application/routing/guardPolicy.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/index.js",
+      "path": "ui/src/application/routing/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/landingEntry.js",
+      "path": "ui/src/application/routing/landingEntry.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/landingEntry.test.ts",
+      "path": "ui/src/application/routing/landingEntry.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/loginEntry.js",
+      "path": "ui/src/application/routing/loginEntry.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/loginEntry.test.ts",
+      "path": "ui/src/application/routing/loginEntry.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/publicEntry.js",
+      "path": "ui/src/application/routing/publicEntry.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/publicEntry.test.ts",
+      "path": "ui/src/application/routing/publicEntry.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/safeNavigation.js",
+      "path": "ui/src/application/routing/safeNavigation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/useSurfaceNavigate.js",
+      "path": "ui/src/application/routing/useSurfaceNavigate.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/webSurface.js",
+      "path": "ui/src/application/routing/webSurface.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/routing/webSurfaceContract.mjs",
+      "path": "ui/src/application/routing/webSurfaceContract.mjs",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/session/authSession.js",
+      "path": "ui/src/application/session/authSession.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/session/authSession.test.ts",
+      "path": "ui/src/application/session/authSession.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/session/consoleSession.js",
+      "path": "ui/src/application/session/consoleSession.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/session/consoleSession.test.ts",
+      "path": "ui/src/application/session/consoleSession.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/application/vendor/index.js",
+      "path": "ui/src/application/vendor/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/vendor/vendorApi.js",
+      "path": "ui/src/application/vendor/vendorApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/enhancedVerifierFlow.js",
+      "path": "ui/src/application/verifier/enhancedVerifierFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/enhancedVerifierUseCases.js",
+      "path": "ui/src/application/verifier/enhancedVerifierUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/index.js",
+      "path": "ui/src/application/verifier/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/presentationRequestFlow.js",
+      "path": "ui/src/application/verifier/presentationRequestFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/presentationRequestUseCases.js",
+      "path": "ui/src/application/verifier/presentationRequestUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/verifierDemoFlow.js",
+      "path": "ui/src/application/verifier/verifierDemoFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/verifier/verifierDemoUseCases.js",
+      "path": "ui/src/application/verifier/verifierDemoUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/wallet/index.js",
+      "path": "ui/src/application/wallet/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/wallet/walletDemoFlow.js",
+      "path": "ui/src/application/wallet/walletDemoFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/wallet/walletDemoUseCases.js",
+      "path": "ui/src/application/wallet/walletDemoUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/wallet/walletSetupFlow.js",
+      "path": "ui/src/application/wallet/walletSetupFlow.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/application/wallet/walletSetupUseCases.js",
+      "path": "ui/src/application/wallet/walletSetupUseCases.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/console/ConsoleApp.jsx",
+      "path": "ui/src/apps/console/ConsoleApp.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/console/ConsoleRoutes.jsx",
+      "path": "ui/src/apps/console/ConsoleRoutes.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/console/ConsoleRoutes.test.tsx",
+      "path": "ui/src/apps/console/ConsoleRoutes.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/apps/public/PublicApp.jsx",
+      "path": "ui/src/apps/public/PublicApp.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/public/PublicRoutes.jsx",
+      "path": "ui/src/apps/public/PublicRoutes.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/public/PublicRoutes.test.tsx",
+      "path": "ui/src/apps/public/PublicRoutes.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/AppProviders.jsx",
+      "path": "ui/src/apps/shared/AppProviders.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/AppShell.jsx",
+      "path": "ui/src/apps/shared/AppShell.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/AppShell.publicEntry.test.tsx",
+      "path": "ui/src/apps/shared/AppShell.publicEntry.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/PrerenderReadySignal.jsx",
+      "path": "ui/src/apps/shared/PrerenderReadySignal.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/WebSurfaceBoundary.jsx",
+      "path": "ui/src/apps/shared/WebSurfaceBoundary.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/apps/shared/WebSurfaceBoundary.test.tsx",
+      "path": "ui/src/apps/shared/WebSurfaceBoundary.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/bootstrapApp.jsx",
+      "path": "ui/src/bootstrapApp.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/bootstrapRoot.jsx",
+      "path": "ui/src/bootstrapRoot.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ApiDocumentation.jsx",
+      "path": "ui/src/components/ApiDocumentation.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ApplyPage.jsx",
+      "path": "ui/src/components/ApplyPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/AuthCallback.jsx",
+      "path": "ui/src/components/AuthCallback.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/AuthUnavailable.jsx",
+      "path": "ui/src/components/AuthUnavailable.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/BrowserRedirect.jsx",
+      "path": "ui/src/components/BrowserRedirect.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ErrorBoundary.jsx",
+      "path": "ui/src/components/ErrorBoundary.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/FutureFeatureButton.jsx",
+      "path": "ui/src/components/FutureFeatureButton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/IdentityProviderDetails.jsx",
+      "path": "ui/src/components/IdentityProviderDetails.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ImpersonationBanner.jsx",
+      "path": "ui/src/components/ImpersonationBanner.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/InviteAcceptPage.jsx",
+      "path": "ui/src/components/InviteAcceptPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/LoginPage.jsx",
+      "path": "ui/src/components/LoginPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/Navigation.jsx",
+      "path": "ui/src/components/Navigation.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ProfilePage.jsx",
+      "path": "ui/src/components/ProfilePage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/ProtectedRoute.jsx",
+      "path": "ui/src/components/ProtectedRoute.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/WalletSetup.jsx",
+      "path": "ui/src/components/WalletSetup.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/WebSectionUnavailable.jsx",
+      "path": "ui/src/components/WebSectionUnavailable.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/AuthAvailability.integration.test.tsx",
+      "path": "ui/src/components/__tests__/AuthAvailability.integration.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/AuthCallback.integration.test.tsx",
+      "path": "ui/src/components/__tests__/AuthCallback.integration.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
+      "path": "ui/src/components/__tests__/BrowserRedirect.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/__tests__/ProtectedRoute.test.tsx",
+      "path": "ui/src/components/__tests__/ProtectedRoute.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/applicant/ApplicationForm.jsx",
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/applicant/CredentialCatalog.jsx",
+      "path": "ui/src/components/applicant/CredentialCatalog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/applicant/DynamicFieldRenderer.jsx",
+      "path": "ui/src/components/applicant/DynamicFieldRenderer.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/applicant/WalletOfferDialog.jsx",
+      "path": "ui/src/components/applicant/WalletOfferDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/applicant/index.js",
+      "path": "ui/src/components/applicant/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/BuildButton.jsx",
+      "path": "ui/src/components/common/BuildButton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ConfirmDeleteDialog.jsx",
+      "path": "ui/src/components/common/ConfirmDeleteDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/EmptyState.jsx",
+      "path": "ui/src/components/common/EmptyState.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ErrorState.jsx",
+      "path": "ui/src/components/common/ErrorState.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/LanguageSwitcher.jsx",
+      "path": "ui/src/components/common/LanguageSwitcher.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/NotificationBell.jsx",
+      "path": "ui/src/components/common/NotificationBell.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/NotificationDropdown.jsx",
+      "path": "ui/src/components/common/NotificationDropdown.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/PermissionGate.jsx",
+      "path": "ui/src/components/common/PermissionGate.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/PermissionTooltip.jsx",
+      "path": "ui/src/components/common/PermissionTooltip.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/PreviewModeBanner.jsx",
+      "path": "ui/src/components/common/PreviewModeBanner.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ResourceCreateDrawer.jsx",
+      "path": "ui/src/components/common/ResourceCreateDrawer.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ResourcePage.jsx",
+      "path": "ui/src/components/common/ResourcePage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ReviewActivationCard.jsx",
+      "path": "ui/src/components/common/ReviewActivationCard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ReviewField.jsx",
+      "path": "ui/src/components/common/ReviewField.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ReviewSectionCard.jsx",
+      "path": "ui/src/components/common/ReviewSectionCard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/ReviewToggleOption.jsx",
+      "path": "ui/src/components/common/ReviewToggleOption.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/StatusChip.jsx",
+      "path": "ui/src/components/common/StatusChip.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/index.js",
+      "path": "ui/src/components/common/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/skeletons/CardSkeleton.jsx",
+      "path": "ui/src/components/common/skeletons/CardSkeleton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/skeletons/FormSkeleton.jsx",
+      "path": "ui/src/components/common/skeletons/FormSkeleton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/skeletons/PageSkeleton.jsx",
+      "path": "ui/src/components/common/skeletons/PageSkeleton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/skeletons/TableSkeleton.jsx",
+      "path": "ui/src/components/common/skeletons/TableSkeleton.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/common/skeletons/index.js",
+      "path": "ui/src/components/common/skeletons/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/ConsoleDashboard.jsx",
+      "path": "ui/src/components/console/ConsoleDashboard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/NotificationPreferencesPage.jsx",
+      "path": "ui/src/components/console/NotificationPreferencesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/OrgConsoleUnavailable.jsx",
+      "path": "ui/src/components/console/OrgConsoleUnavailable.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/ApplicantDashboard.jsx",
+      "path": "ui/src/components/console/applicant/ApplicantDashboard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/ApplicantSettingsPage.jsx",
+      "path": "ui/src/components/console/applicant/ApplicantSettingsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/DeviceManagementPage.jsx",
+      "path": "ui/src/components/console/applicant/DeviceManagementPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/MyIdentityPage.jsx",
+      "path": "ui/src/components/console/applicant/MyIdentityPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/applicant/index.js",
+      "path": "ui/src/components/console/applicant/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/audit/AuditPage.jsx",
+      "path": "ui/src/components/console/audit/AuditPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/audit/index.js",
+      "path": "ui/src/components/console/audit/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/connect/DeliveryDestinationsPage.jsx",
+      "path": "ui/src/components/console/connect/DeliveryDestinationsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/ApplicantStatsCard.jsx",
+      "path": "ui/src/components/console/dashboard/ApplicantStatsCard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/BlockingIssuesPanel.jsx",
+      "path": "ui/src/components/console/dashboard/BlockingIssuesPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/CriticalEventsPanel.jsx",
+      "path": "ui/src/components/console/dashboard/CriticalEventsPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/DashboardErrorAlert.jsx",
+      "path": "ui/src/components/console/dashboard/DashboardErrorAlert.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/DeveloperQuickStartPanel.jsx",
+      "path": "ui/src/components/console/dashboard/DeveloperQuickStartPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/EnvironmentBadge.jsx",
+      "path": "ui/src/components/console/dashboard/EnvironmentBadge.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/GuidedSetupBanner.jsx",
+      "path": "ui/src/components/console/dashboard/GuidedSetupBanner.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/IssuanceDashboardWidget.jsx",
+      "path": "ui/src/components/console/dashboard/IssuanceDashboardWidget.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/OrganizationHealthPanel.jsx",
+      "path": "ui/src/components/console/dashboard/OrganizationHealthPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/ReadinessCard.stories.tsx",
+      "path": "ui/src/components/console/dashboard/ReadinessCard.stories.tsx",
+      "roles": [
+        "retained-development-support"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/RecentActivityPanel.jsx",
+      "path": "ui/src/components/console/dashboard/RecentActivityPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx",
+      "path": "ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/SetupReadinessPanel.jsx",
+      "path": "ui/src/components/console/dashboard/SetupReadinessPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/SystemStatusBar.jsx",
+      "path": "ui/src/components/console/dashboard/SystemStatusBar.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/TeamSnapshotPanel.jsx",
+      "path": "ui/src/components/console/dashboard/TeamSnapshotPanel.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/dashboard/index.js",
+      "path": "ui/src/components/console/dashboard/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/ApiKeysPage.jsx",
+      "path": "ui/src/components/console/deploy/ApiKeysPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DeployPage.jsx",
+      "path": "ui/src/components/console/deploy/DeployPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DeploymentActivityCard.jsx",
+      "path": "ui/src/components/console/deploy/DeploymentActivityCard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DeploymentProfileWizard.jsx",
+      "path": "ui/src/components/console/deploy/DeploymentProfileWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DeploymentsPage.jsx",
+      "path": "ui/src/components/console/deploy/DeploymentsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DidIdentitiesPage.jsx",
+      "path": "ui/src/components/console/deploy/DidIdentitiesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/DidIdentityDetailPage.jsx",
+      "path": "ui/src/components/console/deploy/DidIdentityDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/IssuerIdentityWizard.jsx",
+      "path": "ui/src/components/console/deploy/IssuerIdentityWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/KeyManagementServiceWizard.jsx",
+      "path": "ui/src/components/console/deploy/KeyManagementServiceWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/LanesDevicesPage.jsx",
+      "path": "ui/src/components/console/deploy/LanesDevicesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/SigningKeysPage.jsx",
+      "path": "ui/src/components/console/deploy/SigningKeysPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/didIdentityUtils.js",
+      "path": "ui/src/components/console/deploy/didIdentityUtils.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/index.js",
+      "path": "ui/src/components/console/deploy/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/keyManagementAuth.js",
+      "path": "ui/src/components/console/deploy/keyManagementAuth.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/keyManagementServiceCatalog.js",
+      "path": "ui/src/components/console/deploy/keyManagementServiceCatalog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/kmsEntitlements.js",
+      "path": "ui/src/components/console/deploy/kmsEntitlements.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/steps/EnvironmentStep.jsx",
+      "path": "ui/src/components/console/deploy/steps/EnvironmentStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/steps/IntegrationStep.jsx",
+      "path": "ui/src/components/console/deploy/steps/IntegrationStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/steps/ReviewStep.jsx",
+      "path": "ui/src/components/console/deploy/steps/ReviewStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/steps/RuntimeSettingsStep.jsx",
+      "path": "ui/src/components/console/deploy/steps/RuntimeSettingsStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/deploy/steps/index.js",
+      "path": "ui/src/components/console/deploy/steps/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/CustomFlowBuilder.jsx",
+      "path": "ui/src/components/console/flows/CustomFlowBuilder.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowDefinitionWizard.jsx",
+      "path": "ui/src/components/console/flows/FlowDefinitionWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowDefinitionsPage.jsx",
+      "path": "ui/src/components/console/flows/FlowDefinitionsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowDetailPage.jsx",
+      "path": "ui/src/components/console/flows/FlowDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowInstancesPage.jsx",
+      "path": "ui/src/components/console/flows/FlowInstancesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowsPage.jsx",
+      "path": "ui/src/components/console/flows/FlowsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/index.js",
+      "path": "ui/src/components/console/flows/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/DeploymentBindingStep.jsx",
+      "path": "ui/src/components/console/flows/steps/DeploymentBindingStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/FlowStepsConfigStep.jsx",
+      "path": "ui/src/components/console/flows/steps/FlowStepsConfigStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/FlowTypeStep.jsx",
+      "path": "ui/src/components/console/flows/steps/FlowTypeStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/PreconditionsStep.jsx",
+      "path": "ui/src/components/console/flows/steps/PreconditionsStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/ReviewStep.jsx",
+      "path": "ui/src/components/console/flows/steps/ReviewStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/flows/steps/index.js",
+      "path": "ui/src/components/console/flows/steps/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/index.js",
+      "path": "ui/src/components/console/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/ApplicationReviewPage.jsx",
+      "path": "ui/src/components/console/operate/ApplicationReviewPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/ApplicationsPage.jsx",
+      "path": "ui/src/components/console/operate/ApplicationsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/IssuancePage.jsx",
+      "path": "ui/src/components/console/operate/IssuancePage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/IssuingSection.jsx",
+      "path": "ui/src/components/console/operate/IssuingSection.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/OperatePage.jsx",
+      "path": "ui/src/components/console/operate/OperatePage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/VerificationSessionsPage.jsx",
+      "path": "ui/src/components/console/operate/VerificationSessionsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/dialogs/ApproveDialog.jsx",
+      "path": "ui/src/components/console/operate/dialogs/ApproveDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/dialogs/RejectDialog.jsx",
+      "path": "ui/src/components/console/operate/dialogs/RejectDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/dialogs/RequestInfoDialog.jsx",
+      "path": "ui/src/components/console/operate/dialogs/RequestInfoDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/dialogs/WalletInviteDialog.jsx",
+      "path": "ui/src/components/console/operate/dialogs/WalletInviteDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/operate/index.js",
+      "path": "ui/src/components/console/operate/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/MembershipRequestsPage.jsx",
+      "path": "ui/src/components/console/org/MembershipRequestsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/NotificationsPage.jsx",
+      "path": "ui/src/components/console/org/NotificationsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/OrgDefaultsSection.jsx",
+      "path": "ui/src/components/console/org/OrgDefaultsSection.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/OrgPage.jsx",
+      "path": "ui/src/components/console/org/OrgPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/OrgSetupPage.jsx",
+      "path": "ui/src/components/console/org/OrgSetupPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/OrganizationSettingsPage.jsx",
+      "path": "ui/src/components/console/org/OrganizationSettingsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/RoleEscalationRequestsPage.jsx",
+      "path": "ui/src/components/console/org/RoleEscalationRequestsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/RolesPage.jsx",
+      "path": "ui/src/components/console/org/RolesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/TeamPage.jsx",
+      "path": "ui/src/components/console/org/TeamPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/WebhooksPage.jsx",
+      "path": "ui/src/components/console/org/WebhooksPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/org/index.js",
+      "path": "ui/src/components/console/org/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/organizationDefaultSelection.js",
+      "path": "ui/src/components/console/organizationDefaultSelection.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/ComplianceProfilePage.jsx",
+      "path": "ui/src/components/console/policies/ComplianceProfilePage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/ComplianceProfilesPage.jsx",
+      "path": "ui/src/components/console/policies/ComplianceProfilesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PoliciesPage.jsx",
+      "path": "ui/src/components/console/policies/PoliciesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PolicySetDetailPage.jsx",
+      "path": "ui/src/components/console/policies/PolicySetDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PolicySetWizard.jsx",
+      "path": "ui/src/components/console/policies/PolicySetWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PolicySetsPage.jsx",
+      "path": "ui/src/components/console/policies/PolicySetsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PresentationPoliciesPage.jsx",
+      "path": "ui/src/components/console/policies/PresentationPoliciesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PresentationPolicyPage.jsx",
+      "path": "ui/src/components/console/policies/PresentationPolicyPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/PresentationPolicyWizard.jsx",
+      "path": "ui/src/components/console/policies/PresentationPolicyWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/index.js",
+      "path": "ui/src/components/console/policies/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/policyClaimsValidation.js",
+      "path": "ui/src/components/console/policies/policyClaimsValidation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/policyFreshnessValidation.js",
+      "path": "ui/src/components/console/policies/policyFreshnessValidation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/policySetGuards.js",
+      "path": "ui/src/components/console/policies/policySetGuards.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/policyTemplateDefaults.js",
+      "path": "ui/src/components/console/policies/policyTemplateDefaults.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/projectTemplatePolicyClaims.js",
+      "path": "ui/src/components/console/policies/projectTemplatePolicyClaims.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/ClaimsConfigurationStep.jsx",
+      "path": "ui/src/components/console/policies/steps/ClaimsConfigurationStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/FreshnessBindingStep.jsx",
+      "path": "ui/src/components/console/policies/steps/FreshnessBindingStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/ReviewStep.jsx",
+      "path": "ui/src/components/console/policies/steps/ReviewStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/TemplateSelectionStep.jsx",
+      "path": "ui/src/components/console/policies/steps/TemplateSelectionStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/TrustProfileStep.jsx",
+      "path": "ui/src/components/console/policies/steps/TrustProfileStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/policies/steps/index.js",
+      "path": "ui/src/components/console/policies/steps/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationEvidenceEditor.jsx",
+      "path": "ui/src/components/console/templates/ApplicationEvidenceEditor.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateDetailPage.jsx",
+      "path": "ui/src/components/console/templates/ApplicationTemplateDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateEditorPage.jsx",
+      "path": "ui/src/components/console/templates/ApplicationTemplateEditorPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplatesPage.jsx",
+      "path": "ui/src/components/console/templates/ApplicationTemplatesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/CheckConfigurationDialog.jsx",
+      "path": "ui/src/components/console/templates/CheckConfigurationDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplateDetailPage.jsx",
+      "path": "ui/src/components/console/templates/CredentialTemplateDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplateEditorPage.jsx",
+      "path": "ui/src/components/console/templates/CredentialTemplateEditorPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplateWizard.jsx",
+      "path": "ui/src/components/console/templates/CredentialTemplateWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplatesPage.jsx",
+      "path": "ui/src/components/console/templates/CredentialTemplatesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/DraftListField.jsx",
+      "path": "ui/src/components/console/templates/DraftListField.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/TemplateWalletCompatibility.jsx",
+      "path": "ui/src/components/console/templates/TemplateWalletCompatibility.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/TemplatesPage.jsx",
+      "path": "ui/src/components/console/templates/TemplatesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/applicationClaimConstants.js",
+      "path": "ui/src/components/console/templates/applicationClaimConstants.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/applicationFieldOptions.js",
+      "path": "ui/src/components/console/templates/applicationFieldOptions.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/credentialTemplateClaims.js",
+      "path": "ui/src/components/console/templates/credentialTemplateClaims.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/credentialTemplateValidity.js",
+      "path": "ui/src/components/console/templates/credentialTemplateValidity.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/index.js",
+      "path": "ui/src/components/console/templates/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/BasicsStep.jsx",
+      "path": "ui/src/components/console/templates/steps/BasicsStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/ClaimsStep.jsx",
+      "path": "ui/src/components/console/templates/steps/ClaimsStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/CryptoValidityStep.jsx",
+      "path": "ui/src/components/console/templates/steps/CryptoValidityStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/ReviewStep.jsx",
+      "path": "ui/src/components/console/templates/steps/ReviewStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/TrustComplianceStep.jsx",
+      "path": "ui/src/components/console/templates/steps/TrustComplianceStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/steps/index.js",
+      "path": "ui/src/components/console/templates/steps/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/templates/templateIssuerSelection.js",
+      "path": "ui/src/components/console/templates/templateIssuerSelection.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/CreateTrustProfileDrawer.jsx",
+      "path": "ui/src/components/console/trust/CreateTrustProfileDrawer.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/RevocationProfileDetailPage.jsx",
+      "path": "ui/src/components/console/trust/RevocationProfileDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/RevocationProfileWizard.jsx",
+      "path": "ui/src/components/console/trust/RevocationProfileWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/RevocationProfilesPage.jsx",
+      "path": "ui/src/components/console/trust/RevocationProfilesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/TrustPage.jsx",
+      "path": "ui/src/components/console/trust/TrustPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/TrustProfileDetailPage.jsx",
+      "path": "ui/src/components/console/trust/TrustProfileDetailPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/TrustProfileEditPage.jsx",
+      "path": "ui/src/components/console/trust/TrustProfileEditPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/TrustProfileWizard.jsx",
+      "path": "ui/src/components/console/trust/TrustProfileWizard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/TrustProfilesPage.jsx",
+      "path": "ui/src/components/console/trust/TrustProfilesPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/index.js",
+      "path": "ui/src/components/console/trust/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/steps/BasicsStep.jsx",
+      "path": "ui/src/components/console/trust/steps/BasicsStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/steps/ReviewStep.jsx",
+      "path": "ui/src/components/console/trust/steps/ReviewStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
+      "path": "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/steps/ValidationRulesStep.jsx",
+      "path": "ui/src/components/console/trust/steps/ValidationRulesStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/steps/index.js",
+      "path": "ui/src/components/console/trust/steps/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/console/trust/trustProfileFormatCatalog.js",
+      "path": "ui/src/components/console/trust/trustProfileFormatCatalog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/CredentialFlowDiagram.jsx",
+      "path": "ui/src/components/diagrams/CredentialFlowDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/DeploymentModelDiagram.jsx",
+      "path": "ui/src/components/diagrams/DeploymentModelDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/IdentityTransactionDiagram.jsx",
+      "path": "ui/src/components/diagrams/IdentityTransactionDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/InteractiveProtocolMap.jsx",
+      "path": "ui/src/components/diagrams/InteractiveProtocolMap.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/StandardsStackDiagram.jsx",
+      "path": "ui/src/components/diagrams/StandardsStackDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/TrustModelDiagram.jsx",
+      "path": "ui/src/components/diagrams/TrustModelDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/UnifiedIdentityFlowDiagram.jsx",
+      "path": "ui/src/components/diagrams/UnifiedIdentityFlowDiagram.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/diagrams/index.js",
+      "path": "ui/src/components/diagrams/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/identity/AssociationConsentPage.jsx",
+      "path": "ui/src/components/identity/AssociationConsentPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/issuance/OID4VCIInviteDisplay.jsx",
+      "path": "ui/src/components/issuance/OID4VCIInviteDisplay.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/issuance/QRCodeDisplay.jsx",
+      "path": "ui/src/components/issuance/QRCodeDisplay.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/layouts/AuthenticatedLayout.jsx",
+      "path": "ui/src/components/layouts/AuthenticatedLayout.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/layouts/PublicFooter.jsx",
+      "path": "ui/src/components/layouts/PublicFooter.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/layouts/PublicLayout.jsx",
+      "path": "ui/src/components/layouts/PublicLayout.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/layouts/index.js",
+      "path": "ui/src/components/layouts/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/ConsoleHeaderBar.jsx",
+      "path": "ui/src/components/navigation/ConsoleHeaderBar.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/ConsoleHeaderBar.test.tsx",
+      "path": "ui/src/components/navigation/ConsoleHeaderBar.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/OrgSwitcher.jsx",
+      "path": "ui/src/components/navigation/OrgSwitcher.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/SidebarNavigation.jsx",
+      "path": "ui/src/components/navigation/SidebarNavigation.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/SidebarNavigation.test.tsx",
+      "path": "ui/src/components/navigation/SidebarNavigation.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/SidebarNavigationApplicant.test.tsx",
+      "path": "ui/src/components/navigation/SidebarNavigationApplicant.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/components/navigation/index.js",
+      "path": "ui/src/components/navigation/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/ConfirmOrgDialog.jsx",
+      "path": "ui/src/components/onboarding/ConfirmOrgDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/DomainMatchModal.jsx",
+      "path": "ui/src/components/onboarding/DomainMatchModal.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/MembershipModeChip.jsx",
+      "path": "ui/src/components/onboarding/MembershipModeChip.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/RoleCard.jsx",
+      "path": "ui/src/components/onboarding/RoleCard.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/index.js",
+      "path": "ui/src/components/onboarding/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/AcceptanceStep.jsx",
+      "path": "ui/src/components/onboarding/steps/AcceptanceStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/AdvancedConfigStep.jsx",
+      "path": "ui/src/components/onboarding/steps/AdvancedConfigStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/ApplicantJoinStep.jsx",
+      "path": "ui/src/components/onboarding/steps/ApplicantJoinStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/BusinessContextStep.jsx",
+      "path": "ui/src/components/onboarding/steps/BusinessContextStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/CompletionStep.jsx",
+      "path": "ui/src/components/onboarding/steps/CompletionStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/IntentSelectionStep.jsx",
+      "path": "ui/src/components/onboarding/steps/IntentSelectionStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/IssuerIdentityStep.jsx",
+      "path": "ui/src/components/onboarding/steps/IssuerIdentityStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/RoleSelectionStep.jsx",
+      "path": "ui/src/components/onboarding/steps/RoleSelectionStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/TechnicalIdentityStep.jsx",
+      "path": "ui/src/components/onboarding/steps/TechnicalIdentityStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/TrustHealthCheckStep.jsx",
+      "path": "ui/src/components/onboarding/steps/TrustHealthCheckStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/TrustProfileStep.jsx",
+      "path": "ui/src/components/onboarding/steps/TrustProfileStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/TrustSourcesStep.jsx",
+      "path": "ui/src/components/onboarding/steps/TrustSourcesStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/UseCaseStep.jsx",
+      "path": "ui/src/components/onboarding/steps/UseCaseStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/VendorCreateOrgStep.jsx",
+      "path": "ui/src/components/onboarding/steps/VendorCreateOrgStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/VerifierIdentityStep.jsx",
+      "path": "ui/src/components/onboarding/steps/VerifierIdentityStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/onboarding/steps/WalletPairingStep.jsx",
+      "path": "ui/src/components/onboarding/steps/WalletPairingStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/organizations/CreateOrganizationForm.jsx",
+      "path": "ui/src/components/organizations/CreateOrganizationForm.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/organizations/CreateOrganizationPage.jsx",
+      "path": "ui/src/components/organizations/CreateOrganizationPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/organizations/OrganizationMembershipHub.jsx",
+      "path": "ui/src/components/organizations/OrganizationMembershipHub.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/DiscoverOrganizationsPage.jsx",
+      "path": "ui/src/components/pages/DiscoverOrganizationsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/JoinOrganizationPage.jsx",
+      "path": "ui/src/components/pages/JoinOrganizationPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/MyOrganizationsPage.jsx",
+      "path": "ui/src/components/pages/MyOrganizationsPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/ProtocolSupportCatalog.jsx",
+      "path": "ui/src/components/pages/ProtocolSupportCatalog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/ProtocolSupportCatalogView.jsx",
+      "path": "ui/src/components/pages/ProtocolSupportCatalogView.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/PublicVerificationPage.jsx",
+      "path": "ui/src/components/pages/PublicVerificationPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/WhatIsVerifiableIdentityPage.jsx",
+      "path": "ui/src/components/pages/WhatIsVerifiableIdentityPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/pages/index.js",
+      "path": "ui/src/components/pages/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewApplicationPage.jsx",
+      "path": "ui/src/components/preview/PreviewApplicationPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewCatalogPage.jsx",
+      "path": "ui/src/components/preview/PreviewCatalogPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewCredentialPage.jsx",
+      "path": "ui/src/components/preview/PreviewCredentialPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewFlowPage.jsx",
+      "path": "ui/src/components/preview/PreviewFlowPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewLayout.jsx",
+      "path": "ui/src/components/preview/PreviewLayout.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewNotFound.jsx",
+      "path": "ui/src/components/preview/PreviewNotFound.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/PreviewPage.jsx",
+      "path": "ui/src/components/preview/PreviewPage.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/preview/index.js",
+      "path": "ui/src/components/preview/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/seo/SEOHead.jsx",
+      "path": "ui/src/components/seo/SEOHead.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/seo/index.js",
+      "path": "ui/src/components/seo/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/seo/structuredData.js",
+      "path": "ui/src/components/seo/structuredData.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/TrustProvider.jsx",
+      "path": "ui/src/components/trust/TrustProvider.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/adapters/api/TrustApiAdapter.jsx",
+      "path": "ui/src/components/trust/adapters/api/TrustApiAdapter.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/adapters/index.js",
+      "path": "ui/src/components/trust/adapters/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/adapters/mock/MockTrustAdapter.jsx",
+      "path": "ui/src/components/trust/adapters/mock/MockTrustAdapter.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/adapters/parsing/PkijsCertParser.js",
+      "path": "ui/src/components/trust/adapters/parsing/PkijsCertParser.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/components/CertificateUploader.jsx",
+      "path": "ui/src/components/trust/components/CertificateUploader.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/components/KeyLocationSelector.jsx",
+      "path": "ui/src/components/trust/components/KeyLocationSelector.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/components/TrustChainStatus.jsx",
+      "path": "ui/src/components/trust/components/TrustChainStatus.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/components/TrustHealthChecklist.jsx",
+      "path": "ui/src/components/trust/components/TrustHealthChecklist.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/components/index.js",
+      "path": "ui/src/components/trust/components/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/index.js",
+      "path": "ui/src/components/trust/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/ports/ICertParser.js",
+      "path": "ui/src/components/trust/ports/ICertParser.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/ports/ITrustService.jsx",
+      "path": "ui/src/components/trust/ports/ITrustService.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/ports/index.js",
+      "path": "ui/src/components/trust/ports/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/ports/managedIssuerCertificate.js",
+      "path": "ui/src/components/trust/ports/managedIssuerCertificate.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/ports/types.js",
+      "path": "ui/src/components/trust/ports/types.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/trust/trustHooks.js",
+      "path": "ui/src/components/trust/trustHooks.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/APIKeyManager.jsx",
+      "path": "ui/src/components/vendor/APIKeyManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/DeploymentProfileManager.jsx",
+      "path": "ui/src/components/vendor/DeploymentProfileManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/FlowDisableDialog.jsx",
+      "path": "ui/src/components/vendor/FlowDisableDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/FlowManager.jsx",
+      "path": "ui/src/components/vendor/FlowManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/FlowPublishDialog.jsx",
+      "path": "ui/src/components/vendor/FlowPublishDialog.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/RevocationManager.jsx",
+      "path": "ui/src/components/vendor/RevocationManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/TemplateActions.jsx",
+      "path": "ui/src/components/vendor/TemplateActions.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/WebhookManager.jsx",
+      "path": "ui/src/components/vendor/WebhookManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/Oid4vpQrCode.jsx",
+      "path": "ui/src/components/vendor/verification/Oid4vpQrCode.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/VerificationResultSummary.jsx",
+      "path": "ui/src/components/vendor/verification/VerificationResultSummary.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/VerificationSessionManager.jsx",
+      "path": "ui/src/components/vendor/verification/VerificationSessionManager.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/steps/PolicySelectStep.jsx",
+      "path": "ui/src/components/vendor/verification/steps/PolicySelectStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/steps/QRDisplayStep.jsx",
+      "path": "ui/src/components/vendor/verification/steps/QRDisplayStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/components/vendor/verification/steps/SessionConfigStep.jsx",
+      "path": "ui/src/components/vendor/verification/steps/SessionConfigStep.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/checkConstants.js",
+      "path": "ui/src/config/checkConstants.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/dashboardAccess.js",
+      "path": "ui/src/config/dashboardAccess.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/dashboardRules.js",
+      "path": "ui/src/config/dashboardRules.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/index.js",
+      "path": "ui/src/config/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/issuanceProtocols.js",
+      "path": "ui/src/config/issuanceProtocols.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/navigation.js",
+      "path": "ui/src/config/navigation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/operateTabs.js",
+      "path": "ui/src/config/operateTabs.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/config/permissions.js",
+      "path": "ui/src/config/permissions.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/consoleIndex.jsx",
+      "path": "ui/src/consoleIndex.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/AuthContext.jsx",
+      "path": "ui/src/contexts/AuthContext.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/BrandingContext.jsx",
+      "path": "ui/src/contexts/BrandingContext.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/ConsoleContext.jsx",
+      "path": "ui/src/contexts/ConsoleContext.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/NotificationContext.jsx",
+      "path": "ui/src/contexts/NotificationContext.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/PreviewContext.jsx",
+      "path": "ui/src/contexts/PreviewContext.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/contexts/__tests__/PublicEntryAuth.test.tsx",
+      "path": "ui/src/contexts/__tests__/PublicEntryAuth.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/data/policyTemplates.js",
+      "path": "ui/src/data/policyTemplates.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/extensions/commerce/index.js",
+      "path": "ui/src/extensions/commerce/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/extensions/commerce/public.js",
+      "path": "ui/src/extensions/commerce/public.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/extensions/commerce/publicStub.jsx",
+      "path": "ui/src/extensions/commerce/publicStub.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/extensions/commerce/website.js",
+      "path": "ui/src/extensions/commerce/website.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useAsyncActionScope.js",
+      "path": "ui/src/hooks/useAsyncActionScope.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useAsyncData.js",
+      "path": "ui/src/hooks/useAsyncData.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useAuth.js",
+      "path": "ui/src/hooks/useAuth.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useBranding.js",
+      "path": "ui/src/hooks/useBranding.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useBrowserEntry.js",
+      "path": "ui/src/hooks/useBrowserEntry.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useDashboardData.js",
+      "path": "ui/src/hooks/useDashboardData.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useDialog.js",
+      "path": "ui/src/hooks/useDialog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useGoogleDigitalCredentials.js",
+      "path": "ui/src/hooks/useGoogleDigitalCredentials.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useNotifications.js",
+      "path": "ui/src/hooks/useNotifications.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useOrganizationDefaults.js",
+      "path": "ui/src/hooks/useOrganizationDefaults.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/usePermissions.js",
+      "path": "ui/src/hooks/usePermissions.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useSSE.js",
+      "path": "ui/src/hooks/useSSE.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useWalletOpenLink.js",
+      "path": "ui/src/hooks/useWalletOpenLink.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useWalletPreferences.js",
+      "path": "ui/src/hooks/useWalletPreferences.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useWizard.js",
+      "path": "ui/src/hooks/useWizard.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/hooks/useZkAgeVerification.js",
+      "path": "ui/src/hooks/useZkAgeVerification.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/i18n/index.js",
+      "path": "ui/src/i18n/index.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/index.jsx",
+      "path": "ui/src/index.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/react-shim.js",
+      "path": "ui/src/react-shim.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/__tests__/authApi.test.ts",
+      "path": "ui/src/services/__tests__/authApi.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/services/adminImpersonationApi.js",
+      "path": "ui/src/services/adminImpersonationApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/api.jsx",
+      "path": "ui/src/services/api.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/apiKeysApi.jsx",
+      "path": "ui/src/services/apiKeysApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/applicantApi.jsx",
+      "path": "ui/src/services/applicantApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/applicationTemplatesApi.js",
+      "path": "ui/src/services/applicationTemplatesApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/associationConsent.js",
+      "path": "ui/src/services/associationConsent.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/auditApi.js",
+      "path": "ui/src/services/auditApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/authApi.js",
+      "path": "ui/src/services/authApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/authEvents.js",
+      "path": "ui/src/services/authEvents.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/complianceProfilesApi.jsx",
+      "path": "ui/src/services/complianceProfilesApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/credentialLinkUtils.js",
+      "path": "ui/src/services/credentialLinkUtils.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/credentialTemplateVersionOperation.js",
+      "path": "ui/src/services/credentialTemplateVersionOperation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/credentialsApi.jsx",
+      "path": "ui/src/services/credentialsApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/dashboardApi.js",
+      "path": "ui/src/services/dashboardApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/deliveryDestinationsApi.js",
+      "path": "ui/src/services/deliveryDestinationsApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/deploymentProfilesApi.jsx",
+      "path": "ui/src/services/deploymentProfilesApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/devicesApi.js",
+      "path": "ui/src/services/devicesApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/digitalCredentialsApi.js",
+      "path": "ui/src/services/digitalCredentialsApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/domainMatchingApi.js",
+      "path": "ui/src/services/domainMatchingApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/flowsApi.jsx",
+      "path": "ui/src/services/flowsApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/healthApi.js",
+      "path": "ui/src/services/healthApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/idempotency.js",
+      "path": "ui/src/services/idempotency.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/identityProviderApi.js",
+      "path": "ui/src/services/identityProviderApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/issuerIdentitiesApi.js",
+      "path": "ui/src/services/issuerIdentitiesApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/loadScopedCatalog.js",
+      "path": "ui/src/services/loadScopedCatalog.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/membershipApi.js",
+      "path": "ui/src/services/membershipApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/notificationEvents.js",
+      "path": "ui/src/services/notificationEvents.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/notificationsApi.js",
+      "path": "ui/src/services/notificationsApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/organizationsApi.jsx",
+      "path": "ui/src/services/organizationsApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/physicalDocumentsApi.js",
+      "path": "ui/src/services/physicalDocumentsApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/policyCreationDependencies.js",
+      "path": "ui/src/services/policyCreationDependencies.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/policyCreationOperation.js",
+      "path": "ui/src/services/policyCreationOperation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/policySetsApi.js",
+      "path": "ui/src/services/policySetsApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/preferencesApi.js",
+      "path": "ui/src/services/preferencesApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/presentationPolicyApi.js",
+      "path": "ui/src/services/presentationPolicyApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/profilePicturePayload.js",
+      "path": "ui/src/services/profilePicturePayload.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/protocolSupportApi.js",
+      "path": "ui/src/services/protocolSupportApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/publicVerificationApi.js",
+      "path": "ui/src/services/publicVerificationApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/queryUtils.js",
+      "path": "ui/src/services/queryUtils.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/rbacApi.js",
+      "path": "ui/src/services/rbacApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/resourceCreationOperation.js",
+      "path": "ui/src/services/resourceCreationOperation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/signingKeysApi.js",
+      "path": "ui/src/services/signingKeysApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/sseService.js",
+      "path": "ui/src/services/sseService.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/subscriptionsApi.jsx",
+      "path": "ui/src/services/subscriptionsApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/teamApi.js",
+      "path": "ui/src/services/teamApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/templateCreationOperation.js",
+      "path": "ui/src/services/templateCreationOperation.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/walletRegistryApi.js",
+      "path": "ui/src/services/walletRegistryApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/walletTransportService.js",
+      "path": "ui/src/services/walletTransportService.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/webhookEvents.js",
+      "path": "ui/src/services/webhookEvents.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/webhooksApi.jsx",
+      "path": "ui/src/services/webhooksApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/zkVerificationApi.jsx",
+      "path": "ui/src/services/zkVerificationApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/test/i18nApplicationTestSetup.js",
+      "path": "ui/src/test/i18nApplicationTestSetup.js",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/test/mocks/fixtures.ts",
+      "path": "ui/src/test/mocks/fixtures.ts",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/test/mocks/handlers.ts",
+      "path": "ui/src/test/mocks/handlers.ts",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/test/mocks/server.ts",
+      "path": "ui/src/test/mocks/server.ts",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/test/setup.ts",
+      "path": "ui/src/test/setup.ts",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/test/utils.tsx",
+      "path": "ui/src/test/utils.tsx",
+      "roles": [
+        "test-support"
+      ]
+    },
+    {
+      "source": "ui/src/utils/analytics.example.js",
+      "path": "ui/src/utils/analytics.example.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/analytics.js",
+      "path": "ui/src/utils/analytics.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/deviceDetection.js",
+      "path": "ui/src/utils/deviceDetection.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/hasAsciiControlCharacters.js",
+      "path": "ui/src/utils/hasAsciiControlCharacters.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/officialReferences.js",
+      "path": "ui/src/utils/officialReferences.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/runtimeConfig.js",
+      "path": "ui/src/utils/runtimeConfig.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/staticAssetHref.js",
+      "path": "ui/src/utils/staticAssetHref.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/waitForFonts.js",
+      "path": "ui/src/utils/waitForFonts.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/utils/walletSelectionRestrictions.js",
+      "path": "ui/src/utils/walletSelectionRestrictions.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicConfig.application.js",
+      "path": "ui/src/variants/publicConfig.application.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicConfig.public.js",
+      "path": "ui/src/variants/publicConfig.public.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicConfig.selfhost.js",
+      "path": "ui/src/variants/publicConfig.selfhost.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicConfig.website.js",
+      "path": "ui/src/variants/publicConfig.website.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicSite.application.jsx",
+      "path": "ui/src/variants/publicSite.application.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/variants/publicSite.selfhost.jsx",
+      "path": "ui/src/variants/publicSite.selfhost.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/wasm/biometricsWasm.js",
+      "path": "ui/src/wasm/biometricsWasm.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/tests/application/surface-profile.test.tsx",
+      "path": "ui/tests/application/surface-profile.test.tsx",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/tsconfig.build.json",
+      "path": "ui/tsconfig.build.json",
+      "roles": [
+        "configuration"
+      ]
+    },
+    {
+      "source": "ui/tsconfig.json",
+      "path": "ui/tsconfig.json",
+      "roles": [
+        "configuration"
+      ]
+    },
+    {
+      "source": "ui/tsconfig.node.json",
+      "path": "ui/tsconfig.node.json",
+      "roles": [
+        "configuration"
+      ]
+    },
+    {
+      "source": "ui/vite.config.ts",
+      "path": "ui/vite.config.ts",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/vitest.application.config.ts",
+      "path": "ui/vitest.application.config.ts",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    },
+    {
+      "source": "ui/vitest.config.ts",
+      "path": "ui/vitest.config.ts",
+      "roles": [
+        "build-or-test-driver"
+      ]
+    }
+  ],
+  "omission_categories": {
+    "accepted-application-exclusion": "Exact existing 72-input omission; ownership roster remains unchanged.",
+    "baseline-profile-substitution": "Replaced only at the same destination by the exact reviewed application profile input.",
+    "migration-or-browser-diagnostic": "Producer-side migration/qualification tool; no selected package command or source dependency.",
+    "platform-package-diagnostic": "Platform-owned source-package exporter, consumer, codec, contract or process guardian; absent from the portable application source and runtime.",
+    "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
+    "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
+    "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
+    "unselected-test": "Not in the exact 24-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
+    "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
+  },
+  "omitted": [
+    {
+      "source": "contracts/application-source-export.json",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "scripts/installer_startup_process.py",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/.dockerignore",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/.env.example",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/.gitignore",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/.storybook/main.ts",
+      "role": "unadvertised-storybook-tooling"
+    },
+    {
+      "source": "ui/.storybook/preview.tsx",
+      "role": "unadvertised-storybook-tooling"
+    },
+    {
+      "source": "ui/Dockerfile.prod",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/README.web-surfaces.md",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/SEO_MONITORING_GUIDE.md",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/TESTING.md",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/TESTING_QUICKSTART.md",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/UX_DRIVEN_TEST_STRATEGY.md",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/bun.lock",
+      "role": "unselected-package-manager-lock"
+    },
+    {
+      "source": "ui/nginx.dev.conf",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/nginx.spa.conf",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/nginx.website.conf",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/nginx.website.headers.conf",
+      "role": "unselected-package-support"
+    },
+    {
+      "source": "ui/package-lock.json",
+      "role": "baseline-profile-substitution"
+    },
+    {
+      "source": "ui/package.json",
+      "role": "baseline-profile-substitution"
+    },
+    {
+      "source": "ui/public/blog/rss.xml",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/demos/manifests/2026.07.0.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/demos/manifests/2026.08.0.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/demos/manifests/index.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/aiko-tanaka.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/daniel-ortega.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/elena-kovacs.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/marcus-vale.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/nora-patel.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/sofia-rahman.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/authors/victor-leclerc.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/canvas-learning-achievement.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/credential-lifecycle.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/first-party-browser-wallet.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/independent-wallet-interoperability.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/membership-badge-login.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.07.0/organization-primitives.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.08.0/portfolio-draft.svg",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/demos/2026.08.1/portfolio-draft.svg",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/social/elevenid-blog-default.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/social/trust-profiles-explained.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/social/understanding-csca-certificates-v2.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/images/social/why-identity-needs-a-protocol.png",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/llms.txt",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/de/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/en/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/es/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/fr/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/ja/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/public/locales/nl/marketing.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/scripts/adopt-vitest-timings.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/application-browser-process.py",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-browser-startup.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-browser-startup.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-config.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-dependency-install.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-dependency-install.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-dependency-profile.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-dependency-profile.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-package-consumer.mjs",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-package-consumer.test.mjs",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-public-assets.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-resource-smoke.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-resource-smoke.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-runtime-context.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-runtime-context.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-runtime.Dockerfile",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-source-closure.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/application-source-closure.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/application-source-zip.mjs",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/scripts/assert-website-dist.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/association-consent-browser.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/association-unlink.contract.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/build-selfhost.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/check_crawler_artifacts.py",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/checker-worker-cleanup.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/crawler-config.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/dev-server-origin.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/export-application-source.mjs",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/scripts/export-application-source.test.mjs",
+      "role": "platform-package-diagnostic"
+    },
+    {
+      "source": "ui/scripts/generate-demo-manifest-module.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/generated-text.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/generated-text.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/patch-prerenderer-ts-deepmerge.cjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/platform-demo-boundary.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/production-build-contract.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/public-verification-browser.mjs",
+      "role": "migration-or-browser-diagnostic"
+    },
+    {
+      "source": "ui/scripts/render-website-nginx.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/run-vitest-shard.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/smoke-website.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/test-openapi-proxy.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/test_crawler_artifacts.py",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/test_nginx_crawler_routes.py",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/update-vitest-timings.mjs",
+      "role": "unselected-tooling"
+    },
+    {
+      "source": "ui/scripts/web-surface-build-contract.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/web-surface-contract.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/scripts/website-build-tools.mjs",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/scripts/website-build-tools.test.mjs",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/__tests__/prerenderedSeo.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/__tests__/publicIndexHtml.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/__tests__/authRoutingInteraction.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/__tests__/credentialApplicationInteraction.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/__tests__/flowManagementInteraction.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/__tests__/onboardingInteraction.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/__tests__/verificationInteraction.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/applicationFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/applicationFormUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/credentialCatalog.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/myApplications.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/myDocuments.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/orgApplications.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/applications/walletOfferDialogUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/associations/consentCode.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/flows/flowDialogUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/flows/flowManager.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/flows/flowManagerRealtime.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/flows/flowManagerUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/issuance/issuanceDashboard.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/inviteAcceptFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/inviteAcceptUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/joinOrganizationFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/joinOrganizationUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/onboardingFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/onboarding/onboardingUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/orgSettings/orgSettingsFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/orgSettings/orgSettingsUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/vendor/vendorApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/enhancedVerifierFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/enhancedVerifierUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/presentationRequestFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/presentationRequestUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/verifierDemoFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/verifier/verifierDemoUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/wallet/walletDemoFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/wallet/walletDemoUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/wallet/walletSetupFlow.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/application/wallet/walletSetupUseCases.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/apps/console/ConsoleApp.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/apps/website/WebsiteApp.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/apps/website/WebsiteRoutes.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/FromIDVPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/IdentityGuidePage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/LandingPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/LandingPageContent.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/Navigation.selfhost.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/ProductPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/ProtocolPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/StandardsPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/__tests__/ApplicantDashboard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ApplicantSettingsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ApplicantSettingsPage.wallets.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ApplyPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/AuthCallback.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/AuthenticatedLayout.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ClaimCredentialDialog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ConsoleSelectionLifecycle.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/CredentialCatalog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/DiscoverOrganizationsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/DynamicFieldRenderer.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/FlowDialogs.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/FlowManager.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/IdentityProviderDetails.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ImpersonationBanner.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/InviteAcceptPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/JoinOrganizationPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/LandingPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/LoginPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/MyIdentityPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/PrivatePricingBoundary.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ProfilePage.session.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/ProfilePage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/WalletOfferDialog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/__tests__/WalletSetup.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/common/ConfirmDeleteDialog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/common/NotificationBell.permissions.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/common/NotificationBell.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/common/NotificationDropdown.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/common/StatusChip.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/__tests__/ConsoleDashboard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/applicant/DeviceManagementPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/audit/AuditPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/connect/DeliveryDestinationsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/dashboard/CriticalEventsPanel.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/dashboard/GuidedSetupBanner.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/dashboard/OrganizationHealthPanel.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/dashboard/RuntimeReadinessPanel.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/dashboard/SystemStatusBar.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/ApiKeysPage.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/ApiKeysPage.creation-scope.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/ApiKeysPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/DidIdentitiesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/DidIdentityDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/IssuerIdentityWizard.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/IssuerIdentityWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/KeyManagementServiceWizard.combined-continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/KeyManagementServiceWizard.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/KeyManagementServiceWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/LanesDevicesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/SigningKeysPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/__tests__/DeploymentProfileWizard.pending-review.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/__tests__/DeploymentProfileWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/__tests__/RuntimeSettingsStep.defaults.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/didIdentityUtils.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/keyManagementAuth.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/FlowInstancesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/CustomFlowBuilder.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/CustomFlowBuilder.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/DeploymentBindingStep.defaults.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/FlowDefinitionWizard.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/FlowDefinitionWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/flows/__tests__/FlowDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/operate/ApplicationReviewPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/operate/ApplicationsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/operate/IssuancePage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/operate/IssuingSection.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/operate/VerificationSessionsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/MembershipRequestsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/NotificationsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/OrgDefaultsSection.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/OrgSetupPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/OrganizationAccess.integration.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/OrganizationSettingsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/RequestReviewPages.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/RoleEscalationRequestsPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/RolesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/TeamPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/org/WebhooksPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/ClaimsConfigurationStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/ComplianceProfilePage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/ComplianceProfilesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/FreshnessBindingStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/OrganizationDefaults.steps.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PolicySets.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPoliciesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.claim-projection.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.defaults.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.freshness.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.pending-review.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.recovery.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/PresentationPolicyWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/ReviewStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/TemplateSelectionStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/TrustProfileStep.scope.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/policyTemplateDefaults.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/policies/__tests__/projectTemplatePolicyClaims.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationEvidenceEditor.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateEditorPage.constants.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateEditorPage.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplateEditorPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/ApplicationTemplatesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/CheckConfigurationDialog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplateDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplateEditorPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/CredentialTemplatesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/ClaimsStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/CredentialTemplateWizard.pending-review.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/CredentialTemplateWizard.prerequisites.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/CredentialTemplateWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/CryptoValidityStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/ReviewStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/TrustComplianceStep.defaults.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/TrustComplianceStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/credentialTemplateClaims.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/templates/__tests__/credentialTemplateValidity.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/CreateTrustProfileDrawer.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfileDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfileWizard.lifetime.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfileWizard.retry.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfileWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfilesPage.create-permission.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/RevocationProfilesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileDetailPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileEditPage.lifetime.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileEditPage.native.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileEditPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileWizard.continuation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfileWizard.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfilesPage.scope.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/console/trust/__tests__/TrustProfilesPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/demos/DemoVideoPlayer.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/demos/DemoVideoPlayer.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/identity/AssociationConsentPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/issuance/OID4VCIInviteDisplay.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/landing/DeploymentModelsSection.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/landing/EndUserExperienceSection.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/landing/LandingSection.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/landing/ProductCapabilitiesSection.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/landing/ProofLabSection.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/landing/proofLabRuntime.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/layouts/PublicFooter.selfhost.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/layouts/PublicFooter.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/organizations/CreateOrganizationFlow.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/organizations/CreateOrganizationPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/organizations/OrganizationMembershipHub.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/pages/AiCapabilityPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/DemoPages.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/DemoPages.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/pages/EudiWalletVerificationPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/IsoMdocVerificationPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/LegalPages.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/MarketingProtocolSupportCatalog.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/OpenBadgesIssuancePage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/OpenBadgesIssuancePage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/pages/OpenBadgesVerificationPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/ProtocolSupportCatalog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/pages/PublicIAPages.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/PublicVerificationPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/pages/SdJwtVerificationPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/TrustRegistryPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/VerifiableCredentialApiPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/WhatIsCredentialVerificationPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/WhatIsDigitalCredentialPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/WhatIsMartyProtocolPage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/pages/WhatIsOpenBadgePage.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/components/preview/PreviewApplicationPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/preview/PreviewCatalogPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/preview/PreviewCredentialPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/preview/PreviewFlowPage.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/preview/PreviewNavigation.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/trust/adapters/api/TrustApiAdapter.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/trust/adapters/parsing/CertParser.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/trust/adapters/parsing/__fixtures__/chain.p7b",
+      "role": "unused-test-support"
+    },
+    {
+      "source": "ui/src/components/trust/adapters/parsing/__fixtures__/one.pem",
+      "role": "unused-test-support"
+    },
+    {
+      "source": "ui/src/components/trust/adapters/parsing/__fixtures__/two.pem",
+      "role": "unused-test-support"
+    },
+    {
+      "source": "ui/src/components/vendor/RevocationManager.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/WebhookManager.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/__tests__/APIKeyManager.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/verification/VerificationResultSummary.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/verification/VerificationSessionManager.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/verification/steps/PolicySelectStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/components/vendor/verification/steps/QRDisplayStep.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/config/__tests__/dashboardRules.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/config/__tests__/navigation.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/contexts/ConsoleContext.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/contexts/NotificationContext.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/data/marketingContent.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/generated/demoManifests.generated.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/generated/demoWalletSchema.generated.json",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useAsyncData.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useDashboardData.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useOrganizationDefaults.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/usePermissions.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useSSE.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useWalletPreferences.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/__tests__/useWizard.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/useBrowserEntry.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/hooks/useDialog.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/apiKeyCreationContinuation.scope.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/apiKeysApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/apiServiceCompatibility.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/applicantApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/applicationTemplatesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/associationConsent.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/auditApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/complianceProfilesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/credentialTemplateNormalization.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/credentialTemplatePatch.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/credentialTemplateVersionOperation.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/credentialTransport.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/credentialsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/dashboardApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/deliveryDestinationsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/deploymentProfilesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/devicesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/flowsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/healthApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/idempotency.scope.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/identityProviderApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/issuerIdentitiesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/issuerIdentityContinuation.scope.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/loadScopedCatalog.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/membershipApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/notificationsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/orgScopedGuards.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/organizationGuardCompatibility.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/policyCreationDependencies.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/policyCreationOperation.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/policySetsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/preferencesApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/presentationPolicyApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/profilePicturePayload.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/protocolSupportApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/rbacApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/readinessGatewaySmoke.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/signingKeysRegistrationApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/sseService.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/subscriptionsApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/teamApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/templateCreationOperation.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/templateReadbackSchema.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/trustProfileContinuation.scope.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/walletRegistryApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/__tests__/webhooksApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/demoManifestService.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/services/demoManifestService.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/services/platformDemoScenarios.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/services/publicVerificationApi.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/test/focusEnvironmentBaseline.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/test/i18nTestSetup.js",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/test/mocks/browser.ts",
+      "role": "unused-test-support"
+    },
+    {
+      "source": "ui/src/utils/__tests__/walletSelectionRestrictions.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/utils/officialReferences.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/utils/runtimeConfig.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/variants/__tests__/publicConfig.selfhost.tester.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/variants/__tests__/publicSite.public.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/variants/__tests__/publicSite.selfhost.test.tsx",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/variants/__tests__/selfhostBuild.test.ts",
+      "role": "unselected-test"
+    },
+    {
+      "source": "ui/src/variants/marketingRoutes.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/variants/publicSite.public.jsx",
+      "role": "accepted-application-exclusion"
+    },
+    {
+      "source": "ui/src/website.jsx",
+      "role": "accepted-application-exclusion"
+    }
+  ],
+  "generated_state": [
+    "ui/node_modules",
+    "ui/dist-application"
+  ],
+  "test_profile": {
+    "config": "vitest.application.config.ts",
+    "files": [
+      "src/__tests__/startupRecovery.test.ts",
+      "src/application/routing/appHandoff.test.ts",
+      "src/application/routing/applyEntry.test.ts",
+      "src/application/routing/authCallback.test.ts",
+      "src/application/routing/guardPolicy.test.ts",
+      "src/application/routing/landingEntry.test.ts",
+      "src/application/routing/loginEntry.test.ts",
+      "src/application/routing/publicEntry.test.ts",
+      "src/application/session/authSession.test.ts",
+      "src/application/session/consoleSession.test.ts",
+      "src/apps/public/PublicRoutes.test.tsx",
+      "src/apps/console/ConsoleRoutes.test.tsx",
+      "src/apps/shared/AppShell.publicEntry.test.tsx",
+      "src/apps/shared/WebSurfaceBoundary.test.tsx",
+      "src/contexts/__tests__/PublicEntryAuth.test.tsx",
+      "src/components/__tests__/AuthCallback.integration.test.tsx",
+      "src/components/__tests__/AuthAvailability.integration.test.tsx",
+      "src/components/__tests__/ProtectedRoute.test.tsx",
+      "src/components/__tests__/BrowserRedirect.test.tsx",
+      "src/components/navigation/ConsoleHeaderBar.test.tsx",
+      "src/components/navigation/SidebarNavigation.test.tsx",
+      "src/components/navigation/SidebarNavigationApplicant.test.tsx",
+      "src/services/__tests__/authApi.test.ts",
+      "tests/application/surface-profile.test.tsx"
+    ],
+    "shared_contracts": [
+      "contracts/organization-domain-behavior.json"
+    ]
+  },
+  "public_files": [
+    ".well-known/ai-plugin.json",
+    "apple-touch-icon.png",
+    "config.json",
+    "favicon-96x96.png",
+    "favicon.ico",
+    "favicon.svg",
+    "locales/de/applicant.json",
+    "locales/de/common.json",
+    "locales/de/console.json",
+    "locales/de/errors.json",
+    "locales/de/forms.json",
+    "locales/de/onboarding.json",
+    "locales/de/vendor.json",
+    "locales/en/applicant.json",
+    "locales/en/common.json",
+    "locales/en/console.json",
+    "locales/en/errors.json",
+    "locales/en/forms.json",
+    "locales/en/onboarding.json",
+    "locales/en/vendor.json",
+    "locales/es/applicant.json",
+    "locales/es/common.json",
+    "locales/es/console.json",
+    "locales/es/errors.json",
+    "locales/es/forms.json",
+    "locales/es/onboarding.json",
+    "locales/es/vendor.json",
+    "locales/fr/applicant.json",
+    "locales/fr/common.json",
+    "locales/fr/console.json",
+    "locales/fr/errors.json",
+    "locales/fr/forms.json",
+    "locales/fr/onboarding.json",
+    "locales/fr/vendor.json",
+    "locales/ja/applicant.json",
+    "locales/ja/common.json",
+    "locales/ja/console.json",
+    "locales/ja/errors.json",
+    "locales/ja/forms.json",
+    "locales/ja/onboarding.json",
+    "locales/ja/vendor.json",
+    "locales/nl/applicant.json",
+    "locales/nl/common.json",
+    "locales/nl/console.json",
+    "locales/nl/errors.json",
+    "locales/nl/forms.json",
+    "locales/nl/onboarding.json",
+    "locales/nl/vendor.json",
+    "logo192.png",
+    "logo512.png",
+    "manifest.json",
+    "runtime-config.js",
+    "startup.js",
+    "test-harness.html"
+  ],
+  "shared_contracts": [
+    "contracts/organization-domain-behavior.json",
+    "contracts/web-surface-routes.json",
+    "contracts/website-source-ownership.json"
+  ],
+  "retained_inactive_inputs": [
+    {
+      "from": "ui/src/components/pages/index.js",
+      "disposition": "retain byte-for-byte; inactive export barrel",
+      "edges": 12,
+      "reason": "Twelve re-exports target already-omitted website modules; no path from selected public/console entrypoints or the 24 selected tests."
+    },
+    {
+      "from": "ui/src/utils/analytics.example.js",
+      "disposition": "retain byte-for-byte; inactive example",
+      "specifier": "./utils/analytics",
+      "resolved_missing_path": "ui/src/utils/utils/analytics",
+      "reason": "No incoming selected build/test/application edge; the example is not repaired or pruned in this package batch."
+    },
+    {
+      "from": "ui/src/wasm/biometricsWasm.js",
+      "disposition": "retain byte-for-byte; inactive optional bridge",
+      "specifier": "./marty-biometrics-pkg/marty_biometrics.js",
+      "reason": "No incoming selected application/test edge; variable @vite-ignore import is caught and returns null if its separately built optional package is absent. This is separate from the mandatory SDK WASM proven by M24."
+    }
+  ],
+  "scope": {
+    "preserve_all_accepted_non_test_source_and_stories": true,
+    "source_ownership_audit_complete": false,
+    "package_graph_minimized": false,
+    "runtime_or_release_tooling_shipped": false
+  }
+}

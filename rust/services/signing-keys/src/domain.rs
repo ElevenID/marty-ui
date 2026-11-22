@@ -5,14 +5,13 @@ pub(crate) fn explicit_format_allowed(
     formats: Option<&serde_json::Value>,
     requested: &str,
 ) -> bool {
-    crate::profiles::protocol_wire_format(requested).as_deref() != Some("application/vc+jwt")
+    let wire = crate::profiles::protocol_wire_format(requested);
+    let explicit = matches!(wire.as_deref(), Some("application/vc+jwt"))
+        || wire.as_deref() == Some(marty_signing_grant::delegated_decision::WIRE_FORMAT);
+    !explicit
         || formats
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|values| {
-                values
-                    .iter()
-                    .any(|value| value.as_str() == Some("application/vc+jwt"))
-            })
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == wire.as_deref()))
 }
 
 /// The explicit profile must be usable by Core's signing and authentication path.

@@ -1,0 +1,105 @@
+{
+  "provenance": "Locally authored synthetic Gateway fixture. Digests independently computed with Python stdlib JSON sort_keys, compact separators and SHA-256; every key and string is ASCII and all numbers are safe integers. No upstream protocol fixture bytes.",
+  "command": {
+    "profile": "urn:marty:delegation-command:v1",
+    "command": "CREATE_GRANT",
+    "command_id": "55555555-5555-4555-8555-555555555555",
+    "terms": {
+      "grantor": {
+        "type": "USER",
+        "id": "urn:marty:user:22222222-2222-4222-8222-222222222222"
+      },
+      "subject": {
+        "type": "ORGANIZATION",
+        "id": "urn:marty:organization:11111111-1111-4111-8111-111111111111"
+      },
+      "delegate": {
+        "type": "SERVICE_ACCOUNT",
+        "id": "urn:test:synthetic-agent"
+      },
+      "binding": {
+        "method": "KEY",
+        "key_thumbprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "actions": [
+        "urn:test:review"
+      ],
+      "audiences": [
+        "urn:test:verifier"
+      ],
+      "resources": [
+        "urn:test:resource"
+      ],
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2026-01-01T01:00:00Z",
+      "subdelegation_allowed": false,
+      "constraints": {
+        "mode": "EXACT_OPERATION",
+        "request_profile": "urn:test:request",
+        "request_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  },
+  "result": {
+    "profile": "urn:marty:delegation-command-response:v1",
+    "original_command_id": "55555555-5555-4555-8555-555555555555",
+    "command_digest": "sha256:c5977cf7a624df31ed4abc6bab6dfa3fc3e383da825d45dfcfdfb1cc0a01e85e",
+    "recovered": false,
+    "result": {
+      "kind": "GRANT_SNAPSHOT",
+      "grant": {
+        "profile": "urn:marty:delegation-grant:v1",
+        "id": "44444444-4444-4444-8444-444444444444",
+        "organization_id": "11111111-1111-4111-8111-111111111111",
+        "authority": {
+          "mode": "MANAGED",
+          "issuer": {
+            "type": "ORGANIZATION",
+            "id": "urn:marty:organization:11111111-1111-4111-8111-111111111111"
+          },
+          "status_ref": "https://authority.example.invalid/status"
+        },
+        "terms": {
+          "grantor": {
+            "type": "USER",
+            "id": "urn:marty:user:22222222-2222-4222-8222-222222222222"
+          },
+          "subject": {
+            "type": "ORGANIZATION",
+            "id": "urn:marty:organization:11111111-1111-4111-8111-111111111111"
+          },
+          "delegate": {
+            "type": "SERVICE_ACCOUNT",
+            "id": "urn:test:synthetic-agent"
+          },
+          "binding": {
+            "method": "KEY",
+            "key_thumbprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "actions": [
+            "urn:test:review"
+          ],
+          "audiences": [
+            "urn:test:verifier"
+          ],
+          "resources": [
+            "urn:test:resource"
+          ],
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": "2026-01-01T01:00:00Z",
+          "subdelegation_allowed": false,
+          "constraints": {
+            "mode": "EXACT_OPERATION",
+            "request_profile": "urn:test:request",
+            "request_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        "status": "PENDING",
+        "revision": 1,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "terms_digest": "sha256:bc448ce8d86542880932614708b1cd83a1d4432b28a544db53f302e1c70ffeee"
+      }
+    }
+  }
+}

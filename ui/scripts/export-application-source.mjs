@@ -14,6 +14,15 @@ import {
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CONTRACT = 'contracts/application-source-export.json';
+// Source maps may evolve without changing the archive grammar. Each accepted
+// map, including the initial package, is pinned to exact reviewed bytes.
+const SOURCE_CONTRACTS = Object.freeze([
+  Object.freeze({ path: CONTRACT, sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41',
+    files: 581, test_files: 26, assertions: 321 }),
+  Object.freeze({ path: 'contracts/application-source-export-history/initial-v1.json',
+    sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad',
+    files: 575, test_files: 24, assertions: 296 }),
+]);
 export const APPLICATION_SOURCE_MANIFEST_PATH = 'application-source-origin.json';
 const MANIFEST_SCHEMA = 'marty.application-source-package/v1';
 const RECEIPT_SCHEMA = 'marty.application-source-package-producer/v1';
@@ -143,13 +152,15 @@ function sourceState(root) {
 }
 
 function validateContract(contract) {
+  const approved = SOURCE_CONTRACTS.find((entry) => entry.sha256 === hash(Buffer.from(`${JSON.stringify(contract, null, 2)}\n`)));
+  require(approved, 'Application source contract is not an approved current or historical map');
   keys(contract, ['schema', 'repository', 'source_boundary', 'manifest_path', 'inputs', 'omission_categories', 'omitted',
     'generated_state', 'test_profile', 'public_files', 'shared_contracts', 'retained_inactive_inputs', 'scope'], 'source export contract');
   require(contract.schema === 'marty.application-source-export/v1' && contract.repository === 'ElevenID/marty-ui'
     && contract.manifest_path === APPLICATION_SOURCE_MANIFEST_PATH, 'Unknown application source export contract');
   assert.deepEqual(contract.source_boundary.prefixes, ['ui/'], 'Unexpected application source boundary');
   assert.deepEqual(contract.generated_state, GENERATED, 'Unexpected generated-state exceptions');
-  require(Array.isArray(contract.inputs) && contract.inputs.length === 575, 'The reviewed application source map must contain 575 files');
+  require(Array.isArray(contract.inputs) && contract.inputs.length === approved.files, 'The reviewed application source map has changed');
   require(Array.isArray(contract.omitted) && contract.omitted.length > 0 && contract.omitted.length <= 2048,
     'Invalid application source omission list');
   const destinations = new Set(); const sources = new Map(); let previous = '';
@@ -180,7 +191,7 @@ function validateContract(contract) {
     previous = row.source; omitted.add(row.source);
   }
   for (const name of contract.source_boundary.additional_files) applicationSourcePath(name);
-  require(contract.test_profile.files.length === 24 && contract.public_files.length === 54 && contract.shared_contracts.length === 3,
+  require(contract.test_profile.files.length === approved.test_files && contract.public_files.length === 54 && contract.shared_contracts.length === 3,
     'The selected application test/public/contract boundary changed');
   for (const name of ['LICENSE', 'README.md', ...contract.shared_contracts, 'scripts/load-secrets-env.sh', 'scripts/ui-production-start.sh', 'ui/nginx.prod.conf',
     ...contract.test_profile.files.map((name) => `ui/${name}`), ...contract.public_files.map((name) => `ui/public/${name}`)]) {
@@ -194,6 +205,18 @@ function validateContract(contract) {
 }
 function contractInput(root = ROOT) {
   const value = read(root, CONTRACT, MAX_JSON); return { ...value, contract: validateContract(parseApplicationSourceJson(value.bytes)) };
+}
+function manifestContract(manifest) {
+  const approved = SOURCE_CONTRACTS.find((entry) => entry.sha256 === manifest?.contract?.sha256);
+  require(approved, 'Application source manifest selects an unapproved source contract');
+  const input = read(ROOT, approved.path, MAX_JSON);
+  require(hash(input.bytes) === approved.sha256, 'Approved application source contract bytes changed');
+  return { contract: validateContract(parseApplicationSourceJson(input.bytes)), approved };
+}
+export function applicationSourceTestPolicy(manifest) {
+  const { contract, approved } = manifestContract(manifest);
+  assert.deepEqual(manifest.test_profile, contract.test_profile, 'Application source test roster changed');
+  return { test_profile: contract.test_profile, assertions: approved.assertions };
 }
 function gitInput(root, relative, state) {
   const entry = state.files.get(relative);
@@ -260,7 +283,7 @@ function validateRecord(row, label) {
     && DIGEST.test(row.sha256) && ['100644', '100755'].includes(row.git_mode) && OID.test(row.blob_oid)
     && row.mode === (row.git_mode === '100755' ? 0o755 : 0o644), `Invalid ${label} byte/Git identity`);
 }
-export function validateApplicationSourcePackageManifest(manifest, { contract = contractInput().contract } = {}) {
+export function validateApplicationSourcePackageManifest(manifest, { contract = manifestContract(manifest).contract } = {}) {
   validateContract(contract);
   keys(manifest, ['schema', 'fixture', 'source', 'archive', 'contract', 'files', 'source_inventory_sha256', 'route_contract', 'test_profile',
     'contracts', 'dependency_profile', 'substitutions', 'omission_policy', 'retained_inactive_inputs', 'qualification'], 'source manifest');
@@ -531,16 +554,20 @@ export function restoreApplicationSourcePackage({ archivePath, manifestPath, exp
     source_inventory_sha256: manifest.source_inventory_sha256 };
 }
 
+async function main() {
+  const names = new Map([['--archive', 'archivePath'], ['--manifest', 'manifestPath'], ['--report', 'reportPath'], ['--baseline-report', 'baselineReportPath']]);
+  const args = process.argv.slice(2); const options = {};
+  while (args.length) {
+    const name = names.get(args.shift()); require(name && !Object.hasOwn(options, name) && args.length, 'Unknown, repeated or incomplete source export option');
+    options[name] = args.shift();
+  }
+  require(Object.keys(options).length === names.size, 'Source export requires --archive, --manifest, --report and --baseline-report');
+  const result = await exportApplicationSourcePackage(options);
+  console.log(JSON.stringify({ status: result.status, source_commit: result.source_commit, archive: result.archive, manifest: result.manifest }));
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
-  try {
-    const names = new Map([['--archive', 'archivePath'], ['--manifest', 'manifestPath'], ['--report', 'reportPath'], ['--baseline-report', 'baselineReportPath']]);
-    const args = process.argv.slice(2); const options = {};
-    while (args.length) {
-      const name = names.get(args.shift()); require(name && !Object.hasOwn(options, name) && args.length, 'Unknown, repeated or incomplete source export option');
-      options[name] = args.shift();
-    }
-    require(Object.keys(options).length === names.size, 'Source export requires --archive, --manifest, --report and --baseline-report');
-    const result = await exportApplicationSourcePackage(options);
-    console.log(JSON.stringify({ status: result.status, source_commit: result.source_commit, archive: result.archive, manifest: result.manifest }));
-  } catch (error) { console.error(`Application source export failed: ${error.message}`); process.exitCode = 1; }
+  // The planner imports the closure, which imports this module's policy.
+  // Complete module evaluation before awaiting that CLI work.
+  main().catch((error) => { console.error(`Application source export failed: ${error.message}`); process.exitCode = 1; });
 }

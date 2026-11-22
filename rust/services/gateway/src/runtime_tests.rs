@@ -56,6 +56,9 @@ async fn object_admission_keeps_body_limit_and_json_object_errors_distinct() {
 include!("../tests/support/template_issuer_options_behavior.rs");
 include!("../tests/support/organization_defaults_behavior.rs");
 include!("../tests/support/ob3_client_contract_behavior.rs");
+include!("../tests/support/agent_administration_behavior.rs");
+include!("../tests/support/delegation_command_behavior.rs");
+include!("../tests/support/agent_enrollment_behavior.rs");
 use std::{
     collections::BTreeSet,
     sync::atomic::{AtomicBool, Ordering},
@@ -220,6 +223,8 @@ fn identity(kind: &str) -> Option<GatewayIdentity> {
             "api_key:key-1".into()
         },
         authentication_time_unix: None,
+        expires_at_unix: None,
+        session_observed_at_unix: None,
         non_impersonated_session: None,
         user_email: None,
         user_domain: None,
@@ -3500,6 +3505,8 @@ fn scoped_api_key_forwards_only_the_authorized_permission() {
         source: AuthenticationSource::ApiKey,
         user_id: "key-owner".into(),
         authentication_time_unix: None,
+        expires_at_unix: None,
+        session_observed_at_unix: None,
         non_impersonated_session: None,
         user_email: None,
         user_domain: None,
@@ -3548,6 +3555,8 @@ fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
         source: AuthenticationSource::Session,
         user_id: "user-1".into(),
         authentication_time_unix: None,
+        expires_at_unix: None,
+        session_observed_at_unix: None,
         non_impersonated_session: None,
         user_email: None,
         user_domain: None,

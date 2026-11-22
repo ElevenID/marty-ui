@@ -130,6 +130,10 @@ pub struct GatewayRuntimeState {
     pub mdoc_dsc_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
+    pub agent_admin_enabled: bool,
+    pub delegation_approval_enabled: bool,
+    pub delegation_commands_enabled: bool,
+    pub agent_enrollment_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
     pub device_registration_gateway_key: Option<String>,
@@ -249,6 +253,10 @@ impl GatewayRuntimeState {
             mdoc_dsc_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
+            agent_admin_enabled: false,
+            delegation_approval_enabled: false,
+            delegation_commands_enabled: false,
+            agent_enrollment_enabled: false,
             passport_tenant_keys: None,
             service_token: None,
             device_registration_gateway_key: None,
@@ -263,6 +271,63 @@ impl GatewayRuntimeState {
     pub fn with_client_ip_observation(mut self, enabled: bool) -> Self {
         self.observe_client_ip = enabled;
         self
+    }
+
+    pub fn with_agent_administration(
+        mut self,
+        directory: bool,
+        approval: bool,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if (directory || approval)
+            && self
+                .service_token
+                .as_ref()
+                .is_none_or(|token| token.len() < 32)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "candidate agent administration requires a service token".into(),
+            ));
+        }
+        self.agent_admin_enabled = directory;
+        self.delegation_approval_enabled = approval;
+        Ok(self)
+    }
+
+    pub fn with_delegation_commands(
+        mut self,
+        enabled: bool,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if enabled
+            && self
+                .service_token
+                .as_ref()
+                .is_none_or(|token| token.len() < 32)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "candidate delegation commands require a service token".into(),
+            ));
+        }
+        self.delegation_commands_enabled = enabled;
+        Ok(self)
+    }
+
+    pub fn with_agent_enrollment(
+        mut self,
+        enabled: bool,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if enabled
+            && (!self.agent_admin_enabled
+                || self
+                    .service_token
+                    .as_ref()
+                    .is_none_or(|token| token.len() < 32))
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "candidate enrollment requires agent administration and a service token".into(),
+            ));
+        }
+        self.agent_enrollment_enabled = enabled;
+        Ok(self)
     }
 
     pub fn with_service_token(
@@ -611,6 +676,24 @@ async fn authentication_middleware(
     // Only gateway-authenticated identity may supply downstream actor attribution.
     // Some upstreams prefer this legacy alias over the trusted X-User-ID header.
     request.headers_mut().remove("x-authenticated-user-id");
+    if request.method() == "OPTIONS"
+        && crate::delegation_commands::is_namespace(request.uri().path())
+    {
+        return crate::delegation_commands::preflight(
+            &state,
+            request.uri().path(),
+            request.headers(),
+        );
+    }
+    if request.method() == "OPTIONS"
+        && crate::agent_administration::is_namespace(request.uri().path())
+    {
+        return crate::agent_administration::preflight(
+            &state,
+            request.uri().path(),
+            request.headers(),
+        );
+    }
     let Some(method) = http_method(request.method().as_str()) else {
         return error_response(
             405,
@@ -819,6 +902,8 @@ async fn entity_tag_middleware(
 ) -> Response {
     if request.uri().path() == "/v1/notifications/events/push"
         || crate::public_verification::is_public_path(request.uri().path())
+        || crate::agent_administration::is_namespace(request.uri().path())
+        || crate::delegation_commands::is_namespace(request.uri().path())
     {
         return next.run(request).await;
     }
@@ -876,6 +961,18 @@ async fn tenant_authorization_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    if crate::delegation_commands::is_namespace(request.uri().path()) {
+        return match crate::delegation_commands::admit(&state, request).await {
+            Ok(request) => next.run(request).await,
+            Err(response) => response,
+        };
+    }
+    if crate::agent_administration::is_namespace(request.uri().path()) {
+        return match crate::agent_administration::admit(&state, request).await {
+            Ok(request) => next.run(request).await,
+            Err(response) => response,
+        };
+    }
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
         || crate::external_association::is_namespace(request.uri().path())
@@ -1120,6 +1217,11 @@ async fn idempotency_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    if crate::agent_administration::is_namespace(request.uri().path())
+        || crate::delegation_commands::is_namespace(request.uri().path())
+    {
+        return next.run(request).await;
+    }
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
         || crate::external_association::is_namespace(request.uri().path())
@@ -1294,6 +1396,12 @@ async fn proxy_handler(
     State(state): State<Arc<GatewayRuntimeState>>,
     request: Request,
 ) -> Response {
+    if crate::delegation_commands::is_namespace(request.uri().path()) {
+        return crate::delegation_commands::dispatch(state, request).await;
+    }
+    if crate::agent_administration::is_namespace(request.uri().path()) {
+        return crate::agent_administration::dispatch(state, request).await;
+    }
     match request.uri().path() {
         "/health" => {
             return (
@@ -1303,12 +1411,23 @@ async fn proxy_handler(
                 .into_response();
         }
         "/openapi.json" => {
-            return Json(
-                GatewayContract::load()
-                    .expect("validated embedded gateway contract")
-                    .openapi_document(&state.release_identity.release_version),
-            )
-            .into_response();
+            let mut document = GatewayContract::load()
+                .expect("validated embedded gateway contract")
+                .openapi_document(&state.release_identity.release_version);
+            crate::agent_administration::extend_openapi(
+                &mut document,
+                state.agent_admin_enabled,
+                state.delegation_approval_enabled,
+            );
+            crate::agent_administration::extend_enrollment_openapi(
+                &mut document,
+                state.agent_enrollment_enabled,
+            );
+            crate::delegation_commands::extend_openapi(
+                &mut document,
+                state.delegation_commands_enabled,
+            );
+            return Json(document).into_response();
         }
         "/v1/protocol-support" => {
             return Json(discovery::protocol_support_catalog()).into_response();
