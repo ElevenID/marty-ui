@@ -20,6 +20,8 @@ import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
 import OrgConsoleUnavailable from '../../components/console/OrgConsoleUnavailable';
 import PresentationPolicyPage from '../../components/console/policies/PresentationPolicyPage';
+import AgentDirectoryPage from '../../components/console/agents/AgentDirectoryPage';
+import DelegationApprovalPage from '../../components/console/agents/DelegationApprovalPage';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
@@ -180,6 +182,8 @@ function ConsoleRoutes() {
         }
       >
         <Route index element={<ConsoleDashboard />} />
+        <Route path="agents" element={<AgentDirectoryPage />} />
+        <Route path="delegation-grants/:grantId/approve" element={<DelegationApprovalPage />} />
         <Route path="design" element={<Navigate to="/console/org/templates/credentials" replace />} />
         <Route path="govern" element={<Navigate to="/console/org/trust/profiles" replace />} />
         <Route path="connect" element={<Navigate to="/console/org/deploy" replace />} />

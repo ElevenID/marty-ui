@@ -44,6 +44,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
+import { isAgentTrustFeatureEnabled } from '../../application/agentTrustFeatures';
 
 const DRAWER_WIDTH = 260;
 const DRAWER_WIDTH_COLLAPSED = 72;
@@ -296,6 +297,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
     const filterByPermission = (list) =>
       list
         .filter((item) => {
+          if (item.feature && !isAgentTrustFeatureEnabled(item.feature)) return false;
           if (!item.requiredPermission) return true;
           const { resource, action } = item.requiredPermission;
           return !permissionsLoading && !permissionError && can(resource, action);

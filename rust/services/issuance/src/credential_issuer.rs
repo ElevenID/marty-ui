@@ -24,6 +24,7 @@ pub struct HttpIssuerContextResolver {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
+    native_owner: bool,
 }
 
 impl std::fmt::Debug for HttpIssuerContextResolver {
@@ -42,7 +43,32 @@ impl HttpIssuerContextResolver {
         api_key: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, CredentialIssuanceError> {
+        Self::with_transport(base_url, api_key, timeout, false)
+    }
+
+    /// Connect directly to the Signing Keys owner over HTTPS. Existing callers
+    /// of `new` retain the gateway compatibility query transport.
+    pub fn new_for_native_owner(
+        origin: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, CredentialIssuanceError> {
+        Self::with_transport(
+            native_signing_owner_base_url(origin)?,
+            api_key,
+            timeout,
+            true,
+        )
+    }
+
+    fn with_transport(
+        base_url: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        native_owner: bool,
+    ) -> Result<Self, CredentialIssuanceError> {
         let client = Client::builder()
+            .https_only(native_owner)
             .timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -53,6 +79,7 @@ impl HttpIssuerContextResolver {
             client,
             base_url,
             api_key: api_key.map(str::to_owned),
+            native_owner,
         })
     }
 
@@ -102,20 +129,14 @@ impl HttpIssuerContextResolver {
         algorithm: &str,
     ) -> Result<Value, CredentialIssuanceError> {
         assert!(operation != crate::signing_error_detail::SigningOperation::Sign);
-        let mut query = vec![
-            ("organization_id", organization_id),
-            ("issuer_did", issuer_did),
-            ("credential_format", credential_format),
-            ("key_purpose", key_purpose),
-            ("algorithm", algorithm),
-        ];
-        if let Some(issuer_mode) = issuer_mode {
-            query.push(("issuer_mode", issuer_mode));
-        }
-        let mut request = self.client.get(self.endpoint()?).query(&query);
-        if let Some(api_key) = self.api_key.as_deref() {
-            request = request.header("X-API-Key", api_key);
-        }
+        let request = self.context_request(
+            organization_id,
+            issuer_did,
+            issuer_mode,
+            credential_format,
+            key_purpose,
+            algorithm,
+        )?;
         let response = request.send().await.map_err(|error| {
             issuer_error(format!("DID issuer context resolution failed: {error}"))
         })?;
@@ -139,8 +160,82 @@ impl HttpIssuerContextResolver {
                 "DID issuer context resolution failed (HTTP {status})"
             )));
         }
+        if self.native_owner {
+            validate_native_context(&context, organization_id, issuer_mode)?;
+        }
         Ok(context)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn context_request(
+        &self,
+        organization_id: &str,
+        issuer_did: &str,
+        issuer_mode: Option<&str>,
+        credential_format: &str,
+        key_purpose: &str,
+        algorithm: &str,
+    ) -> Result<reqwest::RequestBuilder, CredentialIssuanceError> {
+        let mut query = vec![
+            ("organization_id", organization_id),
+            ("issuer_did", issuer_did),
+            ("credential_format", credential_format),
+            ("key_purpose", key_purpose),
+            ("algorithm", algorithm),
+        ];
+        if let Some(issuer_mode) = issuer_mode {
+            query.push(("issuer_mode", issuer_mode));
+        }
+        let mut request = if self.native_owner {
+            self.client.post(self.endpoint()?).json(&json!({
+                "organization_id":organization_id,"issuer_did":issuer_did,
+                "credential_format":credential_format,"key_purpose":key_purpose,
+                "algorithm":algorithm,
+            }))
+        } else {
+            self.client.get(self.endpoint()?).query(&query)
+        };
+        if let Some(api_key) = self.api_key.as_deref() {
+            request = request.header("X-API-Key", api_key);
+        }
+        Ok(request)
+    }
+}
+
+pub(crate) fn native_signing_owner_base_url(
+    mut origin: Url,
+) -> Result<Url, CredentialIssuanceError> {
+    if origin.scheme() != "https"
+        || origin.host_str().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || !matches!(origin.path(), "" | "/")
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        return Err(issuer_error(
+            "native Signing Keys requires an unambiguous HTTPS origin",
+        ));
+    }
+    origin.set_path("/internal/compat");
+    Ok(origin)
+}
+
+pub(crate) fn validate_native_context(
+    context: &Value,
+    organization: &str,
+    issuer_mode: Option<&str>,
+) -> Result<(), CredentialIssuanceError> {
+    if context["organization_id"].as_str() != Some(organization)
+        || context["issuer_profile"]["organization_id"].as_str() != Some(organization)
+        || issuer_mode
+            .is_some_and(|mode| context["issuer_profile"]["issuer_mode"].as_str() != Some(mode))
+    {
+        return Err(issuer_error(
+            "native Signing Keys returned a different issuer ownership binding",
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait]

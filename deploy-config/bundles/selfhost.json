@@ -27,6 +27,7 @@
     "docs/hosting-cloudflare-addon.md",
     "docs/installer-external-oidc.md",
     "docs/installer-external-postgres.md",
+    "docs/supabase-deployment-runbook.md",
     "docs/notification-email.md",
     "docker/secrets/selfhost.example/notification_resend_api_key",
     "docs/installer-http01-host-bridge.md",
@@ -166,6 +167,7 @@
     "scripts/selfhost_windows_renewal_native.py",
     "scripts/selfhost_windows_selection.py",
     "scripts/selfhost_windows_website.py",
+    "scripts/selfhost_windows_website_plan.py",
     "scripts/selfhost_windows_model.py",
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",
@@ -228,6 +230,7 @@
     "scripts/verify_installer_provenance.py",
     "scripts/web_auth.py",
     "scripts/website_producer_policy.py",
+    "scripts/website_deployment_model.py",
     "scripts/website_provenance.py",
     "scripts/website_release.py"
   ],

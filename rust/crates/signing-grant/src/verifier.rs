@@ -12,7 +12,7 @@ use crate::{
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
 
-const ORIGINS: [SigningOrigin; 6] = SigningOrigin::ALL;
+const ORIGINS: [SigningOrigin; 6] = SigningOrigin::DEFAULT;
 
 #[derive(Clone)]
 pub struct GrantVerifier {
@@ -35,11 +35,26 @@ impl GrantVerifier {
         verify_token_file: PathBuf,
         replay: RedisGrantReplayStore,
     ) -> Result<Self, TransitGrantError> {
+        Self::for_managed_openbao_with_delegated_decisions(
+            endpoint,
+            verify_token_file,
+            replay,
+            false,
+        )
+    }
+
+    pub fn for_managed_openbao_with_delegated_decisions(
+        endpoint: &str,
+        verify_token_file: PathBuf,
+        replay: RedisGrantReplayStore,
+        enabled: bool,
+    ) -> Result<Self, TransitGrantError> {
         if !verify_token_file.is_absolute() {
             return Err(TransitGrantError::InvalidConfig);
         }
         let clients = ORIGINS
             .into_iter()
+            .chain(enabled.then_some(SigningOrigin::DelegatedDecision))
             .map(|origin| {
                 TransitGrantClient::for_origin(endpoint, origin)
                     .map(|client| (origin, Arc::new(client) as Arc<dyn GrantMac>))
@@ -55,9 +70,14 @@ impl GrantVerifier {
     pub(crate) fn for_aws(
         config: &crate::configuration::AwsGrantConfiguration,
         replay: RedisGrantReplayStore,
+        delegated_decisions_enabled: bool,
     ) -> Result<Self, GrantProviderError> {
+        if delegated_decisions_enabled && !config.is_configured(SigningOrigin::DelegatedDecision) {
+            return Err(GrantProviderError::InvalidConfig);
+        }
         let clients = ORIGINS
             .into_iter()
+            .chain(delegated_decisions_enabled.then_some(SigningOrigin::DelegatedDecision))
             .filter(|origin| config.is_configured(*origin))
             .map(|origin| {
                 config

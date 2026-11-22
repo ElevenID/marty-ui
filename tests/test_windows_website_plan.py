@@ -107,6 +107,48 @@ def test_first_cutover_preserves_combined_product_and_changes_only_declared_mode
                                         (planned['before'], staged, split))))
 
 
+@pytest.mark.parametrize('fault', [None, 'missing-digest', 'other-platform', 'anonymous-volume', 'wrong-route-label'])
+def test_owner_observation_uses_exact_signed_cache_and_engine_route_path(planned, monkeypatch, fault):
+    release = planned['website_release']
+    metadata = release['image_metadata']
+    image = release['image']['uri'] + '@' + release['image']['digest']
+    commerce = metadata['commerce_extension']['source_sha']
+    row = {'Os': 'linux', 'Architecture': 'amd64', 'Id': planned['website_image_id'], 'RepoDigests': [image],
+           'Config': {'ExposedPorts': {'80/tcp': {}}, 'Labels': {
+               'org.opencontainers.image.source': 'https://github.com/' + plan.ui.COMMERCE_REPOSITORY,
+               'org.opencontainers.image.revision': commerce,
+               'org.opencontainers.image.version': metadata['revision'],
+               'com.elevenid.website.repository': metadata['repository'],
+               'com.elevenid.website.source-sha': metadata['source_sha'],
+               'com.elevenid.website.commerce-source-sha': commerce,
+               'com.elevenid.website.audience': 'production',
+               'com.elevenid.website.pages': 'full',
+               'com.elevenid.website.route-contract-sha256': metadata['route_contract']['sha256'],
+           }}}
+    if fault == 'missing-digest': row['RepoDigests'] = []
+    elif fault == 'other-platform': row['Architecture'] = 'arm64'
+    elif fault == 'anonymous-volume': row['Config']['Volumes'] = {'/html': {}}
+    elif fault == 'wrong-route-label': row['Config']['Labels']['com.elevenid.website.route-contract-sha256'] = 'different'
+
+    class Docker:
+        def json(self, args):
+            assert args == ['image', 'inspect', image]
+            return [row]
+
+    monkeypatch.setattr(plan.product.renewal, 'namespace_entry_exists', lambda _path: False)
+    inputs = {key: value for key, value in planned.items() if key not in {'website_image_id', 'route_runtime_mount'}}
+    if fault:
+        with pytest.raises(ValueError):
+            plan.from_observation(**inputs, docker=Docker())
+        return
+    result = plan.from_observation(**inputs, docker=Docker())
+    assert result['route_runtime_mount']['Source'] == (
+        '/run/desktop/mnt/host/c/Marty/production/windows-website-' + 'a'*32 + '/routes')
+    assert result['states']['combined']['data_sha256'] == planned['anchor']['data_sha256']
+    assert result['states']['combined']['model_sha256'] == planned['anchor']['model_sha256']
+    assert not any(result['qualification'].values())
+
+
 def test_real_compose_normalization_preserves_the_declared_first_cutover_delta(planned, tmp_path):
     """Source proposal hashes do not stand in for normalized Compose identities."""
     proposed = propose(planned)

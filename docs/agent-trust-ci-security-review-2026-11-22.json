@@ -1,0 +1,723 @@
+{
+  "report_format_version": 1,
+  "report_id": "agent-trust-ci-security-review-2026-11-22",
+  "recorded_at_utc": "2026-11-22T08:07:53.340567+00:00",
+  "status": "READ_ONLY_TRIAGE_PREEXISTING_ALERTS_REMAIN_OPEN",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "pull_request": 1994,
+    "reviewed_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+    "codeql_pull_request_merge_commit": "74fdefcd03bf2f126cb12f650b1023ef05dfa84a",
+    "accepted_main_comparison": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+    "reviewed_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+    "query_source_commit": "ceeaafac4e629e0e39de04d40c719d7d18b4b612"
+  },
+  "trigger": {
+    "check_url": "https://github.com/ElevenID/marty-ui/runs/137137306398",
+    "observed_conclusion": "failure",
+    "reported_security_alerts": {
+      "critical": 2,
+      "high": 1
+    },
+    "successful_analysis_upload_does_not_mean_alerts_pass": true
+  },
+  "summary": [
+    "Both deserialization sinks predate this PR and are unchanged from accepted main. The inspected production paths use fixed closed DTOs, the locked 2,097,152-byte HTTP body bound, Serde recursion budget 128 and existing request/domain checks. No arbitrary-code, polymorphic-gadget or unbounded-request exploit was demonstrated. This is not a load-test or denial-of-service-immunity claim.",
+    "The hashing finding traces the result of normal API-key creation, not a human-chosen password. The checked production admission generates 43 random alphanumeric token characters; SHA-256 supplies the existing indexed lookup/verifier. CodeQL classifies create_api_key output as password through its naming heuristic. The implementation is unchanged from main, where the alert was already open.",
+    "The verification handler retains unresolved hardening opportunities around duplicate-field collapse in Value, unnecessary nested allocation within existing caps and organization-ID validation after authorization-provider dispatch. No broader extractor/error-contract or token-format migration is included in this qualification correction.",
+    "All three alerts remain open. No rule, model, suppression, alert disposition, check, approval or merge requirement was changed. The normal protected checks and merge queue remain authoritative; this assessment does not create a green CodeQL result."
+  ],
+  "browser_observation": {
+    "purpose": "Read actual alert annotations, source-to-sink paths, query references and history after the GitHub connector rejected unsupported annotation endpoints.",
+    "mutations": false,
+    "alerts_324_326_first_observed_commit": "f81bf70f867569db97f73b06dbaef7813e89118b",
+    "alerts_324_326_prior_pull_request": 2010,
+    "alert_138_prior_pull_request": 814,
+    "alert_138_already_open_on_main": true,
+    "scope_limit": "One actual path was read for each alert; source review covers the checked-in callers. Unseen duplicate UI paths are not claimed as separately inspected."
+  },
+  "export_encoding": "Each embedded data object preserves its original export key order. UTF-8 JSON with indent=2 and a final LF reproduces its recorded byte count and SHA-256.",
+  "assessments": [
+    {
+      "alert_number": 324,
+      "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/324",
+      "original_export": {
+        "file_name": "alert-324-assessment.json",
+        "bytes": 13802,
+        "sha256": "3b32a51b3fb28dd9a188e94db3b30b1b73033bed9200a49100e7d6c8baa7d338"
+      },
+      "data": {
+        "schema_version": 1,
+        "assessment_at_utc": "2026-11-22T08:05:17.228083+00:00",
+        "alert": {
+          "number": 324,
+          "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/324",
+          "rule": "rust/unsafe-deserialization",
+          "reported_severity": "critical",
+          "query_security_severity": 9.8,
+          "sink_path": "rust/services/flow/src/api.rs",
+          "sink_line": 29,
+          "reported_path_count": 12,
+          "browser_observation_source": "Root agent read the authenticated GitHub alert page; connector annotations/code-scanning endpoints are unsupported.",
+          "first_detected_reported": "2026-11-20",
+          "first_detected_pr_reported": 2010,
+          "first_detected_commit_reported": "f81bf70f867569db97f73b06dbaef7813e89118b",
+          "current_pr_merge_reported": "74fdefcd"
+        },
+        "source": {
+          "candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "accepted_main": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+          "current_head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+          "rust_worktree_clean": true,
+          "api_file_identical_to_accepted_main": true,
+          "api_blob_on_both": "beff040abd70a2e47489f950194644a3469cb4da",
+          "files": {
+            "rust/Cargo.lock": {
+              "sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+              "git_blob": "8a24e82b2254fabeb5ef126ef0919862709b405f"
+            },
+            "rust/Cargo.toml": {
+              "sha256": "48071dfa08689e0c47fd263fbc4580f2f8d5711e088898b383cdd1a40dd3ef3a",
+              "git_blob": "d4190f6db6c27cd03c6f97d498a009897f19aa1d"
+            },
+            "rust/services/flow/src/api.rs": {
+              "sha256": "9ba46df43f3b35d6794f2ecffbfeba2dfb365e5656639d877813b33f59ed2303",
+              "git_blob": "beff040abd70a2e47489f950194644a3469cb4da"
+            },
+            "rust/services/flow/src/domain.rs": {
+              "sha256": "9282ba42e33b0936e769a54d8a6488d4c4e2348f65df0c11b8db1e1b92939177",
+              "git_blob": "fb28b6290c9b0c4e0c41a66e0d41d0fd818b1509"
+            },
+            "rust/services/flow/src/http_application.rs": {
+              "sha256": "db365930ac45d4a2f5375c0df465b55fd9a5422bf006f29715ebc569e350aab3",
+              "git_blob": "2726f46a9a4ef54c8263870f04c317beb888b9c4"
+            },
+            "rust/services/flow/src/http_read.rs": {
+              "sha256": "19bad3d672065b08cef389f7a28ba4066bf7b1eb4a6af824efb8dfd0e2927f56",
+              "git_blob": "08a7b87c08a34a20e0ed0cbfbf26a529ed35f1f1"
+            },
+            "rust/services/flow/src/http_verification.rs": {
+              "sha256": "4ddef7a07b1ed9f6b6cd7afb3537c5286521b19d3588ee9f18c0e20ac7b9f652",
+              "git_blob": "14de46639cc4e5c102180388deef32f758d09613"
+            },
+            "rust/services/flow/src/main.rs": {
+              "sha256": "fbef406bbbf4127d7abd2ce9fb26196e3a299548b2aee74d3bb5b9f36f482c99",
+              "git_blob": "1879f9e2e6c12f760cb0f7316a0d37eeb004312e"
+            },
+            "rust/services/flow/src/runtime.rs": {
+              "sha256": "ca3e871cd42fcd5e98c2acb5cf4ad2d197ab42f0422878ed735b7b4023a42036",
+              "git_blob": "c4079c1a042dd961992dcc167a17284b6a5613d3"
+            }
+          }
+        },
+        "confirmed_browser_path": [
+          "POST /v1/flows/siop/submit registration at http_verification.rs:104",
+          "submit_siop Json<Value> extraction at http_verification.rs:954",
+          "parse_request(payload) at http_verification.rs:956",
+          "compile-time T: Deserialize + ValidateRequest at api.rs:25-27",
+          "serde_json::from_value at api.rs:29, followed by request.validate at api.rs:31"
+        ],
+        "production_caller_inventory": [
+          {
+            "path": "rust/services/flow/src/http_read.rs",
+            "line": 333,
+            "handler": "create_definition",
+            "request_type": "CreateFlowDefinitionRequest",
+            "route": "POST /v1/flows/definitions"
+          },
+          {
+            "path": "rust/services/flow/src/http_read.rs",
+            "line": 399,
+            "handler": "update_definition",
+            "request_type": "UpdateFlowDefinitionRequest",
+            "route": "PATCH /v1/flows/definitions/{flow_id}"
+          },
+          {
+            "path": "rust/services/flow/src/http_read.rs",
+            "line": 723,
+            "handler": "start_instance",
+            "request_type": "StartFlowRequest",
+            "route": "POST /v1/flows/instances"
+          },
+          {
+            "path": "rust/services/flow/src/http_read.rs",
+            "line": 824,
+            "handler": "advance_instance",
+            "request_type": "AdvanceFlowRequest",
+            "route": "POST /v1/flows/instances/{instance_id}/advance"
+          },
+          {
+            "path": "rust/services/flow/src/http_verification.rs",
+            "line": 215,
+            "handler": "start_siop",
+            "request_type": "StartSiopFlowRequest",
+            "route": "POST /v1/flows/siop"
+          },
+          {
+            "path": "rust/services/flow/src/http_verification.rs",
+            "line": 734,
+            "handler": "submit_dc_api",
+            "request_type": "DigitalCredentialSubmissionRequest",
+            "route": "POST /v1/flows/instances/{instance_id}/submit/dc-api"
+          },
+          {
+            "path": "rust/services/flow/src/http_verification.rs",
+            "line": 956,
+            "handler": "submit_siop",
+            "request_type": "SiopSubmitRequest",
+            "route": "POST /v1/flows/siop/submit"
+          },
+          {
+            "path": "rust/services/flow/src/http_application.rs",
+            "line": 60,
+            "handler": "receive_application_approved",
+            "request_type": "ApplicationApprovedWebhook",
+            "route": "POST /v1/flows/webhooks/application-approved"
+          }
+        ],
+        "caller_inventory_scope": "All eight production HTTP call sites of this helper were inspected in source. The browser reports twelve alternative taint paths; this assessment does not claim to have exported each individual GitHub path.",
+        "request_type_review": {
+          "validate_request_implementations": [
+            "CreateFlowDefinitionRequest",
+            "UpdateFlowDefinitionRequest",
+            "StartFlowRequest",
+            "AdvanceFlowRequest",
+            "StartVerificationFlowRequest",
+            "StartSiopFlowRequest",
+            "SiopSubmitRequest",
+            "SubmitVerificationRequest",
+            "DigitalCredentialSubmissionRequest",
+            "ApplicationApprovedWebhook"
+          ],
+          "all_ten_dtos_deny_unknown_fields": true,
+          "all_http_target_types_compile_time_fixed": true,
+          "attacker_selected_runtime_type_or_typetag_found": false,
+          "custom_deserializers": [
+            {
+              "path": "rust/services/flow/src/api.rs",
+              "line": 302,
+              "type": "Patch<T>",
+              "behavior": "Calls Option<T>::deserialize and maps None/Some to Null/Value; it performs no I/O, code execution, dynamic type selection, or unsafe operations."
+            }
+          ],
+          "nested_types": "Strings, integer and fieldless-enum values, Option/Patch, Vec/BTreeMap, serde_json::Value, and derived request structs; local FlowType is a closed derived enum at domain.rs:24.",
+          "reported_siop_constraints": {
+            "id_token_max_characters": 16384,
+            "instance_id_max_characters": 255,
+            "validation_location": "api.rs:674-678"
+          },
+          "validation_is_executed_before_return": true
+        },
+        "http_bounds": {
+          "locked_versions": {
+            "axum": "0.8.9",
+            "axum-core": "0.5.6",
+            "serde_json": "1.0.151",
+            "serde": "1.0.229"
+          },
+          "body_limit_bytes": 2097152,
+          "body_limit_chain": [
+            "Axum Json<T>::from_request uses Bytes::from_request (axum json.rs:111).",
+            "Bytes::from_request calls into_limited_body before collecting bytes (axum-core request_parts.rs:111).",
+            "RequestExt::with_limited_body applies http_body_util::Limited with DEFAULT_LIMIT=2,097,152 when no override is present (axum-core ext_traits/request.rs:316-326)."
+          ],
+          "router_evidence": [
+            "Flow read router merges application and verification routes at http_read.rs:181-182, then attaches state.",
+            "main.rs:124 merges that router directly with operational routes; runtime.rs:140-141 only constructs operational routes.",
+            "No DefaultBodyLimit::disable occurs in Rust source. The two explicit limits in Flow apply to separate public-verification and issuance-prerequisite routes."
+          ],
+          "json_recursion_limit": 128,
+          "recursion_evidence": "Axum creates serde_json::Deserializer::from_slice and does not disable its default remaining_depth=128. No disable_recursion_limit call occurs in Flow source.",
+          "locked_dependency_source_hashes": {
+            "axum_json": {
+              "package_path": "axum-0.8.9/src/json.rs",
+              "sha256": "feaad1fce714c48cad69b3a1e6ccac9a49966e7c6b5f85f7d8a7c392af667f7a"
+            },
+            "body_bytes": {
+              "package_path": "axum-core-0.5.6/src/extract/request_parts.rs",
+              "sha256": "5e791539e708afde58143eb82c7a61c6a4dfc5c61cbde87429165e03b33d29b1"
+            },
+            "body_limit": {
+              "package_path": "axum-core-0.5.6/src/ext_traits/request.rs",
+              "sha256": "630a931c1c4ee0f6232e7934a0ff4d08a2cc1854587e48c87af12cb93611b935"
+            },
+            "serde_json_recursion": {
+              "package_path": "serde_json-1.0.151/src/de.rs",
+              "sha256": "4998d7e252eb513be85b298e287048b4fb283882e9ba7df905f572f07200f3f3"
+            }
+          }
+        },
+        "query": {
+          "query_commit": "ceeaafac4e629e0e39de04d40c719d7d18b4b612",
+          "sources": [
+            {
+              "path": "rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.ql",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.ql",
+              "bytes": 1531,
+              "sha256": "5f3e1feb06d06dabf9b9056f33144700db947fe61a4ab7b4cf8e32e9fa8299f5"
+            },
+            {
+              "path": "rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.qhelp",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.qhelp",
+              "bytes": 1856,
+              "sha256": "6eceeb5cbf7b9a83095e117afb9470e6f977e8031dff47a2a568257032df3536"
+            },
+            {
+              "path": "rust/ql/src/queries/security/CWE-502/UnsafeDeserializationGood.rs",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserializationGood.rs",
+              "bytes": 818,
+              "sha256": "27756bd8d355c7cf62b3e09e0230cd881d4cbb4ee987a1afa2a7ab63f5ba4836"
+            },
+            {
+              "path": "rust/ql/lib/codeql/rust/security/UnsafeDeserializationExtensions.qll",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/security/UnsafeDeserializationExtensions.qll",
+              "bytes": 2025,
+              "sha256": "5ed51f5a338722805f9810ac1306b8246c86e4eaf743c86b0eef22cf765b611a"
+            },
+            {
+              "path": "rust/ql/lib/codeql/rust/frameworks/serde.model.json",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/frameworks/serde.model.json",
+              "bytes": 1754,
+              "sha256": "f7a740ce08f82c31e562813143e9557259d970614a9b99124ca1f49479d7bb5a"
+            },
+            {
+              "path": "rust/ql/lib/codeql/rust/frameworks/axum.model.json",
+              "url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/frameworks/axum.model.json",
+              "bytes": 1736,
+              "sha256": "6baf9a331c82fe84bf7f666355a9c9dc5171f27205477e5db606c9fbf5f88c94"
+            }
+          ],
+          "analysis_cli_version": "2.27.5",
+          "analysis_rust_query_pack": "0.1.47",
+          "model_facts": [
+            "The Axum model marks routed handler parameters as remote sources.",
+            "The Serde model marks from_value/from_str/from_slice/from_reader input as unsafe-deserialization sinks regardless of concrete target type.",
+            "The query barriers are model-data, numeric, boolean and fieldless-enum barriers; no body-size, deny_unknown_fields or ValidateRequest-specific barrier appears in the inspected query/model files."
+          ],
+          "introduction_reference": "https://codeql.github.com/docs/codeql-overview/codeql-changelog/codeql-cli-2.27.5/",
+          "introduction_note": "Official 2.27.5 release notes list rust/unsafe-deserialization as a newly added query."
+        },
+        "assessment": {
+          "demonstrated_arbitrary_code_execution": false,
+          "demonstrated_polymorphic_gadget_path": false,
+          "demonstrated_unbounded_http_request": false,
+          "finding_relationship": "Existing request conversion is unchanged from accepted main and was already reported in another PR. The available source and dependency evidence supports a mismatch between the generic unsafe-deserialization model and these bounded, statically typed request paths.",
+          "remaining_limit": "Input-size and recursion limits do not establish overall denial-of-service immunity under unlimited concurrent requests. This review did not run load tests or establish an exploit beyond that general network resource-budget concern. Arbitrary future custom Deserialize implementations would require separate review.",
+          "recommended_minimal_code_change": "None justified by the observed dataflow. Retain the qualified implementation and its validation behavior.",
+          "scanner_only_changes_rejected": [
+            "Renaming or swapping equivalent deserialization APIs solely to avoid the modeled sink.",
+            "Suppressions, ignore annotations, rule removal, or alert dismissal.",
+            "A broad typed-extractor/API-error refactor without an independently demonstrated security need."
+          ],
+          "alert_state": "Leave open for the normal security/check review process; no dismissal or bypass performed."
+        },
+        "actions": {
+          "source_edits": false,
+          "builds_or_tests": false,
+          "downloads_or_installations": false,
+          "github_mutations": false,
+          "alerts_dismissed_or_suppressed": false
+        },
+        "evidence": {
+          "analysis_metadata": "analysis-metadata.json",
+          "analysis_metadata_sha256": "d95d3cddb64aee4fdac2e12c076bd8df8cc357a1aec30401b6e3d952062a23f8",
+          "query_metadata": "exact-query-model-sources.json",
+          "query_metadata_sha256": "4261142605b1f380189609fe7f03f483d89b9159fed29f6374050a2f11e0adde"
+        }
+      }
+    },
+    {
+      "alert_number": 326,
+      "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/326",
+      "original_export": {
+        "file_name": "codeql-alert-326-assessment.json",
+        "bytes": 11084,
+        "sha256": "95b0933412421c104289d9930ad1e31b333ee3ded51e03e6da0f873507861161"
+      },
+      "data": {
+        "schema_version": 1,
+        "recorded_at_utc": "2026-11-22T08:05:01.680203+00:00",
+        "status": "READ_ONLY_ASSESSMENT_ALERT_REMAINS_OPEN",
+        "alert": {
+          "repository": "ElevenID/marty-ui",
+          "number": 326,
+          "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/326",
+          "rule_id": "rust/unsafe-deserialization",
+          "severity_label": "critical",
+          "sink": {
+            "path": "rust/services/flow/src/http_verification.rs",
+            "line": 191
+          },
+          "root_authenticated_ui_observation": {
+            "first_detected_date": "2026-11-20",
+            "first_detected_pull_request": 2010,
+            "first_detected_commit": "f81bf70f867569db97f73b06dbaef7813e89118b",
+            "reported_paths": 2
+          }
+        },
+        "source": {
+          "candidate_commit": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "candidate_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+          "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+          "start_verification_handler_byte_identical_to_accepted_main": true,
+          "files": [
+            {
+              "path": "rust/services/flow/src/http_verification.rs",
+              "sha256": "4ddef7a07b1ed9f6b6cd7afb3537c5286521b19d3588ee9f18c0e20ac7b9f652",
+              "bytes": 53706,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/services/flow/src/api.rs",
+              "sha256": "9ba46df43f3b35d6794f2ecffbfeba2dfb365e5656639d877813b33f59ed2303",
+              "bytes": 33593,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/services/flow/src/http_read.rs",
+              "sha256": "19bad3d672065b08cef389f7a28ba4066bf7b1eb4a6af824efb8dfd0e2927f56",
+              "bytes": 50114,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/services/flow/src/verification_start.rs",
+              "sha256": "8f961088f439a34916c192d47c1ef82ea9f300f848ce3fb4dc92a1e1cc3ae32b",
+              "bytes": 17357,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/services/flow/src/main.rs",
+              "sha256": "fbef406bbbf4127d7abd2ce9fb26196e3a299548b2aee74d3bb5b9f36f482c99",
+              "bytes": 8510,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/services/flow/Cargo.toml",
+              "sha256": "2fea55d7961ae4d0f25cbd812b93cefc47125e132a3e52efed6945834f0a1a10",
+              "bytes": 2659,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/Cargo.toml",
+              "sha256": "48071dfa08689e0c47fd263fbc4580f2f8d5711e088898b383cdd1a40dd3ef3a",
+              "bytes": 13753,
+              "working_bytes_match_candidate": true
+            },
+            {
+              "path": "rust/Cargo.lock",
+              "sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+              "bytes": 229326,
+              "working_bytes_match_candidate": true
+            }
+          ]
+        },
+        "input_trace": {
+          "route": "POST /v1/flows/verify",
+          "handler": "start_verification",
+          "extractor": "Json<serde_json::Value>",
+          "sink": "serde_json::from_value::<StartVerificationFlowRequest>(payload)",
+          "provided_ui_trace_matches_source": true,
+          "trace_limit": "The supplied route/extractor/from_value trace was reviewed. The UI reports two paths; this reviewer was not supplied a distinct second path and does not infer its provenance."
+        },
+        "actual_input_bounds": {
+          "http_body_bytes": 2097152,
+          "enforced_by": "Axum Json -> Bytes::from_request -> RequestExt::into_limited_body default limit before JSON deserialization",
+          "router_override_or_disable_found": false,
+          "router_path": [
+            "flow_verification_routes",
+            "flow_read_router",
+            "main: axum::serve with operational_router merged with flow_read_router"
+          ],
+          "serde_json_unbounded_depth_or_disable_recursion_limit_found": false,
+          "bound_scope": "Per request. No aggregate concurrency, memory-amplification stress, rate-limit, or deployment exposure qualification was performed.",
+          "locked_framework_sources": [
+            {
+              "package": "axum-0.8.9",
+              "path": "src/json.rs",
+              "bytes": 11554,
+              "sha256": "feaad1fce714c48cad69b3a1e6ccac9a49966e7c6b5f85f7d8a7c392af667f7a"
+            },
+            {
+              "package": "axum-core-0.5.6",
+              "path": "src/ext_traits/request.rs",
+              "bytes": 13300,
+              "sha256": "630a931c1c4ee0f6232e7934a0ff4d08a2cc1854587e48c87af12cb93611b935"
+            },
+            {
+              "package": "serde_json-1.0.151",
+              "path": "src/de.rs",
+              "bytes": 86840,
+              "sha256": "4998d7e252eb513be85b298e287048b4fb283882e9ba7df905f572f07200f3f3"
+            },
+            {
+              "package": "serde_json-1.0.151",
+              "path": "src/value/de.rs",
+              "bytes": 41251,
+              "sha256": "ceda1bf415aafde89caa83bf275811b70d393717d4e1038e0c61822d2da02993"
+            }
+          ],
+          "serde_json_initial_recursion_budget": 128
+        },
+        "deserialized_schema": {
+          "type": "StartVerificationFlowRequest",
+          "derive": "serde Deserialize",
+          "deny_unknown_fields": true,
+          "field_types": [
+            "String",
+            "Option<String>",
+            "VerificationResponseType (closed fieldless enum)",
+            "Oid4vpProfile (closed fieldless enum)",
+            "RequestTransport (closed fieldless enum)",
+            "RequestUriMethod (closed fieldless enum)",
+            "u16"
+          ],
+          "custom_deserialize_hooks_in_target_or_fields": false,
+          "typetag_or_trait_object_dispatch": false,
+          "user_selected_type_construction": false
+        },
+        "validation_and_authorization": {
+          "gateway_api_key_path": "FlowRequestState validates gateway service authentication and the API-key actor projection when API-key headers are present, before body extraction.",
+          "ordinary_header_path": "Without those API-key projection headers, body extraction/conversion precedes authorize; authorize requires a nonempty X-User-ID and asks the configured authorization provider for verification:execute on the requested organization. This is an existing trusted-principal-header/provider boundary, not independent proof of end-user authentication.",
+          "persistence_order": "authorize succeeds before persist_verification_start; prepare_profiled_verification_start_with_id validates before signing identity resolution, presentation-policy construction or database persistence.",
+          "existing_checks": [
+            "nonempty principal",
+            "organization_id required and at most 255 characters",
+            "issuer DID syntax prefix and at most 2048 characters",
+            "expiry between 1 and 1440 minutes",
+            "presentation policy required for vp_token",
+            "transport/method/response/profile compatibility",
+            "environment-sensitive callback URL validation",
+            "registered callback destination for the organization",
+            "exact signing identity organization/issuer/purpose/format/algorithm binding",
+            "organization-bound presentation policy and credential-authority/trust-profile checks"
+          ],
+          "pre_authorization_validation_limit": "organization_id is passed to the authorization provider before validate_for_environment applies its 255-character bound. The same ordering exists in accepted main; no bypass was demonstrated."
+        },
+        "query_model": {
+          "reviewed_commit": "ceeaafac4e629e0e39de04d40c719d7d18b4b612",
+          "query_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.ql",
+          "extensions_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/security/UnsafeDeserializationExtensions.qll",
+          "serde_model_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/frameworks/serde.model.json",
+          "help_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserialization.qhelp",
+          "good_example_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-502/UnsafeDeserializationGood.rs",
+          "sink_model": "serde model marks from_str/from_slice/from_reader and from_value argument 0 as unsafe-deserialization sinks, plus a from_value Value::String-field sink.",
+          "observed_barriers": [
+            "models-as-data barriers",
+            "numeric types",
+            "boolean types",
+            "fieldless enums"
+          ],
+          "model_limit": "The inspected rule/model has no explicit barrier for Axum body limits, Serde recursion bounds, deny_unknown_fields, or downstream request validation. Its generic taint result does not establish target-type gadgets or a concrete resource-exhaustion exploit. The help itself recommends size limits, strict fields and avoiding polymorphic deserialization."
+        },
+        "security_assessment": {
+          "code_execution_path_demonstrated": false,
+          "unbounded_input_allocation_path_demonstrated": false,
+          "conclusion": "The closed DTO and existing byte/depth/domain boundaries are not represented as sanitizers by the inspected broad serde sink model. This is a model/context mismatch; it is not proof of exploitability, a dismissal, or a claim that bounded parsing cannot be abused under load.",
+          "not_tested": [
+            "live exploit attempts",
+            "load/resource-exhaustion behavior",
+            "fresh CodeQL analysis",
+            "the separately reported generic Flow and Organization sinks"
+          ]
+        },
+        "unresolved_hardening_followups": [
+          {
+            "issue": "Duplicate JSON fields collapse in the intermediate Value map before strict DTO conversion.",
+            "evidence": "serde_json Value visitor inserts repeated keys into its map; later deny_unknown_fields cannot recover duplicate-key history.",
+            "recommendation": "Review direct concrete typed extraction or equivalent strict duplicate rejection with compatible API error behavior; keep this separate from an attempt to conceal a modeled sink.",
+            "resolved": false
+          },
+          {
+            "issue": "Invalid organization identifiers can reach the authorization provider before domain-length validation.",
+            "recommendation": "Consider validating the request for its deployment environment before authorization-provider dispatch while preserving authentication, authorization and error contracts.",
+            "resolved": false
+          },
+          {
+            "issue": "Generic Value can allocate nested structures up to the existing per-request byte/depth caps before rejecting the flat request schema.",
+            "recommendation": "Review a route-specific tighter body budget and concrete typed extraction against compatibility requirements. Existing 2 MiB / recursion-budget 128 bounds remain in force.",
+            "resolved": false
+          }
+        ],
+        "actions": {
+          "runtime_source_changed": false,
+          "tests_or_builds_run": false,
+          "alert_dismissed_or_ignored": false,
+          "query_or_model_changed": false,
+          "security_gate_overridden": false,
+          "github_status_created": false,
+          "aws_restarted": false
+        },
+        "required_gate": "Alert remains open. Normal protected code-scanning/check requirements and merge-queue eligibility remain authoritative; no all-green CodeQL or final merge eligibility claim follows from this assessment."
+      }
+    },
+    {
+      "alert_number": 138,
+      "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/138",
+      "original_export": {
+        "file_name": "alert-138-assessment.json",
+        "bytes": 9474,
+        "sha256": "55c6cebf4adfadadfe3850a6fbc0b69efe0b88fd112a0691bc481da65c939152"
+      },
+      "data": {
+        "schema_version": 1,
+        "recorded_at_utc": "2026-11-22T08:06:41.052Z",
+        "status": "READ_ONLY_ASSESSMENT_ALERT_REMAINS_OPEN",
+        "alert": {
+          "repository": "ElevenID/marty-ui",
+          "number": 138,
+          "url": "https://github.com/ElevenID/marty-ui/security/code-scanning/138",
+          "rule_id": "rust/weak-sensitive-data-hashing",
+          "reported_severity": "high",
+          "query_security_severity": 7.5,
+          "sink": {
+            "path": "rust/services/organization/src/domain.rs",
+            "line": 708
+          },
+          "browser_observation_source": "Root agent read the authenticated GitHub alert page and supplied its exact path and history; this reviewer independently inspected the referenced source and pinned query.",
+          "root_authenticated_ui_history": {
+            "alert_open_on_main_before_candidate": true,
+            "first_detected_displayed_date": "September 12",
+            "first_detected_pull_request": 814,
+            "first_detected_commit": "eda8cf0ef6026ffdcb7a53a372069962462a0ecc",
+            "main_detection_displayed_date": "September 14",
+            "main_detection_commit_abbreviated": "f5c4da68",
+            "older_main_view_commit_prefix": "5a478",
+            "date_limit": "The parent message supplied month/day and abbreviated main identities; no missing year or commit suffix is inferred."
+          }
+        },
+        "source": {
+          "candidate_commit": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+          "candidate_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+          "production_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+          "api_key_impl_identical_to_accepted_main": true,
+          "api_key_impl": {
+            "path": "rust/services/organization/src/domain.rs",
+            "extraction": "From the bytes 'impl ApiKey {' through its matching top-level closing brace, excluding the following newline.",
+            "bytes": 3071,
+            "sha256": "8cef11333a260672cb7d3070a6bb566ed6c1aec04f036e851a7144fff39eae92"
+          },
+          "unchanged_files": [
+            "rust/services/organization/src/api_keys.rs",
+            "rust/services/organization/src/grpc_service.rs",
+            "rust/services/organization/tests/application_postgres_integration.rs",
+            "rust/services/organization/migrations/0001_organization_schema.sql"
+          ],
+          "domain_file_candidate_change": "Only the later PolicySetType::MachineAuthorization variant and its string mapping were added; the ApiKey implementation is unchanged."
+        },
+        "reported_path": [
+          {
+            "path": "rust/services/organization/tests/application_postgres_integration.rs",
+            "line": 308,
+            "operation": "create_api_key(CreateApiKeyCommand) uses the normal application creation path."
+          },
+          {
+            "path": "rust/services/organization/tests/application_postgres_integration.rs",
+            "line": 326,
+            "operation": "validate_api_key receives created_key.value.raw_key, returned by that creation operation."
+          },
+          {
+            "path": "rust/services/organization/src/api_keys.rs",
+            "line": 276,
+            "operation": "ApiKey::hash_key(raw_key) computes the deterministic lookup digest."
+          },
+          {
+            "path": "rust/services/organization/src/domain.rs",
+            "line": 708,
+            "operation": "SHA-256 hashes the raw generated API token."
+          }
+        ],
+        "generation_and_admission": {
+          "source": "rust/services/organization/src/domain.rs:651-660",
+          "random_characters": 43,
+          "alphabet_size": 62,
+          "public_prefixes": [
+            "mk_test_",
+            "mk_live_"
+          ],
+          "theoretical_token_space_bits": 256.0304413466356,
+          "token_space_calculation": "43 * log2(62); the prefix contributes no secret entropy.",
+          "rng_package": "rand 0.9.5",
+          "rng_facts": [
+            "rand::rng() returns ThreadRng, which implements CryptoRng.",
+            "The pinned ThreadRng source documents OsRng seeding and periodic reseeding, with ChaCha12 as the selected algorithm.",
+            "The pinned Alphanumeric distribution selects uniformly from 62 characters using rejection sampling."
+          ],
+          "rng_source_locations": [
+            "rand-0.9.5/src/rngs/thread.rs:48-68,157,194",
+            "rand-0.9.5/src/distr/other.rs:137-152"
+          ],
+          "http_creation": "CreateApiKeyRequest at http_service.rs:394 uses deny_unknown_fields and accepts metadata, scopes, expiry and test/live selection; it has no raw key or password field.",
+          "application_creation": "CreateApiKeyCommand has no caller-supplied secret field. OrganizationApplication::create_api_key_as calls ApiKey::create and persists the generated key hash.",
+          "installer_and_acceptance_creation": "Checked-in production installer and acceptance paths construct the same creation command; they do not import a caller-selected raw secret.",
+          "from_raw_callers": "The only checked-in production call to ApiKey::from_raw is inside ApiKey::create. Two additional calls are fixtures in domain_behavior.rs and postgres_integration.rs.",
+          "scope_limit": "This is a source assessment of checked-in production application paths; it does not assert facts about external library consumers or manually modified database rows."
+        },
+        "lookup_and_verification": {
+          "incoming_path": "Gateway x-api-key or supported Bearer API-key input reaches Organization through ValidateApiKeyRequest. The Organization gRPC handler authenticates the service request before validation.",
+          "lookup": "validate_api_key hashes the supplied token and selects an existing row using the bound key_hash parameter; it does not create a key from this input.",
+          "verification": "ApiKey::verify compares digest bytes with subtle::ConstantTimeEq. Validation checks active/expiry state, locks the stored row, repeats verification/state checks, then records usage.",
+          "storage_contract": "organization_service.api_keys.key_hash is varchar(64), unique, and constrained to 64 lowercase hexadecimal characters. The original raw token is not persisted in that column.",
+          "source_locations": [
+            "rust/services/gateway/src/middleware.rs:216-217,262-276",
+            "rust/services/gateway/src/providers.rs:489-506",
+            "rust/services/organization/src/grpc_service.rs:367-390",
+            "rust/services/organization/src/api_keys.rs:268-313",
+            "rust/services/organization/src/domain.rs:707-714",
+            "rust/services/organization/src/postgres.rs:421-439",
+            "rust/services/organization/migrations/0001_organization_schema.sql:60-91"
+          ]
+        },
+        "query_model": {
+          "reviewed_commit": "ceeaafac4e629e0e39de04d40c719d7d18b4b612",
+          "query_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/src/queries/security/CWE-327/WeakSensitiveDataHashing.ql",
+          "extensions_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/security/WeakSensitiveDataHashingExtensions.qll",
+          "rust_source_classification_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/rust/ql/lib/codeql/rust/security/SensitiveData.qll",
+          "shared_name_heuristic_url": "https://github.com/github/codeql/blob/ceeaafac4e629e0e39de04d40c719d7d18b4b612/shared/concepts/codeql/concepts/internal/SensitiveDataHeuristics.qll",
+          "help_url": "https://codeql.github.com/codeql-query-help/rust/rust-weak-sensitive-data-hashing/",
+          "classification_reason": "maybePassword at lines 76-79 includes api.?(key|tok). Rust SensitiveDataCall applies this naming heuristic to function-return nodes, so create_api_key is classified as a password source.",
+          "sink_reason": "The password branch treats ordinary HashingAlgorithm inputs as sinks because the algorithm is not a computationally expensive password KDF; the inspected source classifier does not establish low input entropy.",
+          "help_distinction": "The rule help recommends expensive password KDFs for passwords and limited-input-space data; it recommends SHA-2 or SHA-3 in other cases."
+        },
+        "assessment": {
+          "demonstrated_weak_hash_vulnerability_in_reported_path": false,
+          "conclusion": "The reported path contains a cryptographically generated, approximately 256-bit-space API token. The query's password classification follows an API-key naming heuristic. This is an inherited semantic classification mismatch, not a demonstrated password-hashing weakness introduced by this candidate.",
+          "algorithm_change_recommended": false,
+          "no_change_justification": "SHA-256 is the indexed lookup digest and verifier for high-entropy generated tokens. A salted password KDF would change the persisted format and deterministic lookup contract, require a migration for existing keys, and add per-request work without addressing a demonstrated low-entropy input in this path.",
+          "rejected_gate_workarounds": [
+            "Renaming symbols to evade the sensitive-name heuristic.",
+            "Suppressions, ignore annotations, query/model removal or alert dismissal.",
+            "An arbitrary hashing-algorithm replacement without preserving the storage and validation contract."
+          ],
+          "alert_state": "Open; unchanged.",
+          "gate_limit": "This assessment does not turn the reported CodeQL advisory failure into success, grant merge eligibility, or override any required check or merge-queue policy."
+        },
+        "actions": {
+          "runtime_source_changed": false,
+          "tests_or_builds_run": false,
+          "alert_dismissed_or_ignored": false,
+          "query_or_model_changed": false,
+          "github_mutations": false,
+          "security_gate_overridden": false,
+          "aws_actions": false,
+          "assessment_json_created": true
+        }
+      }
+    }
+  ],
+  "actions": {
+    "runtime_source_changed": false,
+    "security_tests_or_exploit_attempts_run": false,
+    "alerts_dismissed_or_suppressed": false,
+    "query_or_model_changed": false,
+    "security_requirements_overridden": false,
+    "synthetic_status_or_approval_created": false,
+    "aws_restarted": false
+  },
+  "limits": [
+    "This is a scoped read-only review of the three reported paths, not a complete product security audit.",
+    "Future custom deserializers, deployment limit overrides, concurrent request resource exhaustion and lower-entropy imported keys need separate review.",
+    "Subsequent normal CI must execute and report its own analysis and checks; no final-head or merge-eligibility result is asserted here."
+  ]
+}

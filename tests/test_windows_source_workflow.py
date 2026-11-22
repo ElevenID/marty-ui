@@ -13,7 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / '.github/workflows/windows-owner-source.yml'
-NATIVE_CASES = {
+SOURCE_CASES = {
     'test_native_install_publishes_private_source_and_refuses_overwrite',
     'test_native_source_inventory_refuses_unsafe_placement[broad-acl]',
     'test_native_source_inventory_refuses_unsafe_placement[hardlink]',
@@ -23,6 +23,51 @@ NATIVE_CASES = {
     'test_native_late_source_acl_failure_preserves_pending_without_ready',
     'test_isolated_generated_runner_resolves_original_anchor_and_refuses_late_source_failure',
 }
+CALLER_CASES = {
+    'test_isolated_caller_check_replays_original_anchor_without_runtime_or_log_writes',
+    'test_isolated_caller_refuses_wrong_profile_pin_without_owner_or_log_changes',
+    'test_isolated_caller_refuses_preloaded_owner_module',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-bytes]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-hardlink]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-extra]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-cache]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-junction]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-bytes]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-hardlink]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-extra]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-cache]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-junction]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[profile-bytes]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[profile-hardlink]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[helper-bytes]',
+    'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[helper-hardlink]',
+    'test_isolated_caller_requires_private_acl_for_every_new_input[caller]',
+    'test_isolated_caller_requires_private_acl_for_every_new_input[profile]',
+    'test_isolated_caller_requires_private_acl_for_every_new_input[helper]',
+    'test_native_caller_log_append_preserves_prefix_and_verifies_appended_bytes',
+    'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[partial-prefix]',
+    'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[full-log]',
+    'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[hardlink]',
+    'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[broad-acl]',
+    'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[junction]',
+    'test_native_hook_journal_publishes_and_replays_exact_completed_pair',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[pending]',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[empty-intent]',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[empty-completion]',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[changed-intent]',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[boolean-completion-attempt]',
+    'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[unexpected-entry]',
+    'test_native_hook_record_allocation_replacement_preserves_failed_evidence[intent]',
+    'test_native_hook_record_allocation_replacement_preserves_failed_evidence[complete]',
+    'test_native_hook_intent_survives_late_source_failure_without_completion',
+    'test_native_hook_state_requires_private_exclusive_custody[lock-hardlink]',
+    'test_native_hook_state_requires_private_exclusive_custody[owner-hardlink]',
+    'test_native_hook_state_requires_private_exclusive_custody[owner-broad-acl]',
+    'test_native_hook_state_requires_private_exclusive_custody[junction]',
+    'test_native_hook_state_requires_private_exclusive_custody[held-lock]',
+}
+NATIVE_CASES = {('tests.test_windows_source_install_ntfs', name) for name in SOURCE_CASES}
+NATIVE_CASES |= {('tests.test_windows_source_caller_ntfs', name) for name in CALLER_CASES}
 
 
 def workflow():
@@ -66,6 +111,7 @@ def test_windows_source_workflow_uses_only_public_native_synthetic_execution():
     assert re.findall(r'\btests/[^\s`]+\.py', commands) == [
         'tests/test_windows_owner_source_bundle.py',
         'tests/test_windows_source_install.py',
+        'tests/test_windows_source_caller.py',
     ]
     assert 'python -X faulthandler scripts/ci/run_windows_source_tests.py --junitxml=$report' in native_step()['run']
     assert '--junitxml=$report' in native_step()['run']
@@ -91,20 +137,22 @@ def test_native_workflow_is_a_required_same_commit_ci_dependency():
     assert '${{ github.workflow }}' not in workflow()['concurrency']['group']
 
 
-@pytest.mark.parametrize('fault', [None, 'additional-case', 'missing', 'empty', 'skipped',
+@pytest.mark.parametrize('fault', [None, 'additional-case', 'missing-source', 'missing-caller', 'empty', 'skipped',
                                   'failure', 'error', 'duplicate', 'wrong-module', 'counter'])
 def test_native_completion_gate_executes_and_rejects_missing_or_skipped_evidence(tmp_path, fault):
     root = ET.Element('testsuites')
     suite = ET.SubElement(root, 'testsuite', tests=str(len(NATIVE_CASES)),
                           errors='0', failures='0', skipped='0')
-    for name in sorted(NATIVE_CASES):
-        ET.SubElement(suite, 'testcase', classname='tests.test_windows_source_install_ntfs', name=name)
+    for module, name in sorted(NATIVE_CASES):
+        ET.SubElement(suite, 'testcase', classname=module, name=name)
     first = suite[0]
     if fault == 'additional-case':
         ET.SubElement(suite, 'testcase', classname='tests.test_windows_source_install_ntfs', name='test_future_case')
         suite.set('tests', str(len(NATIVE_CASES) + 1))
-    elif fault == 'missing':
-        suite.remove(first)
+    elif fault in {'missing-source', 'missing-caller'}:
+        module = ('tests.test_windows_source_install_ntfs' if fault == 'missing-source'
+                  else 'tests.test_windows_source_caller_ntfs')
+        suite.remove(next(case for case in suite if case.get('classname') == module))
         suite.set('tests', str(len(NATIVE_CASES) - 1))
     elif fault == 'empty':
         suite.clear()

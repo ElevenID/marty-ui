@@ -102,6 +102,7 @@ impl OrganizationApplication {
         &self,
         command: CreatePolicySetCommand,
     ) -> Result<PolicySet, OrganizationApplicationError> {
+        require_general_policy_type(command.policy_type)?;
         require_text(&command.name, "policy-set name is required")?;
         self.validate_policy_documents(&command.policies)?;
         let cedar_policies = serialize_policy_documents(&command.policies)?;
@@ -157,6 +158,7 @@ impl OrganizationApplication {
             .ok_or(OrganizationApplicationError::PolicySetNotFound(
                 command.policy_set_id,
             ))?;
+        require_general_policy_type(policy_set.policy_type)?;
         if let Some(name) = command.patch.name {
             policy_set.name = name;
         }
@@ -192,6 +194,7 @@ impl OrganizationApplication {
             .ok_or(OrganizationApplicationError::PolicySetNotFound(
                 policy_set_id,
             ))?;
+        require_general_policy_type(policy_set.policy_type)?;
         policy_set.archive(now);
         self.store
             .save_policy_set_in_transaction(&mut transaction, &policy_set)
@@ -218,6 +221,7 @@ impl OrganizationApplication {
             .ok_or(OrganizationApplicationError::PolicySetNotFound(
                 policy_set_id,
             ))?;
+        require_general_policy_type(policy_set.policy_type)?;
         let documents = deserialize_policy_documents(&policy_set.cedar_policies);
         self.validate_policy_documents(&documents)?;
         let all_policy_sets = self
@@ -253,7 +257,8 @@ impl OrganizationApplication {
         policy_set_id: Uuid,
     ) -> Result<(), OrganizationApplicationError> {
         let mut transaction = self.store.begin_transaction().await?;
-        self.store
+        let policy_set = self
+            .store
             .policy_set_by_id_for_update_in_transaction(
                 &mut transaction,
                 organization_id,
@@ -263,6 +268,7 @@ impl OrganizationApplication {
             .ok_or(OrganizationApplicationError::PolicySetNotFound(
                 policy_set_id,
             ))?;
+        require_general_policy_type(policy_set.policy_type)?;
         if !self
             .store
             .delete_policy_set_in_transaction(&mut transaction, organization_id, policy_set_id)
@@ -311,6 +317,17 @@ impl OrganizationApplication {
             ))
         }
     }
+}
+
+fn require_general_policy_type(
+    policy_type: PolicySetType,
+) -> Result<(), OrganizationApplicationError> {
+    if policy_type == PolicySetType::MachineAuthorization {
+        return Err(OrganizationApplicationError::InvalidCommand(
+            "dedicated machine policy owner required",
+        ));
+    }
+    Ok(())
 }
 
 #[must_use]

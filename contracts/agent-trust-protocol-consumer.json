@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "consumer": "marty-ui-agent-trust-source",
+  "status": "SOURCE_ONLY",
+  "runtime_qualification": "NOT_ASSESSED",
+  "public_discovery": false,
+  "public_mip_version": "0.5.0",
+  "public_protocol_revision": "76c37dc229b328afe002b911a26624543f814a64",
+  "coverage_policy": "marty-agent-trust-source-pack-v1",
+  "fixture_policy": "schema-shapes-v1",
+  "protocol": {
+    "repository": "https://github.com/Marty-Protocol/Marty-Protocol",
+    "revision": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+    "version": "0.6.0",
+    "manifest_path": "conformance/agent-trust/v1/manifest.json",
+    "manifest_sha256": "3d9fc9475050d80ea2e0a835a3c8cf801a642303a063fa4d3014485ceb6b8d37",
+    "capability_register_path": "protocol/agent-trust/capability-register.json"
+  },
+  "selected_profiles": [
+    {
+      "id": "principal-runtime-binding.v1",
+      "schemas": [
+        "schemas/principal-runtime-binding/v1/binding-record.json",
+        "schemas/principal-runtime-binding/v1/profile-configuration.json"
+      ]
+    },
+    {
+      "id": "delegated-commands.v1",
+      "schemas": [
+        "schemas/delegated-authority/v1/command-request.json",
+        "schemas/delegated-authority/v1/command-response.json"
+      ]
+    },
+    {
+      "id": "oauth-account-linking.v1",
+      "schemas": [
+        "schemas/agent-trust/v1/oauth-context.json",
+        "schemas/agent-trust/v1/account-link.json"
+      ]
+    },
+    {
+      "id": "authzen-mapping.v1",
+      "schemas": ["schemas/agent-trust/v1/authzen-decision.json"]
+    },
+    {
+      "id": "lifecycle-signals.v1",
+      "schemas": ["schemas/agent-trust/v1/security-event-impact.json"]
+    },
+    {
+      "id": "credential-evidence.v1",
+      "schemas": [
+        "schemas/agent-trust/v1/domain-evidence-binding.json",
+        "schemas/agent-trust/v1/portable-trust-manifest.json"
+      ]
+    }
+  ]
+}

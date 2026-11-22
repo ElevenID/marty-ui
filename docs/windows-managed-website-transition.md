@@ -52,8 +52,10 @@ of nine can belong to cumulative generation 33.
 inputs and requires exact equality. `validate_envelope` checks record integrity
 and the immutable contract shape; neither the envelope nor a self-consistent
 SHA256 can authenticate its own inputs. Journal parsing uses envelope integrity
-and still requires the future caller to reconstruct the plan under the existing
-owner.
+and requires a live caller to reconstruct the plan under the existing owner.
+The [managed check-only invocation](windows-managed-website-preflight.md#reconstruct-the-first-cutover-plan)
+can make that reconstruction from the held selection, composition and cached
+image and report its hashes before a transition is attempted.
 
 ## Allowed model and data changes
 
@@ -116,10 +118,11 @@ must contain no existing website route mount, ancestor mount, or nested route
 mount. The new route directory is confined to an attempt directly below the same
 Windows owner root.
 
-These checks make the declared baseline coherent. They do not read the installed
-template, establish file custody, test Nginx syntax, prove Docker path identity, or
-prove that the running edge loaded those bytes. Those qualification fields remain
-false.
+The plan checks these declaration inputs in memory. The [managed website
+preflight](windows-managed-website-preflight.md) separately checks a compatible
+full v4 composition against the installed bind and holds the Windows template
+bytes through owner exit. Running Nginx configuration and route behavior require
+transition qualification.
 
 ## Journal phases, interruption, and backout
 

@@ -1,0 +1,29 @@
+[package]
+name = "marty-delegated-use-client"
+version = "0.1.0"
+description = "Independent mutually authenticated client for delegated-use evidence"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+axum-server.workspace = true
+rcgen.workspace = true
+tokio.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

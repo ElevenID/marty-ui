@@ -6,22 +6,24 @@ The future owner must derive every input while holding its existing lease and
 must separately qualify mounted bytes, native custody, storage and live traffic.
 """
 from copy import deepcopy
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
-import deploy_website as routing
+import website_deployment_model as routing
 import package_web_composition as composition
 import selfhost_windows_product as product
 import selfhost_windows_product_journal as product_journal
 import selfhost_windows_selection as selection
+from selfhost_windows_website import (
+    ROUTE_TARGET, TEMPLATE_TARGET, combined_edge_binding, edge_template_identity,
+    path_under_owner, runtime_bind_source, windows_path,
+)
 import ui_release as ui
 import website_release as web
 
 
 SCHEMA = 'marty.windows-website-transition-plan/v1'
 SLOT = routing.SLOTS[0]
-ROUTE_TARGET = '/etc/nginx/marty-website'
-TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
 ANCHOR_FIELDS = {'project', 'engine_id', 'docker_host', 'root', 'selection_sequence',
     'generation_sequence', 'binding_sha256', 'journal_sha256', 'configuration_sha256', 'model_sha256',
     'selection_sha256', 'selected_sha256', 'native_sha256', 'historical_tls_sha256', 'data_sha256'}
@@ -49,33 +51,65 @@ def digest(value):
     return selection.digest(selection.packed(value))
 
 
-def windows_path(value):
-    """A bounded, canonical local-drive spelling; no filesystem qualification."""
-    require(isinstance(value, str) and len(value) <= 1024 and not re.search(r'[\x00-\x1f\x7f]', value))
-    path = PureWindowsPath(value)
-    require(re.fullmatch(r'[A-Z]:', path.drive) and path.is_absolute() and str(path) == value
-            and len(path.parts) > 1 and all(part not in {'.', '..'} and ':' not in part
-                and part.rstrip(' .') == part and not PureWindowsPath(part).is_reserved()
-                for part in path.parts[1:]))
-    return path
+def cached_website_image(docker, release):
+    """Resolve the original signed OCI coordinate to a local image configuration."""
+    image = release['image']
+    reference = image['uri'] + '@' + image['digest']
+    rows = docker.json(['image', 'inspect', reference])
+    require(type(rows) is list and len(rows) == 1)
+    row = rows[0]
+    require(row['Os'] == 'linux' and row['Architecture'] == 'amd64'
+            and isinstance(row['Id'], str) and re.fullmatch(r'sha256:[0-9a-f]{64}', row['Id'])
+            and type(row['RepoDigests']) is list and reference in row['RepoDigests'])
+    config = row['Config']
+    require(isinstance(config, dict) and config.get('Volumes') in (None, {})
+            and set(config.get('ExposedPorts') or {}) == {'80/tcp'})
+    metadata = release['image_metadata']
+    commerce = metadata['commerce_extension']['source_sha']
+    expected = {
+        'org.opencontainers.image.source': 'https://github.com/' + release['producer']['repository'],
+        'org.opencontainers.image.revision': commerce,
+        'org.opencontainers.image.version': metadata['revision'],
+        'com.elevenid.website.repository': metadata['repository'],
+        'com.elevenid.website.source-sha': metadata['source_sha'],
+        'com.elevenid.website.commerce-source-sha': commerce,
+        'com.elevenid.website.audience': metadata['audience'],
+        'com.elevenid.website.pages': metadata['production_pages'],
+        'com.elevenid.website.route-contract-sha256': metadata['route_contract']['sha256'],
+    }
+    labels = config.get('Labels')
+    require(isinstance(labels, dict) and all(labels.get(name) == value for name, value in expected.items()))
+    return row['Id']
 
 
-def _under(root, value):
-    path = windows_path(value)
-    require(str(path).startswith(str(root) + '\\'))
-    return path
+def route_mount_proposal(template_mount, route_directory):
+    """Use the installed engine's drive spelling for the proposed route bind."""
+    source = template_mount['Source']
+    template = runtime_bind_source(source)
+    require(template.drive == route_directory.drive
+            and template_mount['Mode'] == 'ro' and template_mount['Propagation'] == 'rprivate')
+    if source.startswith('/'):
+        suffix = template.as_posix()[3:]
+        require(source.endswith('/' + suffix))
+        route_source = source[:-len(suffix)] + route_directory.as_posix()[3:]
+    else:
+        route_source = route_directory.as_posix() if '/' in source else str(route_directory)
+    return {'Type': 'bind', 'Source': route_source, 'Destination': ROUTE_TARGET,
+            'Mode': 'ro', 'RW': False, 'Propagation': 'rprivate'}
 
 
-def _runtime_source(value):
-    """Only the existing documented local-drive Docker Desktop bridge forms."""
-    require(isinstance(value, str))
-    for prefix in ('/run/desktop/mnt/host/', '/host_mnt/', '/mnt/'):
-        if value.startswith(prefix):
-            match = re.fullmatch(r'([a-zA-Z])/(.+)', value[len(prefix):])
-            require(match is not None)
-            value = match[1].upper() + ':\\' + match[2].replace('/', '\\')
-            break
-    return windows_path(value)
+def from_observation(before, manifest, website_release, routes, anchor, *, docker,
+                     proof_sha256, attempt_directory, edge_template, data_before):
+    """Derive application-preserving declarations from inputs held by the owner."""
+    root = windows_path(anchor['root'])
+    attempt = path_under_owner(root, str(attempt_directory))
+    require(attempt.parent == root and re.fullmatch(r'windows-website-[0-9a-f]{32}', attempt.name))
+    require(not product.renewal.namespace_entry_exists(Path(attempt)))
+    template = next(mount for mount in data_before['edge']['mounts'] if mount['Destination'] == TEMPLATE_TARGET)
+    return plan(before, manifest, website_release, routes, {**anchor, 'model_sha256': digest(before)},
+        proof_sha256=proof_sha256, attempt_directory=str(attempt), edge_template=edge_template,
+        data_before=data_before, website_image_id=cached_website_image(docker, website_release),
+        route_runtime_mount=route_mount_proposal(template, attempt / 'routes'))
 
 
 def validate_anchor(value):
@@ -107,31 +141,6 @@ def _data(value, roles):
                     and '..' not in PurePosixPath(target).parts and not target.startswith('/run/secrets/'))
             targets.append(target)
         require(len(targets) == len(set(targets)) and targets == sorted(targets))
-
-
-def _edge_input(before, template, root):
-    edge = before['services']['edge']
-    require(not edge.get('depends_on') and
-            'http://127.0.0.1/edge-healthz' in edge.get('healthcheck', {}).get('test', []))
-    volumes = edge.get('volumes', [])
-    require(type(volumes) is list and all(type(mount) is dict for mount in volumes))
-    targets = [mount.get('target') for mount in volumes]
-    require(all(isinstance(target, str) for target in targets) and len(targets) == len(set(targets)))
-    require(not any(target == ROUTE_TARGET or target.startswith(ROUTE_TARGET + '/')
-                    or ROUTE_TARGET.startswith(target.rstrip('/') + '/') for target in targets))
-    mounts = [mount for mount in volumes if mount['target'] == TEMPLATE_TARGET]
-    require(len(mounts) == 1 and mounts[0].get('type') == 'bind' and mounts[0].get('read_only') is True)
-    _under(root, mounts[0].get('source'))
-    require(isinstance(template, bytes) and 0 < len(template) <= 1024*1024 and b'\0' not in template)
-    try:
-        text = template.decode('utf-8')
-    except UnicodeError:
-        raise ValueError('Managed website transition plan refused') from None
-    lines = [line.split('#', 1)[0].strip() for line in text.splitlines()]
-    require(lines.count(composition.EDGE_INCLUDE) == 1
-            and any(re.fullmatch(r'location\s+=\s+/edge-healthz\s*\{', line) for line in lines))
-    return {'source': mounts[0]['source'], 'target': TEMPLATE_TARGET,
-            'bytes': len(template), 'sha256': selection.digest(template)}
 
 
 def proposal(before, manifest, website_release, routes, anchor, *, attempt_directory,
@@ -172,26 +181,20 @@ def proposal(before, manifest, website_release, routes, anchor, *, attempt_direc
         require(product.image_identity(service['image']) == product.image_identity(expected))
     require(services['ui']['image'] == manifest['application']['image']['uri'] + '@' + manifest['application']['image']['digest'])
     root = windows_path(anchor['root'])
-    attempt = _under(root, attempt_directory)
+    attempt = path_under_owner(root, attempt_directory)
     require(attempt.parent == root and re.fullmatch(r'windows-website-[0-9a-f]{32}', attempt.name))
     route_directory = str(attempt / 'routes')
-    template = _edge_input(before, edge_template, root)
     require(type(route_runtime_mount) is dict and set(route_runtime_mount) == {
         'Type', 'Source', 'Destination', 'Mode', 'RW', 'Propagation'}
         and route_runtime_mount['Type'] == 'bind' and route_runtime_mount['Destination'] == ROUTE_TARGET
         and route_runtime_mount['Mode'] == 'ro' and route_runtime_mount['RW'] is False
         and route_runtime_mount['Propagation'] == 'rprivate'
-        and str(_runtime_source(route_runtime_mount['Source'])) == route_directory)
+        and str(runtime_bind_source(route_runtime_mount['Source'])) == route_directory)
     require(isinstance(website_image_id, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', website_image_id))
     _data(data_before, set(services) - product.renewal.INITIALIZERS)
     require(digest(data_before) == anchor['data_sha256'])
-    mounted_template = [mount for mount in data_before['edge']['mounts'] if mount['Destination'] == TEMPLATE_TARGET]
-    require(len(mounted_template) == 1 and mounted_template[0]['Type'] == 'bind'
-        and mounted_template[0].get('RW') is False
-        and str(_runtime_source(mounted_template[0].get('Source'))) == template['source'])
-    template['runtime_mount_sha256'] = digest(mounted_template[0])
-    require(not any(mount['Destination'] == ROUTE_TARGET or mount['Destination'].startswith(ROUTE_TARGET + '/')
-        or ROUTE_TARGET.startswith(mount['Destination'].rstrip('/') + '/') for mount in data_before['edge']['mounts']))
+    binding = combined_edge_binding(before, data_before['edge']['mounts'], anchor['root'])
+    template = edge_template_identity(binding, edge_template)
 
     # Reuse only the ordinary deployer's pure service/route definitions. This
     # intermediate rendering object is never persisted as an independent owner.

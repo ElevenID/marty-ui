@@ -75,6 +75,13 @@ Within that lease the diagnostic:
 - Compares the exact product role and image map, all four configured OpenBao
   role pins, website audience and independent edge health configuration with
   the authenticated composition.
+- For a compatible full standalone v4 composition, binds the retained source
+  and rendered edge configurations to the exact installed read-only template
+  mount. The selected owner holds the bounded Windows template bytes and their
+  namespace through the final container readback and lease exit. The report
+  includes the byte count, template digest and mount-record digest. The combined
+  baseline must have the website include, independent health location and no
+  existing or overlapping website route mount.
 - Rechecks installed identities before releasing the lease. Results are emitted
   only after all lease and input exit checks finish successfully.
 
@@ -97,7 +104,32 @@ compatibility blockers.
 | `generation_sequence` | The cumulative sequence, including sealed predecessor offsets. |
 | `composition_matches_selected_product` | The compared role, pin, audience and edge-configuration requirements match. |
 | `compatibility_blockers` | Fixed reason codes for product-role, product-image, OpenBao-image, audience or edge-configuration differences. |
+| `mounted_edge_template_checked` | The full v4 preflight bound the installed template mount to held Windows source bytes. |
+| `combined_edge_template` | Template byte count, SHA-256 and runtime mount SHA-256 for a compatible full v4 composition, otherwise `null`. |
 | `activation_supported` | Always false for this diagnostic milestone. |
+
+The template check establishes the combined host input and mounted source
+identity. Qualifying the running Nginx configuration, public routing and
+application handoffs requires the managed transition.
+
+## Reconstruct the first-cutover plan
+
+For a compatible signed full v4 composition, add
+`--plan-attempt-directory <absolute-path>` to the check-only invocation. Use an
+unused `windows-website-<32 lowercase hex>` path directly under the selected
+Windows owner root. The planned route directory is its `routes` child.
+
+The signed website digest must already be cached on the selected Docker engine.
+The planner checks the cached registry digest, image config ID, Linux/amd64
+platform, production website labels, port and volume declarations. It holds the
+six original outer proof files under the selected lease and binds the plan to
+the selected journal, configuration, template, application and provider
+identities. The report's `transition_plan` contains the plan hash, proof hashes
+and model, data and route hashes for the combined, staged and split proposals.
+
+This check-only operation leaves the attempt path available for the managed
+transition. The transition must rebuild the plan from held inputs, qualify its
+rendered models and record the observed runtime changes before admission.
 | `production_admission` | Always false; this report is not release or runtime admission. |
 
 The report explicitly leaves native custody, foreign-storage custody, runtime

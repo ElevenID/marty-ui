@@ -82,7 +82,7 @@ pub fn permission_catalog() -> Result<Vec<PermissionDefinition>, CatalogError> {
 
 pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRoleTemplate> {
     let all = keys_matching(catalog, |_| true);
-    let access_admin = keys_for_resources(
+    let mut access_admin = keys_for_resources(
         catalog,
         &[
             "organization",
@@ -90,6 +90,7 @@ pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRole
             "role",
             "policy-set",
             "api-key",
+            "agent-identity",
             "signing-key",
             "webhook",
             "integration-connector",
@@ -97,6 +98,8 @@ pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRole
             "audit",
         ],
     );
+    // Inventory administration alone does not establish managed enrollment.
+    access_admin.remove("agent-identity:enroll");
     let catalog_admin = keys_for_resources(
         catalog,
         &[

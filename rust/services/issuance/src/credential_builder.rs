@@ -15,7 +15,7 @@ use marty_oid4vci::{
         prepare_remote_jwt_vc, prepare_remote_mdoc, prepare_remote_sd_jwt, RemoteJwtVcRequest,
         RemoteMdocRequest, RemoteSdJwtRequest,
     },
-    types::SignedCredential,
+    types::{CredentialClaims, CredentialPayloadFormat, SignedCredential},
     Oid4vciError,
 };
 use marty_signing_grant::{minter::GrantMinting, GrantBinding, SigningOrigin, HEADER_NAME};
@@ -53,6 +53,7 @@ const VCDM_PROTECTED_TERMS: &[&str] = &[
 #[derive(Clone)]
 pub struct HttpCredentialBuilder {
     signer: Arc<dyn DidSigner>,
+    machine_nested_vc2: bool,
 }
 
 impl std::fmt::Debug for HttpCredentialBuilder {
@@ -71,6 +72,7 @@ impl HttpCredentialBuilder {
     ) -> Result<Self, CredentialIssuanceError> {
         Ok(Self {
             signer: Arc::new(HttpDidSigner::new(base_url, api_key, timeout)?),
+            machine_nested_vc2: false,
         })
     }
 
@@ -85,12 +87,44 @@ impl HttpCredentialBuilder {
                 HttpDidSigner::new(base_url, api_key, timeout)?
                     .with_grant_minter(SigningOrigin::IssuanceCredential, minter),
             ),
+            machine_nested_vc2: false,
         })
+    }
+
+    /// Connect directly to the Signing Keys owner. The existing constructor
+    /// retains its gateway compatibility transport and query shape.
+    pub fn new_for_native_owner_with_grant<M: GrantMinting + 'static>(
+        origin: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        minter: M,
+    ) -> Result<Self, CredentialIssuanceError> {
+        Ok(Self {
+            signer: Arc::new(
+                HttpDidSigner::new_for_native_owner(origin, api_key, timeout)?
+                    .with_grant_minter(SigningOrigin::IssuanceCredential, minter),
+            ),
+            machine_nested_vc2: false,
+        })
+    }
+
+    /// Trusted composition explicitly selects the strict machine credential
+    /// profile. Transport selection alone never changes credential semantics.
+    /// This route binds the reserved UUID in both `jti` and signed `vc.id` and
+    /// accepts only the no-status MachineCredential subset used by the machine
+    /// authority source. Existing nested and direct issuance remain unchanged.
+    #[must_use]
+    pub fn with_machine_nested_vc2_jwt_profile(mut self) -> Self {
+        self.machine_nested_vc2 = true;
+        self
     }
 
     #[cfg(test)]
     fn with_signer(signer: Arc<dyn DidSigner>) -> Self {
-        Self { signer }
+        Self {
+            signer,
+            machine_nested_vc2: false,
+        }
     }
 
     async fn sign(
@@ -177,6 +211,9 @@ impl HttpCredentialBuilder {
         request: &CredentialBuildRequest,
         claims: HashMap<String, Value>,
     ) -> Result<BuiltCredential, CredentialIssuanceError> {
+        if self.machine_nested_vc2 {
+            return self.build_machine_nested_vc2(request, claims).await;
+        }
         let open_badge = is_open_badge_type(&request.credential_type);
         if open_badge {
             validate_open_badge_request_criteria(request, &claims)?;
@@ -247,6 +284,59 @@ impl HttpCredentialBuilder {
                 "Native JWT-VC assembly returned a different format",
             )),
         }
+    }
+
+    async fn build_machine_nested_vc2(
+        &self,
+        request: &CredentialBuildRequest,
+        claims: HashMap<String, Value>,
+    ) -> Result<BuiltCredential, CredentialIssuanceError> {
+        let signer = marty_oid4vci::remote_credential::RemoteSignerMetadata::new(
+            &request.issuer.issuer_did,
+            verification_method(request)?,
+            &request.issuer.algorithm,
+            issuer_public_jwk_json(request)?,
+        )
+        .map_err(native_error)?;
+        let content = CredentialClaims {
+            subject_id: request.subject_did.clone(),
+            credential_type: request.credential_type.clone(),
+            claims,
+            expiration_seconds: Some(request.validity_seconds),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let prepared = marty_oid4vci::formats::jwt_vc::prepare_jwt_vc_with_profile(
+            &signer,
+            &content,
+            marty_oid4vci::formats::jwt_vc::JwtVcPreparationOptions {
+                credential_id: Some(request.credential_id.clone()),
+                credential_subject: request.credential_subject.clone(),
+                include_subject_claim: true,
+                include_vc_id: true,
+                include_nbf: true,
+                ..Default::default()
+            },
+            marty_oid4vci::JwtVcPreparationProfile::HistoricalNested,
+        )
+        .map_err(native_error)?;
+        let signature = self
+            .sign(
+                request,
+                prepared.signing_input().as_bytes(),
+                &request.issuer.algorithm,
+            )
+            .await?;
+        let signed = prepared.complete(&signature).map_err(native_error)?;
+        Ok(BuiltCredential {
+            credential_id: signed.credential_id().into(),
+            credential: signed.credential().into(),
+        })
     }
 
     async fn build_mdoc(
@@ -381,6 +471,9 @@ impl CredentialBuilder for HttpCredentialBuilder {
                 "organization_id is required for DID-mediated signing",
             ));
         }
+        if self.machine_nested_vc2 {
+            validate_machine_nested_selection(request)?;
+        }
         let claims = claims_for_credential_format(request);
         match request.kind {
             CredentialBuilderKind::SdJwt => {
@@ -400,6 +493,53 @@ impl CredentialBuilder for HttpCredentialBuilder {
         }
     }
 }
+
+fn validate_machine_nested_selection(
+    request: &CredentialBuildRequest,
+) -> Result<(), CredentialIssuanceError> {
+    let canonical_id = request
+        .credential_id
+        .strip_prefix("urn:uuid:")
+        .and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .ok()
+                .map(|id| !id.is_nil() && id.to_string() == value)
+        })
+        == Some(true);
+    let subject = request
+        .subject_did
+        .as_deref()
+        .filter(|value| !value.is_empty() && value.trim() == *value);
+    if request.kind != CredentialBuilderKind::JwtVcJson
+        || request.credential_type != "MachineCredential"
+        || request.remote_credential_format != "jwt_vc_json"
+        || request.response_format != "jwt_vc_json"
+        || !matches!(request.issuer.algorithm.as_str(), "ES256" | "EdDSA")
+        || request.jwt_vc_signing_timing.is_some()
+        || request.credential_document.is_some()
+        || !request.status_list_entries.is_empty()
+        || request.claims.contains_key("credentialStatus")
+        || request.achievement_id.is_some()
+        || !request.selective_disclosure_claims.is_empty()
+        || request.validity_seconds <= 0
+        || !canonical_id
+        || subject.is_none()
+        || request.credential_subject.as_ref().is_some_and(|value| {
+            !value.is_object()
+                || value.get("id").and_then(Value::as_str) != subject
+                || !request.claims.is_empty()
+        })
+    {
+        return Err(signing_error(
+            "incompatible selected machine nested JWT-VC profile",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "machine_nested_profile_tests.rs"]
+mod machine_nested_profile_tests;
 
 fn claims_for_credential_format(request: &CredentialBuildRequest) -> Map<String, Value> {
     let mut claims = request.claims.clone();
@@ -477,6 +617,7 @@ pub(crate) struct HttpDidSigner {
     base_url: Url,
     api_key: Option<String>,
     grant: Option<(SigningOrigin, Arc<dyn GrantMinting>)>,
+    native_owner: bool,
 }
 
 impl HttpDidSigner {
@@ -485,7 +626,26 @@ impl HttpDidSigner {
         api_key: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, CredentialIssuanceError> {
+        Self::with_transport(base_url, api_key, timeout, false)
+    }
+
+    pub(crate) fn new_for_native_owner(
+        origin: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, CredentialIssuanceError> {
+        let base_url = crate::credential_issuer::native_signing_owner_base_url(origin)?;
+        Self::with_transport(base_url, api_key, timeout, true)
+    }
+
+    fn with_transport(
+        base_url: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        native_owner: bool,
+    ) -> Result<Self, CredentialIssuanceError> {
         let client = Client::builder()
+            .https_only(native_owner)
             .timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -495,6 +655,7 @@ impl HttpDidSigner {
             base_url,
             api_key: api_key.map(str::to_owned),
             grant: None,
+            native_owner,
         })
     }
 
@@ -528,6 +689,8 @@ impl HttpDidSigner {
 
 #[derive(Serialize)]
 struct SignBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    organization_id: Option<&'a str>,
     issuer_did: &'a str,
     credential_format: &'a str,
     key_purpose: &'a str,
@@ -585,21 +748,25 @@ impl DidSigner for HttpDidSigner {
             .await
             .and_then(|grant| grant.to_header_value())
             .map_err(|_| signing_error("DID signer KMS grant is unavailable"))?;
-        let mut http_request = self
-            .client
-            .post(self.endpoint())
-            .query(&[("organization_id", request.organization_id.as_str())])
-            .header(HEADER_NAME, grant)
-            .json(&SignBody {
-                verification_method_id: &request.verification_method_id,
-                expected_public_jwk: expected_public_jwk.as_ref(),
-                issuer_did: &request.issuer_did,
-                credential_format: &request.credential_format,
-                key_purpose: &request.key_purpose,
-                key_reference: &request.signing_key_reference,
-                payload_b64: URL_SAFE_NO_PAD.encode(&request.payload),
-                algorithm: &request.algorithm,
-            });
+        let http_request = self.client.post(self.endpoint());
+        let http_request = if self.native_owner {
+            http_request
+        } else {
+            http_request.query(&[("organization_id", request.organization_id.as_str())])
+        };
+        let mut http_request = http_request.header(HEADER_NAME, grant).json(&SignBody {
+            organization_id: self
+                .native_owner
+                .then_some(request.organization_id.as_str()),
+            verification_method_id: &request.verification_method_id,
+            expected_public_jwk: expected_public_jwk.as_ref(),
+            issuer_did: &request.issuer_did,
+            credential_format: &request.credential_format,
+            key_purpose: &request.key_purpose,
+            key_reference: &request.signing_key_reference,
+            payload_b64: URL_SAFE_NO_PAD.encode(&request.payload),
+            algorithm: &request.algorithm,
+        });
         if let Some(api_key) = self.api_key.as_deref() {
             http_request = http_request.header("X-API-Key", api_key);
         }
@@ -658,6 +825,10 @@ impl DidSigner for HttpDidSigner {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "native_signing_owner_tests.rs"]
+mod native_signing_owner_tests;
 
 fn credential_status_claim(entries: &[Value]) -> Option<Value> {
     let mut claims = Vec::new();

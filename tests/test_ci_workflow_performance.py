@@ -4496,15 +4496,41 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
         ("marty-presentation-policy", "marty-credential-template"),
         ("marty-presentation-policy", "marty-issuance-service"),
         ("marty-flow", "marty-presentation-policy"),
+        ("marty-flow", "marty-organization"),
         ("marty-gateway", "marty-auth"),
+        ("marty-delegated-use", "marty-credential-template"),
+        ("marty-delegated-use", "marty-presentation-policy"),
+        ("marty-delegated-use", "marty-issuance-service"),
+        ("marty-delegated-use", "marty-signing-keys"),
+        ("marty-delegated-use", "marty-trust-profile"),
     }, (
-        "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
+        "Only registered DIDComm, explicit-profile, managed-evidence and delegated-use fixtures may add service test edges: "
         f"{sorted(edges)}"
     )
     _assert_service_fixture_dependency(
         documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
         "marty-presentation-policy", "../presentation-policy",
     )
+    # Flow's delegated ingress fixture exercises current Organization-owned
+    # machine permissions, including withdrawal during signing and recovery.
+    _assert_service_fixture_dependency(
+        documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
+        "marty-organization", "../organization",
+    )
+    # The actual delegated-use host fixtures compose native template/policy
+    # reads, fresh issuance, remote signing custody and issuer trust records.
+    # Register only these exact test edges; none may enter the serving graph.
+    delegated_use = documents[rust / "services/delegated-use/Cargo.toml"]
+    for dependency, path in (
+        ("marty-credential-template", "../credential-template"),
+        ("marty-presentation-policy", "../presentation-policy"),
+        ("marty-issuance-service", "../issuance"),
+        ("marty-signing-keys", "../signing-keys"),
+        ("marty-trust-profile", "../trust-profile"),
+    ):
+        _assert_service_fixture_dependency(
+            delegated_use, workspace_dependencies, dependency, path,
+        )
     issuance = documents[rust / "services/issuance/Cargo.toml"]
     _assert_signing_keys_fixture_dependency(
         issuance, workspace_dependencies, "../signing-keys"
@@ -4575,6 +4601,10 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
     ("marty-credential-template", "../credential-template"),
     ("marty-flow", "../flow"),
     ("marty-auth", "../auth"),
+    ("marty-issuance-service", "../issuance"),
+    ("marty-presentation-policy", "../presentation-policy"),
+    ("marty-trust-profile", "../trust-profile"),
+    ("marty-organization", "../organization"),
 ])
 def test_service_fixture_dependencies_reject_production_edges(
     kind: str, target_specific: bool, dependency: str, path: str

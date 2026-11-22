@@ -49,7 +49,7 @@ fn decode_template_reference(
         credential_type: response.credential_type,
         vct: response.vct,
         doctype: response.doctype,
-        supported_formats: response.supported_formats,
+        supported_formats: decode_template_formats(response.supported_formats)?,
         claims: response
             .claims
             .into_iter()
@@ -72,6 +72,37 @@ fn decode_template_reference(
         wallet_configurations: bounded_json(&response.wallet_configs_json, "credential_template")?,
         issuer_algorithm: nonempty(response.issuer_algorithm),
     })
+}
+
+fn decode_template_formats(formats: Vec<String>) -> Result<Vec<String>, FlowProviderError> {
+    formats
+        .into_iter()
+        .map(|format| {
+            // Credential Template publishes public wire names; the selected
+            // Flow capabilities use canonical names. Translate only known
+            // aliases, preserving the direct/nested JWT distinction and list
+            // cardinality. Unknown capabilities must not disappear silently.
+            let canonical = match format.as_str() {
+                "MDOC" | "mdoc" | "mso_mdoc" => "MDOC",
+                "SD_JWT_VC" | "sd_jwt_vc" | "dc+sd-jwt" | "vc+sd-jwt" => "SD_JWT_VC",
+                "VC_JWT" | "jwt_vc" | "jwt_vc_json" | "jwt_vc_json_ld" => "VC_JWT",
+                "VC_JWT_DIRECT_V1" | "vc_jwt_direct_v1" | "application/vc+jwt" => {
+                    "VC_JWT_DIRECT_V1"
+                }
+                "JSON_LD" | "ldp_vc" => "JSON_LD",
+                "ZK_MDOC" | "zk_mdoc" | "zkp_mdoc" => "ZK_MDOC",
+                "VDS_NC" | "vds_nc" | "vds_nc_barcode" => "VDS_NC",
+                "ICAO_EMRTD" | "icao_emrtd" => "ICAO_EMRTD",
+                _ => {
+                    return Err(invalid_response(
+                        "credential_template",
+                        "unknown supported credential format",
+                    ))
+                }
+            };
+            Ok(canonical.to_owned())
+        })
+        .collect()
 }
 
 fn decode_policy_reference(
@@ -141,6 +172,7 @@ fn decode_policy_reference(
 }
 
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
+const READ_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const USER_ID_HEADER: &str = "x-user-id";
 
@@ -370,6 +402,196 @@ pub struct FlowGrpcProviders {
     pub issuance: GrpcIssuanceProvider,
 }
 
+/// The two read providers used by the separately hosted delegated-use owner.
+/// This constructor opens no Organization or Issuance execution channel. The
+/// policy provider retains the inspected keyless channel's provenance; a raw
+/// `Channel` or configuration boolean cannot manufacture that capability.
+pub struct FlowDelegatedReadProviders {
+    pub credential_template: GrpcCredentialTemplateProvider,
+    pub presentation_policy: GrpcPresentationPolicyProvider,
+}
+
+impl FlowDelegatedReadProviders {
+    pub async fn connect(
+        credential_template_target: &str,
+        presentation_policy_target: &str,
+        tls: &crate::WorkloadClientTlsFiles,
+        service_token: &str,
+    ) -> Result<Self, FlowProviderError> {
+        if !delegated_read_target(credential_template_target)
+            || !delegated_read_target(presentation_policy_target)
+            || !(32..=1024).contains(&service_token.len())
+            || !service_token
+                .bytes()
+                .all(|byte| (0x21..=0x7e).contains(&byte))
+        {
+            return Err(invalid_response(
+                "delegated_read_configuration",
+                "explicit HTTPS targets and service credential are required",
+            ));
+        }
+        let template = server_tls_factory(credential_template_target, &tls.ca_certificate)
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "credential_template",
+            })?;
+        let policy = workload_factory(presentation_policy_target, Some(tls)).map_err(|_| {
+            FlowProviderError::Unavailable {
+                provider: "presentation_policy",
+            }
+        })?;
+        let (template_channel, policy_channel) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::try_join!(template.connect(), policy.connect())
+            })
+            .await
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "delegated_read_transport",
+            })?
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "delegated_read_transport",
+            })?;
+        let mut presentation_policy = GrpcPresentationPolicyProvider::new(
+            PresentationPolicyServiceClient::new(policy_channel),
+            Some(service_token),
+        )?;
+        presentation_policy.workload_mtls = policy.is_keyless();
+        Ok(Self {
+            credential_template: GrpcCredentialTemplateProvider::new(
+                CredentialTemplateServiceClient::new(template_channel),
+                Some(service_token),
+            )?,
+            presentation_policy,
+        })
+    }
+}
+
+fn delegated_read_target(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|target| {
+        target.scheme() == "https"
+            && target.host_str().is_some()
+            && target.path() == "/"
+            && target.username().is_empty()
+            && target.password().is_none()
+            && target.query().is_none()
+            && target.fragment().is_none()
+    })
+}
+
+#[cfg(test)]
+mod delegated_read_configuration_tests {
+    #[test]
+    fn delegated_read_targets_require_explicit_protected_service_origins() {
+        assert!(super::delegated_read_target("https://policy.example:9443"));
+        for target in [
+            "http://127.0.0.1:8080",
+            "https://user:secret@policy.example",
+            "https://policy.example/private",
+            "https://policy.example?mode=anonymous",
+            "https://policy.example#identity",
+            "policy.example:443",
+        ] {
+            assert!(!super::delegated_read_target(target));
+        }
+    }
+
+    #[tokio::test]
+    async fn delegated_reads_bound_stalled_unary_bodies_and_trailers() {
+        use super::*;
+        use axum::{body::Body, http::Response, Router};
+        use std::{
+            sync::{
+                atomic::{AtomicUsize, Ordering},
+                Arc,
+            },
+            time::{Duration, Instant},
+        };
+        use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+        let received = Arc::new(AtomicUsize::new(0));
+        let captured = received.clone();
+        let app = Router::new().fallback(move |request: axum::extract::Request| {
+            let captured = captured.clone();
+            async move {
+                assert_eq!(request.headers()["x-service-token"], TOKEN);
+                captured.fetch_add(1, Ordering::SeqCst);
+                let pending = tokio_stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
+                // Wallet reads receive headers but no message. The other
+                // reads receive a valid empty protobuf frame but no trailers.
+                let body = if request.uri().path().ends_with("/ListWallets") {
+                    Body::from_stream(pending)
+                } else {
+                    Body::from_stream(
+                        tokio_stream::once(Ok::<_, std::io::Error>(
+                            axum::body::Bytes::from_static(&[0, 0, 0, 0, 0]),
+                        ))
+                        .chain(pending),
+                    )
+                };
+                Response::builder()
+                    .header("content-type", "application/grpc")
+                    .body(body)
+                    .unwrap()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_routes(tonic::service::Routes::from(app))
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        let channel = tonic::transport::Endpoint::from_shared(target)
+            .unwrap()
+            .connect_timeout(Duration::from_secs(1))
+            .timeout(Duration::from_millis(250))
+            .connect()
+            .await
+            .unwrap();
+        let templates = GrpcCredentialTemplateProvider::new(
+            CredentialTemplateServiceClient::new(channel.clone()),
+            Some(TOKEN),
+        )
+        .unwrap();
+        let policies = GrpcPresentationPolicyProvider::new(
+            PresentationPolicyServiceClient::new(channel),
+            Some(TOKEN),
+        )
+        .unwrap();
+        let started = Instant::now();
+        let outcome = tokio::time::timeout(READ_RPC_TIMEOUT + Duration::from_secs(2), async {
+            tokio::join!(
+                templates.get_template("template-1"),
+                templates.wallet_formats("org-1"),
+                policies.get_policy("policy-1"),
+            )
+        })
+        .await;
+        server.abort();
+        let (template, wallets, policy) = outcome.expect("unary body deadline must complete");
+        assert_eq!(received.load(Ordering::SeqCst), 3);
+        // Prove these reached the complete-body deadline, rather than failing
+        // at the channel's much shorter response-header deadline.
+        assert!(started.elapsed() >= READ_RPC_TIMEOUT - Duration::from_secs(1));
+        for result in [template.map(|_| ()), wallets.map(|_| ())] {
+            assert_eq!(
+                result,
+                Err(FlowProviderError::Unavailable {
+                    provider: "credential_template"
+                }),
+            );
+        }
+        assert_eq!(
+            policy.map(|_| ()),
+            Err(FlowProviderError::Unavailable {
+                provider: "presentation_policy"
+            }),
+        );
+    }
+}
+
 #[derive(Clone, Default)]
 struct GrpcAuthentication {
     service_token: Option<AsciiMetadataValue>,
@@ -497,13 +719,14 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
         let mut client = self.client.clone();
-        let response = client
-            .get_template(self.auth.request(GetTemplateRequest {
+        let response = bounded_read_rpc(
+            "credential_template",
+            template_id,
+            client.get_template(self.auth.request(GetTemplateRequest {
                 template_id: template_id.into(),
-            }))
-            .await
-            .map_err(|status| provider_status("credential_template", template_id, status))?
-            .into_inner();
+            })),
+        )
+        .await?;
         decode_template_reference(template_id, response)
     }
 
@@ -518,14 +741,15 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             ));
         }
         let mut client = self.client.clone();
-        let response = client
-            .list_wallets(self.auth.request(ListWalletsRequest {
+        let response = bounded_read_rpc(
+            "credential_template",
+            "wallets",
+            client.list_wallets(self.auth.request(ListWalletsRequest {
                 active_only: true,
                 organization_id: organization_id.into(),
-            }))
-            .await
-            .map_err(|status| provider_status("credential_template", "wallets", status))?
-            .into_inner();
+            })),
+        )
+        .await?;
         let formats = response
             .wallets
             .into_iter()
@@ -683,13 +907,14 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         let mut client = self.client.clone();
-        let response = client
-            .get_policy(self.auth.request(GetPolicyRequest {
+        let response = bounded_read_rpc(
+            "presentation_policy",
+            policy_id,
+            client.get_policy(self.auth.request(GetPolicyRequest {
                 policy_id: policy_id.into(),
-            }))
-            .await
-            .map_err(|status| provider_status("presentation_policy", policy_id, status))?
-            .into_inner();
+            })),
+        )
+        .await?;
         decode_policy_reference(policy_id, response)
     }
 
@@ -919,6 +1144,21 @@ fn bounded_json<T: DeserializeOwned>(
         .map_err(|_| invalid_response(provider, "provider returned malformed JSON"))
 }
 
+/// A channel's response-header timeout does not cover an incomplete unary
+/// message or missing trailers. Bound the complete read without cancelling a
+/// signer, evaluator, issuer, or persistence operation that may have effects.
+async fn bounded_read_rpc<T>(
+    provider: &'static str,
+    resource: &str,
+    request: impl std::future::Future<Output = Result<tonic::Response<T>, Status>>,
+) -> Result<T, FlowProviderError> {
+    tokio::time::timeout(READ_RPC_TIMEOUT, request)
+        .await
+        .map_err(|_| FlowProviderError::Unavailable { provider })?
+        .map(tonic::Response::into_inner)
+        .map_err(|status| provider_status(provider, resource, status))
+}
+
 fn provider_status(provider: &'static str, resource: &str, status: Status) -> FlowProviderError {
     if provider == "presentation_policy"
         && status.code() == Code::FailedPrecondition
@@ -1124,7 +1364,7 @@ mod tests {
             status: "active".into(),
             credential_type: "MemberCredential".into(),
             credential_payload_format: "vc_jwt_direct_v1".into(),
-            supported_formats: vec!["VC_JWT_DIRECT_V1".into()],
+            supported_formats: vec!["vc_jwt_direct_v1".into()],
             jwt_vc_profile_json: serde_json::to_string(
                 &marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap(),
             )
@@ -1153,13 +1393,86 @@ mod tests {
         }
         template.jwt_vc_profile_json.clear();
         template.credential_payload_format = "jwt_vc".into();
-        template.supported_formats = vec!["VC_JWT".into()];
+        template.supported_formats = vec!["jwt_vc".into()];
         let legacy = decode_template_reference("template-1", template).unwrap();
+        assert_eq!(legacy.credential_format, "jwt_vc");
+        assert_eq!(legacy.supported_formats, ["VC_JWT"]);
         assert!(legacy.jwt_vc_profile.is_none());
         assert!(serde_json::to_value(legacy)
             .unwrap()
             .get("jwt_vc_profile")
             .is_none());
+    }
+
+    #[test]
+    fn actual_template_owner_format_spellings_and_existing_aliases_cross_the_protobuf_boundary() {
+        use prost::Message;
+        for (canonical, wire_names) in [
+            ("MDOC", vec!["mdoc", "mso_mdoc"]),
+            ("SD_JWT_VC", vec!["sd_jwt_vc", "dc+sd-jwt", "vc+sd-jwt"]),
+            ("VC_JWT", vec!["jwt_vc", "jwt_vc_json", "jwt_vc_json_ld"]),
+            (
+                "VC_JWT_DIRECT_V1",
+                vec!["vc_jwt_direct_v1", "application/vc+jwt"],
+            ),
+            ("JSON_LD", vec!["ldp_vc"]),
+            ("ZK_MDOC", vec!["zk_mdoc", "zkp_mdoc"]),
+            ("VDS_NC", vec!["vds_nc", "vds_nc_barcode"]),
+            ("ICAO_EMRTD", vec!["icao_emrtd"]),
+        ] {
+            for wire in std::iter::once(canonical).chain(wire_names) {
+                let response = crate::credential_template_proto::TemplateResponse {
+                    id: "template-1".into(),
+                    organization_id: "org-1".into(),
+                    supported_formats: vec![wire.into()],
+                    wallet_configs_json: "[]".into(),
+                    ..Default::default()
+                };
+                let encoded = response.encode_to_vec();
+                let decoded = decode_template_reference(
+                    "template-1",
+                    crate::credential_template_proto::TemplateResponse::decode(encoded.as_slice())
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(decoded.supported_formats, [canonical]);
+            }
+        }
+    }
+
+    #[test]
+    fn template_wire_formats_reject_unknown_values_and_preserve_distinct_capabilities() {
+        let response = |formats: &[&str]| crate::credential_template_proto::TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            supported_formats: formats.iter().map(|value| (*value).into()).collect(),
+            wallet_configs_json: "[]".into(),
+            ..Default::default()
+        };
+        for unknown in [
+            "",
+            "unknown",
+            "vc_jwt_direct_v2",
+            "application/vc+jwt;profile=other",
+            "jwt_vc ",
+        ] {
+            for known in ["jwt_vc", "vc_jwt_direct_v1"] {
+                assert!(matches!(
+                    decode_template_reference("template-1", response(&[known, unknown])),
+                    Err(FlowProviderError::InvalidResponse {
+                        provider: "credential_template",
+                        ..
+                    })
+                ));
+            }
+        }
+        let distinct =
+            decode_template_reference("template-1", response(&["jwt_vc", "vc_jwt_direct_v1"]))
+                .unwrap();
+        assert_eq!(distinct.supported_formats, ["VC_JWT", "VC_JWT_DIRECT_V1"]);
+        let duplicate =
+            decode_template_reference("template-1", response(&["jwt_vc", "VC_JWT"])).unwrap();
+        assert_eq!(duplicate.supported_formats, ["VC_JWT", "VC_JWT"]);
     }
 
     fn flow_issuance_fixture(name: &str) -> String {

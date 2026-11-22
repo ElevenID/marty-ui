@@ -327,6 +327,7 @@ async fn retrieve_request_object(
     wallet_nonce: Option<String>,
 ) -> Result<Response, FlowHttpError> {
     let current = required_instance(state, instance_id).await?;
+    require_non_delegated_request(&current)?;
     crate::public_verification_session::require_wallet_session(&current)?;
     let expected_status = current.status;
     let expected_updated_at = current.updated_at;
@@ -398,6 +399,7 @@ async fn wallet_verifier_request_owner(
     // authenticated workload, even when no gateway principal headers exist.
     crate::http_read::authenticate_gateway_service(&state, &headers)?;
     let current = required_instance(&state, &instance_id).await?;
+    require_non_delegated_request(&current)?;
     let projection = commit_wallet_verifier_request(&state, current).await?;
     let mut response = Json(projection).into_response();
     response
@@ -413,6 +415,7 @@ async fn commit_wallet_verifier_request(
     state: &FlowHttpState,
     current: crate::FlowInstanceRecord,
 ) -> Result<crate::WalletVerifierRequestProjection, FlowHttpError> {
+    require_non_delegated_request(&current)?;
     let expected_status = current.status;
     let expected_updated_at = current.updated_at;
     let organization_id = current.organization_id.clone();
@@ -441,6 +444,23 @@ async fn commit_wallet_verifier_request(
         return Err(wallet_request_unavailable());
     }
     Ok(prepared.projection)
+}
+
+fn require_non_delegated_request(
+    instance: &crate::FlowInstanceRecord,
+) -> Result<(), FlowHttpError> {
+    if instance
+        .context
+        .get(marty_delegated_authority::DELEGATION_FLOW_CONTEXT_KEY)
+        .is_some()
+    {
+        return Err(FlowHttpError::new(
+            StatusCode::FORBIDDEN,
+            "delegated_request_ingress_required",
+            "Delegated requests require the authenticated delegated ingress",
+        ));
+    }
+    Ok(())
 }
 
 async fn commit_request_snapshot(

@@ -157,3 +157,4 @@ pub mod credential_template_proto {
 pub mod revocation_profile_proto {
     tonic::include_proto!("marty.ui.revocation_profile.v1");
 }
+pub mod machine_credential_status;

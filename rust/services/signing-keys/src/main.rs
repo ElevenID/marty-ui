@@ -72,10 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry_store =
         registry_store.with_auth_envelope_provider(integration_secret_envelopes.clone());
     let grant_verifier = marty_signing_grant::configuration::GrantAuthority::from_environment()?
-        .verifier(
+        .verifier_with_delegated_decisions(
             managed_openbao_endpoint.as_deref(),
             config.sign_grant_verify_token_file.clone(),
             RedisGrantReplayStore::new(registry_store.connection()),
+            config.delegated_receipt_signing_enabled,
         )?;
     if let Some(holder_proofs) = holder_proofs {
         tokio::spawn(async move {

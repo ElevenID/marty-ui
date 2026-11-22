@@ -2373,9 +2373,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4119,6 +4119,128 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-delegated-authority"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "chrono",
+ "ecdsa",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "marty-crypto",
+ "marty-oid4vci",
+ "marty-organization",
+ "marty-principal-runtime-binding",
+ "marty-service-runtime",
+ "marty-signing-grant",
+ "marty-signing-grant-test-support",
+ "marty-verification",
+ "mmf-platform",
+ "mmf-security",
+ "p256",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-delegated-receipt-consumer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ecdsa",
+ "ed25519-dalek 2.2.0",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-delegated-use"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "marty-credential-template",
+ "marty-delegated-authority",
+ "marty-delegated-receipt-consumer",
+ "marty-delegated-use-client",
+ "marty-flow",
+ "marty-issuance-service",
+ "marty-machine-credential-source",
+ "marty-oid4vci",
+ "marty-oid4vp-contract",
+ "marty-organization",
+ "marty-presentation-policy",
+ "marty-principal-runtime-binding",
+ "marty-service-runtime",
+ "marty-signing-grant",
+ "marty-signing-grant-test-support",
+ "marty-signing-keys",
+ "marty-trust-profile",
+ "mmf-platform",
+ "p256",
+ "rand 0.9.5",
+ "rcgen",
+ "redis",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-delegated-use-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "chrono",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-demo-vendor-seed"
 version = "0.1.0"
 dependencies = [
@@ -4322,12 +4444,14 @@ dependencies = [
  "http 1.5.0",
  "marty-api-key-policy",
  "marty-crypto",
+ "marty-delegated-authority",
  "marty-didcomm",
  "marty-iso18013",
  "marty-jwt-vc-issuance",
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-oid4vp-contract",
+ "marty-organization",
  "marty-passport-auth",
  "marty-presentation-policy",
  "marty-schema-startup",
@@ -4443,6 +4567,7 @@ dependencies = [
  "marty-oid4vci",
  "marty-oid4vp-contract",
  "marty-passport-auth",
+ "marty-principal-runtime-binding",
  "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
@@ -4646,6 +4771,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-machine-credential-source"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 2.2.0",
+ "marty-credential-template",
+ "marty-delegated-authority",
+ "marty-issuance-service",
+ "marty-oid4vci",
+ "marty-oid4vp-contract",
+ "marty-organization",
+ "marty-principal-runtime-binding",
+ "marty-trust-profile",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "marty-managed-key-reference"
 version = "0.1.0"
 dependencies = [
@@ -4771,10 +4921,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
+ "ed25519-dalek 2.2.0",
  "libc",
  "marty-api-key-policy",
  "marty-key-material-policy",
+ "marty-principal-runtime-binding",
  "marty-service-contracts",
  "marty-service-runtime",
  "mmf-core",
@@ -4908,6 +5061,22 @@ dependencies = [
  "url",
  "uuid",
  "x509-cert",
+]
+
+[[package]]
+name = "marty-principal-runtime-binding"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ecdsa",
+ "ed25519-dalek 2.2.0",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -9228,9 +9397,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  parseApplicationSourceJson, planApplicationSourceExport, restoreApplicationSourcePackage,
+  applicationSourceTestPolicy, parseApplicationSourceJson, planApplicationSourceExport, restoreApplicationSourcePackage,
   validateApplicationSourceBaseline, validateApplicationSourceProducerReceipt,
 } from '../ui/scripts/export-application-source.mjs';
 import {
@@ -86,7 +86,8 @@ export function validateApplicationReleaseConsumer(consumer, { manifest, baselin
   assert.equal(consumer.environment?.identity_authority, 'verified-external-producer-and-same-source-baseline');
   assert.equal(consumer.environment?.npm_configuration, 'explicit-empty-user-and-global');
   assert.equal(consumer.environment?.cache_mode, 'new-temporary-cache');
-  assert.equal(consumer.tests?.test_count, 296);
+  assert.equal(consumer.tests?.test_count, applicationSourceTestPolicy(manifest).assertions,
+    'Release consumer did not complete every assertion in the approved source test profile');
   assert.deepEqual([...consumer.tests.completed_files].sort(), [...manifest.test_profile.files].sort());
   assert.equal(consumer.dependency_install?.sdk?.initialized_in_node, true);
   assert.equal(consumer.dependency_install?.postinstall?.verified, true);

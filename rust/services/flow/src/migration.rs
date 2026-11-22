@@ -65,6 +65,17 @@ pub async fn migrate_flow_schema_for_organization(
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0005_delegated_use_retention.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!("../migrations/0006_delegated_use_ingress.sql"))
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0007_delegated_use_locks.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
@@ -159,6 +170,7 @@ async fn validate_builtin_ownership(
 async fn validate_connection(
     connection: &mut sqlx::PgConnection,
 ) -> Result<(), FlowMigrationError> {
+    validate_delegated_use_lock_helpers(connection).await?;
     let version: Option<String> = sqlx::query_scalar(
         "SELECT version FROM flow_service.rust_schema_versions WHERE version=$1",
     )
@@ -175,6 +187,40 @@ async fn validate_connection(
             "Public verification retention migration is missing",
         ));
     }
+    let delegated_version: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM flow_service.rust_schema_versions WHERE version='rust_flow_delegated_use_0005')")
+        .fetch_one(&mut *connection).await?;
+    if !delegated_version {
+        return Err(incompatible("Delegated-use retention migration is missing"));
+    }
+    let delegated_guards: i64 = sqlx::query_scalar(
+        "WITH expected(table_name,trigger_name,function_name,trigger_type,deferred) AS (
+           SELECT name,name||'_immutable','reject_delegated_use_mutation',27,false FROM unnest(ARRAY[
+             'delegated_use_storage_identity','delegated_challenge_bindings','delegated_proof_submissions','delegated_use_consumptions']) name
+           UNION ALL SELECT name,name||'_no_truncate','reject_delegated_use_mutation',34,false FROM unnest(ARRAY[
+             'delegated_use_storage_identity','delegated_challenge_bindings','delegated_proof_submissions','delegated_use_consumptions']) name
+           UNION ALL VALUES
+             ('delegated_challenge_bindings','delegated_challenge_binding_guard','guard_delegated_challenge_binding',7,false),
+             ('delegated_proof_submissions','delegated_proof_submission_guard','guard_delegated_proof_submission',7,false),
+             ('delegated_challenge_bindings','delegated_challenge_commit','check_delegated_use_commit',5,true),
+             ('delegated_use_consumptions','delegated_consumption_commit','check_delegated_use_commit',5,true),
+             ('flow_instances','delegated_flow_mutation_guard','guard_delegated_flow_mutation',25,true)
+         ) SELECT count(*) FROM expected e JOIN pg_trigger t
+           ON t.tgrelid=to_regclass('flow_service.'||e.table_name) AND t.tgname=e.trigger_name
+         JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+         WHERE NOT t.tgisinternal AND t.tgenabled='O' AND t.tgqual IS NULL AND t.tgtype=e.trigger_type
+           AND t.tgnargs=0 AND t.tgattr=''::int2vector AND t.tgdeferrable=e.deferred AND t.tginitdeferred=e.deferred
+           AND (t.tgconstraint<>0)=e.deferred AND t.tgfoid=to_regprocedure('flow_service.'||e.function_name||'()')
+           AND NOT p.prosecdef AND p.prorettype='trigger'::regtype AND p.prokind='f'
+           AND l.lanname='plpgsql' AND p.proconfig=ARRAY['search_path=pg_catalog']::text[]",
+    ).fetch_one(&mut *connection).await?;
+    if delegated_guards != 13 {
+        return Err(incompatible(
+            "Delegated-use immutable/commit guards are missing",
+        ));
+    }
+    crate::delegation_use_ingress::validate_delegated_use_ingress_connection(connection)
+        .await
+        .map_err(|_| incompatible("Delegated-use ingress schema or guards are missing"))?;
     let seed: Option<String> = sqlx::query_scalar(
         "SELECT version FROM flow_service.rust_seed_versions \
          WHERE version='rust_flow_seed_0001'",
@@ -226,6 +272,10 @@ async fn validate_connection(
         ("physical_start_intents", "initial_actor"),
         ("physical_start_intents", "original_deadline_at"),
         ("physical_start_intents", "key_source"),
+        ("delegated_use_storage_identity", "storage_id"),
+        ("delegated_challenge_bindings", "instance_snapshot"),
+        ("delegated_proof_submissions", "proof_digest"),
+        ("delegated_use_consumptions", "receipt_digest"),
     ];
     let rows = sqlx::query(
         "SELECT table_name, column_name FROM information_schema.columns \
@@ -273,6 +323,9 @@ async fn validate_connection(
         }
     }
     for (table, key) in [
+        ("flow_service.delegated_challenge_bindings", "challenge_id"),
+        ("flow_service.delegated_proof_submissions", "submission_id"),
+        ("flow_service.delegated_use_consumptions", "challenge_id"),
         ("flow_service.flow_nonce_consumptions", "nonce_digest"),
         ("flow_service.public_verification_receipts", "instance_id"),
         (
@@ -294,6 +347,30 @@ async fn validate_connection(
         let expected_definition = format!("PRIMARY KEY ({key})");
         if definition.as_deref() != Some(expected_definition.as_str()) {
             return Err(incompatible("Rust Flow replay primary key is missing"));
+        }
+    }
+    for (table, keys) in [
+        (
+            "flow_service.delegated_challenge_bindings",
+            "organization_id, verifier_id, nonce_digest",
+        ),
+        (
+            "flow_service.delegated_proof_submissions",
+            "challenge_id, proof_digest",
+        ),
+        (
+            "flow_service.delegated_use_consumptions",
+            "proof_submission_id",
+        ),
+    ] {
+        let present: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_index i ON i.indexrelid=c.conindid
+             WHERE c.conrelid=to_regclass($1) AND c.contype='u' AND c.convalidated AND NOT c.condeferrable
+               AND pg_get_constraintdef(c.oid)=$2 AND i.indisunique AND i.indisvalid AND i.indisready
+               AND i.indpred IS NULL AND i.indexprs IS NULL)",
+        ).bind(table).bind(format!("UNIQUE ({keys})")).fetch_one(&mut *connection).await?;
+        if !present {
+            return Err(incompatible("Delegated-use replay uniqueness is missing"));
         }
     }
     for (index, table, first_key, second_key) in [
@@ -346,4 +423,66 @@ async fn validate_connection(
 
 fn incompatible(message: &str) -> FlowMigrationError {
     FlowMigrationError::Incompatible(message.into())
+}
+
+/// Verify only the exact lock helpers required by the internal use writer.
+/// This reads metadata through a restricted Flow connection and changes no data.
+pub async fn validate_delegated_use_lock_schema(pool: &PgPool) -> Result<(), FlowMigrationError> {
+    let mut connection = pool.acquire().await?;
+    validate_delegated_use_lock_helpers(&mut connection).await
+}
+
+async fn validate_delegated_use_lock_helpers(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), FlowMigrationError> {
+    let migration = include_str!("../migrations/0007_delegated_use_locks.sql");
+    let marker: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM flow_service.rust_schema_versions WHERE version='rust_flow_delegated_use_locks_0007')")
+        .fetch_one(&mut *connection).await?;
+    if !marker {
+        return Err(incompatible(
+            "delegated-use serving lock migration is missing",
+        ));
+    }
+    for (name, signature, table) in [
+        (
+            "lock_delegated_use_definition",
+            "text,text",
+            "flow_definitions",
+        ),
+        (
+            "lock_delegated_use_proof",
+            "uuid,uuid,uuid",
+            "delegated_proof_submissions",
+        ),
+    ] {
+        let marker = format!("CREATE OR REPLACE FUNCTION flow_service.{name}(");
+        let expected = migration
+            .split_once(&marker)
+            .and_then(|(_, rest)| rest.split_once("AS $lock$"))
+            .and_then(|(_, rest)| rest.split_once("$lock$;"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| incompatible("delegated-use lock helper definition is missing"))?;
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+          SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          JOIN pg_language l ON l.oid=p.prolang JOIN pg_class t ON t.oid=to_regclass($3)
+          WHERE p.oid=to_regprocedure($1) AND p.prosrc=$2 AND p.prosecdef
+            AND p.prokind='f' AND p.provolatile='v' AND p.proparallel='u'
+            AND p.proretset AND NOT p.proisstrict AND p.pronargdefaults=0
+            AND p.prorettype=t.reltype AND l.lanname='sql'
+            AND p.proconfig=ARRAY['search_path=pg_catalog']::TEXT[]
+            AND p.proowner=n.nspowner AND t.relowner=n.nspowner
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                           WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))",
+        )
+        .bind(format!("flow_service.{name}({signature})"))
+        .bind(expected)
+        .bind(format!("flow_service.{table}"))
+        .fetch_one(&mut *connection)
+        .await?;
+        if !valid {
+            return Err(incompatible("delegated-use lock helper changed"));
+        }
+    }
+    Ok(())
 }

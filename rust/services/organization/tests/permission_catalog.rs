@@ -9,7 +9,7 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 113);
+    assert_eq!(catalog.len(), 148);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
     assert!(keys.contains("application:manage-ownership"));
@@ -23,6 +23,34 @@ fn shared_permission_catalog_is_unique_and_complete() {
     assert!(keys.contains("passport-certificate:issue-csca"));
     assert!(keys.contains("mdoc-certificate:issue-iaca"));
     assert!(keys.contains("mdoc-certificate:issue"));
+    for action in [
+        "view",
+        "create",
+        "update",
+        "suspend",
+        "revoke",
+        "retire",
+        "rotate-key",
+        "enroll",
+    ] {
+        assert!(keys.contains(&format!("agent-identity:{action}")));
+    }
+    for resource in [
+        "machine-identity",
+        "machine-authorization-policy",
+        "machine-use-access",
+        "delegation-use-policy",
+    ] {
+        for action in ["create", "update", "view"] {
+            assert!(keys.contains(&format!("{resource}:{action}")));
+        }
+    }
+    assert!(keys.contains("machine-authentication-policy:assign"));
+    assert!(keys.contains("delegation-grant:view"));
+    assert!(keys.contains("delegation-grant:approve"));
+    for action in ["create", "suspend", "reinstate", "revoke"] {
+        assert!(keys.contains(&format!("delegation-grant:{action}")));
+    }
 }
 
 #[test]
@@ -56,6 +84,71 @@ fn system_role_templates_preserve_intended_entitlements() {
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
     for template in &templates {
+        for key in [
+            "machine-identity:create",
+            "machine-identity:update",
+            "machine-identity:suspend",
+            "machine-identity:revoke",
+            "machine-identity:retire",
+            "machine-authentication-policy:assign",
+            "machine-authorization-policy:create",
+            "machine-authorization-policy:update",
+            "machine-authorization-policy:activate",
+            "machine-authorization-policy:archive",
+            "machine-use-access:create",
+            "machine-use-access:update",
+            "machine-use-access:revoke",
+            "delegation-use-policy:create",
+            "delegation-use-policy:update",
+            "delegation-use-policy:activate",
+            "delegation-use-policy:archive",
+        ] {
+            assert_eq!(
+                template.permission_keys.contains(key),
+                matches!(template.name, "owner" | "admin"),
+                "unexpected full machine administration permission for {}",
+                template.name
+            );
+        }
+        for key in [
+            "agent-identity:enroll",
+            "delegation-grant:create",
+            "delegation-grant:suspend",
+            "delegation-grant:reinstate",
+            "delegation-grant:revoke",
+        ] {
+            assert_eq!(
+                template.permission_keys.contains(key),
+                matches!(template.name, "owner" | "admin"),
+                "unexpected enrollment or delegated lifecycle permission for {}",
+                template.name
+            );
+        }
+        assert_eq!(
+            template
+                .permission_keys
+                .contains("delegation-grant:approve"),
+            matches!(template.name, "owner" | "admin"),
+            "unexpected representation authority for {}",
+            template.name
+        );
+        for action in [
+            "create",
+            "update",
+            "suspend",
+            "revoke",
+            "retire",
+            "rotate-key",
+        ] {
+            assert_eq!(
+                template
+                    .permission_keys
+                    .contains(&format!("agent-identity:{action}")),
+                matches!(template.name, "owner" | "admin" | "access_admin"),
+                "unexpected agent administration permission for {}",
+                template.name
+            );
+        }
         for key in ["identity:attest", "external-association:manage"] {
             assert_eq!(
                 template.permission_keys.contains(key),

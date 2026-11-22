@@ -4,7 +4,10 @@ use serde_json::Value;
 use sqlx::PgConnection;
 
 pub const VERSION: &str = "0016_application_ownership";
-pub const CATALOG_QUERY: &str = include_str!("../schema/application_ownership_catalog_query.sql");
+pub const CATALOG_QUERY: &str = concat!(
+    include_str!("../schema/application_ownership_catalog_scope.sql"),
+    include_str!("../schema/scoped_catalog_query.sql"),
+);
 const CATALOG: &str = include_str!("../schema/application_ownership_catalog.json");
 
 pub async fn validate(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
