@@ -293,7 +293,7 @@ def test_published_backout_binds_actual_selected_split(monkeypatch, planned, cap
                 pytest.fail('Backout cannot disguise damage to the committed forward seal')
 
 
-def _retire_published(plan, published, guard_pin, anchor, combined_runtime):
+def _retire_published(plan, published, guard_pin, anchor, combined_runtime, *, readmission=None):
     import selfhost_windows_website_backout as retirement
 
     attempt = Path(plan['attempt_directory'])
@@ -313,8 +313,10 @@ def _retire_published(plan, published, guard_pin, anchor, combined_runtime):
         lease = {'owner': plan['owner'], 'guard_sha256': guard_pin}
         start = {'owner_lease': lease, 'native_custody': {}, 'foreign_storage': {}, 'runtime_before': {}}
         routes = {'synthetic': 'combined-overlay'}
-        append('restore-combined', 'started', 'restore-combined-before.json',
-               {**start, 'owner_lease': {**lease, 'published_selection': published}})
+        restored = {**start, 'owner_lease': {**lease, 'published_selection': published}}
+        if readmission is not None:
+            restored['runtime_before'] = readmission
+        append('restore-combined', 'started', 'restore-combined-before.json', restored)
         append('restore-combined', 'completed', 'restore-combined-after.json',
                {'runtime_after': staged, 'mounted_template': plan['edge_template'], 'edge_configuration': routes})
         append('verify-combined', 'started', 'verify-combined-before.json', start)

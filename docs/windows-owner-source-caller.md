@@ -250,3 +250,27 @@ a selected-expired origin that historical readers cannot consume. Retain the old
 source, runner, task definition, configuration, and evidence. A successful caller
 check must not be presented as completed task migration, credential recovery,
 website activation, periodic/logon behavior, or host reboot qualification.
+
+
+## Rehearse the installed website caller
+
+The isolated Windows test replays the exact committed caller and source
+archive through the original anchor. It checks refusal while the website
+guard is active, selects the split after release, and resolves the retained
+combined configuration after guarded rollback and release. The test
+checks the actual journal path and Compose source while preserving the
+credential generation and the caller's hook and log evidence.
+
+On a Windows test session with permission to register a limited current-user
+task, opt into the native clock-trigger rehearsal:
+
+```powershell
+$env:MARTY_TEST_TASK_SCHEDULER = '1'
+python -B -m pytest -s -q tests/test_windows_source_caller_ntfs.py -k released_split
+Remove-Item Env:MARTY_TEST_TASK_SCHEDULER
+```
+
+The rehearsal gives each one-shot task a unique name, verifies its action,
+checks the result, and removes its registration. It launches the synthetic
+installed caller in check-only mode. Actual credential renewal and production
+reboot behavior still require separate rehearsal.
