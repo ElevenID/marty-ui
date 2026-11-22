@@ -92,6 +92,18 @@ services:
       - auth_server_tls_kms_token
       - workload_identity_ca_cert
 
+  owner-migrations:
+    environment:
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:?MARTY_ORG_ADMIN_EMAIL must be set for beta}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
+      MARTY_MIGRATION_PROFILE: beta
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+
   organization:
     environment:
       <<: *beta-grpc-service-auth
