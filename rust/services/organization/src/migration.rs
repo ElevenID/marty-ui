@@ -58,6 +58,74 @@ pub async fn validate_organization_schema(pool: &PgPool) -> Result<(), Organizat
     validate_connection(&mut connection).await
 }
 
+pub async fn validate_organization_outbox_schema(
+    pool: &PgPool,
+) -> Result<(), OrganizationMigrationError> {
+    let columns = sqlx::query(
+        "SELECT table_name, column_name FROM information_schema.columns
+         WHERE table_schema='mmf_messaging'
+           AND table_name IN ('outbox_messages', 'inbox_messages')",
+    )
+    .fetch_all(pool)
+    .await?;
+    let expected_columns = [
+        ("outbox_messages", "message_id"),
+        ("outbox_messages", "source_service"),
+        ("outbox_messages", "tenant_id"),
+        ("outbox_messages", "partition"),
+        ("outbox_messages", "priority"),
+        ("outbox_messages", "message"),
+        ("outbox_messages", "status"),
+        ("outbox_messages", "attempt_count"),
+        ("outbox_messages", "max_attempts"),
+        ("outbox_messages", "next_attempt_at_ms"),
+        ("outbox_messages", "last_error"),
+        ("outbox_messages", "processed_at_ms"),
+        ("outbox_messages", "lease_token"),
+        ("outbox_messages", "lease_expires_at_ms"),
+        ("outbox_messages", "created_at_ms"),
+        ("outbox_messages", "scheduled_at_ms"),
+        ("outbox_messages", "expires_at_ms"),
+        ("inbox_messages", "source_service"),
+        ("inbox_messages", "message_id"),
+        ("inbox_messages", "processed_at_ms"),
+    ];
+    for (table, column) in expected_columns {
+        if !columns.iter().any(|row| {
+            row.get::<String, _>("table_name") == table
+                && row.get::<String, _>("column_name") == column
+        }) {
+            return Err(incompatible(&format!("mmf_messaging.{table}.{column} is missing")));
+        }
+    }
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname FROM pg_indexes WHERE schemaname='mmf_messaging'",
+    )
+    .fetch_all(pool)
+    .await?;
+    for required in [
+        "ix_mmf_outbox_due",
+        "ix_mmf_outbox_lease",
+        "ix_mmf_outbox_tenant",
+        "ix_mmf_inbox_retention",
+    ] {
+        if !indexes.iter().any(|index| index == required) {
+            return Err(incompatible(&format!("outbox index {required} is missing")));
+        }
+    }
+
+    // These zero-row reads prove the runtime identity can reach both owner
+    // tables without mutating them.
+    sqlx::query("SELECT message_id FROM mmf_messaging.outbox_messages LIMIT 0")
+        .fetch_all(pool)
+        .await?;
+    sqlx::query("SELECT message_id FROM mmf_messaging.inbox_messages LIMIT 0")
+        .fetch_all(pool)
+        .await?;
+    Ok(())
+}
+
 async fn validate_connection(
     connection: &mut PgConnection,
 ) -> Result<(), OrganizationMigrationError> {
