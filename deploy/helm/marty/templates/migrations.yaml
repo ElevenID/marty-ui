@@ -88,12 +88,13 @@ spec:
         {{- include "marty.migrationContainer" (dict "root" . "name" "revocation-profile" "command" (list "/usr/local/bin/marty-revocation-profile")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-notification" "role" "migrations" "command" (list "/app/run-migrations-with-secrets.sh")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "organization" "command" (list "/usr/local/bin/marty-organization" "migrate")) | nindent 8 }}
-        {{- include "marty.migrationContainer" (dict "root" . "name" "credential-template" "command" (list "/usr/local/bin/marty-credential-template" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "credential-template" "command" (list "/usr/local/bin/marty-credential-template" "bootstrap")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "flow" "command" (list "/usr/local/bin/marty-flow" "migrate")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "device-registration" "command" (list "/usr/local/bin/marty-device-registration" "migrate")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "verification" "command" (list "/usr/local/bin/marty-verification-service" "migrate")) | nindent 8 }}
-        # These services seed the organization and credential catalog during
-        # normal startup. Issuance must see them before seeding a fresh schema.
+        # Catalog provisioning is an explicit migration-job step; normal
+        # service startup validates schemas and performs no seed writes. Issuance
+        # must see the completed catalog before seeding a fresh schema.
         {{- range $peer := list (dict "name" "organization" "url" "http://organization:8002/health") (dict "name" "credential-template" "url" "http://credential-template:8003/ready") }}
         - name: ready-{{ $peer.name }}
           image: {{ include "marty.image" (dict "root" $ "role" "services") | quote }}
