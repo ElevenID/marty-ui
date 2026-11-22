@@ -21,7 +21,7 @@ def disabled_model() -> dict:
         "keycloak-configurator": {"environment": {
             "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
         }},
-        "notification": {"environment": {"SMTP_USERNAME": ""}},
+        "notification": {"environment": {"SMTP_USERNAME": "", "NOTIFICATION_EMAIL_PROVIDER": "disabled", "NOTIFICATION_EMAIL_FROM": ""}},
     }}
     for owner, flags in journey.PASSPORT_DISABLED_FLAGS.items():
         model["services"][owner] = {"environment": {
@@ -55,7 +55,7 @@ def test_creates_exact_seven_empty_private_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_root, install_root, env_file = setup(tmp_path, monkeypatch)
-    assert optional.stage(secret_root, install_root, env_file, PROJECT) == 7
+    assert optional.stage(secret_root, install_root, env_file, PROJECT) == len(journey.OPTIONAL_LOCAL_SECRET_NAMES)
     assert {path.name for path in secret_root.iterdir()} == journey.OPTIONAL_LOCAL_SECRET_NAMES
     for path in secret_root.iterdir():
         assert path.stat().st_size == 0

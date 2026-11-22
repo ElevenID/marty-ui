@@ -84,6 +84,8 @@ struct Preparation {
     application_settings_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external_oidc_selection_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_postgres_selection_sha256: Option<String>,
     entries: BTreeMap<String, Entry>,
     prior_evidence_sha256: BTreeMap<String, String>,
     storage_created: bool,
@@ -213,22 +215,43 @@ fn entries(state: &LockedInspection) -> Result<BTreeMap<String, Entry>> {
             Some(verify_external_oidc_secret(state)?),
         ));
     }
-    paths.extend(
-        crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
-            .into_iter()
-            .map(|name| {
-                (
-                    format!("secrets/{name}"),
-                    false,
-                    0o444,
-                    Some(
-                        settings
-                            .as_ref()
-                            .map_or(0, |s| s.fingerprints()[name].size_bytes),
-                    ),
-                )
-            }),
+    if crate::installer_postgres::load(state)?.is_some() {
+        paths.push((
+            "secrets/external_postgres_password".to_owned(),
+            false,
+            0o444,
+            Some(verify_external_postgres_secret(state)?),
+        ));
+    }
+    let optional_names: Vec<&str> = settings.as_ref().map_or_else(
+        // No policy record denotes the historical seven-secret preparation.
+        // Fresh installers bind the versioned settings inventory first.
+        || {
+            crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
+                .into_iter()
+                .filter(|name| *name != "notification_resend_api_key")
+                .collect()
+        },
+        |selection| {
+            selection
+                .fingerprints()
+                .keys()
+                .map(String::as_str)
+                .collect()
+        },
     );
+    paths.extend(optional_names.into_iter().map(|name| {
+        (
+            format!("secrets/{name}"),
+            false,
+            0o444,
+            Some(
+                settings
+                    .as_ref()
+                    .map_or(0, |s| s.fingerprints()[name].size_bytes),
+            ),
+        )
+    }));
     let open = |path: &str| -> Result<File> {
         if let Some((parent, name)) = path.split_once('/') {
             require(!name.contains('/'))?;
@@ -261,6 +284,24 @@ fn external_oidc_selection_sha256(state: &LockedInspection) -> Result<Option<Str
     let bytes = state.diagnostic_record(crate::installer_oidc::RECORD, true)?;
     require(selected.is_some() == bytes.is_some())?;
     Ok(bytes.map(|bytes| installer_release::sha256(&bytes)))
+}
+
+fn external_postgres_selection_sha256(state: &LockedInspection) -> Result<Option<String>> {
+    let selected = crate::installer_postgres::load(state)?;
+    let bytes = state.diagnostic_record(crate::installer_postgres::RECORD, true)?;
+    require(selected.is_some() == bytes.is_some())?;
+    Ok(bytes.map(|bytes| installer_release::sha256(&bytes)))
+}
+
+fn verify_external_postgres_secret(state: &LockedInspection) -> Result<u64> {
+    let selected = crate::installer_postgres::load(state)?.ok_or(REFUSED)?;
+    let bytes = state.read_secret("external_postgres_password")?;
+    let length = bytes.len() as u64;
+    selected.verify_imported(&BTreeMap::from([(
+        "external_postgres_password".into(),
+        bytes,
+    )]))?;
+    Ok(length)
 }
 
 /// Public clients have an intentionally empty file. Bind that exact file and
@@ -378,6 +419,7 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
             .application_settings_sha256()
             .map(str::to_owned),
         external_oidc_selection_sha256: external_oidc_selection_sha256(state)?,
+        external_postgres_selection_sha256: external_postgres_selection_sha256(state)?,
         entries: entries(state)?,
         prior_evidence_sha256,
         storage_created: true,
@@ -423,6 +465,8 @@ pub(crate) fn verify_retained_provenance(
             && preparation.application_settings_sha256.as_deref()
                 == state.journal().application_settings_sha256()
             && preparation.external_oidc_selection_sha256 == external_oidc_selection_sha256(state)?
+            && preparation.external_postgres_selection_sha256
+                == external_postgres_selection_sha256(state)?
             && preparation.storage_created
             && preparation.operator_projection_created
                 == crate::installer_oidc::external(state)?.is_none()
@@ -465,6 +509,9 @@ pub(crate) fn verify_retained_provenance(
     }
     if preparation.external_oidc_selection_sha256.is_some() {
         verify_external_oidc_secret(state)?;
+    }
+    if preparation.external_postgres_selection_sha256.is_some() {
+        verify_external_postgres_secret(state)?;
     }
     state.require_path_binding(installation)
 }
@@ -795,6 +842,25 @@ mod tests {
             );
             let journal = std::fs::read(installation.join("installation.json")).unwrap();
             let evidence = std::fs::read(installation.join("evidence").join(RECORD)).unwrap();
+            // This fixture predates versioned application settings. Its exact
+            // retained inventory must not acquire the newly optional mail key.
+            let retained: Preparation = serde_json::from_slice(&evidence).unwrap();
+            assert!(retained.application_settings_sha256.is_none());
+            assert!(!retained
+                .entries
+                .contains_key("secrets/notification_resend_api_key"));
+            assert_eq!(
+                retained
+                    .entries
+                    .keys()
+                    .filter(|name| {
+                        crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
+                            .iter()
+                            .any(|secret| *name == &format!("secrets/{secret}"))
+                    })
+                    .count(),
+                7
+            );
             let password = std::fs::read(installation.join("operator-password")).unwrap();
             assert!(!evidence
                 .windows(password.len())

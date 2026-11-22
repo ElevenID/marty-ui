@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let discovery =
         StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name);
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(config.database_max_connections)
         .connect_lazy(&config.database_url)?;
     let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
     let schema_mode = SchemaStartupMode::from_env()?;
