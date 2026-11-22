@@ -253,9 +253,10 @@ failure would discard useful evidence.
 
 The migration Job runs existing binary commands as ordered init containers:
 revocation-profile, shared/notification bootstrap, organization,
-credential-template, presentation-policy, flow, device-registration and verification. The
-Credential Template step uses its explicit `bootstrap` command to migrate,
-reconcile and seed the catalog under the migration-job identity. Presentation
+organization bootstrap, credential-template, presentation-policy, flow, device-registration and verification. The
+Organization migration and bootstrap run before Credential Template's explicit
+`bootstrap` command migrates, reconciles and seeds the catalog under the
+migration-job identity. Presentation
 Policy has separate `migrate` and `bootstrap-builtins` operator steps. Normal
 Credential Template and Presentation Policy service startup is validation-only
 and does not seed or reconcile records. Bounded curl retries then wait for the
