@@ -82,10 +82,11 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
             "marty-credential-template bootstrap",
             "marty-presentation-policy migrate",
             "marty-presentation-policy bootstrap-builtins",
+            "marty-flow migrate",
         ]
         positions = [block.index(command) for command in commands]
         assert positions == sorted(positions)
-        for service in ("organization", "credential-template", "presentation-policy"):
+        for service in ("organization", "credential-template", "presentation-policy", "flow"):
             match = re.search(
                 rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
                 source,
