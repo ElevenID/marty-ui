@@ -260,8 +260,8 @@ migration-job identity. Presentation
 Policy has separate `migrate` and `bootstrap-builtins` operator steps. Normal
 Credential Template and Presentation Policy service startup is validation-only
 and does not seed or reconcile records. Bounded curl retries then wait for the
-organization, credential-template and presentation-policy runtimes before the
-native issuance migration runs. This prevents fresh issuance from permanently seeding an empty
+organization and credential-template runtimes before the native issuance
+migration runs. This prevents fresh issuance from permanently seeding an empty
 application-template catalog.
 The Job has a deadline and retry limit. It is a regular Job, so `helm --wait`
 can observe the schema-validating applications and migration completion
