@@ -287,12 +287,23 @@ def retired_provider_projection(value):
 
 
 def assert_models(
-    approved, actual, *, interpolated=False, issuer_did="",
-    ui_enabled_sections="public,console", bureau_api_key_file="",
-    passkeys_enabled="", passkey_rp_id="", owner_org_id="",
-    owner_org_name="Marty", owner_org_slug="marty", owner_admin_email="",
-    owner_reviewer_email="", owner_migration_profile="selfhost-production",
-    owner_public_domain="localhost", owner_public_api_url="https://localhost",
+    approved,
+    actual,
+    *,
+    interpolated=False,
+    issuer_did="",
+    ui_enabled_sections="public,console",
+    bureau_api_key_file="",
+    passkeys_enabled="",
+    passkey_rp_id="",
+    owner_org_id="",
+    owner_org_name="Marty",
+    owner_org_slug="marty",
+    owner_admin_email="",
+    owner_reviewer_email="",
+    owner_migration_profile="selfhost-production",
+    owner_public_domain="localhost",
+    owner_public_api_url="https://localhost",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = retired_provider_projection(deepcopy(approved))
@@ -799,9 +810,13 @@ def interpolated_models():
                 owner_org_slug=values.get("MARTY_ORG_SLUG") or "marty",
                 owner_admin_email=values.get("MARTY_ORG_ADMIN_EMAIL") or "",
                 owner_reviewer_email=values.get("MARTY_ORG_REVIEWER_EMAIL") or "",
-                owner_migration_profile=values.get("MARTY_MIGRATION_PROFILE") or "selfhost-production",
+                owner_migration_profile=(
+                    values.get("MARTY_MIGRATION_PROFILE") or "selfhost-production"
+                ),
                 owner_public_domain=values.get("PUBLIC_DOMAIN") or "localhost",
-                owner_public_api_url=values.get("PUBLIC_API_URL") or "https://localhost",
+                owner_public_api_url=(
+                    values.get("PUBLIC_API_URL") or "https://localhost"
+                ),
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (
