@@ -74,12 +74,13 @@ print('PRIVATE_LOG_APPEND_VERIFIED')
 # The late-source action adds one real ACL fault after its pending write.
 STATE_CHILD = r'''
 from contextlib import ExitStack,contextmanager
-import hashlib,json,pathlib,subprocess,sys,types
+import hashlib,json,os,pathlib,subprocess,sys,types
 script,script_sha,profile_sha,action=sys.argv[1:]
 allow_acl_fault=False
+powershell_executable=str(pathlib.Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe')
 def no_runtime_processes(event,arguments):
  if event in {'subprocess.Popen','os.system','os.exec','os.posix_spawn'}:
-  if event=='subprocess.Popen' and allow_acl_fault and arguments[0]=='powershell.exe':return
+  if event=='subprocess.Popen' and allow_acl_fault and arguments[0]==powershell_executable:return
   raise AssertionError('Hook-state proof attempted a runtime process')
 sys.addaudithook(no_runtime_processes)
 path=pathlib.Path(script);raw=path.read_bytes()
@@ -104,8 +105,8 @@ def instrument(name,raw,path):
      "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
     allow_acl_fault=True
     try:
-     subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',command],
-                    capture_output=True,check=True,timeout=15)
+     subprocess.run([powershell_executable,'-NoProfile','-NonInteractive','-Command',command],
+                    executable=powershell_executable,capture_output=True,check=True,timeout=15)
     finally:allow_acl_fault=False
     print('SOURCE_ACL_CHANGED_AFTER_SELECTED_EXIT',file=sys.stderr)
   module.hold_files=late_source
@@ -121,7 +122,18 @@ try:
     @contextmanager
     def replace_allocation(file,value=None,**kwargs):
      if file.name==target and value is not None:
-      file.rename(file.with_name(file.name+'.replaced'))
+      replacement=file.with_name(file.name+'.replaced')
+      try:file.rename(replacement)
+      except PermissionError as error:
+       # A held private state directory may reject the target-parent write
+       # needed by MoveFileEx before a replacement can even be installed.
+       # Accept only that concrete sharing refusal, with its original empty
+       # allocation and identity intact. Other injection errors still fail.
+       assert error.winerror==32
+       assert native._path_identities(file)==kwargs['_expected_identities']
+       assert file.read_bytes()==b'' and not replacement.exists()
+       print('HOOK_ALLOCATION_REPLACEMENT_BLOCKED winerror=32',file=sys.stderr)
+       raise
       file.write_bytes(b'')
       assert native._path_identities(file)!=kwargs['_expected_identities']
       print('REPLACED_HOOK_RECORD_ALLOCATION',file=sys.stderr)
@@ -132,7 +144,12 @@ try:
     state.begin(lease)
   if action!='pending':state.complete()
  result={'completed':state.completed,'pending':state.pending}
-except Exception:
+except Exception as error:
+ details=[]
+ while error is not None and len(details)<5:
+  details.append({'error_type':type(error).__name__,'winerror':getattr(error,'winerror',None)})
+  error=error.__context__
+ print('HOOK_STATE_REFUSAL_DETAILS '+json.dumps(details,sort_keys=True),file=sys.stderr)
  print('EXPECTED_HOOK_STATE_REFUSAL',file=sys.stderr);sys.exit(1)
 print(json.dumps(result,sort_keys=True))
 '''
@@ -518,10 +535,17 @@ def test_native_hook_record_allocation_replacement_preserves_failed_evidence(ins
     with synthetic_state_records(fixture) as root:
         result = run_state(fixture, "partial-" + phase)
         assert result.returncode == 1 and result.stdout == b""
-        assert b"REPLACED_HOOK_RECORD_ALLOCATION" in result.stderr
+        replaced = b"REPLACED_HOOK_RECORD_ALLOCATION" in result.stderr
+        blocked = b"HOOK_ALLOCATION_REPLACEMENT_BLOCKED winerror=32" in result.stderr
+        assert replaced != blocked, result.stderr.decode("utf-8", errors="replace")
         assert b"EXPECTED_HOOK_STATE_REFUSAL" in result.stderr
         path = root / f"000001.{phase}.json"
-        assert path.read_bytes() == path.with_name(path.name + ".replaced").read_bytes() == b""
+        assert path.read_bytes() == b""
+        replacement = path.with_name(path.name + ".replaced")
+        if replaced:
+            assert replacement.read_bytes() == b""
+        else:
+            assert not replacement.exists()
         if phase == "intent":
             assert not (root / "000001.complete.json").exists()
         before = owner_snapshot(fixture["root"], [])
