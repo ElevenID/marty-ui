@@ -34,6 +34,7 @@ def test_organization_schema_and_catalog_writes_are_operator_only() -> None:
         application.index("pub async fn create_organization")
     ]
     assert "validate_organization_schema(self.store.pool())" in initialize
+    assert "validate_organization_outbox_schema(self.store.pool())" in initialize
     assert "migrate_organization_schema(" not in initialize
     assert "self.outbox.migrate()" not in initialize
 
