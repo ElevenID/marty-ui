@@ -69,7 +69,8 @@ def initial_anchor_sha256(plan):
     return selection.digest(selection.packed(_tail_value(plan, 1, name, body, None)))
 
 
-def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next_record_sha256=None):
+def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next_record_sha256=None,
+          historical_forward=False):
     pending = verified_next_record_sha256 is not None
     require(not pending or plan_contract.sha(verified_next_record_sha256))
     require(plan_contract.sha(expected_anchor_sha256) or (pending and expected_anchor_sha256 is None))
@@ -77,11 +78,20 @@ def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next
     ordered = sorted(names - {PLAN, ABORT})
     require(PLAN in names and 1 <= len(ordered) <= journal.MAX_RECORDS
             and all(journal.RECORD_NAME.fullmatch(name) for name in ordered))
+    tails = _inventory(anchors)
+    full_tails = {_tail_name(index) for index in range(1, len(ordered) + 1)}
+    if historical_forward:
+        require(not pending and ABORT not in names)
+        matches = [index for index, name in enumerate(ordered, 1) if name[7:] == 'seal-forward.completed.json']
+        require(len(matches) == 1)
+        ordered = ordered[:matches[0]]
+        # The selected forward decision authenticates this immutable prefix.
+        # A later phase owner separately authenticates any backout suffix.
+        require({_tail_name(index) for index in range(1, len(ordered) + 1)} <= tails <= full_tails)
+    else:
+        require(tails == full_tails or (pending and tails == full_tails - {_tail_name(len(ordered))}))
     expected_count = len(ordered) - int(pending)
     require((expected_count == 0) == (expected_anchor_sha256 is None))
-    expected_tails = {_tail_name(index) for index in range(1, len(ordered) + 1)}
-    tails = _inventory(anchors)
-    require(tails == expected_tails or (pending and tails == expected_tails - {_tail_name(len(ordered))}))
     require(_hold_bytes(records / PLAN, held) == selection.packed(plan))
     receipt = None
     if ABORT in names:
@@ -159,13 +169,16 @@ def read_evidence(plan, *, expected_anchor_sha256, references, held):
         return _read_evidence(records, entries, references, held)
 
 
-def hold_terminal_evidence(plan, *, expected_anchor_sha256, classification, references, held):
+def hold_terminal_evidence(plan, *, expected_anchor_sha256, classification, references, held,
+                           historical_forward=False):
     """Hold the exact terminal journal, anchors and evidence until owner exit."""
     records, anchors = namespace_paths(plan)
     for path in (records, anchors):
         held.enter_context(renewal.hold_storage_namespace(path))
         held.enter_context(_held_private_input(path, directory=True))
-    entries, status, _names, _tails = _read(plan, records, anchors, held, expected_anchor_sha256)
+    require(not historical_forward or classification == 'forward-evidence-complete')
+    entries, status, _names, _tails = _read(plan, records, anchors, held, expected_anchor_sha256,
+                                           historical_forward=historical_forward)
     require(status['classification'] == classification)
     return status, _read_evidence(records, entries, references, held)
 

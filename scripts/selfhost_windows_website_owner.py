@@ -43,12 +43,12 @@ def validate_marker(raw, expected, source):
     return value
 
 
-def _sealed_evidence(plan, link, pinned_candidate, stack):
+def _sealed_evidence(plan, link, pinned_candidate, stack, *, historical_forward):
     phase = 'seal-forward'
     records, anchors = store.namespace_paths(plan)
     require(records.parent == Path(link['attempt_dir']))
     status, evidence = store.hold_terminal_evidence(plan, expected_anchor_sha256=link['terminal_sha256'],
-        classification='forward-evidence-complete', held=stack, references={
+        classification='forward-evidence-complete', held=stack, historical_forward=historical_forward, references={
             'route-website-after.json': ('route-website', 'completed'),
             'verify-website-after.json': ('verify-website', 'completed'),
             'seal-forward-before.json': (phase, 'started'), 'seal-forward-after.json': (phase, 'completed')})
@@ -84,7 +84,7 @@ def _held_json(path, stack, *, maximum=65536, canonical=True):
     return raw, value
 
 
-def _hold_successor(raw, expected, current_model, link, stack, *, admission):
+def _hold_successor(raw, expected, current_model, link, stack, *, admission, historical_forward):
     from selfhost_windows_model import effective_config, immutable_binding
 
     attempt = Path(link['attempt_dir'])
@@ -156,7 +156,7 @@ def _hold_successor(raw, expected, current_model, link, stack, *, admission):
         proof = stack.enter_context(renewal.hold_private_input(proofs / name, max_bytes=limit))
         require(selection.digest(proof) == pin)
 
-    runtime, foreign = _sealed_evidence(plan, link, candidate, stack)
+    runtime, foreign = _sealed_evidence(plan, link, candidate, stack, historical_forward=historical_forward)
     require(qualification['schema'] == forward.SCHEMA and qualification['candidate_sha256'] == link['candidate_sha256']
             and qualification['runtime_sha256'] == forward.contract.digest(runtime)
             and all(product.sha(qualification[key]) for key in (
@@ -171,13 +171,13 @@ def _hold_successor(raw, expected, current_model, link, stack, *, admission):
     return configuration, config_raw, config, model, split['data_sha256'], first, prior, generation
 
 
-def seed(raw, expected, current_model, source, link, stack, *, admission=False):
+def seed(raw, expected, current_model, source, link, stack, *, admission=False, historical_forward=False):
     """Keep the exact credential selection and generation at the new Compose owner."""
     from selfhost_windows_continuation import CHECKPOINT
 
     require(validate_marker(raw, expected, source) == link)
     configuration, config_raw, config, model, data, first, prior, generation = _hold_successor(
-        raw, expected, current_model, link, stack, admission=admission)
+        raw, expected, current_model, link, stack, admission=admission, historical_forward=historical_forward)
     empty = selection.digest(b'')
     first = deepcopy(first)
     first.update(sequence=1, parent=None, operation='website-successor', config_path=str(configuration),
@@ -199,6 +199,37 @@ def seed(raw, expected, current_model, source, link, stack, *, admission=False):
 def decision(link, initial):
     return {'schema': SCHEMA, 'intent_sha256': forward.contract.digest(link),
             'target_entries_sha256': {name: selection.digest(body) for name, body in initial.items()}}
+
+
+def hold_published_split(raw, expected, current_model, source, plan, intent_sha256, held):
+    """Verify and hold the exact untouched selected split for guarded backout."""
+    require(INTENT in raw and DECISION in raw and PENDING not in raw
+            and selection.digest(raw[INTENT]) == intent_sha256)
+    link = validate_marker(raw, expected, source)
+    require(link['attempt_dir'] == plan['attempt_directory'])
+    # The phase directories must remain appendable under the owner lock.
+    # Hold the committed source and selected leaf across the backout action.
+    with ExitStack() as prefix:
+        initial = seed(raw, expected, current_model, source, link, prefix, admission=True, historical_forward=True)
+        require(raw[DECISION] == selection.packed(decision(link, initial)))
+    target = Path(link['target_dir'])
+    held.enter_context(renewal.hold_storage_namespace(target))
+    held.enter_context(_held_private_input(target, directory=True))
+    require(selection._read(target, held) == initial)
+    return {'intent_sha256': intent_sha256, 'selection_sha256': selection.digest(raw[DECISION]),
+            'sealed_anchor_sha256': link['terminal_sha256'],
+            'split_selection_sha256': selection.digest(initial['000001.selection.json'])}
+
+
+def verify_backout_binding(plan, status, published, held):
+    """Bind the later backout to the already selected split and original guard."""
+    require(status['completed_phases'][:len(store.journal.FORWARD)] == list(store.journal.FORWARD)
+            and 'restore-combined' in status['completed_phases'])
+    name = 'restore-combined-before.json'
+    receipt = store.read_evidence(plan, expected_anchor_sha256=status['anchor_sha256'],
+                                  references={name: ('restore-combined', 'started')}, held=held)[name]
+    require(receipt['owner_lease'] == {'guard_sha256': status['guard_sha256'], 'owner': plan['owner'],
+                                       'published_selection': published})
 
 
 def finish(config_path, plan, *, guard_sha256, terminal_sha256, candidate_sha256,

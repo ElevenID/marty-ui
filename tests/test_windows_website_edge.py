@@ -234,6 +234,9 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                     routed = store.append(plan, expected_anchor_sha256=routed['anchor_sha256'], phase=phase, event=event,
                                           evidence_sha256={key: 'a'*64 for key in keys})
             assert routed['classification'] == 'forward-evidence-complete'
+            published = {'intent_sha256': 'c'*64, 'selection_sha256': 'd'*64,
+                         'sealed_anchor_sha256': routed['anchor_sha256'], 'split_selection_sha256': 'e'*64}
+            routed['published_selection'] = published
         site_unhealthy = True
         if fault == 'changed-default-before-backout':
             changed_default = True
@@ -245,5 +248,10 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         restored = advance(routed, edge.BACKOUT)
         assert state == 'staged' and restored['model_state'] == 'staged'
         assert restored['permitted_record_phases'] == ['verify-combined']
+        if fault == 'sealed-backout':
+            with ExitStack() as held:
+                retained = store.read_evidence(plan, expected_anchor_sha256=restored['anchor_sha256'], held=held,
+                    references={'restore-combined-before.json': ('restore-combined', 'started')})
+            assert retained['restore-combined-before.json']['owner_lease']['published_selection'] == published
         assert calls == ['authenticate', 'native', edge.FORWARD, 'authenticate', 'native', edge.BACKOUT]
         assert (attempt / 'routes/active.conf').read_bytes() == proposal['routes']['split']

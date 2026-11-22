@@ -194,3 +194,91 @@ def test_forward_guarded_selection_checks_and_resumes_exact_publication(planned,
         with pytest.raises(ValueError):
             with selection._session(path, _pending_website_sha256=guard_pin):
                 pytest.fail('A changed target checkpoint cannot be selected')
+
+
+@pytest.mark.parametrize('fault', [None, 'changed-split', 'missing-decision', 'wrong-intent'])
+def test_published_backout_binds_actual_selected_split(monkeypatch, planned, capsys, fault):
+    import selfhost_windows_website_backout as backout
+
+    with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
+        source, original_records, plan, guard_pin, pins, split, _verified = prepare(planned, root, path, config)
+        phase['data'] = plan['states']['split']['data_sha256']
+        options = {'assets': root/'assets', 'gh': None, 'cosign': None, 'registry_config': None}
+        committed = owner.finish(path, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        intent = committed['intent_sha256']
+        attempt = Path(plan['attempt_directory'])
+        target = Path(committed['journal'])
+        old_choice = selection.decode(original_records['000001.selection.json'])['choice']
+        calls = []
+
+        def run(combined, choice, _values, selected, active_plan, status, step, *, held, **kwargs):
+            assert combined['compose_file'] == config['compose_file'] and choice == old_choice
+            assert selected['data_sha256'] == plan['owner']['data_sha256']
+            assert active_plan == plan and status['guard_sha256'] == guard_pin
+            calls.append(step)
+            start_value = {key: {} for key in store.journal.START_EVIDENCE}
+            start_value['owner_lease'] = {'owner': plan['owner'], 'guard_sha256': guard_pin}
+            if step == 'restore-combined':
+                binding = status['published_selection']
+                assert binding == {'intent_sha256': intent, 'selection_sha256': selection.digest((source / owner.DECISION).read_bytes()),
+                                   'sealed_anchor_sha256': pins['terminal_sha256'],
+                                   'split_selection_sha256': selection.digest((target / '000001.selection.json').read_bytes())}
+                start_value['owner_lease']['published_selection'] = binding
+            start = forward.stage._evidence(attempt / (step + '-before.json'), start_value, held)
+            started = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=step, event='started',
+                                   evidence_sha256=start)
+            if step == 'retire-candidate':
+                started = store.append(plan, expected_anchor_sha256=started['anchor_sha256'], phase=step,
+                                       event=store.journal.RETIRE_RETURNED, evidence_sha256={'candidate_retirement':'a'*64})
+            end = {key: 'a'*64 for key in store.journal.COMPLETION_EVIDENCE[step]}
+            return store.append(plan, expected_anchor_sha256=started['anchor_sha256'], phase=step,
+                                event='completed', evidence_sha256=end)
+
+        monkeypatch.setattr(forward.edge, 'run', run)
+        monkeypatch.setattr(forward.verify, 'run', run)
+        monkeypatch.setattr(backout, 'run', run)
+        if fault == 'changed-split':
+            (target / '000001.selection.json').write_bytes(b'{}')
+        elif fault == 'missing-decision':
+            (source / owner.DECISION).rename(source / owner.PENDING)
+
+        args = ['--backout-published', '--selection-file', str(path),
+                '--composition-dir', str(root/'assets'), '--gh', str(root/'gh'), '--cosign', str(root/'cosign'),
+                '--plan-file', str(attempt/'journal'/store.PLAN), '--guard-sha256', guard_pin,
+                '--intent-sha256', 'a'*64 if fault == 'wrong-intent' else intent,
+                '--backout-phase', 'restore-combined', '--expected-anchor-sha256', pins['terminal_sha256']]
+        if fault:
+            assert website.main(args) == 2
+            output = capsys.readouterr()
+            assert not output.out and output.err == website.BACKOUT_ERROR + '\n'
+            assert not calls
+            assert store.inspect(plan, expected_anchor_sha256=pins['terminal_sha256'])['classification'] == 'forward-evidence-complete'
+            return
+        with pytest.raises(ValueError):
+            selection.backout_published_website(path, plan, guard_sha256=guard_pin, intent_sha256=intent,
+                expected_anchor_sha256=pins['terminal_sha256'], backout_phase='verify-combined', **options)
+        assert website.main(args) == 0
+        response = capsys.readouterr()
+        assert not response.err
+        result = selection.decode(response.out.encode())
+        assert result['guards_retained'] and result['anchor_sha256'] != pins['terminal_sha256']
+        assert result['published_intent_sha256'] == intent
+
+        assert website.main(args) == 2
+        capsys.readouterr()
+        with selection._session(path, _pending_website_sha256=guard_pin) as (_, _, binding, active, _, _stack):
+            assert active == target and binding['compose_file'] == str(split)
+        for step in ('verify-combined', 'retire-candidate'):
+            result = selection.backout_published_website(path, plan, guard_sha256=guard_pin, intent_sha256=intent,
+                expected_anchor_sha256=result['anchor_sha256'], backout_phase=step, **options)
+        assert calls == list(store.journal.BACKOUT)
+        assert result['classification'] == 'combined-backout-evidence-complete'
+        assert set(original_records) <= {item.name for item in source.iterdir()}
+        assert renewal.product_transition_guard(config).exists()
+        with pytest.raises(ValueError):
+            selection.release_website_backout(path, plan, guard_sha256=guard_pin,
+                                             expected_anchor_sha256=result['anchor_sha256'], **options)
+        (attempt / 'seal-forward-after.json').write_bytes(b'{}')
+        with pytest.raises(ValueError):
+            with selection._session(path, _pending_website_sha256=guard_pin):
+                pytest.fail('Backout cannot disguise damage to the committed forward seal')

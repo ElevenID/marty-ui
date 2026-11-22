@@ -344,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--prepare-forward", action="store_true")
     modes.add_argument("--seal-forward", action="store_true")
     modes.add_argument("--publish-forward", action="store_true")
+    modes.add_argument("--backout-published", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -358,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--qualification-sha256")
     parser.add_argument("--intent-sha256")
+    parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate"))
     args = parser.parse_args(argv)
     operation, error = None, ERROR
     if args.release_abort:
@@ -372,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.seal_website_forward, FORWARD_ERROR
     elif args.publish_forward:
         operation, error = selection.publish_website_forward, FORWARD_ERROR
+    elif args.backout_published:
+        operation, error = selection.backout_published_website, BACKOUT_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
@@ -383,9 +387,15 @@ def main(argv: list[str] | None = None) -> int:
             forward.update(pins)
         else:
             selection.require(not any(pins.values()))
-        if args.intent_sha256 is not None:
-            selection.require(args.publish_forward and product_journal.sha(args.intent_sha256))
-            forward['intent_sha256'] = args.intent_sha256
+        if args.backout_published:
+            selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256))
+            extra = {'backout_phase': args.backout_phase, 'intent_sha256': args.intent_sha256}
+        else:
+            selection.require(args.backout_phase is None)
+            if args.intent_sha256 is not None:
+                selection.require(args.publish_forward and product_journal.sha(args.intent_sha256))
+                forward['intent_sha256'] = args.intent_sha256
+            extra = forward if forward_operation else {}
         release_inputs = (args.plan_file, args.guard_sha256, args.expected_anchor_sha256)
         if operation is not None:
             selection.require(all(release_inputs) and args.plan_attempt_directory is None)
@@ -395,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = operation(args.selection_file.absolute(), plan,
                     guard_sha256=args.guard_sha256, expected_anchor_sha256=args.expected_anchor_sha256,
                     assets=args.composition_dir, gh=args.gh, cosign=args.cosign, registry_config=args.registry_config,
-                    authority_file=args.authority_file, **(forward if forward_operation else {}))
+                    authority_file=args.authority_file, **extra)
         else:
             selection.require(not any(release_inputs) and args.authority_file is None)
             result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,

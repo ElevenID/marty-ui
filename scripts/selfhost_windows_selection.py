@@ -1124,7 +1124,7 @@ def renew_once(config_path,logical_project):
 
 @contextmanager
 def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
-                     _website_edge=None, _website_forward=None, _coordination=None):
+                     _website_edge=None, _website_forward=None, _coordination=None, _published_backout_intent=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1139,6 +1139,11 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
         options['_pending_website_sha256'] = _pending_website[1]
+    if _published_backout_intent is not None:
+        from selfhost_windows_website_journal import BACKOUT
+        require(_pending_website is not None and _website_edge is not None and _website_edge[0] in BACKOUT
+                and re.fullmatch(r'[0-9a-f]{64}', _published_backout_intent))
+        options['_pending_website_selection_sha256'] = _published_backout_intent
     with _session(config_path, _coordination=_coordination, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
@@ -1175,12 +1180,16 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
         generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
 
         def website_owner():
+            journal_hashes = {name: digest(body) for name, body in raw.items()}
+            if _published_backout_intent is not None:
+                from selfhost_windows_website_owner import FILES as website_files
+                journal_hashes = {name: sha for name, sha in journal_hashes.items() if name not in website_files}
             return {
                 'project': cfg['project'], 'engine_id': cfg['engine_id'],
                 'docker_host': cfg['docker_host'], 'root': str(_root.parent),
                 'selection_sequence': sequence, 'generation_sequence': generation_sequence,
                 'binding_sha256': digest(packed(expected)),
-                'journal_sha256': digest(packed({name: digest(body) for name, body in raw.items()})),
+                'journal_sha256': digest(packed(journal_hashes)),
                 'configuration_sha256': digest(cfg_raw),
                 'selection_sha256': digest(raw[f'{sequence:06}.selection.json']),
                 'selected_sha256': digest(packed(selected)),
@@ -1196,6 +1205,16 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             require(digest(model) == cfg['compose_sha256'])
             owner = {**website_owner(), 'model_sha256': digest(packed(decode(model)))}
             status = inspect(cfg, plan, owner, guard_sha256=guard_pin, expected_anchor_sha256=anchor_pin, held=stack)
+            if _published_backout_intent is not None:
+                from selfhost_windows_website_owner import hold_published_split, verify_backout_binding
+                published = hold_published_split(raw, expected, current_model, _root, plan,
+                                                 _published_backout_intent, stack)
+                if _website_edge[0] == BACKOUT[0]:
+                    require(status['classification'] == 'forward-evidence-complete'
+                            and status['anchor_sha256'] == published['sealed_anchor_sha256'])
+                    status['published_selection'] = published
+                else:
+                    verify_backout_binding(plan, status, published, stack)
             if _website_stage is not None:
                 require(status['record_count'] == 1 and status['permitted_record_phases'] == ['stage-candidate'])
                 assets, gh, cosign, registry_config, authority_file = _website_stage
@@ -1445,6 +1464,17 @@ def release_website_backout(config_path, plan, *, guard_sha256, expected_anchor_
     return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
                     assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
                     mode='backout')
+
+
+def backout_published_website(config_path, plan, *, guard_sha256, expected_anchor_sha256, intent_sha256,
+                              backout_phase, assets, gh, cosign, registry_config, authority_file=None):
+    """Restore the combined runtime under the guard and committed split selection."""
+    require(intent_sha256 is not None)
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+            _website_edge=(backout_phase, assets, gh, cosign, registry_config, authority_file),
+            _published_backout_intent=intent_sha256) as status:
+        result = dict(status, published_intent_sha256=intent_sha256, guards_retained=True)
+    return result
 
 
 def prepare_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256,

@@ -173,7 +173,7 @@ def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_con
                         and model_binding(config) in accepted)
                 return expected, root, raw, accepted
             require(website.DECISION in raw)
-            initial = website.seed(raw, expected, current_model, root, link, stack)
+            initial = website.seed(raw, expected, current_model, root, link, stack, historical_forward=True)
             require(raw[website.DECISION] == selection.packed(website.decision(link, initial)))
             if ancestry is not None:
                 ancestry.append((root, dict(raw)))

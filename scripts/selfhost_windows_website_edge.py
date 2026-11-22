@@ -246,8 +246,10 @@ def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosi
     original_edge = _probe(docker, _edge(_owned(initial, config['project'])), proposal, current)
     if current == 'split':
         require(original_edge == prior['edge_configuration'])
-    started_evidence = stage._evidence(attempt / (phase + '-before.json'),
-                                    _start_observation(plan, status, context, initial, original_edge), held)
+    started = _start_observation(plan, status, context, initial, original_edge)
+    if phase == BACKOUT and 'published_selection' in status:
+        started['owner_lease']['published_selection'] = status['published_selection']
+    started_evidence = stage._evidence(attempt / (phase + '-before.json'), started, held)
     started = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase,
                            event='started', evidence_sha256=started_evidence)
     ready = context.check(before_intent=True)

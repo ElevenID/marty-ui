@@ -343,8 +343,26 @@ before continuing. A partial publication fences the predecessor. The existing pr
 guard stays active after the rename, including while the original entrypoint
 resolves the successor for inspection.
 
-Complete the rehearsed postpublication backout, guard release, and scheduled
-renewal and reboot qualification before admitting production cutover.
+### Restore combined runtime after publication
+
+While the publication guard is active, use
+`--backout-published --backout-phase restore-combined` with the original
+selection file, plan, signed composition inputs, and guard. Use the
+publication result's `intent_sha256` as `--intent-sha256` and the sealed
+anchor as `--expected-anchor-sha256`. The owner checks that the split decision
+is committed and that its exact selection is still current before changing
+edge routing.
+
+Run the same command with `--backout-phase verify-combined`, then
+`--backout-phase retire-candidate`. Supply the fresh anchor returned by each
+prior step. Restored routing, public and application handoff, and exact
+candidate removal have their own observations. The reverse records retain the
+original published selection and forward seal. The guard continues to fence
+scheduled renewal and reboot throughout.
+
+Production cutover requires the combined owner to be selectable after
+postpublication restoration, followed by guarded release and scheduled
+renewal and reboot qualification.
 
 ## Required integration before activation
 
