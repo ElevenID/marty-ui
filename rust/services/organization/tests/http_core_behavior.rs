@@ -5,13 +5,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use marty_organization::{
-    application::ORGANIZATION_OUTBOX_PARTITIONS,
-    migration::migrate_organization_schema,
-    postgres::PostgresOrganizationStore,
-    organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
-    AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
-    POLICY_HTTP_ROUTES, RBAC_HTTP_ROUTES, SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES,
-    SCIM_USER_MUTATION_HTTP_ROUTES,
+    application::ORGANIZATION_OUTBOX_PARTITIONS, migration::migrate_organization_schema,
+    organization_core_router, postgres::PostgresOrganizationStore, OrganizationApplication,
+    OrganizationCache, OrganizationHttpState, AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES,
+    MEMBERSHIP_API_HTTP_ROUTES, POLICY_HTTP_ROUTES, RBAC_HTTP_ROUTES,
+    SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES, SCIM_USER_MUTATION_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_messaging::PostgresOutboxStore;
@@ -125,12 +123,9 @@ fn router_with_auth(configured: bool) -> axum::Router {
     migrate_organization_schema(&pool)
         .await
         .expect("organization schema migration");
-    let outbox = PostgresOutboxStore::new(
-        pool.clone(),
-        "organization",
-        ORGANIZATION_OUTBOX_PARTITIONS,
-    )
-        .expect("organization outbox store");
+    let outbox =
+        PostgresOutboxStore::new(pool.clone(), "organization", ORGANIZATION_OUTBOX_PARTITIONS)
+            .expect("organization outbox store");
     outbox
         .migrate()
         .await
