@@ -132,3 +132,13 @@ Composition deliberately records `runtime_tested: false` and
 `billing_journey_tested: false`. Packaging does not establish host or journey
 success. Production traffic changes, source deletion, slim-application
 activation and repository renaming are later gates.
+
+## Production split checkpoint, November 22, 2026
+
+The signed public website from [run `44877079325`, attempt 1](https://github.com/ElevenID/website/actions/runs/44877079325/attempts/1) was reverified with the original producer intake. The verifier authenticated the original archive, the receipt and registry image signatures, provenance, and route contract. Artifact `14696722096` binds image `ghcr.io/elevenid/website@sha256:05c4acbafa4378049e3ede64bdaa58fb50934e180d468e5ee98ef5356b12bfcf`. Retain the public v3 proof set and the earlier composition as release history.
+
+The managed production target requires a full v4 website composed with the accepted v1.1.274 application and v1.1.273 backend. The full standalone source and consumer contracts are merged in [website #22](https://github.com/ElevenID/website/pull/22) and [marty-ui #2024](https://github.com/ElevenID/marty-ui/pull/2024). The private producer remains a draft at `06e13828e49ce51c533e02f70d76a86e81284996`, pending required hosted checks and an original signed v4 release. The organization Actions budget was verified at $0 with excess usage blocked. [marty-subscriptions #113](https://github.com/ElevenID/marty-subscriptions/pull/113)
+
+The Windows operational caller passed its read-only selected-history replay. Production credential and application acceptance is still required. The managed website preflight and transition contract are merged. The next source milestone is to integrate durable transition and recovery operations with the existing generation owner, including the retained edge template and route mounts, interruption handling, and combined backout. [marty-ui #2025](https://github.com/ElevenID/marty-ui/pull/2025) · [marty-ui #2028](https://github.com/ElevenID/marty-ui/pull/2028) · [marty-ui #2034](https://github.com/ElevenID/marty-ui/pull/2034)
+
+After production runtime acceptance, authenticate the full composition, qualify the managed transition and combined backout, and verify public routing and the application authentication handoff. At that point refresh the legacy removal candidate against protected main and run the required checks and merge queue. Auto-merge remains disabled on the removal PR. [marty-ui #2017](https://github.com/ElevenID/marty-ui/pull/2017)
