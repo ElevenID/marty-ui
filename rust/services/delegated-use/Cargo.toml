@@ -33,6 +33,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-delegated-use-client = { path = "../../crates/delegated-use-client" }
+rustls.workspace = true
 marty-credential-template = { path = "../credential-template" }
 marty-presentation-policy = { path = "../presentation-policy" }
 marty-delegated-receipt-consumer = { path = "../../crates/delegated-receipt-consumer" }

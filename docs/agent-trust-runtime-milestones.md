@@ -26,7 +26,10 @@ The separate managed lifecycle gate replaces selected template/policy wire
 fixtures with actual owner services, issues a fresh managed machine credential,
 and joins protected HTTP use, request/receipt signing, recovery and independent
 verification. Its privileged bootstrap and readiness-only reference fixtures remain
-explicit; it does not qualify public wallet routing or production deployment.
+explicit. The current caller follow-on adds opt-in managed wallet routes and an
+independent Rust transport that follows the returned request link and verified
+signed response URI. Production deployment and general wallet interoperability
+remain separate from this selected local qualification.
 
 ## Implemented in this application slice
 
@@ -52,6 +55,7 @@ explicit; it does not qualify public wallet routing or production deployment.
 | P03 original receipt delivery | Protected read-only recovery of exact FINAL_USE compact JWS bytes, current RECOVER_RESULT access checked around awaited reads, original response/digest/timestamps retained | Internal mTLS host; recovery preserves original evidence under current read access and supplies no renewed grant authority; no additional permission or migration |
 | Independent receipt consumer | Standalone ES256/EdDSA verification with independently pinned trust, exact request context, retained original-byte digest and explicit clock/freshness policy | Sealed fresh/history evidence types; no service, database or Core dependency; public client packaging and business execution remain separate |
 | P03 managed network lifecycle | Actual executable and mTLS use routes, real template/policy gRPC owners, fresh managed issuance, separate remote request/credential/receipt keys, exact recovery and independent consumption | Internal selected operation with privileged setup, in-process Issuance bootstrap and named readiness-only reference fixtures; no public wallet, production or Rifare execution claim |
+| P03 managed public caller | Separately enabled mTLS command/request/direct_post/receipt routes, frozen-query association and independent Rust client with retained command identity and explicit TLS trust | Selected managed MachineCredential / KEY / exact-operation profile; no general wallet, production deployment, capability promotion or Rifare business execution claim |
 
 The source pin is Protocol commit
 `6126da7619e057be2ff58dd38a5d50f49891d1b3`, with source-pack manifest digest
@@ -99,8 +103,9 @@ administration paths. The next application packages still need:
   qualification beyond the passing disposable gate, and a separately reviewed
   pending-claim reconciliation design.
   Ordinary Flow finalization remains guarded.
-- Public delegated-use hosting, packaged public clients, deployed integration of
-  the implemented independent verifier and explicit capability qualification. Human lifecycle commands,
+- Production qualification of the optional managed caller host and independent
+  Rust client, deployed integration of the independent verifier and explicit
+  capability qualification. Human lifecycle commands,
   directory, enrollment and approval hosting are opt-in candidates.
 - Rifare adoption of those public features after the corresponding runtime
   gates pass. This checkpoint changes no Rifare business execution behavior.
@@ -1017,3 +1022,136 @@ promotion is included.
 4. Promote public support only for qualified profiles, then integrate Rifare's
    own domain permission, budget, replay/idempotency and business-commit rules.
    Marty evidence does not perform or attest the business outcome.
+
+## Current managed public caller and wallet follow-on
+
+The follow-on to `37b7fdc` completes the recovered unfinished caller slice in
+three parallel tracks: guarded wallet routes, an independent Rust client, and
+actual-executable acceptance through the advertised request and response URLs.
+The existing internal lifecycle remains a separate regression gate. Protocol
+PR #38 is the private [ElevenID protocol proposal](https://github.com/ElevenID/marty-protocol/pull/38);
+the earlier architecture link to an unrelated public-repository PR is corrected.
+
+### Explicit caller surface and retained authority
+
+`DELEGATED_USE_PUBLIC_CALLER_ENABLED=true` separately mounts the public command,
+request, direct-post and original-receipt routes on the existing mandatory
+mutual-TLS listener. The default remains false. The host still needs its main
+explicit opt-in, fourteen restricted database connections and successful
+readiness. Public router construction rejects the internal trusted-forwarder
+mode. The selected tenant and complete actor come from trusted composition and
+the authenticated leaf mapping; headers and form fields cannot select them.
+
+CHALLENGE responses advertise one exact origin-bound request `Link`, including
+original-result recovery. Their retained JSON and command digest are unchanged.
+The request contains the signed response URI. Public submission accepts only
+the bounded `state` plus DCQL `vp_token` form for the selected nested VC2 JWT
+machine profile. Its query ID comes from the frozen request. The emitted request
+must already be retained, and the adapter compares its original digest,
+configuration, actor, request projection and frozen authority inside the same
+locked Flow transaction used by proof retention.
+
+The compact VP is retained without reserialization. Equivalent accepted form
+encodings recover the original proof bytes, ID and receive time. Current access
+and original authentication bounds continue through the existing source, lock
+and COMMIT checks. Terminal exact proof recovery creates no new proof, claim,
+signature or consumption. Request retrieval still requires a live original
+Flow. Cryptographic proof verification and finalization remain with the existing
+delegated-use owner.
+
+### Independent client and verification boundary
+
+The new [`marty-delegated-use-client`](../rust/crates/delegated-use-client/README.md)
+workspace crate has no dependency on private Marty Core, owner services or
+their storage. It constructs its own TLS verifier from explicit roots and a
+client-certificate resolver, permitting remote key custody. It disables
+redirects, automatic retries, environment proxies, decompression and idle
+connection reuse. Requests and responses have byte and time limits; successful
+responses require the selected media type and no-store headers.
+
+Prepared commands retain their caller-selected UUID and locally computed
+canonical digest before I/O. The application must persist those original
+inputs; the client supplies no durable journal. Results must match that
+independent identity, original grant/operation and challenge. Recovery never
+copies its expected command digest from a server response. Links and response
+destinations must match the configured origin and original challenge exactly.
+An uncertain response or absent result cannot authorize a new command identity.
+
+Request artifacts and original receipt bytes remain explicitly unverified.
+The caller independently verifies request signing trust, nonce, lifetime,
+audience, profile and complete DCQL query before submitting proof. The separate
+receipt consumer verifies original signed evidence using independent trust and
+context. `PERMIT`, transport success and `EVIDENCE_ONLY` receipts do not supply
+Rifare business permission or execute a purchase/refund.
+
+### Actual-owner integration correction
+
+The first public network run found a real adapter/owner mismatch: Flow retains
+a MIP PresentationRequest projection, while the new adapter expected the full
+JWT payload. The projection has no JWT-only `iss` or `state` fields and records
+an unselected presentation definition as null. The adapter consequently refused
+valid public input before DCQL association.
+
+The corrected adapter validates the actual MIP message correlation, sender,
+nonce and type; payload Flow/policy IDs, client identity, response fields and
+frozen query; and the original expected-state context. It accepts only
+absent/null presentation definitions and rejects a selected definition. The
+fixture now matches the real producer and tests twenty authority mutations.
+No expected HTTP status, signed request producer, schema, wire contract,
+source pin or authorization check was weakened to obtain a pass.
+
+### Local caller validation
+
+Local validation on 2026-11-21 used Rust 1.95 and locked, offline dependencies.
+These are overlapping views and must not be summed as independent tests.
+
+| Gate | Result |
+| --- | --- |
+| Standalone client build and real mTLS transport suite | 17 passed, 0 failed/ignored |
+| Actual internal and public managed network lifecycles | 2 passed, 0 failed/ignored; 31.40 seconds after the projection correction |
+| Actual executable remote startup/readiness regression | 1 passed, 0 failed/ignored |
+| Existing actual-owner PostgreSQL acceptance | 3 passed, 0 failed/ignored |
+| Delegated-use configuration/runtime and executable smoke | 13 + 3 passed, 0 failed/ignored |
+| Command and original-receipt HTTP contracts | 8 + 5 passed, 0 failed/ignored |
+| Flow library after the projection correction | 103 passed; 26 existing fixture-dependent cases ignored |
+| Selected current-access/ingress PostgreSQL regressions | All 7 explicitly executed, 0 failed/ignored |
+| New wallet association/transport cases | All 6 passed within the Flow library; includes twenty retained-authority mutations |
+| Library and selected executable test-target compilation | Passed with `--locked --offline` |
+| Scoped formatting, local documentation links, diff and OSS commerce boundary | Passed |
+
+Both network gates use freshly issued managed MachineCredentials, actual
+template/policy owners and purpose-separated OpenBao request/credential/receipt
+signing. The public gate follows the returned request link and verified signed
+response URI with the independent client. It exercises malformed/duplicate
+forms and queries, missing certificates, request-before-submission ownership,
+identity-header spoofing, exact retries, terminal proof recovery, original-byte
+receipt recovery, grant revocation and current access withdrawal. Rejections
+and recovery preserve all artifact-signing and grant-minting counters.
+
+The client suite separately proves one-attempt HTTP/redirect failure and
+explicit original-command recovery after a deliberately lost response. Its
+synthetic signed-looking bytes are transport fixtures; cryptographic request
+and receipt verification is performed in the actual-owner lifecycle.
+
+All 814 previous package identity/version/source/checksum tuples and all 62 SQL
+migrations are unchanged. The lock adds one local client package and local
+test dependency edges. Reviewed Core/Protocol pins and public MIP 0.5.0 remain
+unchanged. The commit uses `[skip ci]`; no workflow dispatch, production
+deployment, merge or capability promotion is part of this milestone.
+
+### Next milestones after the caller gate
+
+1. Qualify this selected caller composition with separately provisioned catalog
+   and Issuance serving roles, production network/origins and current source
+   freshness. The disposable administrator bootstrap and readiness-only
+   reference fixtures remain explicit limits of the local gate.
+2. Qualify production CA issuance/revocation, caller certificate/pin and signing
+   key rotation, remote custody, outage and restart behavior. Define reviewed
+   pending-claim reconciliation before any takeover or repeated signing; the
+   current client and service never infer permission from an uncertain outcome.
+3. Qualify separately selected required-attestation, external-authority/domain
+   and represented-subject SESSION adapters when those profiles are requested.
+4. Promote support only for the qualified profile, then connect Rifare through
+   the public contract with its own durable command intent, domain permission,
+   budgets/reservations, provider idempotency and business commit. This batch
+   changes no Rifare execution behavior.

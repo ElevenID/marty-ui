@@ -4184,6 +4184,7 @@ dependencies = [
  "marty-credential-template",
  "marty-delegated-authority",
  "marty-delegated-receipt-consumer",
+ "marty-delegated-use-client",
  "marty-flow",
  "marty-issuance-service",
  "marty-machine-credential-source",
@@ -4203,6 +4204,7 @@ dependencies = [
  "rcgen",
  "redis",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4213,6 +4215,25 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-delegated-use-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "chrono",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
  "url",
  "uuid",
 ]

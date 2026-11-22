@@ -1,4 +1,4 @@
-# Internal delegated-use serving candidate
+# Delegated-use serving candidate
 
 `marty-delegated-use` is the explicit serving composition for the implemented
 managed organization, full-machine, KEY and EXACT_OPERATION profile. It joins
@@ -11,6 +11,11 @@ database, contacting a provider or binding a listener. There is no plaintext
 listener, incoming service-token fallback, local private-key mode, migration
 command or startup privilege provisioning. Existing public Gateway routes,
 the human lifecycle host, capability discovery and public MIP are unchanged.
+
+`DELEGATED_USE_PUBLIC_CALLER_ENABLED=true` separately installs the managed
+machine caller routes described below. The default is `false`; this selection
+does not enable anonymous wallets or browser clients. Every caller still needs
+an explicitly mapped mutual-TLS certificate and current machine-use access.
 
 Marty records identity and authority evidence for an exact operation. Rifare
 continues to own orchestration, domain permissions, budgets, reservations,
@@ -35,6 +40,50 @@ Health and readiness return status only, with no-store headers. Readiness checks
 the original certificate observation again after its awaited checks. Neither a
 successful probe nor an authenticated TLS connection supplies current grant
 consent, cryptographic machine proof or a business permit.
+
+### Optional managed machine caller surface
+
+With `DELEGATED_USE_PUBLIC_CALLER_ENABLED=true`, the same listener also mounts:
+
+| Method and path | Responsibility |
+| --- | --- |
+| `POST /v1/organizations/{organization}/delegated-use-commands` | The same retained START_USE, FINALIZE_USE and RECOVER_RESULT application |
+| `GET /v1/flows/instances/{challenge}/request` | The exact original signed request at the advertised URI |
+| `POST /v1/flows/instances/{challenge}/submit` | Bounded, authenticated `direct_post` association and proof retention |
+| `POST /v1/organizations/{organization}/delegated-use/receipts/recover` | Current-authorized recovery of the original signed receipt |
+
+The public base must be a canonical HTTPS origin, with no trailing slash, path
+prefix, user information, query, fragment or implicit normalization. The public
+command router supplies the request URI in exactly one `Link` header with
+`rel="urn:marty:delegated-use:request"` on a CHALLENGE response, including original
+result recovery. It leaves the retained command response and command digest
+unchanged. No caller supplies a forwarding identity, tenant override, request
+nonce, verifier configuration or authorization snapshot.
+
+The signed request advertises its own `response_uri`. Submission accepts only
+`application/x-www-form-urlencoded` with exactly `state` and `vp_token`.
+`state` must equal the original canonical challenge UUID. `vp_token` must be a
+DCQL JSON map containing exactly the query ID in the frozen request and one
+compact JWT presentation under the selected nested VC2 JWT profile. A bare
+token, extra or duplicate form/JSON fields, `direct_post.jwt`, an error response,
+caller-selected query, unretained request, and a changed request snapshot are
+rejected. The retained proof is the exact extracted compact JWT, so equivalent
+valid form encodings recover the same proof submission without another write.
+
+Association does not verify the presentation. The existing finalization owner
+still authenticates the complete machine proof, current identity, credential,
+grant and policy before retaining a decision receipt. Authentication and
+current-access bounds remain binding through the existing locked transaction
+and COMMIT. The response and all route errors carry no-store protection.
+
+The independent [`marty-delegated-use-client`](../../crates/delegated-use-client/README.md)
+crate follows these URLs using explicit HTTPS trust and mutual TLS. It retains
+command IDs and independently computes their digests before I/O, performs one
+network attempt per call, rejects redirects and response/correlation changes,
+and bounds request and response bytes. The caller independently verifies the
+request signature and selected fields before supplying a proof; original
+receipt bytes go to the separate receipt consumer. Public client transport is
+not itself cryptographic receipt verification or business permission.
 
 ### Original signed receipt recovery
 
@@ -375,7 +424,7 @@ explicit disposable loopback PostgreSQL fixture used above:
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle --no-run
-python3 scripts/with_disposable_delegated_use_lifecycle.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle -- --ignored --exact actual_executable_runs_managed_machine_use_and_recovers_independent_receipt --test-threads=1
+python3 scripts/with_disposable_delegated_use_lifecycle.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle -- --ignored --test-threads=1
 ```
 
 Fresh issuance invokes the real in-process initiation, pre-authorized token exchange,
@@ -403,8 +452,19 @@ recovery after revocation, current access withdrawal, wrong recovery digests,
 unmapped caller certificates and identity-header spoofing. Denied finalization
 must leave the pending proof unconsumed and retain the previously issued receipt.
 
-This is an internal selected-operation qualification with explicit setup
-boundaries. Organization/registry/trust/grant and active catalog records are
+Two explicit tests run this lifecycle with fresh owners: the unchanged internal
+surface and the separately selected public machine caller. The public gate
+uses the independent Rust client, follows the authenticated returned request
+link and the independently verified signed response URI, and submits the exact
+frozen DCQL query ID. It also tests absent-by-default routes, missing client
+certificates, submission before request retention, wrong or duplicate form/query
+fields, bare tokens, unsupported media types and identity-header spoofing.
+Rejected submissions retain no proof or consumption and add no signature or
+signing grant. After finalization, exact proof recovery must return the original
+submission and preserve every claim, proof, receipt and consumption count.
+
+Both tests have explicit setup boundaries.
+Organization/registry/trust/grant and active catalog records are
 provisioned under disposable administrator authority. The fourteen restricted
 database identities belong to the delegated-use child; the in-process catalog
 servers and Issuance bootstrap use the disposable administrator pool. Their
@@ -415,9 +475,10 @@ ports are closed bootstrap fixtures; Issuance's public HTTP handlers, human
 catalog administration, Compliance evaluation, revocation publication and
 Presentation Policy evaluation are not qualified here. Four unselected reference providers share
 one authenticated readiness-only fixture origin; attempted record reads fail
-and are asserted absent. The unchanged public Flow wallet
-URIs are not followed by this internal caller. Public routing, production
-deployment and Rifare's business execution remain separate gates.
+and are asserted absent. The public caller follows the selected guarded wallet
+URIs, while the internal caller remains a regression view. General wallet
+interoperability, production deployment and Rifare's business execution remain
+separate gates.
 
 Stopping or disabling the process preserves every command/request claim, nonce,
 proof, source observation, evaluation and signed result. An uncertain signing
@@ -426,7 +487,9 @@ identity. Original-result recovery requires fresh current access and preserves
 the original evidence times. A future reconciliation workflow needs its own
 reviewed contract.
 
-This executable is a concrete internal serving candidate. Deployed request and
-receipt custody, production network/CA/role qualification, required attestation,
-public wallet contracts and public consumer integration remain separate
-exit gates. See the [runtime milestone checkpoint](../../../docs/agent-trust-runtime-milestones.md).
+This executable remains a default-off serving candidate. Its optional managed
+caller contract is separately selected and locally qualified; general wallet
+interoperability, production request/receipt custody, network/CA/role
+qualification, required attestation and Rifare business integration remain
+separate exit gates. See the
+[runtime milestone checkpoint](../../../docs/agent-trust-runtime-milestones.md).

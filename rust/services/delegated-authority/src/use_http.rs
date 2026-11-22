@@ -1,10 +1,11 @@
-//! Explicit internal transport for retained P03 use commands.
+//! Explicit authenticated transport for retained P03 use commands.
 //!
 //! The explicit default-off delegated-use host selects mandatory mutual TLS.
 //! A separately composed trusted forwarder can instead supply the complete typed
 //! actor and a bounded observation using its dedicated service credential. The
 //! application independently authorizes the actor and verifies proof in either
-//! composition. No public Gateway installs this router.
+//! composition. A separate opt-in caller router requires mutual TLS and adds
+//! only an origin-bound request link; no public Gateway installs either router.
 
 use std::{sync::Arc, time::Duration};
 
@@ -96,6 +97,7 @@ impl DelegationUseHttpApplication for DelegationUseCommandService {
 pub struct DelegationUseHttpState {
     application: Arc<dyn DelegationUseHttpApplication>,
     authenticator: Arc<DelegationUseHttpAuthenticator>,
+    public_request_origin: Option<String>,
 }
 
 /// Explicit transport selection shared by commands and the Flow ingress. The
@@ -114,6 +116,20 @@ enum UseAuthenticationMode {
 }
 
 impl DelegationUseHttpAuthenticator {
+    /// Caller-facing routes must never select the internal forwarding mode.
+    pub fn uses_mutual_tls(&self) -> bool {
+        matches!(self.mode, UseAuthenticationMode::MutualTls(_))
+    }
+
+    /// Authenticate a route whose tenant is fixed by trusted host composition.
+    /// URL knowledge and response parameters cannot select another tenant.
+    pub fn authenticate_selected_organization(
+        &self,
+        request: &Request,
+    ) -> Result<AuthenticatedDelegationUseContext, UseHttpError> {
+        self.authenticate(&self.organization_id.to_string(), request)
+    }
+
     pub fn trusted_forwarder(
         service_token: String,
         organization_id: Uuid,
@@ -219,6 +235,7 @@ impl DelegationUseHttpState {
         Self {
             application,
             authenticator,
+            public_request_origin: None,
         }
     }
 }
@@ -226,11 +243,43 @@ impl DelegationUseHttpState {
 /// Explicit assembly only. Human lifecycle/approval hosts remain separate and
 /// this path is absent from the public Gateway route tables and discovery.
 pub fn delegated_use_command_router(state: DelegationUseHttpState) -> Router {
+    command_router(
+        state,
+        "/internal/v1/organizations/{organization_id}/delegated-use-commands",
+    )
+}
+
+/// Explicit caller composition over the same retained command application.
+/// Original response documents and command digests remain unchanged. A
+/// CHALLENGE response carries one Link to the configured request endpoint.
+pub fn delegated_use_public_command_router(
+    mut state: DelegationUseHttpState,
+    public_origin: &str,
+) -> Result<Router, DelegationUseCommandError> {
+    let origin =
+        url::Url::parse(public_origin).map_err(|_| DelegationUseCommandError::InvalidCommand)?;
+    if !state.authenticator.uses_mutual_tls()
+        || origin.scheme() != "https"
+        || origin.host_str().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+        || origin.origin().ascii_serialization() != public_origin
+    {
+        return Err(DelegationUseCommandError::InvalidCommand);
+    }
+    state.public_request_origin = Some(public_origin.into());
+    Ok(command_router(
+        state,
+        "/v1/organizations/{organization_id}/delegated-use-commands",
+    ))
+}
+
+fn command_router(state: DelegationUseHttpState, route: &str) -> Router {
     Router::new()
-        .route(
-            "/internal/v1/organizations/{organization_id}/delegated-use-commands",
-            post(execute),
-        )
+        .route(route, post(execute))
         .with_state(state)
         .layer(middleware::from_fn(no_store))
 }
@@ -254,7 +303,7 @@ async fn execute(
     State(state): State<DelegationUseHttpState>,
     Path(organization): Path<String>,
     request: Request,
-) -> Result<Json<DelegationUseCommandResponse>, UseHttpError> {
+) -> Result<Response, UseHttpError> {
     let context = state.authenticator.authenticate(&organization, &request)?;
     if request.uri().query().is_some() {
         return Err(invalid());
@@ -286,7 +335,27 @@ async fn execute(
     context.check(Utc::now())?;
     // No timeout, cache, normalization or retry surrounds external preparation,
     // signing or COMMIT. The original identity is the only recovery key.
-    Ok(Json(state.application.execute(&context, &raw).await?))
+    let result = state.application.execute(&context, &raw).await?;
+    command_response(&state, result)
+}
+
+fn command_response(
+    state: &DelegationUseHttpState,
+    result: DelegationUseCommandResponse,
+) -> Result<Response, UseHttpError> {
+    let link = match (&state.public_request_origin, &result.result) {
+        (Some(origin), crate::DelegationUseCommandResult::Challenge { challenge_id, .. }) => {
+            Some(HeaderValue::from_str(&format!(
+                "<{origin}/v1/flows/instances/{challenge_id}/request>; rel=\"urn:marty:delegated-use:request\""
+            )).map_err(|_| UseHttpError::from(DelegationUseCommandError::Unavailable))?)
+        }
+        _ => None,
+    };
+    let mut response = Json(result).into_response();
+    if let Some(link) = link {
+        response.headers_mut().insert(header::LINK, link);
+    }
+    Ok(response)
 }
 
 fn authenticate_forwarded(

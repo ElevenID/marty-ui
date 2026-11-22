@@ -59,6 +59,7 @@ pub fn configuration(owned: &Owned, db: &Database) -> TestResult<DelegatedUseHos
     )?;
     Ok(DelegatedUseHostConfig {
         listen_addr: "127.0.0.1:0".parse()?,
+        public_caller_enabled: false,
         organization_id: owned.organization,
         deployment_profile_id: owned.deployment,
         delegation_policy_id: owned.delegated_policy,

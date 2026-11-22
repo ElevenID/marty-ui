@@ -3,6 +3,10 @@
 //! this owner can turn its frozen Flow request into the retained request result;
 //! proof storage never establishes proof validity or delegated authority.
 
+#[path = "delegation_use_wallet.rs"]
+mod wallet;
+pub use wallet::delegated_use_wallet_router;
+
 use std::{fmt, sync::Arc, time::Duration as Timeout};
 
 use axum::{
@@ -525,10 +529,17 @@ impl FlowDelegatedUseIngress {
         challenge_id: Uuid,
         proof: &[u8],
     ) -> Result<FlowDelegatedProofSubmission> {
-        if challenge_id.is_nil()
-            || proof.is_empty()
-            || proof.len() > MAX_DELEGATE_PROOF_BYTES.min(262_144)
-        {
+        self.submit_input(context, challenge_id, wallet::ProofInput::Original(proof))
+            .await
+    }
+
+    async fn submit_input(
+        &self,
+        context: &AuthenticatedDelegationUseContext,
+        challenge_id: Uuid,
+        input: wallet::ProofInput<'_>,
+    ) -> Result<FlowDelegatedProofSubmission> {
+        if challenge_id.is_nil() || !input.has_valid_size() {
             return Err(DelegationUseCommandError::InvalidCommand);
         }
         let mut bounds = Bounds::new(context, Utc::now())?;
@@ -542,7 +553,6 @@ impl FlowDelegatedUseIngress {
         .await?;
         let caller = context.caller();
         let actor_type = actor_type(caller)?;
-        let proof_digest = digest(proof);
         let mut tx = bounded_transaction(self.repository.pool()).await?;
         let (current, definition) = self.bound_instance(&mut tx, caller, challenge_id).await?;
         bounds.check(database_now(&mut tx).await?)?;
@@ -553,6 +563,17 @@ impl FlowDelegatedUseIngress {
             &mut bounds,
         )
         .await?;
+        bounds.check(database_now(&mut tx).await?)?;
+        // Direct-post association uses this exact locked Flow and its retained
+        // request. It cannot choose a query or race a second, unguarded read.
+        let proof = match input {
+            wallet::ProofInput::Original(bytes) => std::borrow::Cow::Borrowed(bytes),
+            wallet::ProofInput::DirectPost(form) => {
+                std::borrow::Cow::Owned(self.direct_post_proof(&mut tx, &current, &form).await?)
+            }
+        };
+        let proof = proof.as_ref();
+        let proof_digest = digest(proof);
         bounds.check(database_now(&mut tx).await?)?;
         if let Some(row)=sqlx::query("SELECT submission_id,received_at,proof,actor_type,actor_id FROM flow_service.delegated_proof_submissions WHERE challenge_id=$1 AND organization_id=$2 AND proof_digest=$3")
             .bind(challenge_id).bind(caller.organization_id()).bind(&proof_digest)
@@ -822,6 +843,15 @@ async fn retrieve_http(
 ) -> std::result::Result<Response, UseHttpError> {
     let context = state.authenticator.authenticate(&organization, &request)?;
     let challenge_id = challenge_id(&challenge)?;
+    retrieve_authenticated(&state.application, context, challenge_id, request).await
+}
+
+async fn retrieve_authenticated(
+    application: &FlowDelegatedUseIngress,
+    context: AuthenticatedDelegationUseContext,
+    challenge_id: Uuid,
+    request: Request,
+) -> std::result::Result<Response, UseHttpError> {
     if request.uri().query().is_some() {
         return Err(UseHttpError::new(
             StatusCode::BAD_REQUEST,
@@ -844,10 +874,7 @@ async fn retrieve_http(
         ));
     }
     context.check(Utc::now())?;
-    let result = state
-        .application
-        .retrieve_request(&context, challenge_id)
-        .await?;
+    let result = application.retrieve_request(&context, challenge_id).await?;
     let mut response = result.compact_request_jws.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,

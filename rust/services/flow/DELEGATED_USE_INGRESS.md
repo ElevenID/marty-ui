@@ -27,10 +27,40 @@ after the bounded read. Responses/errors use `no-store`, `no-cache` and
 
 Ordinary Flow request retrieval and the paired-wallet request-owner endpoint
 reject delegated instances. Their ordinary verification behavior is unchanged.
-The request retains its original Flow request/response URIs; this internal
-candidate does not advertise a public wallet protocol or enable public proof
-submission. Ordinary verification finalization still cannot complete delegated
-Flow instances.
+The request retains its original Flow request/response URIs. The separate
+caller selection below serves them without adding an ordinary Flow or paired
+wallet bypass. Ordinary verification finalization still cannot complete
+delegated Flow instances.
+
+## Optional managed wallet routes
+
+`delegated_use_wallet_router` mounts the advertised
+`GET /v1/flows/instances/{challenge}/request` and
+`POST /v1/flows/instances/{challenge}/submit` paths. Router construction requires
+the mutual-TLS authenticator. The tenant comes from trusted host configuration,
+and current RETRIEVE_REQUEST or SUBMIT_PROOF access remains required. The
+serving host enables these routes only through its separate
+`DELEGATED_USE_PUBLIC_CALLER_ENABLED=true` selection.
+
+Submission accepts the bounded unencrypted `direct_post` form with exactly
+`state` and `vp_token`. It requires the original challenge UUID and one compact
+JWT under the exact DCQL query ID in the frozen selected nested VC2 JWT request.
+Duplicate decoded form names, ambiguous JSON keys, bare-token fallback,
+unrequested query IDs and additional fields fail closed. The actual emitted
+request must already be retained. Its exact bytes/digest, configuration, actor,
+frozen request and delegated snapshot are checked under the same locked Flow
+transaction as proof retention.
+
+The compact proof is extracted without reserialization. An equivalent accepted
+form encoding recovers the original proof ID, bytes and receive time; a changed
+proof does not replace them. Current-authorized terminal proof recovery uses
+the same original record. Request retrieval still requires a live original
+Flow. Association does not validate a presentation signature or finalize the
+Flow; those responsibilities stay with the delegated-use finalization owner.
+
+This selected machine-client contract does not establish general wallet
+interoperability. See the [host runbook](../delegated-use/README.md#optional-managed-machine-caller-surface)
+and [client crate](../../crates/delegated-use-client/README.md).
 
 ## Original request ownership and unresolved work
 

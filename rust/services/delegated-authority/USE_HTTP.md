@@ -1,4 +1,4 @@
-# Authenticated internal delegated-use transport
+# Authenticated delegated-use command transport
 
 `use_http::delegated_use_command_router` exposes the retained P03 command service
 through an explicitly assembled internal HTTP router. The separate default-off
@@ -6,7 +6,7 @@ through an explicitly assembled internal HTTP router. The separate default-off
 mandatory mutual TLS. The public Gateway and existing human command host continue rejecting
 `START_USE` and `FINALIZE_USE`; public discovery and MIP support are unchanged.
 
-The sole application route is:
+The internal application route is:
 
 ```text
 POST /internal/v1/organizations/{organization_id}/delegated-use-commands
@@ -16,6 +16,27 @@ It accepts the original `START_USE`, `FINALIZE_USE` or `RECOVER_RESULT` JSON
 document. It uses the existing closed P03 decoder and passes the original bytes
 to `DelegationUseCommandService`; it does not normalize intent, create replacement
 command IDs, retry work or supply successful proof/authorization flags.
+
+## Optional caller route
+
+`delegated_use_public_command_router` separately mounts
+`POST /v1/organizations/{organization_id}/delegated-use-commands` with the same
+application and original wire bytes. Construction requires the mutual-TLS
+authenticator and a canonical HTTPS origin; a trusted-forwarder configuration
+is rejected. The default-off host mounts this router only when
+`DELEGATED_USE_PUBLIC_CALLER_ENABLED=true`.
+
+A CHALLENGE result, including original-result recovery, carries exactly one
+`Link` header to `{origin}/v1/flows/instances/{challenge_id}/request` with
+`rel="urn:marty:delegated-use:request"`. This transport metadata does not modify
+the retained command response or its digest. FINAL_USE responses carry no
+request link. The optional caller receipt route similarly selects mutual TLS
+and uses the existing current-authorized original-receipt application.
+
+See the [caller contract and qualification](../delegated-use/README.md#optional-managed-machine-caller-surface)
+and [independent Rust transport](../../crates/delegated-use-client/README.md).
+The public Gateway, human command host and capability discovery do not select
+these caller routes.
 
 ## Explicit authentication selection
 

@@ -24,7 +24,12 @@ internal use/recovery sequence and the independent consumer verifies the
 returned receipt. Privileged catalog/trust/identity setup, in-process Issuance
 bootstrap and readiness-only reference fixtures are documented in the
 [host qualification runbook](../rust/services/delegated-use/README.md#actual-executable-and-managed-lifecycle-qualification).
-Public wallet routing and production deployment remain separate.
+The separately selected managed caller surface now serves the advertised
+request and signed response URIs through the same mTLS and current-access
+owners. Its independent Rust client retains original commands, requires
+configured TLS trust, and performs no automatic redirect or retry. The public
+machine lifecycle is qualified separately from the internal lifecycle;
+production deployment and general wallet interoperability remain separate.
 
 The human `marty-delegation-commands` executable and its Gateway surface still
 reject use commands. Each current source, transport, database role and receipt
@@ -36,14 +41,14 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 
 | Component | Implemented responsibility | Boundary that remains explicit |
 | --- | --- | --- |
-| `marty-delegated-use` | Default-off serving executable, strict bounded configuration, fourteen restricted database connections, concrete source/provider assembly and readiness before mandatory mTLS listen | Deployed CA/custody/role qualification and public wallet/consumer contracts remain separate |
+| `marty-delegated-use` | Default-off serving executable, strict bounded configuration, fourteen restricted database connections, concrete source/provider assembly and readiness before mandatory mTLS listen; separate opt-in managed caller routes | Deployed CA/custody/role qualification and general wallet interoperability remain separate |
 | `DelegationUseCommandService` | Strict P03 use intent, durable original command claims, current caller authorization, sealed START admission, final PERMIT/DENY evaluation and original-result recovery | Internal KEY-grant API; requires explicit authenticated host composition |
 | `OrganizationDelegationUseCommandAuthorizer` | Current active tenant/full-machine/deployment and five explicitly assigned entrypoint rights, including historical result recovery | Does not authenticate the transport or grant consumer business rights |
 | `delegated_use_command_router` | Explicit mutual-TLS or trusted-forwarder authentication, strict original JSON and observation bounds propagated through current source checks and COMMIT | The new executable selects mTLS only; no public Gateway installation |
 | `BoundDelegatedUseMtlsServer` | Mandatory client certificate verification, exact leaf URI/digest-to-machine mapping and original certificate validity bounds; remote keyless server identity | CA issuance, revocation, pin rotation and deployed custody remain operator qualification |
 | `PgDelegationUseRepository` | Shared lifecycle/use command identity, immutable admission/receipt/result records and deferred deadline checks | Requires separately provisioned privileges and the same PostgreSQL database as its Flow owner |
 | `FlowDelegatedUseOwner` | Actual Flow challenge preparation, immutable proof submission, frozen definition/proof checks, retained nonce admission and final consumption on the supplied connection | Storing proof bytes does not verify them |
-| `FlowDelegatedUseIngress` | Authenticated current-authorized request retrieval and proof submission; exact retained request JWS; durable preparation claim before signing; deadline checks through COMMIT | Internal routes only; public wallet/request/response transport remains separate |
+| `FlowDelegatedUseIngress` | Authenticated current-authorized request retrieval and proof submission; exact retained request JWS; durable preparation claim before signing; deadline checks through COMMIT | The selected public wallet adapter associates frozen DCQL direct_post input; general wallet interoperability remains separate |
 | `MartyMachineOid4vpProofVerifier` | Concrete Core OID4VP verification plus selected full-machine MAP, key/runtime and required evidence checks | Full-machine, credential and attestation providers must be independently qualified |
 | `MartyNestedJwtVcMachineCredentialVerifier` | Actual issuer and holder signatures under the selected nested JWT-VC profile; exact registered credential, current Trust Profile/issuer/key/status and all operation scope | Trusted source owner remains explicit; existing SD-JWT owners are not silently broadened |
 | `AuditedMachineOid4vpProofVerifier` | Concrete machine verification followed by committed exact audit bytes and a post-COMMIT original-deadline check | Separate restricted audit writer; source evidence records remain owned and retained by their actual producers |
@@ -52,6 +57,7 @@ capability discovery remain unchanged. The Protocol source stays pinned at
 | `HttpManagedDelegatedReceiptSigner` | Pinned managed issuer/key, separate signing-grant origin, remote signing and independent verification of the returned signature | Explicit deployment selection, key provisioning and live provider qualification remain required |
 | `delegated_use_receipt_router` | Bounded current-authorized recovery of the exact FINAL_USE compact receipt, original result and digest, with original times preserved | Existing RECOVER_RESULT access; internal host only; no reevaluation or new signature |
 | `marty-delegated-receipt-consumer` | Independent ES256/EdDSA verification, caller-pinned trust/context/retention, strict wire checks and separate fresh/history output types | Offline evidence only; no service/storage dependency, current revocation lookup or business-execution permission |
+| `marty-delegated-use-client` | Independent mTLS transport, retained command IDs/digests, exact same-origin advertised URLs, bounded strict responses and original result/receipt recovery | Caller supplies verified request fields and separate receipt trust; no private service/storage dependency or automatic retry |
 
 The component contracts are documented in the
 [serving-host runbook](../rust/services/delegated-use/README.md),

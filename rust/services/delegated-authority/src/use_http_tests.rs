@@ -10,6 +10,154 @@ const ORG: &str = "9d23ceca-cd3f-4ef9-955b-cdca59348865";
 const ACTOR: &str = "urn:example:authenticated-agent";
 const TOKEN: &str = "synthetic-delegated-use-service-hop-token";
 
+fn caller_authenticator() -> Arc<DelegationUseHttpAuthenticator> {
+    Arc::new(
+        DelegationUseHttpAuthenticator::mutual_tls(
+            ORG.parse().unwrap(),
+            crate::use_mtls::DelegatedUseWorkloadBindings::new(vec![
+                crate::use_mtls::DelegatedUseWorkloadBinding::new(
+                    "spiffe://caller.example/machine/one".into(),
+                    format!("sha256:{}", "a".repeat(64)),
+                    ACTOR.into(),
+                )
+                .unwrap(),
+            ])
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+}
+
+fn caller_application() -> Arc<CountingApplication> {
+    Arc::new(CountingApplication {
+        calls: AtomicUsize::new(0),
+        requests: Mutex::new(Vec::new()),
+        actors: Mutex::new(Vec::new()),
+        error: DelegationUseCommandError::AccessDenied,
+    })
+}
+
+#[tokio::test]
+async fn caller_commands_reject_forwarding_auth_and_require_authenticated_peer() {
+    let application = caller_application();
+    let forwarded =
+        DelegationUseHttpState::new(application.clone(), TOKEN.into(), ORG.parse().unwrap())
+            .unwrap();
+    assert!(delegated_use_public_command_router(forwarded, "https://caller.example").is_err());
+    let state =
+        DelegationUseHttpState::with_authenticator(application.clone(), caller_authenticator());
+    let router = delegated_use_public_command_router(state, "https://caller.example").unwrap();
+    for forwarded in [false, true] {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/organizations/{ORG}/delegated-use-commands"))
+            .header("content-type", "application/json")
+            .body(Body::from(recover()))
+            .unwrap();
+        if forwarded {
+            req.headers_mut()
+                .insert("x-service-token", HeaderValue::from_static(TOKEN));
+        }
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if forwarded {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(!response.headers().contains_key(header::LINK));
+    }
+    assert_eq!(application.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn caller_request_origin_cannot_redirect_or_inject_link_metadata() {
+    for origin in [
+        "http://caller.example",
+        "https://caller.example/",
+        "https://caller.example/prefix",
+        "https://caller.example?request=elsewhere",
+        "https://caller.example#fragment",
+        "https://user@caller.example",
+        "https://CALLER.example",
+        "https://caller.example:443",
+        "https://caller.example\r\nLink: <https://foreign.example>",
+    ] {
+        let state = DelegationUseHttpState::with_authenticator(
+            caller_application(),
+            caller_authenticator(),
+        );
+        assert!(delegated_use_public_command_router(state, origin).is_err());
+    }
+}
+
+#[tokio::test]
+async fn caller_request_link_keeps_retained_response_document_unchanged() {
+    let mut state =
+        DelegationUseHttpState::with_authenticator(caller_application(), caller_authenticator());
+    let challenge_id = Uuid::new_v4();
+    let now = Utc::now();
+    let mut retained = DelegationUseCommandResponse {
+        profile: crate::DELEGATION_COMMAND_RESPONSE_PROFILE.into(),
+        original_command_id: Uuid::new_v4(),
+        command_digest: format!("sha256:{}", "b".repeat(64)),
+        recovered: false,
+        result: crate::DelegationUseCommandResult::Challenge {
+            challenge_id,
+            grant: crate::CommandGrantReference {
+                id: Uuid::new_v4(),
+                revision: 1,
+                terms_digest: format!("sha256:{}", "c".repeat(64)),
+            },
+            operation: crate::DelegationUseOperation {
+                action: "urn:example:action".into(),
+                resource_id: "urn:example:resource".into(),
+                audience: "urn:example:audience".into(),
+                request_profile: "urn:example:operation:v1".into(),
+                request_digest: format!("sha256:{}", "d".repeat(64)),
+            },
+            created_at: now,
+            expires_at: now + chrono::Duration::seconds(60),
+        },
+    };
+    assert!(!command_response(&state, retained.clone())
+        .unwrap()
+        .headers()
+        .contains_key(header::LINK));
+    state.public_request_origin = Some("https://caller.example".into());
+    for recovered in [false, true] {
+        retained.recovered = recovered;
+        let original = serde_json::to_vec(&retained).unwrap();
+        let response = command_response(&state, retained.clone()).unwrap();
+        assert_eq!(response.headers()[header::LINK], format!(
+            "<https://caller.example/v1/flows/instances/{challenge_id}/request>; rel=\"urn:marty:delegated-use:request\""
+        ));
+        assert_eq!(
+            to_bytes(response.into_body(), 16_384)
+                .await
+                .unwrap()
+                .as_ref(),
+            original.as_slice()
+        );
+    }
+    retained.result = crate::DelegationUseCommandResult::FinalUse {
+        challenge_id,
+        decision: "PERMIT".into(),
+        receipt_ref: "urn:marty:delegated-receipt:fixture".into(),
+        receipt_digest: format!("sha256:{}", "e".repeat(64)),
+        recorded_at: now,
+        authorization_expires_at: now + chrono::Duration::seconds(30),
+        semantics: "EVIDENCE_ONLY".into(),
+    };
+    assert!(!command_response(&state, retained)
+        .unwrap()
+        .headers()
+        .contains_key(header::LINK));
+}
+
 struct CountingApplication {
     calls: AtomicUsize,
     requests: Mutex<Vec<Vec<u8>>>,

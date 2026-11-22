@@ -1,5 +1,5 @@
-//! Explicit internal original-receipt retrieval. Public command/discovery and
-//! human administration routes remain separate from this protected artifact.
+//! Explicit authenticated original-receipt retrieval. The optional caller route
+//! requires mutual TLS; discovery and human administration remain separate.
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -66,11 +66,29 @@ impl DelegationUseReceiptHttpState {
 }
 
 pub fn delegated_use_receipt_router(state: DelegationUseReceiptHttpState) -> Router {
+    receipt_router(
+        state,
+        "/internal/v1/organizations/{organization_id}/delegated-use/receipts/recover",
+    )
+}
+
+/// Original signed bytes remain behind the same current-access check. Public
+/// caller composition accepts only certificate-derived machine identities.
+pub fn delegated_use_public_receipt_router(
+    state: DelegationUseReceiptHttpState,
+) -> Result<Router, DelegationUseCommandError> {
+    if !state.authenticator.uses_mutual_tls() {
+        return Err(DelegationUseCommandError::InvalidCommand);
+    }
+    Ok(receipt_router(
+        state,
+        "/v1/organizations/{organization_id}/delegated-use/receipts/recover",
+    ))
+}
+
+fn receipt_router(state: DelegationUseReceiptHttpState, route: &str) -> Router {
     Router::new()
-        .route(
-            "/internal/v1/organizations/{organization_id}/delegated-use/receipts/recover",
-            post(recover),
-        )
+        .route(route, post(recover))
         .with_state(state)
         .layer(middleware::from_fn(no_store))
 }

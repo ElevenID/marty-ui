@@ -4,7 +4,7 @@ Status: source integrity and schema-shape checks only. Runtime qualification is
 `NOT_ASSESSED`; public discovery is `false`.
 
 Marty has an independently reviewed source pin for the optional contracts added
-by [Marty Protocol PR #38](https://github.com/Marty-Protocol/Marty-Protocol/pull/38).
+by [Marty Protocol PR #38](https://github.com/ElevenID/marty-protocol/pull/38).
 This prepares a shared implementation target for agent identity, delegated
 commands, OAuth/account links, AuthZEN, security events and evidence portability.
 The [consumer lock](../../contracts/agent-trust-protocol-consumer.json) selects

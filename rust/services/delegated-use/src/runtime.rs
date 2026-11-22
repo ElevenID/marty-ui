@@ -20,9 +20,13 @@ use marty_delegated_authority::{
     },
     organization_machine_state::OrganizationMachineAuthenticationStateSource,
     use_http::{
-        delegated_use_command_router, DelegationUseHttpAuthenticator, DelegationUseHttpState,
+        delegated_use_command_router, delegated_use_public_command_router,
+        DelegationUseHttpAuthenticator, DelegationUseHttpState,
     },
-    use_receipt_http::{delegated_use_receipt_router, DelegationUseReceiptHttpState},
+    use_receipt_http::{
+        delegated_use_public_receipt_router, delegated_use_receipt_router,
+        DelegationUseReceiptHttpState,
+    },
     AuthorityMode, ConfiguredConsentEvidenceVerifier, ConstraintMode, ConstraintVerificationError,
     DelegatedDecisionReceiptIssuer, DelegatedDecisionReceiptSigner, DelegationAuthorityService,
     DelegationChallengeIssuer, DelegationCommandCaller, DelegationGrant, DelegationUseAuthorizer,
@@ -35,10 +39,10 @@ use marty_delegated_authority::{
     DELEGATED_DECISION_JWS_PURPOSE,
 };
 use marty_flow::{
-    delegated_use_flow_router, resolve_flow_presentation_policy, FlowDefinitionRecord,
-    FlowDelegatedReadProviders, FlowDelegatedUseHttpState, FlowDelegatedUseIngress,
-    FlowDelegatedUseOwner, FlowDelegationOid4vpChallengeStore, FlowProviderRegistry,
-    HttpFlowReferenceProvider, HttpSigningProvider, PostgresFlowRepository,
+    delegated_use_flow_router, delegated_use_wallet_router, resolve_flow_presentation_policy,
+    FlowDefinitionRecord, FlowDelegatedReadProviders, FlowDelegatedUseHttpState,
+    FlowDelegatedUseIngress, FlowDelegatedUseOwner, FlowDelegationOid4vpChallengeStore,
+    FlowProviderRegistry, HttpFlowReferenceProvider, HttpSigningProvider, PostgresFlowRepository,
     VerificationDefinitionBinding,
 };
 use marty_machine_credential_source::PgOwnedMachineJwtVcAuthoritySource;
@@ -84,6 +88,7 @@ pub struct DelegatedUseRuntime {
     commands: Arc<DelegationUseCommandService>,
     ingress: Arc<FlowDelegatedUseIngress>,
     authenticator: Arc<DelegationUseHttpAuthenticator>,
+    caller_routes: Option<Router>,
     providers: FlowProviderRegistry,
     receipt_signer: Arc<dyn DelegatedDecisionReceiptSigner>,
     receipt_issuer: Principal,
@@ -301,6 +306,32 @@ impl DelegatedUseRuntime {
             )
             .map_err(|_| DelegatedUseRuntimeError("workload identity selection"))?,
         );
+        let caller_routes = if configuration.public_caller_enabled {
+            let caller_commands = delegated_use_public_command_router(
+                DelegationUseHttpState::with_authenticator(commands.clone(), authenticator.clone()),
+                &configuration.public_base_url,
+            )
+            .map_err(|_| DelegatedUseRuntimeError("public caller selection"))?;
+            let wallet = delegated_use_wallet_router(FlowDelegatedUseHttpState::new(
+                ingress.clone(),
+                authenticator.clone(),
+            ))
+            .map_err(|_| DelegatedUseRuntimeError("public wallet selection"))?;
+            let receipts = delegated_use_public_receipt_router(
+                DelegationUseReceiptHttpState::with_authenticator(
+                    // The retained application remains the sole evidence owner.
+                    commands.clone(),
+                    authenticator.clone(),
+                ),
+            );
+            Some(
+                caller_commands.merge(wallet).merge(
+                    receipts.map_err(|_| DelegatedUseRuntimeError("public receipt selection"))?,
+                ),
+            )
+        } else {
+            None
+        };
         let runtime = Self {
             pools,
             grant_repository,
@@ -314,6 +345,7 @@ impl DelegatedUseRuntime {
             commands,
             ingress,
             authenticator,
+            caller_routes,
             providers,
             receipt_signer,
             receipt_issuer,
@@ -424,10 +456,11 @@ impl DelegatedUseRuntime {
         Ok(())
     }
 
-    /// Only internal commands, original receipts and protected request/proof routes are mounted.
+    /// Internal routes remain available. Explicit caller selection additionally
+    /// mounts the authenticated public command, receipt and wallet URLs.
     /// The host installs authenticated health/readiness probes separately.
     pub fn router(&self) -> Router {
-        delegated_use_command_router(DelegationUseHttpState::with_authenticator(
+        let router = delegated_use_command_router(DelegationUseHttpState::with_authenticator(
             self.commands.clone(),
             self.authenticator.clone(),
         ))
@@ -440,7 +473,11 @@ impl DelegatedUseRuntime {
                 self.commands.clone(),
                 self.authenticator.clone(),
             ),
-        ))
+        ));
+        match &self.caller_routes {
+            Some(caller) => router.merge(caller.clone()),
+            None => router,
+        }
     }
 
     pub fn commands(&self) -> Arc<DelegationUseCommandService> {

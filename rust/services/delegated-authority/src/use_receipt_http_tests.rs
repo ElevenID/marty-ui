@@ -18,6 +18,25 @@ const ORG: &str = "9d23ceca-cd3f-4ef9-955b-cdca59348865";
 const ACTOR: &str = "urn:example:receipt-reader";
 const TOKEN: &str = "synthetic-protected-receipt-service-hop-token";
 
+#[test]
+fn caller_receipt_router_cannot_select_internal_service_forwarding() {
+    let application = Arc::new(Application {
+        calls: AtomicUsize::new(0),
+        requests: Mutex::new(Vec::new()),
+        actors: Mutex::new(Vec::new()),
+        error: DelegationUseCommandError::AccessDenied,
+    });
+    let authenticator = Arc::new(
+        DelegationUseHttpAuthenticator::trusted_forwarder(TOKEN.into(), ORG.parse().unwrap())
+            .unwrap(),
+    );
+    assert!(delegated_use_public_receipt_router(
+        DelegationUseReceiptHttpState::with_authenticator(application.clone(), authenticator)
+    )
+    .is_err());
+    assert_eq!(application.calls.load(Ordering::SeqCst), 0);
+}
+
 struct Application {
     calls: AtomicUsize,
     requests: Mutex<Vec<Vec<u8>>>,

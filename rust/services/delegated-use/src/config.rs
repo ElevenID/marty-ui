@@ -58,6 +58,7 @@ const JSON_NAMES: [&str; 3] = [
 ];
 const PUBLIC_NAMES: &[&str] = &[
     "DELEGATED_USE_LISTEN_ADDR",
+    "DELEGATED_USE_PUBLIC_CALLER_ENABLED",
     "DELEGATED_USE_ORGANIZATION_ID",
     "DELEGATED_USE_DEPLOYMENT_PROFILE_ID",
     "DELEGATED_USE_DELEGATION_POLICY_ID",
@@ -151,6 +152,7 @@ impl fmt::Debug for ReceiptSigningConfig {
 #[derive(Clone)]
 pub struct DelegatedUseHostConfig {
     pub listen_addr: SocketAddr,
+    pub public_caller_enabled: bool,
     pub organization_id: Uuid,
     pub deployment_profile_id: Uuid,
     pub delegation_policy_id: Uuid,
@@ -337,7 +339,32 @@ impl DelegatedUseHostConfig {
             source_evidence_digest: None,
             source_expires_at: None,
         };
-        let public_base_url = https(&input, "DELEGATED_USE_PUBLIC_BASE_URL", false)?;
+        let public_caller_enabled = match input
+            .get("DELEGATED_USE_PUBLIC_CALLER_ENABLED")
+            .map(String::as_str)
+        {
+            None | Some("false") => false,
+            Some("true") => true,
+            _ => {
+                return Err(HostConfigError::Invalid(
+                    "DELEGATED_USE_PUBLIC_CALLER_ENABLED",
+                ))
+            }
+        };
+        let public_base_url = https(
+            &input,
+            "DELEGATED_USE_PUBLIC_BASE_URL",
+            public_caller_enabled,
+        )?;
+        if public_caller_enabled
+            && url::Url::parse(&public_base_url)
+                .map_err(|_| HostConfigError::Invalid("DELEGATED_USE_PUBLIC_BASE_URL"))?
+                .origin()
+                .ascii_serialization()
+                != public_base_url
+        {
+            return Err(HostConfigError::Invalid("DELEGATED_USE_PUBLIC_BASE_URL"));
+        }
         if public_base_url.ends_with('/') {
             return Err(HostConfigError::Invalid("DELEGATED_USE_PUBLIC_BASE_URL"));
         }
@@ -501,6 +528,7 @@ impl DelegatedUseHostConfig {
             .map_err(|_| HostConfigError::Invalid("DELEGATED_USE_WORKLOAD_BINDINGS"))?;
         Ok(Self {
             listen_addr,
+            public_caller_enabled,
             organization_id,
             deployment_profile_id,
             delegation_policy_id,

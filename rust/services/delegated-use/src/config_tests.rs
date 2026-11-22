@@ -199,6 +199,7 @@ fn valid_configuration_uses_selected_profiles_and_redacts_credentials() {
     let input = values();
     let config = parse(input.clone()).unwrap();
     assert_eq!(config.listen_addr.to_string(), "127.0.0.1:8021");
+    assert!(!config.public_caller_enabled);
     assert_eq!(
         config.flow_start.definition.organization_id,
         config.organization_id.to_string()
@@ -224,6 +225,46 @@ fn valid_configuration_uses_selected_profiles_and_redacts_credentials() {
     }
     assert!(!debug.contains("never-log"));
     assert!(!debug.contains("tls.token"));
+}
+
+#[test]
+fn public_caller_routes_require_explicit_selection_and_canonical_origin() {
+    for enabled in [None, Some("false"), Some("true")] {
+        let mut input = values();
+        if let Some(enabled) = enabled {
+            input.insert("DELEGATED_USE_PUBLIC_CALLER_ENABLED".into(), enabled.into());
+        }
+        assert_eq!(
+            parse(input).unwrap().public_caller_enabled,
+            enabled == Some("true")
+        );
+    }
+    for enabled in ["TRUE", "1", " true", "", "false "] {
+        let mut input = values();
+        input.insert("DELEGATED_USE_PUBLIC_CALLER_ENABLED".into(), enabled.into());
+        assert_eq!(
+            parse(input).unwrap_err(),
+            HostConfigError::Invalid("DELEGATED_USE_PUBLIC_CALLER_ENABLED")
+        );
+    }
+    for origin in [
+        "https://verifier.example.invalid/prefix",
+        "https://verifier.example.invalid/",
+        "https://verifier.example.invalid:443",
+        "https://VERIFIER.example.invalid",
+        "https://verifier.example.invalid?caller=true",
+        "https://user@verifier.example.invalid",
+        "https://verifier.example.invalid#request",
+        "http://verifier.example.invalid",
+    ] {
+        let mut input = values();
+        input.insert("DELEGATED_USE_PUBLIC_CALLER_ENABLED".into(), "true".into());
+        input.insert("DELEGATED_USE_PUBLIC_BASE_URL".into(), origin.into());
+        assert_eq!(
+            parse(input).unwrap_err(),
+            HostConfigError::Invalid("DELEGATED_USE_PUBLIC_BASE_URL")
+        );
+    }
 }
 
 #[test]

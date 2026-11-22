@@ -4,8 +4,11 @@
 //! OpenBao/Redis custody, current PostgreSQL owners and both Cedar evaluations
 //! are real. The caller is a disposable mTLS machine and holds its own VP key.
 //! Human approval authentication and unused catalog health are explicit test
-//! fixtures. This qualifies the selected MachineCredential/KEY/exact-operation
-//! path; it does not qualify a production deployment or public wallet routing.
+//! fixtures. The two gates exercise the internal surface and the explicitly
+//! enabled public delegated-machine caller/wallet surface with fresh owners.
+//! This qualifies the selected MachineCredential/KEY/exact-operation path,
+//! including returned request and signed response URI routing. It does not
+//! qualify a production deployment or arbitrary consumer wallet compatibility.
 #![allow(dead_code)] // Shared legacy support is not invoked by this gate.
 
 #[path = "support/lifecycle_owners.rs"]
@@ -33,10 +36,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 
-use live_support::{available_address, caller, environment, setting, Executable, Server};
+use live_support::{available_address, environment, setting, Executable, Server};
 use network::{
     denied, denied_for, finalization, original, protected, recovery, start, wallet_challenge,
-    CatalogHealthFixture, Network, SigningCounts,
+    CatalogHealthFixture, Network, SigningCounts, Surface, WalletChallenge,
 };
 use support::{
     database::Database,
@@ -47,10 +50,27 @@ use support::{
     TestResult,
 };
 
+// Both gates run in the same disposable provider audit domain. Serialize them
+// even when a caller omits --test-threads=1 so count deltas remain attributable.
+static LIFECYCLE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires the explicit disposable PostgreSQL/OpenBao/Redis lifecycle wrapper"]
 async fn actual_executable_runs_managed_machine_use_and_recovers_independent_receipt() -> TestResult
 {
+    let _gate = LIFECYCLE_GATE.lock().await;
+    exercise(Surface::Internal).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires the explicit disposable PostgreSQL/OpenBao/Redis lifecycle wrapper"]
+async fn actual_public_client_follows_verified_wallet_routes_and_recovers_independent_receipt(
+) -> TestResult {
+    let _gate = LIFECYCLE_GATE.lock().await;
+    exercise(Surface::Public).await
+}
+
+async fn exercise(surface: Surface) -> TestResult {
     assert_eq!(setting("MARTY_TEST_DELEGATED_USE_LIFECYCLE"), "true");
     marty_service_runtime::install_tls_crypto_provider();
     let db = Database::new().await?;
@@ -130,6 +150,9 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     )?;
     env.insert("DELEGATED_USE_LISTEN_ADDR".into(), listen.to_string());
     env.insert("DELEGATED_USE_PUBLIC_BASE_URL".into(), origin.clone());
+    if surface == Surface::Public {
+        env.insert("DELEGATED_USE_PUBLIC_CALLER_ENABLED".into(), "true".into());
+    }
     env.insert(
         "DELEGATED_USE_VERIFIER_DISPLAY_NAME".into(),
         "Disposable lifecycle gate".into(),
@@ -149,11 +172,7 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         );
     }
     let mut executable = Executable::start(&env).await?;
-    let network = Network {
-        client: caller(None).await?,
-        origin: origin.clone(),
-        organization: owned.organization,
-    };
+    let network = Network::connect(origin.clone(), owned.organization, surface, None).await?;
     for route in ["/health", "/ready"] {
         let response = network
             .client
@@ -163,15 +182,19 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         protected(&response, StatusCode::OK);
         assert!(response.bytes().await?.is_empty());
     }
+    network.assert_route_selection().await?;
+    network.assert_no_certificate().await?;
     assert_eq!(SigningCounts::capture()?, expected_issuance);
 
     // CA validation alone is insufficient: the exact caller leaf and URI must
     // match this machine. Forwarding headers must never substitute an actor.
-    let unknown = Network {
-        client: caller(Some(setting("MARTY_TEST_USE_UNMAPPED_CALLER_CERT_FILE"))).await?,
-        origin: origin.clone(),
-        organization: owned.organization,
-    };
+    let unknown = Network::connect(
+        origin.clone(),
+        owned.organization,
+        surface,
+        Some(setting("MARTY_TEST_USE_UNMAPPED_CALLER_CERT_FILE")),
+    )
+    .await?;
     let start_bytes = start(&grant);
     denied(
         unknown.command_request(&start_bytes),
@@ -196,14 +219,47 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         return Err("START_USE did not retain a challenge".into());
     };
     let challenge_id = *challenge_id;
+    if surface == Surface::Public {
+        // A wallet cannot create association authority before the host has
+        // emitted and retained the selected signed request. Even a correctly
+        // shaped form naming the configured query has no request to answer.
+        denied_for(
+            network.form_request(
+                &format!("{origin}/v1/flows/instances/{challenge_id}/submit"),
+                &[
+                    ("state", challenge_id.to_string()),
+                    (
+                        "vp_token",
+                        json!({requirement_id.clone(): ["e30.e30.Zg"]}).to_string(),
+                    ),
+                ],
+            ),
+            StatusCode::CONFLICT,
+            "delegation_use_conflict",
+            "wallet submission before emitted request",
+        )
+        .await?;
+        assert_no_public_proof(&db, &network, challenge_id, expected_issuance).await?;
+    }
     denied(
         unknown.request(challenge_id),
         StatusCode::FORBIDDEN,
         "delegation_use_workload_denied",
     )
     .await?;
+    if surface == Surface::Public {
+        denied_for(
+            network
+                .request(challenge_id)
+                .header("x-forwarded-client-cert", "untrusted-caller-header"),
+            StatusCode::FORBIDDEN,
+            "delegation_use_access_denied",
+            "spoofed wallet request actor",
+        )
+        .await?;
+    }
     let request = network.signed_request(challenge_id).await?;
-    let challenge = wallet_challenge(
+    let wallet = wallet_challenge(
         &request,
         &keys.request.jwk,
         &keys.request.kid,
@@ -212,6 +268,7 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         &origin,
         &requirement_id,
     )?;
+    let challenge = &wallet.challenge;
     assert!(network.signed_request(challenge_id).await? == request);
     let after_request = SigningCounts {
         request_sign: expected_issuance.request_sign + 1,
@@ -220,21 +277,24 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     };
     assert_eq!(SigningCounts::capture()?, after_request);
 
-    let proof = owned.proof(&challenge);
+    let proof = owned.proof(challenge);
     denied(
-        unknown.proof_request(challenge_id, &proof),
+        unknown.proof_request(&wallet, &proof),
         StatusCode::FORBIDDEN,
         "delegation_use_workload_denied",
     )
     .await?;
-    let submitted = network.submit(challenge_id, &proof).await?;
+    if surface == Surface::Public {
+        assert_public_submission_admission(&network, &db, &wallet, &proof, after_request).await?;
+    }
+    let submitted = network.submit(&wallet, &proof).await?;
     assert!(!submitted.recovered);
     assert_eq!(submitted.challenge_id, challenge_id);
     assert_eq!(
         submitted.proof_digest,
         format!("sha256:{:x}", Sha256::digest(&proof))
     );
-    let repeated = network.submit(challenge_id, &proof).await?;
+    let repeated = network.submit(&wallet, &proof).await?;
     assert!(repeated.recovered);
     assert_eq!(repeated.submission_id, submitted.submission_id);
     assert_eq!(repeated.received_at, submitted.received_at);
@@ -279,6 +339,25 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     assert_eq!(SigningCounts::capture()?, after_final);
     original(&network.command(&finish).await?, &completed)?;
     original(&network.command(&recovery(&completed)).await?, &completed)?;
+    if surface == Surface::Public {
+        // A lost submission response can be recovered even when finalization
+        // has since made the Flow terminal. Recovery preserves the original
+        // proof identity and time; it cannot retain or consume another proof.
+        let before_terminal_recovery =
+            terminal_recovery_counts(&db, &network, challenge_id).await?;
+        assert_eq!(before_terminal_recovery, (2, 1, 1, 1, 1, 1));
+        let historical = network.submit(&wallet, &proof).await?;
+        assert!(historical.recovered);
+        assert_eq!(historical.submission_id, submitted.submission_id);
+        assert_eq!(historical.challenge_id, submitted.challenge_id);
+        assert_eq!(historical.proof_digest, submitted.proof_digest);
+        assert_eq!(historical.received_at, submitted.received_at);
+        assert_eq!(
+            terminal_recovery_counts(&db, &network, challenge_id).await?,
+            before_terminal_recovery,
+        );
+        assert_eq!(SigningCounts::capture()?, after_final);
+    }
 
     let recovered = network.receipt(&recovery(&completed)).await?;
     original(&recovered.original_response, &completed)?;
@@ -409,6 +488,17 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         "delegation_use_workload_denied",
     )
     .await?;
+    if surface == Surface::Public {
+        denied_for(
+            network
+                .receipt_request(&recovery(&completed))
+                .header("x-marty-use-principal-id", &owned.principal.id),
+            StatusCode::FORBIDDEN,
+            "delegation_use_access_denied",
+            "spoofed receipt recovery actor",
+        )
+        .await?;
+    }
     let again = network.receipt(&recovery(&completed)).await?;
     assert!(again.compact_jws == compact);
     assert_eq!(again.receipt_digest, *receipt_digest);
@@ -420,7 +510,7 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     assert_owner_evidence(
         &db,
         &owned,
-        &challenge,
+        challenge,
         submitted.submission_id,
         &proof,
         &request,
@@ -443,7 +533,7 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     };
     let pending_id = *pending_id;
     let pending_request = network.signed_request(pending_id).await?;
-    let pending_challenge = wallet_challenge(
+    let pending_wallet = wallet_challenge(
         &pending_request,
         &keys.request.jwk,
         &keys.request.kid,
@@ -452,8 +542,8 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         &origin,
         &requirement_id,
     )?;
-    let pending_proof = owned.proof(&pending_challenge);
-    let pending_submission = network.submit(pending_id, &pending_proof).await?;
+    let pending_proof = owned.proof(&pending_wallet.challenge);
+    let pending_submission = network.submit(&pending_wallet, &pending_proof).await?;
     let after_second_request = SigningCounts {
         request_sign: after_final.request_sign + 1,
         request_grant: after_final.request_grant + 1,
@@ -508,7 +598,7 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
         network.command_request(&finish),
         network.receipt_request(&recovery(&completed)),
         network.request(pending_id),
-        network.proof_request(pending_id, &pending_proof),
+        network.proof_request(&pending_wallet, &pending_proof),
     ] {
         denied(
             request,
@@ -550,6 +640,151 @@ async fn actual_executable_runs_managed_machine_use_and_recovers_independent_rec
     keys.server.close().await?;
     db.close().await;
     Ok(())
+}
+
+async fn assert_public_submission_admission(
+    network: &Network,
+    db: &Database,
+    wallet: &WalletChallenge,
+    proof: &[u8],
+    signing: SigningCounts,
+) -> TestResult {
+    let response_uri = &wallet.verified.response_uri;
+    let state = &wallet.verified.state;
+    let query = &wallet.verified.query_id;
+    let proof = std::str::from_utf8(proof).map_err(|_| "locally produced VP is not UTF-8")?;
+    let vp_token = json!({query.clone(): [proof]}).to_string();
+    let quoted_query = serde_json::to_string(query)?;
+    let quoted_proof = serde_json::to_string(proof)?;
+    let duplicate_query =
+        format!("{{{quoted_query}:[{quoted_proof}],{quoted_query}:[{quoted_proof}]}}");
+
+    for (label, fields) in [
+        (
+            "wallet response for a different state",
+            vec![
+                ("state", uuid::Uuid::new_v4().to_string()),
+                ("vp_token", vp_token.clone()),
+            ],
+        ),
+        (
+            "wallet-selected query identifier",
+            vec![
+                ("state", state.clone()),
+                (
+                    "vp_token",
+                    json!({"wallet-selected-query": [proof]}).to_string(),
+                ),
+            ],
+        ),
+        (
+            "bare wallet token",
+            vec![("state", state.clone()), ("vp_token", proof.to_owned())],
+        ),
+        (
+            "duplicate wallet state",
+            vec![
+                ("state", state.clone()),
+                ("state", state.clone()),
+                ("vp_token", vp_token.clone()),
+            ],
+        ),
+        (
+            "duplicate wallet token field",
+            vec![
+                ("state", state.clone()),
+                ("vp_token", vp_token.clone()),
+                ("vp_token", vp_token.clone()),
+            ],
+        ),
+        (
+            "duplicate wallet query key",
+            vec![("state", state.clone()), ("vp_token", duplicate_query)],
+        ),
+        (
+            "unsolicited presentation submission",
+            vec![
+                ("state", state.clone()),
+                ("vp_token", vp_token.clone()),
+                ("presentation_submission", "{}".into()),
+            ],
+        ),
+    ] {
+        denied_for(
+            network.form_request(response_uri, &fields),
+            StatusCode::BAD_REQUEST,
+            "invalid_delegation_use_command",
+            label,
+        )
+        .await?;
+    }
+    denied_for(
+        network
+            .client
+            .post(response_uri)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(
+                &json!({"state": state, "vp_token": vp_token}),
+            )?),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "delegated_flow_direct_post_required",
+        "wallet response with unsupported media type",
+    )
+    .await?;
+    denied_for(
+        network.form_request(
+            &format!("{response_uri}?state={state}"),
+            &[("state", state.clone()), ("vp_token", vp_token.clone())],
+        ),
+        StatusCode::BAD_REQUEST,
+        "invalid_delegated_flow_request",
+        "wallet response query parameters",
+    )
+    .await?;
+    denied_for(
+        network
+            .proof_request(wallet, proof.as_bytes())
+            .header("x-forwarded-client-cert", "untrusted-wallet-certificate"),
+        StatusCode::FORBIDDEN,
+        "delegation_use_access_denied",
+        "spoofed wallet submission actor",
+    )
+    .await?;
+    assert_no_public_proof(db, network, wallet.challenge.challenge_id, signing).await
+}
+
+async fn assert_no_public_proof(
+    db: &Database,
+    network: &Network,
+    challenge_id: uuid::Uuid,
+    signing: SigningCounts,
+) -> TestResult {
+    let proofs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM flow_service.delegated_proof_submissions WHERE organization_id=$1 AND challenge_id=$2",
+    ).bind(network.organization).bind(challenge_id).fetch_one(&db.admin).await?;
+    assert_eq!(proofs, 0, "rejected public forms retained a proof");
+    let consumed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM flow_service.delegated_use_consumptions WHERE organization_id=$1 AND challenge_id=$2)",
+    ).bind(network.organization).bind(challenge_id).fetch_one(&db.admin).await?;
+    assert!(!consumed, "rejected public forms consumed a challenge");
+    assert_eq!(SigningCounts::capture()?, signing);
+    Ok(())
+}
+
+async fn terminal_recovery_counts(
+    db: &Database,
+    network: &Network,
+    challenge_id: uuid::Uuid,
+) -> TestResult<(i64, i64, i64, i64, i64, i64)> {
+    Ok(sqlx::query_as(
+        "SELECT
+         (SELECT count(*) FROM delegated_authority_service.use_command_claims WHERE organization_id=$1 AND challenge_id=$2),
+         (SELECT count(*) FROM flow_service.delegated_request_claims WHERE organization_id=$1 AND challenge_id=$2),
+         (SELECT count(*) FROM flow_service.delegated_proof_submissions WHERE organization_id=$1 AND challenge_id=$2),
+         (SELECT count(*) FROM flow_service.delegated_proof_ingress WHERE organization_id=$1 AND challenge_id=$2),
+         (SELECT count(*) FROM delegated_authority_service.use_receipts WHERE organization_id=$1 AND challenge_id=$2),
+         (SELECT count(*) FROM flow_service.delegated_use_consumptions WHERE organization_id=$1 AND challenge_id=$2)",
+    ).bind(network.organization).bind(challenge_id).fetch_one(&db.admin).await?)
 }
 
 async fn assert_owner_evidence(

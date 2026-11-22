@@ -1,9 +1,13 @@
 //! Network-only caller mechanics and independent bootstrap expectations.
 //! No function below reads a retained challenge or receipt from owner storage.
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
 use axum::{http::HeaderMap, routing::get, Json, Router};
@@ -14,13 +18,17 @@ use marty_delegated_authority::{
     DelegationUseOperation, RetainedUseChallenge, DELEGATION_COMMAND_PROFILE,
     DELEGATION_COMMAND_RESPONSE_PROFILE,
 };
+use marty_delegated_use_client::{
+    CallerVerifiedRequest, ClientConfig, DelegatedUseClient, GrantReference, MtlsConfig, Operation,
+    PreparedFinalize, PreparedStart, StartedUse,
+};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::live_support::{provider_calls, ISSUANCE_KEY, SERVICE_TOKEN};
+use super::live_support::{caller, identity, provider_calls, setting, ISSUANCE_KEY, SERVICE_TOKEN};
 use crate::support::{
     owned::{operation_digest, ACTION, AUDIENCE, OPERATION_PROFILE, RESOURCE, VERIFIER_CLIENT_ID},
     TestResult,
@@ -76,17 +84,218 @@ pub struct ProofSubmission {
     pub recovered: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Surface {
+    Internal,
+    Public,
+}
+
+#[derive(Clone)]
+enum PreparedCommand {
+    Start(Arc<PreparedStart>),
+    Finalize(Arc<PreparedFinalize>),
+}
+impl PreparedCommand {
+    fn digest(&self) -> &str {
+        match self {
+            Self::Start(command) => command.command_digest(),
+            Self::Finalize(command) => command.command_digest(),
+        }
+    }
+}
+
+struct PublicCaller {
+    client: DelegatedUseClient,
+    prepared: Mutex<BTreeMap<Uuid, PreparedCommand>>,
+    started: Mutex<BTreeMap<Uuid, Arc<StartedUse>>>,
+}
+
+pub struct WalletChallenge {
+    pub challenge: RetainedUseChallenge,
+    pub verified: CallerVerifiedRequest,
+}
+
 pub struct Network {
     pub client: Client,
     pub origin: String,
     pub organization: Uuid,
+    pub surface: Surface,
+    public: Option<PublicCaller>,
 }
 impl Network {
+    pub async fn connect(
+        origin: String,
+        organization: Uuid,
+        surface: Surface,
+        certificate: Option<String>,
+    ) -> TestResult<Self> {
+        // Raw negative probes use the same authenticated leaf, key and trust as
+        // the independent client. Positive public operations use the client's
+        // own bounded transport with its fixed redirect/retry/proxy policy.
+        let client = caller(certificate.clone()).await?;
+        let public = if surface == Surface::Public {
+            let identity = identity("MARTY_TEST_USE_CALLER_TLS", certificate)?
+                .connect()
+                .await?;
+            let ca = std::fs::read(setting("MARTY_TEST_USE_CA_DER_FILE"))?;
+            let tls = mmf_platform::keyless_grpc_client_config(&identity, vec![ca.clone()])?;
+            let mut mtls = MtlsConfig {
+                roots: rustls::RootCertStore::empty(),
+                client_certificate: tls.client_auth_cert_resolver.clone(),
+            };
+            mtls.roots.add(ca.into())?;
+            Some(PublicCaller {
+                client: DelegatedUseClient::new(ClientConfig {
+                    origin: origin.clone(),
+                    organization,
+                    tls: mtls,
+                    timeout: Duration::from_secs(20),
+                })?,
+                prepared: Mutex::new(BTreeMap::new()),
+                started: Mutex::new(BTreeMap::new()),
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            client,
+            origin,
+            organization,
+            surface,
+            public,
+        })
+    }
+
+    fn command_prefix(&self) -> &'static str {
+        match self.surface {
+            Surface::Internal => "/internal/v1",
+            Surface::Public => "/v1",
+        }
+    }
+
+    pub async fn assert_route_selection(&self) -> TestResult {
+        // Probe malformed inputs only. Route selection must neither create an
+        // operation nor reach a signer, and each public surface stays absent
+        // unless the separate caller feature is explicitly selected.
+        let command = format!(
+            "/v1/organizations/{}/delegated-use-commands",
+            self.organization
+        );
+        let receipt = format!(
+            "/v1/organizations/{}/delegated-use/receipts/recover",
+            self.organization
+        );
+        let challenge = Uuid::nil();
+        for (method, path, content_type, detail) in [
+            (
+                reqwest::Method::POST,
+                command,
+                "application/json",
+                "invalid_delegation_use_command",
+            ),
+            (
+                reqwest::Method::POST,
+                receipt,
+                "application/json",
+                "invalid_delegation_use_command",
+            ),
+            (
+                reqwest::Method::GET,
+                format!("/v1/flows/instances/{challenge}/request"),
+                "application/json",
+                "invalid_delegated_flow_request",
+            ),
+            (
+                reqwest::Method::POST,
+                format!("/v1/flows/instances/{challenge}/submit"),
+                "application/x-www-form-urlencoded",
+                "invalid_delegated_flow_request",
+            ),
+        ] {
+            let mut request = self
+                .client
+                .request(method.clone(), format!("{}{path}", self.origin));
+            if method == reqwest::Method::POST {
+                request = request.header("content-type", content_type).body("{}");
+            }
+            match self.surface {
+                Surface::Internal => {
+                    let response = request.send().await?;
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::NOT_FOUND,
+                        "unselected public path {path}"
+                    );
+                }
+                Surface::Public => {
+                    denied_for(
+                        request,
+                        StatusCode::BAD_REQUEST,
+                        detail,
+                        "selected public route",
+                    )
+                    .await?;
+                }
+            }
+        }
+        // The public selection adds its routes without displacing the internal
+        // machine host; malformed internal commands still reach its guard.
+        denied_for(
+            self.client
+                .post(format!(
+                    "{}/internal/v1/organizations/{}/delegated-use-commands",
+                    self.origin, self.organization
+                ))
+                .header("content-type", "application/json")
+                .body("{}"),
+            StatusCode::BAD_REQUEST,
+            "invalid_delegation_use_command",
+            "preserved internal route",
+        )
+        .await
+    }
+
+    pub async fn assert_no_certificate(&self) -> TestResult {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(std::fs::read(setting("MARTY_TEST_USE_CA_DER_FILE"))?.into())?;
+        let mut tls = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let client = Client::builder()
+            .use_preconfigured_tls(tls)
+            .https_only(true)
+            .http1_only()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        assert!(
+            client
+                .post(format!(
+                    "{}{}/organizations/{}/delegated-use-commands",
+                    self.origin,
+                    self.command_prefix(),
+                    self.organization
+                ))
+                .header("content-type", "application/json")
+                .body("{}")
+                .send()
+                .await
+                .is_err(),
+            "selected use listener accepted a caller without its certificate"
+        );
+        Ok(())
+    }
+
     pub fn command_request(&self, raw: &[u8]) -> RequestBuilder {
         self.client
             .post(format!(
-                "{}/internal/v1/organizations/{}/delegated-use-commands",
-                self.origin, self.organization
+                "{}{}/organizations/{}/delegated-use-commands",
+                self.origin,
+                self.command_prefix(),
+                self.organization
             ))
             .header("content-type", "application/json")
             .body(raw.to_vec())
@@ -94,28 +303,55 @@ impl Network {
     pub fn receipt_request(&self, raw: &[u8]) -> RequestBuilder {
         self.client
             .post(format!(
-                "{}/internal/v1/organizations/{}/delegated-use/receipts/recover",
-                self.origin, self.organization
+                "{}{}/organizations/{}/delegated-use/receipts/recover",
+                self.origin,
+                self.command_prefix(),
+                self.organization
             ))
             .header("content-type", "application/json")
             .body(raw.to_vec())
     }
     pub fn request(&self, challenge: Uuid) -> RequestBuilder {
-        self.client.get(format!(
-            "{}/internal/v1/organizations/{}/delegated-use/challenges/{challenge}/request",
-            self.origin, self.organization
-        ))
+        let path = match self.surface {
+            Surface::Internal => format!(
+                "/internal/v1/organizations/{}/delegated-use/challenges/{challenge}/request",
+                self.organization
+            ),
+            Surface::Public => format!("/v1/flows/instances/{challenge}/request"),
+        };
+        self.client.get(format!("{}{path}", self.origin))
     }
-    pub fn proof_request(&self, challenge: Uuid, proof: &[u8]) -> RequestBuilder {
+    pub fn proof_request(&self, wallet: &WalletChallenge, proof: &[u8]) -> RequestBuilder {
+        match self.surface {
+            Surface::Internal => self.client
+                .post(format!(
+                    "{}/internal/v1/organizations/{}/delegated-use/challenges/{}/proof",
+                    self.origin, self.organization, wallet.challenge.challenge_id
+                ))
+                .header("content-type", "application/octet-stream")
+                .body(proof.to_vec()),
+            Surface::Public => self.form_request(
+                &wallet.verified.response_uri,
+                &[
+                    ("state", wallet.verified.state.clone()),
+                    ("vp_token", json!({wallet.verified.query_id.clone(): [std::str::from_utf8(proof).expect("locally produced compact VP")]}).to_string()),
+                ],
+            ),
+        }
+    }
+    pub fn form_request(&self, response_uri: &str, fields: &[(&str, String)]) -> RequestBuilder {
+        let body: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields.iter().map(|(key, value)| (*key, value.as_str())))
+            .finish();
         self.client
-            .post(format!(
-                "{}/internal/v1/organizations/{}/delegated-use/challenges/{challenge}/proof",
-                self.origin, self.organization
-            ))
-            .header("content-type", "application/octet-stream")
-            .body(proof.to_vec())
+            .post(response_uri)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
     }
     pub async fn command(&self, raw: &[u8]) -> TestResult<DelegationUseCommandResponse> {
+        if let Some(public) = &self.public {
+            return public.command(raw).await;
+        }
         let command: Option<Value> = serde_json::from_slice(raw).ok();
         let label = match command.as_ref().and_then(|value| value["command"].as_str()) {
             Some("START_USE") => "START_USE",
@@ -129,9 +365,30 @@ impl Network {
         Ok(result)
     }
     pub async fn receipt(&self, raw: &[u8]) -> TestResult<ReceiptArtifact> {
+        if let Some(public) = &self.public {
+            let command = public.recovery_command(raw)?;
+            let PreparedCommand::Finalize(command) = command else {
+                return Err("receipt recovery requires a locally prepared finalization".into());
+            };
+            let artifact = public.client.recover_receipt(&command).await?;
+            return Ok(ReceiptArtifact {
+                original_response: serde_json::from_value(serde_json::to_value(
+                    artifact.original_response(),
+                )?)?,
+                receipt_ref: artifact.receipt_ref().into(),
+                receipt_digest: artifact.receipt_digest().into(),
+                compact_jws: artifact.compact_jws().into(),
+                semantics: artifact.semantics().into(),
+            });
+        }
         json_response(self.receipt_request(raw), "original receipt recovery").await
     }
     pub async fn signed_request(&self, challenge: Uuid) -> TestResult<String> {
+        if let Some(public) = &self.public {
+            let started = public.started(challenge)?;
+            let artifact = public.client.fetch_request(&started).await?;
+            return Ok(artifact.compact_jws().into());
+        }
         let (response, context) = checked_response(
             self.request(challenge),
             StatusCode::OK,
@@ -152,13 +409,154 @@ impl Network {
         String::from_utf8(bytes)
             .map_err(|_| format!("{context}: signed request is not UTF-8").into())
     }
-    pub async fn submit(&self, challenge: Uuid, proof: &[u8]) -> TestResult<ProofSubmission> {
+    pub async fn submit(
+        &self,
+        wallet: &WalletChallenge,
+        proof: &[u8],
+    ) -> TestResult<ProofSubmission> {
+        if let Some(public) = &self.public {
+            let started = public.started(wallet.challenge.challenge_id)?;
+            let proof =
+                std::str::from_utf8(proof).map_err(|_| "locally produced VP is not UTF-8")?;
+            let submitted = public
+                .client
+                .submit_direct_post(&started, &wallet.verified, proof)
+                .await?;
+            return Ok(ProofSubmission {
+                submission_id: submitted.submission_id,
+                challenge_id: submitted.challenge_id,
+                proof_digest: submitted.proof_digest,
+                received_at: submitted.received_at,
+                recovered: submitted.recovered,
+            });
+        }
         json_response(
-            self.proof_request(challenge, proof),
+            self.proof_request(wallet, proof),
             "machine proof submission",
         )
         .await
     }
+}
+
+impl PublicCaller {
+    fn remember(&self, id: Uuid, prepared: PreparedCommand) -> TestResult {
+        let mut commands = self
+            .prepared
+            .lock()
+            .map_err(|_| "local command cache unavailable")?;
+        if commands
+            .get(&id)
+            .is_some_and(|original| original.digest() != prepared.digest())
+        {
+            return Err("local command identity was reused with different intent".into());
+        }
+        commands.insert(id, prepared);
+        Ok(())
+    }
+
+    fn recovery_command(&self, raw: &[u8]) -> TestResult<PreparedCommand> {
+        let document: Value =
+            serde_json::from_slice(raw).map_err(|_| "invalid locally prepared recovery command")?;
+        if document["profile"] != DELEGATION_COMMAND_PROFILE
+            || document["command"] != "RECOVER_RESULT"
+        {
+            return Err("expected a locally prepared recovery command".into());
+        }
+        let id = local_uuid(&document, "original_command_id")?;
+        let commands = self
+            .prepared
+            .lock()
+            .map_err(|_| "local command cache unavailable")?;
+        let original = commands
+            .get(&id)
+            .ok_or("recovery has no locally prepared original command")?;
+        if document["expected_command_digest"].as_str() != Some(original.digest()) {
+            return Err(
+                "recovery digest differs from the locally prepared original command".into(),
+            );
+        }
+        Ok(original.clone())
+    }
+
+    fn started(&self, challenge: Uuid) -> TestResult<Arc<StartedUse>> {
+        self.started
+            .lock()
+            .map_err(|_| "local started-use cache unavailable")?
+            .get(&challenge)
+            .cloned()
+            .ok_or_else(|| "challenge has no validated returned request URI".into())
+    }
+
+    fn remember_started(&self, started: StartedUse) -> TestResult<DelegationUseCommandResponse> {
+        let response = checked_public_response(started.response())?;
+        self.started
+            .lock()
+            .map_err(|_| "local started-use cache unavailable")?
+            .insert(started.challenge_id(), Arc::new(started));
+        Ok(response)
+    }
+
+    async fn command(&self, raw: &[u8]) -> TestResult<DelegationUseCommandResponse> {
+        // These fields are the caller's original local command inputs. A
+        // recovered server DTO can name only a previously retained local ID
+        // and digest; it never supplies its own expected command binding.
+        let document: Value = serde_json::from_slice(raw)
+            .map_err(|_| "invalid locally prepared delegated-use command")?;
+        if document["profile"] != DELEGATION_COMMAND_PROFILE {
+            return Err("invalid locally prepared delegated-use profile".into());
+        }
+        match document["command"].as_str() {
+            Some("START_USE") => {
+                let id = local_uuid(&document, "command_id")?;
+                let grant: GrantReference = serde_json::from_value(document["grant"].clone())
+                    .map_err(|_| "invalid locally prepared grant reference")?;
+                let operation: Operation = serde_json::from_value(document["operation"].clone())
+                    .map_err(|_| "invalid locally prepared operation")?;
+                let prepared = Arc::new(PreparedStart::new(id, grant, operation)?);
+                self.remember(id, PreparedCommand::Start(prepared.clone()))?;
+                self.remember_started(self.client.start(&prepared).await?)
+            }
+            Some("FINALIZE_USE") => {
+                let id = local_uuid(&document, "command_id")?;
+                let prepared = Arc::new(PreparedFinalize::new(
+                    id,
+                    local_uuid(&document, "challenge_id")?,
+                    local_uuid(&document, "proof_submission_id")?,
+                )?);
+                self.remember(id, PreparedCommand::Finalize(prepared.clone()))?;
+                checked_public_response(self.client.finalize(&prepared).await?.response())
+            }
+            Some("RECOVER_RESULT") => match self.recovery_command(raw)? {
+                PreparedCommand::Start(prepared) => {
+                    self.remember_started(self.client.recover_start(&prepared).await?)
+                }
+                PreparedCommand::Finalize(prepared) => {
+                    checked_public_response(self.client.recover_final(&prepared).await?.response())
+                }
+            },
+            _ => Err("unsupported locally prepared delegated-use command".into()),
+        }
+    }
+}
+
+fn local_uuid(document: &Value, field: &str) -> TestResult<Uuid> {
+    document[field]
+        .as_str()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .filter(|value| !value.is_nil())
+        .ok_or_else(|| "invalid locally prepared command identifier".into())
+}
+
+fn checked_public_response(
+    response: &marty_delegated_use_client::CommandResponse,
+) -> TestResult<DelegationUseCommandResponse> {
+    // The independent client has already checked profile, identity, digest,
+    // operation and result bindings. Conversion exists only to reuse the
+    // legacy acceptance assertions and never supplies client expectations.
+    let response: DelegationUseCommandResponse =
+        serde_json::from_value(serde_json::to_value(response)?)?;
+    assert_eq!(response.profile, DELEGATION_COMMAND_RESPONSE_PROFILE);
+    Ok(response)
 }
 
 pub fn protected(response: &Response, status: StatusCode) {
@@ -281,6 +679,7 @@ async fn generic_detail(response: Response) -> &'static str {
         Some("delegated_flow_body_timeout") => "delegated_flow_body_timeout",
         Some("delegated_flow_request_body_forbidden") => "delegated_flow_request_body_forbidden",
         Some("delegated_flow_proof_bytes_required") => "delegated_flow_proof_bytes_required",
+        Some("delegated_flow_direct_post_required") => "delegated_flow_direct_post_required",
         Some("delegated_flow_body_too_large") => "delegated_flow_body_too_large",
         _ => "unrecognized-error-detail",
     }
@@ -313,7 +712,7 @@ pub fn wallet_challenge(
     started: &DelegationUseCommandResponse,
     public_base_url: &str,
     requirement_id: &str,
-) -> TestResult<RetainedUseChallenge> {
+) -> TestResult<WalletChallenge> {
     let parts = compact.split('.').collect::<Vec<_>>();
     assert_eq!(parts.len(), 3);
     let header: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0])?)?;
@@ -402,15 +801,28 @@ pub fn wallet_challenge(
         .as_str()
         .ok_or("missing signed request nonce")?;
     assert!(!nonce.is_empty() && nonce.len() <= 256);
-    Ok(RetainedUseChallenge {
-        organization_id: grant.organization_id,
-        challenge_id: *challenge_id,
-        grant: grant.clone(),
-        operation: operation.clone(),
-        verifier_id: VERIFIER_CLIENT_ID.into(),
-        nonce: nonce.into(),
-        created_at: *created_at,
-        expires_at: *expires_at,
+    Ok(WalletChallenge {
+        challenge: RetainedUseChallenge {
+            organization_id: grant.organization_id,
+            challenge_id: *challenge_id,
+            grant: grant.clone(),
+            operation: operation.clone(),
+            verifier_id: VERIFIER_CLIENT_ID.into(),
+            nonce: nonce.into(),
+            created_at: *created_at,
+            expires_at: *expires_at,
+        },
+        verified: CallerVerifiedRequest {
+            response_uri: claims["response_uri"]
+                .as_str()
+                .ok_or("missing verified response URI")?
+                .into(),
+            state: claims["state"]
+                .as_str()
+                .ok_or("missing verified response state")?
+                .into(),
+            query_id: query.id,
+        },
     })
 }
 
