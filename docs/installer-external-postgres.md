@@ -214,6 +214,9 @@ coordinated recovery still require the following deployment qualification.
 
 ## Deployment qualification
 
+Follow the [Supabase deployment runbook](supabase-deployment-runbook.md) for
+credential provisioning, staging isolation, acceptance and recovery.
+
 Use a disposable provider database and the exact intended release to verify:
 
 1. The session endpoint accepts the selected role and validates its certificate
