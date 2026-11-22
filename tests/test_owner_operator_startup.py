@@ -55,9 +55,12 @@ def test_presentation_policy_schema_and_builtin_writes_are_operator_only() -> No
 def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
     for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
         source = read(path)
-        start = source.index("  owner-migrations:")
-        end = source.index("\n  ", start + 5)
-        block = source[start:end]
+        owner_match = re.search(
+            r"(?ms)^  owner-migrations:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+            source,
+        )
+        assert owner_match is not None
+        block = owner_match.group(1)
         commands = [
             "marty-organization migrate",
             "marty-organization bootstrap",
