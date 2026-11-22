@@ -30,6 +30,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "  db-migrate: {build: '.'}\n"
         "  kms-initialize: {build: '.'}\n"
         "  gateway: {build: '.'}\n"
+        "  owner-migrations: {build: '.'}\n"
         "  issuance-migrations: {build: '.'}\n"
         "  issuance: {build: '.'}\n"
         "  ui: {image: 'nginx:alpine'}\n", encoding="utf-8")
@@ -38,6 +39,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         f"  db-migrate: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  kms-initialize: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n"
+        f"  owner-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  ui: {{image: '{PREFIX}/ui-selfhost:1.2.3'}}\n",
