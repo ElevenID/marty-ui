@@ -6,7 +6,7 @@ Status: **planned / not yet qualified**. This is the next milestone after the me
 
 Replace the remaining privileged test/bootstrap boundaries with separately provisioned owner services and restricted runtime identities, then qualify the selected managed MachineCredential / full-machine / KEY / EXACT_OPERATION caller against those services over the configured HTTPS/mTLS origins.
 
-The acceptance target is not another in-process composition. The actual Credential Template, Presentation Policy and Issuance executables must run as independent processes, each connected with its own runtime database role. The delegated-use host must consume their public service contracts and must not receive their migration or administrator credentials.
+The acceptance target is not another in-process composition. The actual Organization, Credential Template, Presentation Policy and Issuance executables must run as independent processes, each connected with its own runtime database role. The delegated-use host must consume their public service contracts and must not receive their migration or administrator credentials.
 
 ## Verified starting point
 
@@ -15,7 +15,8 @@ The merged main source currently has these explicit boundaries:
 - marty-delegated-use uses fourteen independently checked PostgreSQL connections and mandatory mTLS. Its public caller is separately default-off.
 - rust/services/delegated-use/tests/support/lifecycle_owners.rs creates Credential Template and Presentation Policy schemas and records through one disposable administrator PgPool, then starts their actual application/gRPC services in the test process. The read calls use actual TLS and service-token authentication, but this does not qualify separately provisioned database roles or independent processes.
 - The actual selected lifecycle's Issuance bootstrap is in-process. The host's reference/status reader uses configured HTTPS origins and the Issuance API key, but the live lifecycle does not yet prove the independently deployed Issuance service and its restricted database role.
-- rust/services/credential-template/src/main.rs has migrate and verify-owned-schema commands, but normal startup also migrates, reconciles legacy data and seeds the system catalog.
+- rust/services/organization/src/main.rs and OrganizationApplication::initialize previously migrated the organization/outbox schemas and reconciled organization/bootstrap memberships during runtime startup. These writes now have explicit migrate/bootstrap operator commands and validation-only runtime initialization.
+- rust/services/credential-template/src/main.rs has migrate and verify-owned-schema commands, but normal startup previously migrated, reconciled legacy data and seeded the system catalog.
 - rust/services/presentation-policy/src/main.rs migrates its schema and reconciles built-in policies during normal startup; the executable currently has no equivalent explicit operator-only migration/bootstrap command.
 - rust/services/issuance/src/main.rs has migrate and verify-owned-schema commands and a schema startup mode. The deployed acceptance configuration must select validation-only startup. The application-ownership and external-association startup helpers are explicitly read-only schema/role preflights; they do not perform DDL or seed writes. Their independent database identity and privilege boundaries still require qualification.
 - The AWS replay qualified the selected composition in an isolated container on the existing development host. It did not qualify a bare-host deployment, the installed stack, or the external catalog/Issuance serving roles.
@@ -26,15 +27,17 @@ These are source-backed limitations, not inferred deployment failures.
 
 ### OQ-1 — Remove privileged startup behavior
 
-1. Credential Template: make normal service startup schema-validation-only and read-only with respect to migrations, legacy-data reconciliation and system-catalog seeding. Keep those writes in explicit operator/bootstrap commands that require the migration/owner credential. Preserve existing migration bytes.
-2. Presentation Policy: add explicit migration, schema verification and built-in-policy bootstrap commands. Make normal service startup validate-only and remove policy reconciliation writes from the runtime path.
-3. Issuance: configure the deployed service to use MARTY_SCHEMA_STARTUP_MODE=validate; audit its remaining startup preparation helpers and separate any DDL/seed operation into explicit owner commands.
-4. Add executable tests proving a runtime-role database can start and serve its read contract while lacking CREATE/ALTER, migration-ledger writes and unrelated owner writes. Prove each operator command fails under the runtime role and succeeds only under its dedicated owner role.
-5. Ensure readiness validates schema/migration identity without repairing it. No startup auto-migration, automatic grant provisioning or historical reconstruction.
+1. Organization: keep organization and outbox migrations plus organization/bootstrap membership reconciliation in explicit operator commands. Normal service initialization validates both schemas and performs no writes.
+2. Credential Template: make normal service startup schema-validation-only and read-only with respect to migrations, legacy-data reconciliation and system-catalog seeding. Keep those writes in explicit operator/bootstrap commands that require the migration/owner credential. Preserve existing migration bytes.
+3. Presentation Policy: add explicit migration, schema verification and built-in-policy bootstrap commands. Make normal service startup validate-only and remove policy reconciliation writes from the runtime path.
+4. Issuance: configure the deployed service to use MARTY_SCHEMA_STARTUP_MODE=validate; audit its remaining startup preparation helpers and separate any DDL/seed operation into explicit owner commands.
+5. Add executable tests proving a runtime-role database can start and serve its read contract while lacking CREATE/ALTER, migration-ledger writes and unrelated owner writes. Prove each operator command fails under the runtime role and succeeds only under its dedicated owner role.
+6. Ensure readiness validates schema/migration identity without repairing it. No startup auto-migration, automatic grant provisioning or historical reconstruction.
 
 ### OQ-2 — Separate database roles and owner processes
 
 Provision separate, least-privilege roles for:
+- Organization serving;
 - Credential Template serving;
 - Presentation Policy serving;
 - Issuance serving and the narrowly scoped status/API path;
@@ -84,7 +87,7 @@ Run both internal and public lifecycle regression gates plus the independent cli
 
 | Gate | Required result |
 | --- | --- |
-| Startup privilege separation | All three runtime executables start using only their own restricted runtime identities; no migration/bootstrap writes during startup |
+| Startup privilege separation | All four runtime executables start using only their own restricted runtime identities; no migration/bootstrap writes during startup |
 | Owner database boundaries | Runtime roles cannot migrate, create objects, grant privileges or write outside their documented owner contract |
 | Independent service identity | Each HTTPS/gRPC/HTTP peer is authenticated against its exact configured trust and identity; wrong identity fails closed |
 | Actual Issuance | Credential is issued by the running Issuance service; no pre-completed credential insertion or in-process Issuance shortcut |
