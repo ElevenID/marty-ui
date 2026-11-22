@@ -95,7 +95,7 @@ pub(crate) struct ObservedFile {
     pub mount_id: u64,
 }
 
-fn observe_operator(file: &File) -> Result<ObservedFile, String> {
+pub(crate) fn observe_operator(file: &File) -> Result<ObservedFile, String> {
     let meta = file.metadata().map_err(|_| REFUSED)?;
     if !meta.is_file() || meta.mode() & 0o7777 != 0o600 || meta.len() != 69 || meta.nlink() != 1 {
         return Err(REFUSED.into());

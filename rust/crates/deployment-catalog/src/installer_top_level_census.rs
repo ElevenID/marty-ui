@@ -76,6 +76,8 @@ pub(crate) enum TopLevelName {
     Downloads,
     Evidence,
     OpenBaoState,
+    OpenBaoControl,
+    OpenBaoSeal,
     Secrets,
     State,
     Backups,
@@ -140,6 +142,8 @@ impl TopLevelName {
             Self::Downloads => "downloads".into(),
             Self::Evidence => "evidence".into(),
             Self::OpenBaoState => "openbao-state".into(),
+            Self::OpenBaoControl => "openbao-control".into(),
+            Self::OpenBaoSeal => "openbao-seal".into(),
             Self::Secrets => "secrets".into(),
             Self::State => "state".into(),
             Self::Backups => "backups".into(),
@@ -168,6 +172,8 @@ impl TopLevelName {
             Self::Downloads
             | Self::Evidence
             | Self::OpenBaoState
+            | Self::OpenBaoControl
+            | Self::OpenBaoSeal
             | Self::Secrets
             | Self::State
             | Self::Backups
@@ -185,6 +191,80 @@ impl TopLevelName {
             _ => Kind::File,
         }
     }
+}
+
+/// Explicit source-versioned layouts. Selection belongs to the locked owner
+/// records, never to which names happen to exist in the current directory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CensusProfile {
+    LegacyNormal31,
+    NativeComposeV2 { local_operator_password: bool },
+}
+impl CensusProfile {
+    pub(crate) fn names(self) -> Vec<TopLevelName> {
+        use TopLevelName::*;
+        match self {
+            Self::LegacyNormal31 => TopLevelName::REQUIRED.to_vec(),
+            Self::NativeComposeV2 {
+                local_operator_password,
+            } => {
+                let mut names: Vec<_> = TopLevelName::REQUIRED
+                    .into_iter()
+                    .filter(|name| {
+                        !matches!(
+                            name,
+                            OpenBaoEnv
+                                | OpenBaoComposeRuntime
+                                | OpenBaoComposeModel
+                                | OpenBaoCreated
+                                | OpenBaoStart(_)
+                                | OpenBaoCompleted(OpenBaoCompletedRole::Bootstrap)
+                        ) && (local_operator_password || *name != OperatorPassword)
+                    })
+                    .collect();
+                names.extend([OpenBaoControl, OpenBaoSeal]);
+                names
+            }
+        }
+    }
+    fn matches(self, names: &BTreeSet<String>) -> bool {
+        self.names()
+            .into_iter()
+            .map(TopLevelName::name)
+            .collect::<BTreeSet<_>>()
+            == *names
+    }
+}
+
+/// The native profile is deliberately limited to the completed initial local
+/// managed-OpenBao path. Other layouts require their own reviewed exact census.
+pub(crate) fn current_native_profile(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<CensusProfile, IncompleteReason> {
+    let inspect = || -> Result<CensusProfile, String> {
+        locked.require_path_binding(installation)?;
+        locked.require_unchanged()?;
+        if crate::installer_foundation::load(locked)?.is_some()
+            || crate::installer_generation_maintenance::current_session(locked, installation)?
+                .is_some()
+            || crate::installer_hosting::load(locked)?.is_none_or(|hosting| {
+                hosting.certificate_source()
+                    != crate::installer_hosting::CertificateSource::ManagedCa
+            })
+        {
+            return Err("Unsupported native census profile".into());
+        }
+        let local_operator_password = crate::installer_oidc::load(locked)?.is_none();
+        // Selected owner records are revalidated by each loader and by the
+        // journal guard. Later receipt checks bind the optional credential.
+        locked.require_path_binding(installation)?;
+        locked.require_unchanged()?;
+        Ok(CensusProfile::NativeComposeV2 {
+            local_operator_password,
+        })
+    };
+    inspect().map_err(|_| IncompleteReason::InvalidSpecification)
 }
 
 /// Caller must authenticate each exact identity from creation-time evidence.
@@ -350,10 +430,18 @@ pub(crate) fn inspect_held(
             return incomplete(IncompleteReason::InvalidSpecification);
         }
     }
-    if expected.len() != TopLevelName::REQUIRED.len()
-        || TopLevelName::REQUIRED
-            .iter()
-            .any(|name| !expected.contains_key(&name.name()))
+    let expected_names: BTreeSet<_> = expected.keys().cloned().collect();
+    if ![
+        CensusProfile::LegacyNormal31,
+        CensusProfile::NativeComposeV2 {
+            local_operator_password: true,
+        },
+        CensusProfile::NativeComposeV2 {
+            local_operator_password: false,
+        },
+    ]
+    .into_iter()
+    .any(|profile| profile.matches(&expected_names))
     {
         return incomplete(IncompleteReason::InvalidSpecification);
     }
@@ -471,6 +559,42 @@ pub(crate) fn derive_current_fixed_specs_held(
     expected_root: &HostIdentity,
     expected_mount: u64,
 ) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    derive_profile_specs_held(
+        root,
+        expected_root,
+        expected_mount,
+        CensusProfile::LegacyNormal31,
+    )
+}
+
+pub(crate) fn derive_native_specs(
+    locked: &LockedInspection,
+    installation: &Path,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    profile: CensusProfile,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    if current_native_profile(locked, installation)? != profile {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    let result = derive_profile_specs_held(
+        locked.installation_directory(),
+        expected_root,
+        expected_mount,
+        profile,
+    );
+    if current_native_profile(locked, installation)? != profile {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    result
+}
+
+fn derive_profile_specs_held(
+    root: &File,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    profile: CensusProfile,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
     if identity(root).ok().as_ref() != Some(expected_root)
         || mount_id(root).ok() != Some(expected_mount)
         || expected_mount == 0
@@ -478,10 +602,8 @@ pub(crate) fn derive_current_fixed_specs_held(
         return Err(IncompleteReason::InstallationChanged);
     }
     let observed_names = names(root)?;
-    let required_names: BTreeSet<_> = TopLevelName::REQUIRED
-        .iter()
-        .map(|name| name.name())
-        .collect();
+    let required = profile.names();
+    let required_names: BTreeSet<_> = required.iter().map(|name| name.name()).collect();
     if observed_names != required_names {
         return Err(
             if observed_names.difference(&required_names).next().is_some() {
@@ -491,8 +613,8 @@ pub(crate) fn derive_current_fixed_specs_held(
             },
         );
     }
-    let mut specs = Vec::with_capacity(TopLevelName::REQUIRED.len());
-    for name in TopLevelName::REQUIRED {
+    let mut specs = Vec::with_capacity(required.len());
+    for name in required {
         let held = open_child(root, OsStr::new(&name.name()))
             .map_err(|_| IncompleteReason::UnsafeEntry)?
             .ok_or(IncompleteReason::MissingOrChangedEntry)?;
@@ -526,10 +648,21 @@ mod tests {
         u64,
         Vec<ExpectedTopLevel>,
     ) {
+        fixture_for_profile(CensusProfile::LegacyNormal31)
+    }
+    fn fixture_for_profile(
+        profile: CensusProfile,
+    ) -> (
+        tempfile::TempDir,
+        File,
+        HostIdentity,
+        u64,
+        Vec<ExpectedTopLevel>,
+    ) {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let mut specs = Vec::new();
-        for name in TopLevelName::REQUIRED {
+        for name in profile.names() {
             let path = temp.path().join(name.name());
             match name.expected_kind() {
                 Kind::Directory => {
@@ -550,6 +683,66 @@ mod tests {
         let root_identity = identity(&root).unwrap();
         let mount = mount_id(&root).unwrap();
         (temp, root, root_identity, mount, specs)
+    }
+
+    #[test]
+    fn native_closed_layouts_observe_control_and_seal_without_legacy_artifacts() {
+        for local_operator_password in [false, true] {
+            let profile = CensusProfile::NativeComposeV2 {
+                local_operator_password,
+            };
+            let (_temp, root, wanted, mount, specs) = fixture_for_profile(profile);
+            assert_eq!(specs.len(), if local_operator_password { 24 } else { 23 });
+            let derived = derive_profile_specs_held(&root, &wanted, mount, profile).unwrap();
+            assert_eq!(derived.len(), specs.len());
+            assert!(derived
+                .iter()
+                .any(|spec| spec.name == TopLevelName::OpenBaoControl));
+            assert!(derived
+                .iter()
+                .any(|spec| spec.name == TopLevelName::OpenBaoSeal));
+            assert!(!derived
+                .iter()
+                .any(|spec| spec.name == TopLevelName::OpenBaoCreated));
+            assert!(matches!(
+                inspect_held(&root, uuid::Uuid::new_v4(), &wanted, mount, &derived),
+                CensusOutcome::ExactExpectedSetObserved(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn native_profile_never_selects_password_optionality_or_legacy_files_from_presence() {
+        let external = CensusProfile::NativeComposeV2 {
+            local_operator_password: false,
+        };
+        let local = CensusProfile::NativeComposeV2 {
+            local_operator_password: true,
+        };
+        let (temp, root, wanted, mount, _) = fixture_for_profile(external);
+        assert!(matches!(
+            derive_profile_specs_held(&root, &wanted, mount, local),
+            Err(IncompleteReason::MissingOrChangedEntry)
+        ));
+        fs::write(
+            temp.path().join("operator-password"),
+            b"synthetic unexpected file",
+        )
+        .unwrap();
+        assert!(matches!(
+            derive_profile_specs_held(&root, &wanted, mount, external),
+            Err(IncompleteReason::UnknownTopLevel)
+        ));
+        fs::remove_file(temp.path().join("operator-password")).unwrap();
+        fs::write(
+            temp.path().join("openbao-created.json"),
+            b"synthetic obsolete record",
+        )
+        .unwrap();
+        assert!(matches!(
+            derive_profile_specs_held(&root, &wanted, mount, external),
+            Err(IncompleteReason::UnknownTopLevel)
+        ));
     }
 
     #[test]
