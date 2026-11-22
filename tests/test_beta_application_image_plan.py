@@ -171,7 +171,7 @@ def test_complete_model_comparison_rejects_worker_field_loss_without_private_out
 
 def test_comparison_rejects_swapped_selector_and_pinned_overlay_order(gate):
     base = synthetic_base()
-    names = [name for name in base["services"] if name != "issuance-migrations"]
+    names = [name for name in base["services"] if name not in {"issuance-migrations", "owner-migrations"}]
     official = gate["expected_model"](base, names, "official")
     wrong = deepcopy(official)
     wrong["services"]["signing-keys"]["environment"]["SERVICE_NAME"] = "verification"
