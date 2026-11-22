@@ -559,6 +559,9 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
         and "issuance-migration-live.log" in item["text"]
     )
     assert db_migration["offset"] < owner_bootstrap["offset"] < issuance_migration["offset"]
+    assert '"MARTY_ORG_ID=$PilotOrganizationId"' in owner_bootstrap["text"]
+    assert '"MARTY_MIGRATION_PROFILE=beta"' in owner_bootstrap["text"]
+    assert '"PUBLIC_API_URL=$BetaOrigin"' in owner_bootstrap["text"]
     rehearsal = next(
         item
         for item in commands
