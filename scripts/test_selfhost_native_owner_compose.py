@@ -453,9 +453,12 @@ def assert_models(
         actual["services"]["organization"]["depends_on"]
     )
     for service in ("credential-template", "presentation-policy"):
-        assert actual["services"][service]["depends_on"] == {
-            "owner-migrations": {"condition": "service_completed_successfully", "required": True},
+        assert actual["services"][service]["depends_on"]["owner-migrations"] == {
+            "condition": "service_completed_successfully", "required": True,
         }
+        # Preserve the pre-existing owner-service dependencies (for example
+        # Revocation Profile and native Issuance) while adding the operator
+        # provisioning barrier.
         expected["services"][service]["depends_on"] = deepcopy(
             actual["services"][service]["depends_on"]
         )
