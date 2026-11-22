@@ -20,7 +20,7 @@ contract = release.contract
 
 
 @contextmanager
-def closed_abort(monkeypatch, planned, *, compensated=False, backout=False):
+def closed_abort(monkeypatch, planned, *, compensated=False, backout=False, prepared_routes=False):
     with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
         config['tls_init_receipt'] = {'id': '1'*64, 'image': 'sha256:'+'2'*64, 'config_hash': '3'*64}
         path.write_bytes(selection.packed(config))
@@ -44,13 +44,14 @@ def closed_abort(monkeypatch, planned, *, compensated=False, backout=False):
         calls = []
         behavior = SimpleNamespace(fault=None)
         edge_configuration = {'container_id': owned[0]['Id'], 'routes_sha256': selection.digest(b'')}
+        route_body = b'# Qualified inactive fixture route\n'
 
         def preflight(config, _choice, _values, _record, _assets, *, plan_owner,
                       plan_attempt_directory, guarded_attempt=False, **kwargs):
             if guarded_attempt:
                 calls.append('signed-composition')
                 assert kwargs['retained_edge_inputs'] == (engine, model, data) and kwargs['include_http']
-                return plans[-1], {'http': {'signed': True}}
+                return plans[-1], {'http': {'signed': True}, 'routes': {'split': route_body}}
             plan = contract.plan(**planned)
             body = Path(config['compose_file']).read_bytes()
             model_hash = contract.digest(selection.decode(body))
@@ -122,12 +123,15 @@ def closed_abort(monkeypatch, planned, *, compensated=False, backout=False):
                 qualifications = {'runtime_sha256': contract.digest(runtime), 'edge_sha256': contract.digest(edge_configuration),
                     'public_routes_sha256': '3'*64, 'application_handoffs_sha256': '4'*64,
                     'native_sha256': owner['native_sha256'], 'foreign_storage_sha256': None, 'foreign_storage_changes': 0}
+                route_state = 'materialized' if prepared_routes else 'absent'
+                if prepared_routes:
+                    release.edge._held_routes(Path(plan['route_directory']), route_body, held, create=True)
                 retained = {'runtime_after': runtime, 'normalized_model': evidence['normalized_model'],
-                            'edge_configuration': edge_configuration, 'retained_route_directory': False}
+                            'edge_configuration': edge_configuration, 'retained_route_directory': route_state}
                 publish(retirement.PHASE, 'started', retirement.BEFORE, {
                     'owner_lease': owner_lease, 'native_custody': {}, 'foreign_storage': {},
                     'runtime_before': {'containers': staged, 'edge_configuration': edge_configuration,
-                        'normalized_model': evidence['normalized_model'], 'candidate_retirement': {
+                        'retained_route_directory': route_state, 'normalized_model': evidence['normalized_model'], 'candidate_retirement': {
                             'candidate_id': stage_id, 'observed_candidate': stage_row, 'remove_command': ['container','rm',stage_id]}}})
                 publish(retirement.PHASE, release.journal.RETIRE_RETURNED, retirement.RETURNED, {'candidate_retirement': result})
                 publish(retirement.PHASE, 'completed', retirement.AFTER,
@@ -298,9 +302,9 @@ def test_abort_release_cli_outputs_result_after_private_handles_close(monkeypatc
         assert not captured.err and selection.decode(captured.out.encode())['guard_archived']
 
 
-@pytest.mark.parametrize('drift', [False, True])
-def test_backout_release_reopens_original_generation_with_exact_terminal_records(monkeypatch, planned, drift):
-    with closed_abort(monkeypatch, planned, backout=True) as run:
+@pytest.mark.parametrize('drift,prepared_routes', [(False, False), (False, True), (True, False)])
+def test_backout_release_reopens_original_generation_with_exact_terminal_records(monkeypatch, planned, drift, prepared_routes):
+    with closed_abort(monkeypatch, planned, backout=True, prepared_routes=prepared_routes) as run:
         # An abort release cannot substitute for a completed backout.
         with pytest.raises(ValueError):
             selection.release_website_abort(run.path, run.plan, **run.kwargs)
@@ -319,5 +323,6 @@ def test_backout_release_reopens_original_generation_with_exact_terminal_records
         assert release._path_identities(run.archive) == run.original_identity
         assert selection.release_website_backout(run.path, run.plan, **run.kwargs) == result
         assert (run.attempt / release.BACKOUT_RELEASE).is_file() and plan_file.is_file()
+        assert (Path(run.plan['route_directory']) / 'active.conf').is_file() is prepared_routes
         with selection.selected_inputs(run.path) as lease:
             assert lease.generation_sequence == run.generation

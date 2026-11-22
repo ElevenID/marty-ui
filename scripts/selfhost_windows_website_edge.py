@@ -79,6 +79,26 @@ def _held_routes(path, routes, held, *, create):
     return inventory
 
 
+def _hold_inactive_routes(path, routes, held):
+    """Preserve exact route artifacts even if preparation stopped before routing."""
+    if not renewal.namespace_entry_exists(path):
+        def check_absent():
+            require(not renewal.namespace_entry_exists(path))
+        held.callback(check_absent)
+        return 'absent', check_absent
+    if renewal.namespace_entry_exists(path / 'active.conf'):
+        return 'materialized', _held_routes(path, routes, held, create=False)
+    held.enter_context(renewal.hold_storage_namespace(path))
+    held.enter_context(_held_private_input(path, directory=True))
+
+    def check_empty():
+        require(not any(path.iterdir()))
+
+    check_empty()
+    held.callback(check_empty)
+    return 'empty', check_empty
+
+
 def _probe(docker, edge, proposal, state):
     container = edge['Id']
     require(re.fullmatch(r'[0-9a-f]{64}', container) is not None)

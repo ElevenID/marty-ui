@@ -50,15 +50,17 @@ def _retained(plan, status, evidence):
     require(before['containers'] == staged and before['edge_configuration'] == configuration
             and custody == {'candidate_id': candidate_id, 'observed_candidate': staged[candidate_id],
                             'remove_command': ['container', 'rm', candidate_id]})
-    forced_stop = staged[candidate_id]['status'] in {'running', 'restarting'}
-    require(type(result.get('remove_returncode')) is int and result['stop_completed'] is forced_stop
-            and result == {'candidate_id': candidate_id, 'stop_completed': forced_stop,
+    stop_required = staged[candidate_id]['status'] in {'running', 'restarting'}
+    require(type(result.get('remove_returncode')) is int and result['stop_completed'] is stop_required
+            and result == {'candidate_id': candidate_id, 'stop_completed': stop_required,
                             'remove_returncode': 0, 'completed_cli_job': True,
         'candidate_absent': True})
-    require(contract.sha(before['normalized_model']['sha256']))
+    routes = before['retained_route_directory']
+    require(contract.sha(before['normalized_model']['sha256']) and routes in {'absent', 'empty', 'materialized'}
+            and (edge.FORWARD not in status['completed_phases'] or routes == 'materialized'))
     retained = {'runtime_after': {key: row for key, row in staged.items() if key != candidate_id},
                 'normalized_model': before['normalized_model'], 'edge_configuration': configuration,
-                'retained_route_directory': edge.FORWARD in status['completed_phases']}
+                'retained_route_directory': routes}
     require(contract.digest(edge._retained_data(retained['runtime_after'])) == owner['data_sha256'])
     return retained, result
 
@@ -76,10 +78,8 @@ def _prepare_removal(config, choice, values, record, plan, status, evidence, att
     require(renewal.context_snapshot(owned) == staged_snapshot)
     require(edge._probe(docker, edge._edge(owned), proposal, 'staged') == configuration)
     directory = Path(plan['route_directory'])
-    keep_routes = edge.FORWARD in status['completed_phases']
-    require(renewal.namespace_entry_exists(directory) == keep_routes)
-    if keep_routes:
-        edge._held_routes(directory, proposal['routes']['split'], held, create=False)
+    route_state, check_routes = edge._hold_inactive_routes(directory, proposal['routes']['split'], held)
+    require(edge.FORWARD not in status['completed_phases'] or route_state == 'materialized')
     candidate = reconcile._candidate_items(qualified, project, candidate_id)
     command, staged, hashes = context.layouts['staged']
     combined = {**staged, 'services': {name: service for name, service in staged['services'].items() if name != contract.SLOT}}
@@ -89,9 +89,11 @@ def _prepare_removal(config, choice, values, record, plan, status, evidence, att
     removal_context.check()
     custody = reconcile._removal_intent(candidate, project, command)
     started = edge._start_observation(plan, status, context, qualified, configuration)
-    started['runtime_before'].update(candidate_retirement=custody, normalized_model={'sha256': contract.digest(combined)})
+    started['runtime_before'].update(candidate_retirement=custody, normalized_model={'sha256': contract.digest(combined)},
+                                     retained_route_directory=route_state)
     authorized = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=PHASE, event='started',
                              evidence_sha256=stage._evidence(attempt / BEFORE, started, held))
+    check_routes()
     result = reconcile._remove_candidate(removal_context, custody)
     returned = {'candidate_retirement': result}
     advanced = store.append(plan, expected_anchor_sha256=authorized['anchor_sha256'], phase=PHASE,

@@ -70,8 +70,9 @@ def _abort_inputs(plan, status, attempt, held):
 def _refresh(config, choice, values, record, plan, retained, attempt, *, assets, gh, cosign, registry_config,
              authority_file, held, proposal=None):
     route_directory = Path(plan['route_directory'])
-    keep_routes = retained.get('retained_route_directory', False)
-    require(renewal.namespace_entry_exists(route_directory) == keep_routes)
+    expected_routes = retained.get('retained_route_directory', 'absent')
+    if expected_routes == 'absent':
+        require(not renewal.namespace_entry_exists(route_directory))
     inspected = selection._inspect(config, choice, values, held, expected_data=record['data_sha256'])
     docker, model, context = inspected['docker'], inspected['model'], inspected['context']
     require(not website.WEBSITE_ROLES.intersection(inspected['services'])
@@ -85,7 +86,9 @@ def _refresh(config, choice, values, record, plan, retained, attempt, *, assets,
             plan_attempt_directory=attempt, held_plan_only=True, guarded_attempt=True,
             retained_edge_inputs=(docker, model, data), include_http=True)
         require(rebuilt == plan)
-    check_routes = edge._held_routes(route_directory, proposal['routes']['split'], held, create=False) if keep_routes else None
+    routes = proposal['routes']['split'] if expected_routes != 'absent' else b''
+    actual_routes, check_routes = edge._hold_inactive_routes(route_directory, routes, held)
+    require(actual_routes == expected_routes)
     selection._native_current(config, choice, values, docker, authority_file)
     first = edge._edge(edge._owned(context.check(before_intent=True), config['project']))
     observed = edge._probe(docker, first, proposal, 'combined')
@@ -93,10 +96,8 @@ def _refresh(config, choice, values, record, plan, retained, attempt, *, assets,
     public, application = verify._observe(first, model, proposal['http'], 'combined')
     last = edge._edge(edge._owned(context.check(before_intent=True), config['project']))
     require(verify._installed_ingress(first, model) == verify._installed_ingress(last, model)
-            and edge._probe(docker, last, proposal, 'combined') == observed
-            and renewal.namespace_entry_exists(route_directory) == keep_routes)
-    if check_routes is not None:
-        check_routes()
+            and edge._probe(docker, last, proposal, 'combined') == observed)
+    check_routes()
     return {'runtime_sha256': contract.digest(retained['runtime_after']), 'edge_sha256': contract.digest(observed),
             'public_routes_sha256': contract.digest(public), 'application_handoffs_sha256': contract.digest(application),
             'native_sha256': plan['owner']['native_sha256'], 'foreign_storage_sha256': context.proof_sha256,

@@ -109,7 +109,7 @@ def rollback(paths, planned, monkeypatch):
     monkeypatch.setattr(renewal, 'run_owned_mutation', mutate)
     pin = 'd'*64
 
-    def prepare_history(*, routed=False):
+    def prepare_history(*, routed=False, prepared_routes='absent'):
         status = store.initialize(plan)
         with ExitStack() as held:
             snapshot = renewal.context_snapshot(original + [original_candidate])
@@ -127,8 +127,11 @@ def rollback(paths, planned, monkeypatch):
                     event='started', evidence_sha256={key: 'a'*64 for key in backout.journal.START_EVIDENCE})
                 status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=name,
                     event='completed', evidence_sha256=stage._evidence(attempt/path, fields, held))
-            if routed:
-                backout.edge._held_routes(Path(plan['route_directory']), proposal['routes']['split'], held, create=True)
+            directory = Path(plan['route_directory'])
+            if routed or prepared_routes == 'materialized':
+                backout.edge._held_routes(directory, proposal['routes']['split'], held, create=True)
+            if prepared_routes == 'empty':
+                directory.mkdir()
         return status
 
     def execute(status):
@@ -144,16 +147,18 @@ def rollback(paths, planned, monkeypatch):
     return control
 
 
-@pytest.mark.parametrize('routed',[False,True])
-def test_only_exact_candidate_removed_and_historical_route_file_retained(rollback, routed):
-    result = rollback.execute(rollback.prepare(routed=routed))
+@pytest.mark.parametrize('routed,prepared_routes',[(False,'absent'),(False,'empty'),(False,'materialized'),(True,'materialized')])
+def test_only_exact_candidate_removed_and_historical_route_file_retained(rollback, routed, prepared_routes):
+    result = rollback.execute(rollback.prepare(routed=routed, prepared_routes=prepared_routes))
     assert rollback.calls == ['staged-proof','stop','rm','combined-proof']
     assert result['classification'] == backout.CLASSIFICATION and result['retirement_returned']
     with ExitStack() as held:
         retained, receipt = backout.hold_retirement(rollback.plan, result, held)
-    assert retained['retained_route_directory'] is routed
+    assert retained['retained_route_directory'] == prepared_routes
     assert receipt['candidate_outcome'] == 'removed-after-combined-rollback'
-    assert Path(rollback.plan['route_directory']).exists() is routed
+    directory = Path(rollback.plan['route_directory'])
+    assert directory.exists() == (prepared_routes != 'absent')
+    assert (directory/'active.conf').is_file() == (prepared_routes == 'materialized')
 
 
 @pytest.mark.parametrize('fault',['drift','uncertain','public'])
