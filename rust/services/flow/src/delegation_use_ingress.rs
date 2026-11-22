@@ -769,9 +769,9 @@ async fn validate_ingress_role(pool: &PgPool) -> Result<()> {
           WHERE left(n.nspname::TEXT,3)<>'pg_' AND n.nspname<>'information_schema' AND (
             p.proowner=r.oid OR has_function_privilege(r.oid,p.oid,'EXECUTE WITH GRANT OPTION')
             OR (p.prosecdef AND p.oid<>'flow_service.lock_delegated_ingress_definition(uuid,uuid)'::regprocedure AND has_function_privilege(r.oid,p.oid,'EXECUTE'))))))")
-        .bind(&["rust_schema_versions","delegated_use_storage_identity","flow_definitions","flow_instances","delegated_challenge_bindings","delegated_proof_submissions","delegated_use_consumptions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
-        .bind(&["delegated_proof_submissions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
-        .bind(&["current_step_id","context","step_history","state_history","updated_at"])
+        .bind(["rust_schema_versions","delegated_use_storage_identity","flow_definitions","flow_instances","delegated_challenge_bindings","delegated_proof_submissions","delegated_use_consumptions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
+        .bind(["delegated_proof_submissions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
+        .bind(["current_step_id","context","step_history","state_history","updated_at"])
         .fetch_one(pool).await.map_err(unavailable)?;
     if !safe {
         return Err(DelegationUseCommandError::Unavailable);
@@ -781,9 +781,9 @@ async fn validate_ingress_role(pool: &PgPool) -> Result<()> {
       AND NOT EXISTS(SELECT 1 FROM unnest($1::TEXT[]) t WHERE NOT has_table_privilege(current_user,format('flow_service.%I',t),'SELECT'))
       AND NOT EXISTS(SELECT 1 FROM unnest($2::TEXT[]) t WHERE NOT has_table_privilege(current_user,format('flow_service.%I',t),'INSERT'))
       AND NOT EXISTS(SELECT 1 FROM unnest($3::TEXT[]) c WHERE NOT has_column_privilege(current_user,'flow_service.flow_instances',c,'UPDATE'))")
-        .bind(&["rust_schema_versions","delegated_use_storage_identity","flow_definitions","flow_instances","delegated_challenge_bindings","delegated_proof_submissions","delegated_use_consumptions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
-        .bind(&["delegated_proof_submissions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
-        .bind(&["current_step_id","context","step_history","state_history","updated_at"])
+        .bind(["rust_schema_versions","delegated_use_storage_identity","flow_definitions","flow_instances","delegated_challenge_bindings","delegated_proof_submissions","delegated_use_consumptions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
+        .bind(["delegated_proof_submissions","delegated_request_claims","delegated_request_results","delegated_proof_ingress"])
+        .bind(["current_step_id","context","step_history","state_history","updated_at"])
         .fetch_one(pool).await.map_err(unavailable)?;
     if !required {
         return Err(DelegationUseCommandError::Unavailable);

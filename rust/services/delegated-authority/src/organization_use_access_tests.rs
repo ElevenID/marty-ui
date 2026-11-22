@@ -168,10 +168,18 @@ impl Fixture {
             .await
             .unwrap();
         let role = format!("use_adapter_reader_{}", Uuid::new_v4().simple());
-        sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN; GRANT USAGE ON SCHEMA organization_service TO {role}; GRANT SELECT ON organization_service.rust_schema_versions,organization_service.organizations,organization_service.machine_registry_entries,organization_service.machine_registry_history,organization_service.machine_use_access,organization_service.machine_use_access_history TO {role}"))).execute(&pool).await.unwrap();
+        // A separate generated hex password authenticates this fixture role.
+        let password = Uuid::new_v4().simple().to_string();
+        sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN PASSWORD '{password}'; GRANT USAGE ON SCHEMA organization_service TO {role}; GRANT SELECT ON organization_service.rust_schema_versions,organization_service.organizations,organization_service.machine_registry_entries,organization_service.machine_registry_history,organization_service.machine_use_access,organization_service.machine_use_access_history TO {role}"))).execute(&pool).await.unwrap();
         let source_pool = PgPoolOptions::new()
             .max_connections(3)
-            .connect_with(pool.connect_options().as_ref().clone().username(&role))
+            .connect_with(
+                pool.connect_options()
+                    .as_ref()
+                    .clone()
+                    .username(&role)
+                    .password(&password),
+            )
             .await
             .unwrap();
         let authorizer =

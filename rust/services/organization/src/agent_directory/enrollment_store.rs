@@ -18,6 +18,11 @@ use super::{
 };
 use crate::{AuditEvent, ForwardedPrincipal};
 
+struct EnrollmentTimeBounds {
+    earlier: DateTime<Utc>,
+    expires: Option<DateTime<Utc>>,
+}
+
 struct RetainedChallenge {
     challenge: EnrollmentChallenge,
     invalidated_at: Option<DateTime<Utc>>,
@@ -110,8 +115,10 @@ impl AgentDirectoryService {
                     organization,
                     principal,
                     session,
-                    observed,
-                    Some(result.expires_at),
+                    EnrollmentTimeBounds {
+                        earlier: observed,
+                        expires: Some(result.expires_at),
+                    },
                     true,
                 )
                 .await?;
@@ -186,8 +193,10 @@ impl AgentDirectoryService {
             organization,
             principal,
             session,
-            observed,
-            Some(result.expires_at),
+            EnrollmentTimeBounds {
+                earlier: observed,
+                expires: Some(result.expires_at),
+            },
             true,
         )
         .await?;
@@ -232,8 +241,10 @@ impl AgentDirectoryService {
             organization,
             principal,
             session,
-            observed,
-            None,
+            EnrollmentTimeBounds {
+                earlier: observed,
+                expires: None,
+            },
             false,
         )
         .await?;
@@ -284,8 +295,10 @@ impl AgentDirectoryService {
                 organization,
                 principal,
                 session,
-                observed,
-                None,
+                EnrollmentTimeBounds {
+                    earlier: observed,
+                    expires: None,
+                },
                 true,
             )
             .await?;
@@ -358,8 +371,10 @@ impl AgentDirectoryService {
             organization,
             principal,
             session,
-            completed_at,
-            Some(epoch(challenge.expires_at())?),
+            EnrollmentTimeBounds {
+                earlier: completed_at,
+                expires: Some(epoch(challenge.expires_at())?),
+            },
             true,
         )
         .await?;
@@ -389,18 +404,17 @@ impl AgentDirectoryService {
         org: Uuid,
         principal: &ForwardedPrincipal,
         session: &AgentEnrollmentSession,
-        earlier: DateTime<Utc>,
-        expires: Option<DateTime<Utc>>,
+        bounds: EnrollmentTimeBounds,
         mutation: bool,
     ) -> Result<(), AgentDirectoryError> {
         self.authorize_enrollment(tx, org, principal, mutation)
             .await?;
         let observed = now(tx).await?;
         session.check(org, principal, observed)?;
-        if observed < earlier {
+        if observed < bounds.earlier {
             return Err(AgentDirectoryError::Unavailable);
         }
-        if expires.is_some_and(|expires| observed >= expires) {
+        if bounds.expires.is_some_and(|expires| observed >= expires) {
             return Err(AgentDirectoryError::Conflict);
         }
         Ok(())

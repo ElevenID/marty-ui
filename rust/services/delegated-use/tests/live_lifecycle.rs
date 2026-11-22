@@ -536,9 +536,11 @@ async fn exercise(surface: Surface) -> TestResult {
         &owned,
         challenge,
         submitted.submission_id,
-        &proof,
-        &request,
-        &compact,
+        OwnerEvidenceBytes {
+            proof: &proof,
+            request: &request,
+            compact: &compact,
+        },
         issued.credential_id,
         &issued.transaction_id,
     )
@@ -897,17 +899,26 @@ async fn terminal_recovery_counts(
     ).bind(network.organization).bind(challenge_id).fetch_one(&db.admin).await?)
 }
 
+struct OwnerEvidenceBytes<'a> {
+    proof: &'a [u8],
+    request: &'a str,
+    compact: &'a str,
+}
+
 async fn assert_owner_evidence(
     db: &Database,
     owned: &Owned,
     challenge: &RetainedUseChallenge,
     submission_id: uuid::Uuid,
-    proof: &[u8],
-    request: &str,
-    compact: &str,
+    evidence: OwnerEvidenceBytes<'_>,
     credential_id: uuid::Uuid,
     transaction_id: &str,
 ) -> TestResult {
+    let OwnerEvidenceBytes {
+        proof,
+        request,
+        compact,
+    } = evidence;
     let receipt = sqlx::query("SELECT compact_jws,receipt_document,receipt_digest FROM delegated_authority_service.use_receipts WHERE organization_id=$1 AND challenge_id=$2")
         .bind(owned.organization).bind(challenge.challenge_id).fetch_one(&db.admin).await?;
     assert!(receipt.try_get::<String, _>("compact_jws")? == compact);

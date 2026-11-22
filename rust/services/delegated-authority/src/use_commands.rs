@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::use_postgres::{PgDelegationUseRepository, RetainedUseOutcome};
+use crate::use_postgres::{PgDelegationUseRepository, RetainedUseOutcome, UseFinalizationEvidence};
 use crate::{
     commands::{canonical_command_json, canonical_uuid},
     domain::{valid_digest, valid_uri},
@@ -90,7 +90,7 @@ impl DecodedDelegationUseMutation {
 }
 
 pub enum DecodedDelegationUseCommand {
-    Mutation(DecodedDelegationUseMutation),
+    Mutation(Box<DecodedDelegationUseMutation>),
     Recover {
         original_command_id: Uuid,
         expected_command_digest: String,
@@ -192,14 +192,14 @@ pub fn decode_delegation_use_command(
         "sha256:{:x}",
         Sha256::digest(canonical_command_json(&document).map_err(|_| invalid())?)
     );
-    Ok(DecodedDelegationUseCommand::Mutation(
+    Ok(DecodedDelegationUseCommand::Mutation(Box::new(
         DecodedDelegationUseMutation {
             command_id,
             digest,
             document,
             intent,
         },
-    ))
+    )))
 }
 
 /// Flow-owned retained challenge correlation. This is an authenticated adapter
@@ -482,27 +482,6 @@ impl DelegationUseCommandService {
         flow: Arc<dyn DelegationUseFlowOwner>,
         access: Arc<dyn DelegationUseCommandAuthorizer>,
     ) -> Self {
-        Self::with_clock(
-            repository,
-            lifecycle,
-            challenges,
-            evaluation,
-            receipts,
-            flow,
-            access,
-            Arc::new(SystemDelegationClock),
-        )
-    }
-    pub fn with_clock(
-        repository: PgDelegationUseRepository,
-        lifecycle: Arc<DelegationAuthorityService>,
-        challenges: Arc<DelegationChallengeIssuer>,
-        evaluation: Arc<DelegationUseAuthorizer>,
-        receipts: Arc<DelegatedDecisionReceiptIssuer>,
-        flow: Arc<dyn DelegationUseFlowOwner>,
-        access: Arc<dyn DelegationUseCommandAuthorizer>,
-        clock: Arc<dyn DelegationClock>,
-    ) -> Self {
         Self {
             repository,
             lifecycle,
@@ -511,8 +490,12 @@ impl DelegationUseCommandService {
             receipts,
             flow,
             access,
-            clock,
+            clock: Arc::new(SystemDelegationClock),
         }
+    }
+    pub fn with_clock(mut self, clock: Arc<dyn DelegationClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub async fn execute(
@@ -579,6 +562,7 @@ impl DelegationUseCommandService {
                     .await
             }
             DecodedDelegationUseCommand::Mutation(command) => {
+                let command = *command;
                 if let Some(original) = self.repository.original(caller, command.command_id).await?
                 {
                     return self.recover(caller, original, &command.digest).await;
@@ -701,9 +685,9 @@ impl DelegationUseCommandService {
         let deadline = admission.valid_until().min(resolved.consent_valid_until);
         let mut guard = self.guard(caller, command, resolved.grant).await?;
         let claim = match self.repository.claim(&mut guard, challenge_id).await? {
-            crate::use_postgres::ClaimResult::New(claim) => claim,
+            crate::use_postgres::ClaimResult::New(claim) => *claim,
             crate::use_postgres::ClaimResult::Existing(original) => {
-                return self.recover(caller, original, &guard.command.digest).await
+                return self.recover(caller, *original, &guard.command.digest).await
             }
         };
         guard.check(self.clock.now())?;
@@ -727,9 +711,9 @@ impl DelegationUseCommandService {
         }
         let mut guard = self.guard(caller, command, challenge.grant.clone()).await?;
         let claim = match self.repository.claim(&mut guard, challenge_id).await? {
-            crate::use_postgres::ClaimResult::New(claim) => claim,
+            crate::use_postgres::ClaimResult::New(claim) => *claim,
             crate::use_postgres::ClaimResult::Existing(original) => {
-                return self.recover(caller, original, &guard.command.digest).await
+                return self.recover(caller, *original, &guard.command.digest).await
             }
         };
         guard.check(self.clock.now())?;
@@ -792,9 +776,11 @@ impl DelegationUseCommandService {
                 guard,
                 &self.lifecycle,
                 &challenge,
-                evaluation,
-                receipt,
-                &proof_digest,
+                UseFinalizationEvidence {
+                    evaluation,
+                    receipt,
+                    proof_digest: &proof_digest,
+                },
                 prepared,
             )
             .await

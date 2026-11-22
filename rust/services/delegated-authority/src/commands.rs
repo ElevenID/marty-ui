@@ -87,7 +87,7 @@ impl CommandGrantReference {
 #[derive(Clone)]
 pub enum DelegationMutation {
     Create {
-        terms: GrantTerms,
+        terms: Box<GrantTerms>,
     },
     Approve {
         grant: CommandGrantReference,
@@ -235,7 +235,9 @@ pub fn decode_delegation_command(
         if serde_json::to_value(&terms).map_err(|_| invalid())? != map["terms"] {
             return Err(invalid());
         }
-        DelegationMutation::Create { terms }
+        DelegationMutation::Create {
+            terms: Box::new(terms),
+        }
     } else {
         let value = &map["grant"];
         let grant: CommandGrantReference =
@@ -454,7 +456,7 @@ impl StoredDelegationCommandResult {
         }
         let expected_status = match &decoded.intent {
             DelegationMutation::Create { terms } => {
-                if self.grant.revision != 1 || &self.grant.terms != terms {
+                if self.grant.revision != 1 || &self.grant.terms != terms.as_ref() {
                     return Err(RepositoryError::CorruptData);
                 }
                 GrantStatus::Pending
@@ -779,7 +781,7 @@ impl DelegationCommandService {
         let prepared = match &command.intent {
             DelegationMutation::Create { terms } => {
                 self.lifecycle
-                    .prepare_propose(caller.organization_id, terms.clone())
+                    .prepare_propose(caller.organization_id, terms.as_ref().clone())
                     .await
             }
             DelegationMutation::Approve {

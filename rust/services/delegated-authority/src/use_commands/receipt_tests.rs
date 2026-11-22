@@ -32,16 +32,18 @@ fn service_with_clock(
     f: &Fixture,
     clock: Arc<dyn DelegationClock>,
 ) -> Arc<DelegationUseCommandService> {
-    Arc::new(DelegationUseCommandService::with_clock(
-        f.service.repository.clone(),
-        f.service.lifecycle.clone(),
-        f.service.challenges.clone(),
-        f.service.evaluation.clone(),
-        f.service.receipts.clone(),
-        f.service.flow.clone(),
-        f.service.access.clone(),
-        clock,
-    ))
+    Arc::new(
+        DelegationUseCommandService::new(
+            f.service.repository.clone(),
+            f.service.lifecycle.clone(),
+            f.service.challenges.clone(),
+            f.service.evaluation.clone(),
+            f.service.receipts.clone(),
+            f.service.flow.clone(),
+            f.service.access.clone(),
+        )
+        .with_clock(clock),
+    )
 }
 async fn recover(
     f: &Fixture,

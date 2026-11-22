@@ -16,11 +16,13 @@ impl CommandFixture {
     async fn new() -> Option<Self> {
         let source = Fixture::new().await?;
         let writer_role = format!("command_writer_{}", Uuid::new_v4().simple());
+        // A separate generated hex password authenticates this fixture role.
+        let writer_password = Uuid::new_v4().simple().to_string();
         assert!(writer_role
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_'));
         sqlx::raw_sql(AssertSqlSafe(format!(
-            "CREATE ROLE {writer_role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            "CREATE ROLE {writer_role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{writer_password}';
              GRANT USAGE ON SCHEMA delegated_authority_service TO {writer_role};
              GRANT EXECUTE ON FUNCTION delegated_authority_service.grant_instant(TEXT) TO {writer_role};
              GRANT INSERT,UPDATE ON delegated_authority_service.delegation_grants TO {writer_role};
@@ -35,13 +37,17 @@ impl CommandFixture {
             .await
             .unwrap();
         }
-        let mut url =
-            url::Url::parse(&std::env::var("DELEGATED_AUTHORITY_TEST_DATABASE_URL").unwrap())
-                .unwrap();
-        url.set_username(&writer_role).unwrap();
         let writer = PgPoolOptions::new()
             .max_connections(4)
-            .connect(url.as_str())
+            .connect_with(
+                source
+                    .owner
+                    .connect_options()
+                    .as_ref()
+                    .clone()
+                    .username(&writer_role)
+                    .password(&writer_password),
+            )
             .await
             .unwrap();
         let store = PostgresOrganizationStore::new(source.owner.clone());
@@ -129,6 +135,7 @@ fn recovery(response: &DelegationCommandResponse) -> Value {
 
 #[tokio::test]
 async fn real_command_host_create_and_recovery_require_current_independent_permissions() {
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };
@@ -162,6 +169,7 @@ async fn real_command_host_create_and_recovery_require_current_independent_permi
 
 #[tokio::test]
 async fn real_command_host_lifecycle_uses_original_confirmation_and_never_writes_sources() {
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };
@@ -205,6 +213,7 @@ async fn real_command_host_lifecycle_uses_original_confirmation_and_never_writes
 
 #[tokio::test]
 async fn real_command_host_rejects_wrong_session_pin_and_withdrawn_confirmation() {
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };
@@ -254,6 +263,7 @@ async fn real_command_host_rejects_wrong_session_pin_and_withdrawn_confirmation(
 
 #[tokio::test]
 async fn real_command_host_rechecks_membership_after_actual_grant_lock_wait() {
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };
@@ -291,6 +301,7 @@ async fn real_command_host_rechecks_membership_after_actual_grant_lock_wait() {
 #[tokio::test]
 async fn real_command_host_other_admin_cannot_reinstate_after_grantor_revoked_during_lock() {
     use marty_organization::domain::{Member, MemberStatus};
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };
@@ -351,6 +362,7 @@ async fn real_command_host_other_admin_cannot_reinstate_after_grantor_revoked_du
 
 #[tokio::test]
 async fn real_command_host_readiness_rejects_producer_privileges_and_unsafe_role_paths() {
+    let _guard = crate::postgres::POSTGRES_TEST_LOCK.lock().await;
     let Some(f) = CommandFixture::new().await else {
         return;
     };

@@ -95,8 +95,8 @@ impl PublicKey {
         };
         if fields.iter().any(|name| !map.contains_key(*name))
             || map.keys().any(|name| {
-                !fields.contains(&name.as_str())
-                    && !(metadata && ["kid", "alg", "use", "key_ops"].contains(&name.as_str()))
+                !(fields.contains(&name.as_str())
+                    || metadata && ["kid", "alg", "use", "key_ops"].contains(&name.as_str()))
             })
             || value.get("kid").is_some_and(|v| v != key_id)
             || value.get("alg").is_some_and(|v| v != algorithm)

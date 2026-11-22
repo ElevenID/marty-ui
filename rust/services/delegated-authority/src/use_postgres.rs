@@ -36,8 +36,14 @@ pub(crate) struct RetainedUseOutcome {
 mod receipt_reads;
 
 pub(crate) enum ClaimResult {
-    New(UseClaim),
-    Existing(RetainedUseOutcome),
+    New(Box<UseClaim>),
+    Existing(Box<RetainedUseOutcome>),
+}
+
+pub(crate) struct UseFinalizationEvidence<'a> {
+    pub evaluation: DelegationUseEvaluation,
+    pub receipt: IssuedDelegatedDecisionReceipt,
+    pub proof_digest: &'a str,
 }
 
 impl PgDelegationUseRepository {
@@ -86,7 +92,7 @@ impl PgDelegationUseRepository {
             load_original(&mut tx, &guard.caller, guard.command.command_id).await?
         {
             tx.commit().await.map_err(database)?;
-            return Ok(ClaimResult::Existing(original));
+            return Ok(ClaimResult::Existing(Box::new(original)));
         }
         require_unclaimed_namespace(&mut tx, &guard.caller, guard.command.command_id).await?;
         lock_grant(&mut tx, &guard.grant).await?;
@@ -107,11 +113,11 @@ impl PgDelegationUseRepository {
             .execute(&mut *tx).await.map_err(database)?;
         guard.check(now(&mut tx).await?)?;
         tx.commit().await.map_err(database)?;
-        Ok(ClaimResult::New(UseClaim {
+        Ok(ClaimResult::New(Box::new(UseClaim {
             identity,
             command: guard.command.clone(),
             challenge_id,
-        }))
+        })))
     }
 
     pub(crate) async fn commit_start(
@@ -190,11 +196,14 @@ impl PgDelegationUseRepository {
         mut guard: UseAccessGuard,
         lifecycle: &DelegationAuthorityService,
         challenge: &RetainedUseChallenge,
-        evaluation: DelegationUseEvaluation,
-        receipt: IssuedDelegatedDecisionReceipt,
-        proof_digest: &str,
+        evidence: UseFinalizationEvidence<'_>,
         prepared: Box<dyn PreparedUseFinalization>,
     ) -> Result<DelegationUseCommandResponse, DelegationUseCommandError> {
+        let UseFinalizationEvidence {
+            evaluation,
+            receipt,
+            proof_digest,
+        } = evidence;
         let DelegationUseIntent::Finalize {
             proof_submission_id,
             ..
@@ -500,7 +509,7 @@ fn decode_original(
         .transpose()?;
     Ok(RetainedUseOutcome {
         grant,
-        command,
+        command: *command,
         response,
     })
 }
@@ -534,36 +543,6 @@ fn valid_retained_verifier_id(value: &str) -> bool {
     value.len() <= 1_024 && crate::oid4vp::valid_verifier_client_id(value)
 }
 
-#[cfg(test)]
-mod verifier_id_tests {
-    use super::valid_retained_verifier_id;
-
-    #[test]
-    fn retained_verifier_preserves_oid4vp_client_ids_and_rejects_invalid_text() {
-        for value in [
-            "decentralized_identifier:did:web:verifier.example",
-            "redirect_uri:https://verifier.example/response",
-            "x509_hash:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-            "did:web:verifier.example",
-            "https://verifier.example",
-        ] {
-            assert!(valid_retained_verifier_id(value), "rejected {value:?}");
-        }
-        for value in [
-            "",
-            " ",
-            "decentralized_identifier:did:web:verifier.example ",
-            "decentralized_identifier:did:web:verifier\n.example",
-            "decentralized_identifier:did:web:verifier\t.example",
-            "decentralized_identifier:did:web:verifier\0.example",
-            "decentralized_identifier:did:web:vérifier.example",
-            "decentralized_identifier:did:web:verifier\u{7f}.example",
-        ] {
-            assert!(!valid_retained_verifier_id(value), "accepted {value:?}");
-        }
-        assert!(!valid_retained_verifier_id(&"x".repeat(1_025)));
-    }
-}
 fn validate_final(
     c: &RetainedUseChallenge,
     g: &UseAccessGuard,
@@ -745,4 +724,35 @@ async fn verify_serving_lock_helpers(pool: &PgPool) -> Result<(), RepositoryErro
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod verifier_id_tests {
+    use super::valid_retained_verifier_id;
+
+    #[test]
+    fn retained_verifier_preserves_oid4vp_client_ids_and_rejects_invalid_text() {
+        for value in [
+            "decentralized_identifier:did:web:verifier.example",
+            "redirect_uri:https://verifier.example/response",
+            "x509_hash:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "did:web:verifier.example",
+            "https://verifier.example",
+        ] {
+            assert!(valid_retained_verifier_id(value), "rejected {value:?}");
+        }
+        for value in [
+            "",
+            " ",
+            "decentralized_identifier:did:web:verifier.example ",
+            "decentralized_identifier:did:web:verifier\n.example",
+            "decentralized_identifier:did:web:verifier\t.example",
+            "decentralized_identifier:did:web:verifier\0.example",
+            "decentralized_identifier:did:web:vérifier.example",
+            "decentralized_identifier:did:web:verifier\u{7f}.example",
+        ] {
+            assert!(!valid_retained_verifier_id(value), "accepted {value:?}");
+        }
+        assert!(!valid_retained_verifier_id(&"x".repeat(1_025)));
+    }
 }

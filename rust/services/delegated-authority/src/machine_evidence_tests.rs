@@ -95,18 +95,25 @@ impl Database {
             .await
             .unwrap();
         let role = format!("machine_audit_{}", Uuid::new_v4().simple());
-        // Audited test-only identifiers: fixed prefix and generated UUID.
+        let password = Uuid::new_v4().simple().to_string();
+        // Test-only role and password literals contain only the fixed prefix
+        // and generated UUIDs, never external SQL text.
         assert!(role.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
-        sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{password}';
             GRANT USAGE ON SCHEMA delegated_authority_service TO {role};
             GRANT SELECT ON delegated_authority_service.schema_migrations,delegated_authority_service.machine_authorization_evidence TO {role};
             GRANT SELECT,INSERT ON delegated_authority_service.machine_authentication_evidence TO {role};")))
             .execute(&owner).await.unwrap();
-        let mut writer_url = parsed;
-        writer_url.set_username(&role).unwrap();
         let writer = PgPoolOptions::new()
             .max_connections(4)
-            .connect(writer_url.as_str())
+            .connect_with(
+                owner
+                    .connect_options()
+                    .as_ref()
+                    .clone()
+                    .username(&role)
+                    .password(&password),
+            )
             .await
             .unwrap();
         let evidence = PgMachineAuthenticationEvidenceRepository::new(writer.clone());

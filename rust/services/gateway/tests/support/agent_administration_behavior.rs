@@ -464,30 +464,31 @@ async fn agent_admin_reconstructs_actor_and_correlation_and_never_replays_generi
     assert_eq!(first.status(), StatusCode::OK);
     let first_id = first.headers()["x-request-id"].to_str().unwrap().to_owned();
     assert_ne!(first_id, "caller-chosen");
-    let calls = upstream.calls.lock().unwrap();
-    let forwarded = &calls[0].1;
-    assert_eq!(calls[0].0, "organizations");
-    assert_eq!(admin_header(forwarded, "x-user-id"), ADMIN_USER);
-    assert_eq!(admin_header(forwarded, "x-organization-id"), ADMIN_ORG);
-    assert_eq!(
-        admin_header(forwarded, "x-required-permission"),
-        "agent-identity:revoke"
-    );
-    assert_eq!(admin_header(forwarded, "x-request-id"), first_id);
-    assert_eq!(admin_header(forwarded, "x-service-token"), "s".repeat(32));
-    for forbidden in [
-        "cookie",
-        "authorization",
-        "x-api-key",
-        "x-marty-approval-user-id",
-        "idempotency-key",
-    ] {
-        assert!(!forwarded
-            .headers
-            .keys()
-            .any(|name| name.eq_ignore_ascii_case(forbidden)));
+    {
+        let calls = upstream.calls.lock().unwrap();
+        let forwarded = &calls[0].1;
+        assert_eq!(calls[0].0, "organizations");
+        assert_eq!(admin_header(forwarded, "x-user-id"), ADMIN_USER);
+        assert_eq!(admin_header(forwarded, "x-organization-id"), ADMIN_ORG);
+        assert_eq!(
+            admin_header(forwarded, "x-required-permission"),
+            "agent-identity:revoke"
+        );
+        assert_eq!(admin_header(forwarded, "x-request-id"), first_id);
+        assert_eq!(admin_header(forwarded, "x-service-token"), "s".repeat(32));
+        for forbidden in [
+            "cookie",
+            "authorization",
+            "x-api-key",
+            "x-marty-approval-user-id",
+            "idempotency-key",
+        ] {
+            assert!(!forwarded
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(forbidden)));
+        }
     }
-    drop(calls);
     provider.mode.store(1, Ordering::SeqCst);
     assert_eq!(
         app.oneshot(request()).await.unwrap().status(),

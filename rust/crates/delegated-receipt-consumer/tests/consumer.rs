@@ -17,6 +17,9 @@ const ISSUER: &str = "did:web:receipt.example.test";
 const KID: &str = "did:web:receipt.example.test#receipt-key-1";
 const NONCE: &str = "independent_challenge_nonce_0123456789";
 
+type ContextMutation = Box<dyn Fn(&mut ReceiptContext)>;
+type RetainedBindingMutation = Box<dyn Fn(&mut RetainedReceiptBinding)>;
+
 fn at() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 22, 0, 0, 0)
         .single()
@@ -367,7 +370,7 @@ fn every_independently_known_context_component_is_exact() {
     let a = Algorithm::Es256;
     let key = Key::new(a, 7);
     let compact = key.sign(a, &payload(Decision::Permit));
-    let mutations: Vec<Box<dyn Fn(&mut ReceiptContext)>> = vec![
+    let mutations: Vec<ContextMutation> = vec![
         Box::new(|c| c.organization_id = Uuid::new_v4()),
         Box::new(|c| c.grant.id = Uuid::new_v4()),
         Box::new(|c| c.grant.revision += 1),
@@ -411,7 +414,7 @@ fn retained_metadata_cannot_change_id_digest_decision_or_deadline() {
     let a = Algorithm::EdDsa;
     let key = Key::new(a, 7);
     let compact = key.sign(a, &payload(Decision::Permit));
-    let changes: Vec<Box<dyn Fn(&mut RetainedReceiptBinding)>> = vec![
+    let changes: Vec<RetainedBindingMutation> = vec![
         Box::new(|r| r.receipt_ref = format!("{RECEIPT_REFERENCE_PREFIX}{}", Uuid::new_v4())),
         Box::new(|r| r.receipt_digest = digest('e')),
         Box::new(|r| r.decision = Decision::Deny),

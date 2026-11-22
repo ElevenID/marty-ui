@@ -374,10 +374,10 @@ fn compact_encoding_rejects_padding_trailing_bits_and_extra_or_empty_segments() 
     let challenge = EnrollmentChallenge::new(parameters(&signer)).unwrap();
     let compact = signer.proof(&challenge);
     let parts: Vec<_> = compact.split('.').collect();
-    for index in 0..3 {
+    for (index, part) in parts[..3].iter().enumerate() {
         for replacement in [
-            format!("{}=", parts[index]),
-            format!("{} ", parts[index]),
+            format!("{part}="),
+            format!("{part} "),
             String::new(),
             "+bad/".into(),
         ] {

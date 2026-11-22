@@ -62,8 +62,14 @@ impl MachineUseAccessInput {
             || self.permissions.len() > 5
             || unique.len() != self.permissions.len()
             || self.valid_until <= self.valid_from
-            || self.valid_from.timestamp_subsec_nanos() % 1000 != 0
-            || self.valid_until.timestamp_subsec_nanos() % 1000 != 0
+            || !self
+                .valid_from
+                .timestamp_subsec_nanos()
+                .is_multiple_of(1000)
+            || !self
+                .valid_until
+                .timestamp_subsec_nanos()
+                .is_multiple_of(1000)
         {
             return Err(Error::Invalid);
         }
@@ -188,26 +194,22 @@ impl MachineUseAccessRequest {
                 terms_digest,
                 key_thumbprint,
                 ..
-            } => {
-                if grant_id.is_nil()
-                    || !valid_revision(*grant_revision)
-                    || !valid_digest(terms_digest)
-                    || !valid_digest(key_thumbprint)
-                {
-                    return Err(Error::Invalid);
-                }
+            } if grant_id.is_nil()
+                || !valid_revision(*grant_revision)
+                || !valid_digest(terms_digest)
+                || !valid_digest(key_thumbprint) =>
+            {
+                return Err(Error::Invalid);
             }
             Self::Recover {
                 grant_id,
                 grant_revision,
                 terms_digest,
-            } => {
-                if grant_id.is_nil()
-                    || !valid_revision(*grant_revision)
-                    || !valid_digest(terms_digest)
-                {
-                    return Err(Error::Invalid);
-                }
+            } if grant_id.is_nil()
+                || !valid_revision(*grant_revision)
+                || !valid_digest(terms_digest) =>
+            {
+                return Err(Error::Invalid);
             }
             _ => {}
         }

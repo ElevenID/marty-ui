@@ -135,12 +135,13 @@ impl Fixture {
         let mut pools = Vec::new();
         for purpose in ["read", "consent", "authority", "organization"] {
             let role_name = format!("approval_{}_{}", purpose, Uuid::new_v4().simple());
-            // Audited test-only identifiers: a fixed prefix plus a generated
-            // UUID, not external SQL text. Values remain normal bind parameters.
+            let role_password = Uuid::new_v4().simple().to_string();
+            // Test-only role identifiers and password literals contain only a
+            // fixed prefix and generated UUIDs, never external SQL text.
             assert!(role_name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_'));
-            sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role_name} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;")))
+            sqlx::raw_sql(AssertSqlSafe(format!("CREATE ROLE {role_name} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{role_password}';")))
                 .execute(&owner).await.unwrap();
             if purpose == "organization" {
                 sqlx::raw_sql(AssertSqlSafe(format!("GRANT USAGE ON SCHEMA organization_service TO {role_name}; GRANT SELECT ON ALL TABLES IN SCHEMA organization_service TO {role_name};")))
@@ -181,12 +182,17 @@ impl Fixture {
                     .unwrap();
                 }
             }
-            let mut role_url = url::Url::parse(&url).unwrap();
-            role_url.set_username(&role_name).unwrap();
             pools.push(
                 PgPoolOptions::new()
                     .max_connections(4)
-                    .connect(role_url.as_str())
+                    .connect_with(
+                        owner
+                            .connect_options()
+                            .as_ref()
+                            .clone()
+                            .username(&role_name)
+                            .password(&role_password),
+                    )
                     .await
                     .unwrap(),
             );
