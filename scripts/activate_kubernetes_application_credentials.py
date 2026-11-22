@@ -81,6 +81,7 @@ MIGRATION_COMMANDS = {
     "revocation-profile": ["/usr/local/bin/marty-revocation-profile"],
     "bootstrap-notification": ["/app/run-migrations-with-secrets.sh"],
     "organization": ["/usr/local/bin/marty-organization", "migrate"],
+    "bootstrap-organization": ["/usr/local/bin/marty-organization", "bootstrap"],
     "credential-template": ["/usr/local/bin/marty-credential-template", "bootstrap"],
     "presentation-policy": ["/usr/local/bin/marty-presentation-policy", "migrate"],
     "bootstrap-presentation-policy": ["/usr/local/bin/marty-presentation-policy", "bootstrap-builtins"],
