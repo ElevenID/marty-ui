@@ -58,8 +58,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let organization_id = std::env::var("MARTY_ORG_ID")
                 .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
                 .parse::<uuid::Uuid>()?;
-            let organization_name = std::env::var("MARTY_ORG_NAME")
-                .unwrap_or_else(|_| "Marty".into());
+            let organization_name =
+                std::env::var("MARTY_ORG_NAME").unwrap_or_else(|_| "Marty".into());
             let organization_slug = marty_service_runtime::config::canonical_slug(
                 &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
                 "marty",
