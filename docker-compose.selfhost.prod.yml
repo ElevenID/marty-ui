@@ -320,6 +320,7 @@ services:
         /usr/local/bin/marty-credential-template bootstrap
         /usr/local/bin/marty-presentation-policy migrate
         exec /usr/local/bin/marty-presentation-policy bootstrap-builtins
+        exec /usr/local/bin/marty-flow migrate
     environment:
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -1160,6 +1161,7 @@ services:
       GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
+      MARTY_SCHEMA_STARTUP_MODE: validate
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
@@ -1208,6 +1210,8 @@ services:
       - sign_grant_mint_flow_wallet_token
       - passport_tenant_api_keys
     depends_on:
+      owner-migrations:
+        condition: service_completed_successfully
       db-migrate:
         condition: service_completed_successfully
       redis:
