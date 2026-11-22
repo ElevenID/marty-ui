@@ -315,6 +315,8 @@ services:
     command:
       - |
         . /app/load-secrets-env.sh
+        /usr/local/bin/marty-organization migrate
+        /usr/local/bin/marty-organization bootstrap
         /usr/local/bin/marty-credential-template bootstrap
         /usr/local/bin/marty-presentation-policy migrate
         exec /usr/local/bin/marty-presentation-policy bootstrap-builtins
@@ -322,7 +324,10 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-}
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
       MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-selfhost-production}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
@@ -640,7 +645,7 @@ services:
       - org_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
