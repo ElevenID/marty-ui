@@ -98,7 +98,7 @@ spec:
         # Catalog provisioning is an explicit migration-job step; normal
         # service startup validates schemas and performs no seed writes. Issuance
         # must see the completed catalogs before seeding a fresh schema.
-        {{- range $peer := list (dict "name" "organization" "url" "http://organization:8002/health") (dict "name" "credential-template" "url" "http://credential-template:8003/ready") (dict "name" "presentation-policy" "url" "http://presentation-policy:8009/ready") }}
+        {{- range $peer := list (dict "name" "organization" "url" "http://organization:8002/health") (dict "name" "credential-template" "url" "http://credential-template:8003/ready") }}
         - name: ready-{{ $peer.name }}
           image: {{ include "marty.image" (dict "root" $ "role" "services") | quote }}
           imagePullPolicy: {{ $.Values.imagePullPolicy }}
