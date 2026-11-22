@@ -98,6 +98,12 @@ services:
     environment:
       SERVICE_NAME: organization
 
+  owner-migrations:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: credential_template
+
   credential-template:
     <<: *service-image
     build: !reset null
