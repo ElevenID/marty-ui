@@ -5,7 +5,8 @@ use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_presentation_policy::{
     presentation_policy_proto::presentation_policy_service_server::PresentationPolicyServiceServer,
-    presentation_policy_router, validate_presentation_policy_schema,
+    presentation_policy_router, reconcile_builtin_policies, migrate_presentation_policy_schema,
+    validate_presentation_policy_schema,
     CredentialStatusResolver, CredentialVerificationKernel, NativePresentationControlPlane,
     PolicyApplication, PolicyAuthorization, PolicyRepository, PostgresPolicyStore,
     PresentationGrpcSecurity, PresentationPolicyDependency, PresentationPolicyGrpcService,
