@@ -320,7 +320,6 @@ services:
         /usr/local/bin/marty-credential-template bootstrap
         /usr/local/bin/marty-presentation-policy migrate
         /usr/local/bin/marty-presentation-policy bootstrap-builtins
-        exec /usr/local/bin/marty-flow migrate
     environment:
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
