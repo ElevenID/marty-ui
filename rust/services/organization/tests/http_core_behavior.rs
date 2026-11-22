@@ -4,7 +4,10 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use marty_organization::postgres::PostgresOrganizationStore;
+use marty_organization::{
+    migration::migrate_organization_schema,
+    postgres::PostgresOrganizationStore,
+};
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
     AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
@@ -12,6 +15,7 @@ use marty_organization::{
     SCIM_USER_MUTATION_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
+use mmf_messaging::PostgresOutboxStore;
 use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
@@ -119,12 +123,17 @@ fn router_with_auth(configured: bool) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
         .expect("lazy PostgreSQL URL");
+    migrate_organization_schema(&pool).await.expect("organization schema migration");
+    let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)
+        .expect("organization outbox store");
+    outbox.migrate().await.expect("organization outbox migration");
+    drop(outbox);
     let cache = OrganizationCache::new(
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
-    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool), cache)
+    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool.clone()), cache)
         .expect("application composition");
     organization_core_router(OrganizationHttpState {
         application: Arc::new(application),
