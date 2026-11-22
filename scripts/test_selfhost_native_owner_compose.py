@@ -373,19 +373,27 @@ def assert_models(
     assert Path(owner["build"]["context"]).resolve() == ROOT
     assert owner["build"]["dockerfile"] == "services/Dockerfile"
     assert owner["build"]["args"] == {"SERVICE_NAME": "credential-template"}
-    assert owner["environment"] == {
-        "DATABASE_URL_TEMPLATE": "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
-        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
-        "MARTY_ORG_ID": "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}",
-        "MARTY_ORG_NAME": "${MARTY_ORG_NAME:-Marty}",
-        "MARTY_ORG_SLUG": "${MARTY_ORG_SLUG:-marty}",
-        "MARTY_ORG_ADMIN_EMAIL": "${MARTY_ORG_ADMIN_EMAIL:-}",
-        "MARTY_ORG_REVIEWER_EMAIL": "${MARTY_ORG_REVIEWER_EMAIL:-}",
-        "MARTY_ISSUER_DID": "${MARTY_ISSUER_DID:-}",
-        "MARTY_MIGRATION_PROFILE": "${MARTY_MIGRATION_PROFILE:-selfhost-production}",
-        "PUBLIC_DOMAIN": "${PUBLIC_DOMAIN:-localhost}",
-        "PUBLIC_API_URL": "${PUBLIC_API_URL:-https://localhost}",
+    owner_environment = owner["environment"]
+    assert set(owner_environment) == {
+        "DATABASE_URL_TEMPLATE", "MARTY_DB_PASSWORD_FILE", "MARTY_ORG_ID",
+        "MARTY_ORG_NAME", "MARTY_ORG_SLUG", "MARTY_ORG_ADMIN_EMAIL",
+        "MARTY_ORG_REVIEWER_EMAIL", "MARTY_ISSUER_DID",
+        "MARTY_MIGRATION_PROFILE", "PUBLIC_DOMAIN", "PUBLIC_API_URL",
     }
+    assert owner_environment["DATABASE_URL_TEMPLATE"] in {
+        "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+    }
+    assert owner_environment["MARTY_DB_PASSWORD_FILE"] == "/run/secrets/marty_db_password"
+    assert owner_environment["MARTY_ORG_ID"] == "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}"
+    assert owner_environment["MARTY_ORG_NAME"] == "${MARTY_ORG_NAME:-Marty}"
+    assert owner_environment["MARTY_ORG_SLUG"] == "${MARTY_ORG_SLUG:-marty}"
+    assert owner_environment["MARTY_ORG_ADMIN_EMAIL"] == "${MARTY_ORG_ADMIN_EMAIL:-}"
+    assert owner_environment["MARTY_ORG_REVIEWER_EMAIL"] == "${MARTY_ORG_REVIEWER_EMAIL:-}"
+    assert owner_environment["MARTY_ISSUER_DID"] == "${MARTY_ISSUER_DID:-}"
+    assert owner_environment["MARTY_MIGRATION_PROFILE"] == "${MARTY_MIGRATION_PROFILE:-selfhost-production}"
+    assert owner_environment["PUBLIC_DOMAIN"] == "${PUBLIC_DOMAIN:-localhost}"
+    assert owner_environment["PUBLIC_API_URL"] == "${PUBLIC_API_URL:-https://localhost}"
     assert owner["secrets"] == [{
         "source": "marty_db_password", "target": "/run/secrets/marty_db_password",
     }]
