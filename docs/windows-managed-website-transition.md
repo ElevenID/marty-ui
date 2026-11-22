@@ -292,8 +292,31 @@ pins.
 `forward-evidence-complete`, `combined-backout-evidence-complete`, and
 `abort-evidence-complete` describe the terminal record structure. A stage abort
 returns to the original combined selection through the separate archive step.
-`seal-forward` binds a successor candidate receipt; publication, immutability,
-ancestor closure, and selected-owner reseeding remain outside this module.
+### Prepare the forward successor
+
+After `verify-website`, run `--prepare-forward` with the original guards and
+composition inputs, the verified split tail, and a private Playwright
+`--session-state-file` from the authorized acceptance browser. Supply the
+independently recorded `--expected-account-sha256` and
+`--expected-organization-sha256`, each computed from the UTF-8 bytes of the
+exact expected identifier. Use the application session export shape with an
+empty `origins` list. Keep the live session file outside Git and the attempt.
+
+The owner repeats the signed split, edge, public and OAuth handoff checks. It
+uses the scoped session cookie over canonical HTTPS for `/v1/auth/me` and
+`/v1/organizations/mine`, and retains only the confirmed checks and TLS
+observations. Perform the required interactive sign-in in the acceptance
+browser. Use a session exported from that qualification for this operation.
+
+Preparation also renders one persistent split Compose file with both retained
+credential environments. Its normalized model and configuration hashes must
+match the admitted multi-file layouts. The candidate retains the original
+combined model, selected credential identity, signed proofs and empty future
+activation outputs. Use the returned candidate and qualification digests when
+reviewing the proposed publication. The journal stays at `verify-website` so
+combined rollback remains available during preparation. `seal-forward`,
+ancestor closure, owner publication and renewal/reboot qualification of the
+published successor remain separate steps.
 
 ## Required integration before activation
 

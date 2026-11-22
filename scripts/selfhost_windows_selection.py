@@ -1120,7 +1120,7 @@ def renew_once(config_path,logical_project):
 
 @contextmanager
 def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
-                     _website_edge=None, _coordination=None):
+                     _website_edge=None, _website_forward=None, _coordination=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1129,8 +1129,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
     expired_completion=[];expired_started=False
-    require((_website_stage is None and _website_edge is None) or _pending_website is not None)
-    require(_website_edge is None or _website_stage is None)
+    website_actions = sum(action is not None for action in (_website_stage, _website_edge, _website_forward))
+    require(website_actions <= 1 and (not website_actions or _pending_website is not None))
     options = {}
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
@@ -1216,6 +1216,9 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                     from selfhost_windows_website_edge import run
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
                     gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=stack)
+            if _website_forward is not None:
+                from selfhost_windows_website_forward import prepare
+                status = prepare(cfg, choice, values, record, plan, status, held=stack, **_website_forward)
             yield status
             return
 
@@ -1438,6 +1441,19 @@ def release_website_backout(config_path, plan, *, guard_sha256, expected_anchor_
     return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
                     assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
                     mode='backout')
+
+
+def prepare_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, session_state_file,
+                            expected_account_sha256, expected_organization_sha256, authority_file=None):
+    """Prepare the verified successor files while the original owner still has backout."""
+    forward = {'assets': assets, 'gh': gh, 'cosign': cosign, 'registry_config': registry_config,
+               'session_state_file': session_state_file, 'expected_account_sha256': expected_account_sha256,
+               'expected_organization_sha256': expected_organization_sha256, 'authority_file': authority_file}
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_forward=forward) as result:
+        prepared = result
+    return prepared
 
 
 def reconcile_existing(config_path, *, authority_file=None):

@@ -27,6 +27,7 @@ APPLICATION_MARKER = '/marty-ui-release.json'
 READY = '/ready'
 LOGIN = '/v1/auth/login?redirect_uri=%2Fconsole'
 SESSION = '/v1/auth/me'
+ORGANIZATIONS = '/v1/organizations/mine'
 AUTH = ISSUER_PATH + '/protocol/openid-connect/auth'
 MAX_BODY = 4 * 1024 * 1024
 REDIRECTS = {301, 302, 307, 308}
@@ -56,9 +57,15 @@ def _public_addresses(host):
     return tuple(str(address) for address in sorted(addresses, key=lambda item: (item.version, int(item))))
 
 
-def _request(host, path, addresses, port, context, deadline):
+def _request(host, path, addresses, port, context, deadline, *, session_cookie=None):
     """Connect to the observed DNS answers, with SNI, hostname checks and no proxy."""
     require(re.fullmatch(r'/[A-Za-z0-9_./%?=&-]*', path) is not None and not path.startswith('//'))
+    if session_cookie is not None:
+        name, value = session_cookie
+        require(context is not None and context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+                and port == 443 and path in {SESSION, ORGANIZATIONS}
+                and re.fullmatch(r'[A-Za-z0-9_.-]{1,48}', name)
+                and re.fullmatch(r'[A-Za-z0-9._~%+=/-]{16,2048}', value))
     for address in addresses:
         remaining = deadline - time.monotonic()
         require(remaining > 0)
@@ -79,8 +86,10 @@ def _request(host, path, addresses, port, context, deadline):
                 require(protocol in {'TLSv1.2', 'TLSv1.3'} and 0 < len(certificate) <= 16384)
                 peer = {'address': address, 'version': protocol, 'leaf_sha256': hashlib.sha256(certificate).hexdigest()}
             request = f'GET {path} HTTP/1.1\r\nHost: {host}\r\n'
-            request += 'Connection: close\r\nCache-Control: no-cache\r\nAccept-Encoding: identity\r\n\r\n'
-            transport.sendall(request.encode('ascii'))
+            request += 'Connection: close\r\nCache-Control: no-cache\r\nAccept-Encoding: identity\r\n'
+            if session_cookie is not None:
+                request += f'Cookie: {name}={value}\r\n'
+            transport.sendall((request + '\r\n').encode('ascii'))
             with http.client.HTTPResponse(transport, method='GET') as incoming:
                 incoming.begin()
                 response = Response(incoming.status, incoming.headers, incoming.read(MAX_BODY + 1), peer)
