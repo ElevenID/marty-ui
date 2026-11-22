@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import subprocess
 import sys
@@ -20,11 +20,95 @@ import selfhost_windows_product as product
 import selfhost_windows_renewal as renewal
 import selfhost_windows_selection as selection
 import ui_release as ui
+import website_release as web
 
 
 SCHEMA = "marty.windows-website-preflight/v1"
 WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
+
+ROUTE_TARGET = '/etc/nginx/marty-website'
+TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
+MAX_TEMPLATE_BYTES = 1024*1024
+
+
+def windows_path(value):
+    """A bounded, canonical local-drive spelling; no filesystem qualification."""
+    selection.require(isinstance(value, str) and len(value) <= 1024 and not re.search(r'[\x00-\x1f\x7f]', value))
+    path = PureWindowsPath(value)
+    selection.require(re.fullmatch(r'[A-Z]:', path.drive) and path.is_absolute() and str(path) == value
+            and len(path.parts) > 1 and all(part not in {'.', '..'} and ':' not in part
+                and part.rstrip(' .') == part and not PureWindowsPath(part).is_reserved()
+                for part in path.parts[1:]))
+    return path
+
+
+def path_under_owner(root, value):
+    path = windows_path(value)
+    selection.require(str(path).startswith(str(root) + '\\'))
+    return path
+
+
+def runtime_bind_source(value):
+    """Only the existing documented local-drive Docker Desktop bridge forms."""
+    selection.require(isinstance(value, str))
+    for prefix in ('/run/desktop/mnt/host/', '/host_mnt/', '/mnt/'):
+        if value.startswith(prefix):
+            match = re.fullmatch(r'([a-zA-Z])/(.+)', value[len(prefix):])
+            selection.require(match is not None)
+            value = match[1].upper() + ':\\' + match[2].replace('/', '\\')
+            break
+    return _local_source(value)
+
+
+def _local_source(value):
+    selection.require(isinstance(value, str) and re.match(r'^[a-zA-Z]:[\\/]', value))
+    return windows_path(value[0].upper() + value[1:].replace('/', '\\'))
+
+
+def _overlaps(target, mount):
+    return target == mount or target.startswith(mount.rstrip('/') + '/') or mount.startswith(target + '/')
+
+
+def _combined_mount_targets(targets):
+    selection.require(all(isinstance(target, str) and PurePosixPath(target).root == '/'
+                and str(PurePosixPath(target)) == target and '..' not in PurePosixPath(target).parts
+                for target in targets))
+    selection.require(len(set(targets)) == len(targets))
+    selection.require(not any(_overlaps(ROUTE_TARGET, target) for target in targets))
+    selection.require(not any(_overlaps(TEMPLATE_TARGET, target) for target in targets if target != TEMPLATE_TARGET))
+
+
+def combined_edge_binding(before, runtime_mounts, owner_root):
+    """Identify the declared and installed template before opening its source."""
+    edge = before['services']['edge']
+    selection.require(not edge.get('depends_on') and
+            'http://127.0.0.1/edge-healthz' in edge.get('healthcheck', {}).get('test', []))
+    volumes = edge.get('volumes', [])
+    selection.require(type(volumes) is list and all(type(mount) is dict for mount in volumes))
+    _combined_mount_targets([mount.get('target') for mount in volumes])
+    mounts = [mount for mount in volumes if mount['target'] == TEMPLATE_TARGET]
+    selection.require(len(mounts) == 1 and mounts[0].get('type') == 'bind' and mounts[0].get('read_only') is True)
+    source = str(_local_source(mounts[0].get('source')))
+    path_under_owner(windows_path(owner_root), source)
+    _combined_mount_targets([mount['Destination'] for mount in runtime_mounts])
+    installed = [mount for mount in runtime_mounts if mount['Destination'] == TEMPLATE_TARGET]
+    selection.require(len(installed) == 1 and installed[0]['Type'] == 'bind' and installed[0].get('RW') is False
+            and str(runtime_bind_source(installed[0].get('Source'))) == source)
+    return {'source': source, 'target': TEMPLATE_TARGET, 'runtime_mount_sha256': selection.digest(selection.packed(installed[0]))}
+
+
+def edge_template_identity(binding, template):
+    """Bind exact template bytes to the combined edge mount identity."""
+    selection.require(isinstance(template, bytes) and 0 < len(template) <= MAX_TEMPLATE_BYTES and b'\0' not in template)
+    try:
+        text = template.decode('utf-8')
+    except UnicodeError:
+        raise ValueError('Managed website edge template refused') from None
+    lines = [line.split('#', 1)[0].strip() for line in text.splitlines()]
+    selection.require(lines.count(composition.EDGE_INCLUDE) == 1
+            and any(re.fullmatch(r'location\s+=\s+/edge-healthz\s*\{', line) for line in lines))
+    return {**binding, 'bytes': len(template), 'sha256': selection.digest(template)}
 
 
 def _identity(items: list[dict], project: str) -> dict:
@@ -42,7 +126,8 @@ def _identity(items: list[dict], project: str) -> dict:
     return result
 
 
-def _observe(config: dict, choice: str, values: dict, record: dict) -> tuple[dict, dict]:
+def _observe(config: dict, choice: str, values: dict, record: dict, manifest: dict, *,
+             full_standalone: bool, owner_root: Path, held) -> tuple[dict, dict, dict | None]:
     """Read selected identities; do not substitute for native/storage custody.
 
     The caller already holds the real selection lease and private input handles.
@@ -69,7 +154,8 @@ def _observe(config: dict, choice: str, values: dict, record: dict) -> tuple[dic
     prefix = "current" if choice == "old" else "renewed"
     mounts = renewal.checked_secret_mounts(owned, config["project"], Path(config[prefix + "_secrets"]),
         roles, model, path_equal=renewal.windows_mount_path_equal)
-    selection.require(mounts > 0 and selection.digest(selection.packed(renewal.data_mounts(owned))) == record["data_sha256"])
+    data = renewal.data_mounts(owned)
+    selection.require(mounts > 0 and selection.digest(selection.packed(data)) == record["data_sha256"])
 
     # The completed TLS initializer is retained historical evidence. Its exact
     # receipt was checked above; it is neither compared to a successor image nor
@@ -85,13 +171,25 @@ def _observe(config: dict, choice: str, values: dict, record: dict) -> tuple[dic
             references[reference] = rows[0]["Id"]
         selection.require(identity[role]["image"] == references[reference])
 
+    comparison = compatibility(model, manifest)
+    edge = None
+    if full_standalone and comparison["composition_matches_selected_product"]:
+        source = held.enter_context(renewal.hold_private_input(Path(config["compose_file"]), max_bytes=2*1024*1024))
+        selection.require(selection.digest(source) == config["compose_sha256"])
+        installed = data["edge"]["mounts"]
+        binding = combined_edge_binding(selection.decode(source), installed, str(owner_root))
+        selection.require(combined_edge_binding(model, installed, str(owner_root)) == binding)
+        template = held.enter_context(renewal.hold_private_input(
+            Path(binding["source"]), max_bytes=MAX_TEMPLATE_BYTES))
+        edge = edge_template_identity(binding, template)
+
     after = [item for item in docker.containers() if renewal._project(item) == config["project"]]
     selection.require(_identity(after, config["project"]) == identity)
     renewal.checked_live_configuration(after, hashes, config["tls_init_receipt"])
-    return model, {"configured_roles": len(model["services"]), "installed_roles": len(roles),
+    return model, {**comparison, "configured_roles": len(model["services"]), "installed_roles": len(roles),
                    "selected_configuration_verified": True, "installed_image_bytes_verified": True,
                    "selected_secret_mounts_verified": True, "recorded_data_mounts_verified": True,
-                   "historical_tls_initializer_preserved": True}
+                   "historical_tls_initializer_preserved": True}, edge
 
 
 def compatibility(model: dict, manifest: dict) -> dict:
@@ -134,24 +232,30 @@ def compatibility(model: dict, manifest: dict) -> dict:
 
 
 def inspect_composition(config: dict, choice: str, values: dict, record: dict, assets: Path, *,
-                        gh: Path, cosign: Path, registry_config: Path | None) -> dict:
+                        gh: Path, cosign: Path, registry_config: Path | None,
+                        owner_root: Path, held) -> dict:
     """Called only by the active selected-input callback under its project lock."""
     with composition.verified_package(Path(assets).absolute(), gh=Path(gh).absolute(), cosign=Path(cosign).absolute(),
-                                      registry_config=registry_config) as (manifest, _payload):
-        model, observed = _observe(config, choice, values, record)
-        comparison = compatibility(model, manifest)
+                                      registry_config=registry_config) as (manifest, payload):
+        full_standalone = (manifest["production_pages"] == "full"
+                           and web.read(payload / "website" / "website-release.json")["schema"]
+                           == web.STANDALONE_FULL_RELEASE_SCHEMA)
+        model, observed, edge = _observe(config, choice, values, record, manifest,
+            full_standalone=full_standalone, owner_root=owner_root, held=held)
+        edge_summary = {name: edge[name] for name in ("sha256", "bytes", "runtime_mount_sha256")} if edge else None
         return {"schema": SCHEMA, "inspection_completed": True, "project": config["project"],
                 "compose_sha256": config["compose_sha256"],
                 "resolved_configuration_sha256": selection.digest(selection.packed(model)),
                 "selection_sequence": record["sequence"],
                 "composition_id": manifest["composition_id"], "website_revision": manifest["website"]["revision"],
                 "backend_release_tag": manifest["backend"]["release_tag"],
-                "composition_authenticated": True, **observed, **comparison,
+                "composition_authenticated": True, **observed,
                 "native_custody_checked": False, "foreign_storage_custody_checked": False,
-                "runtime_readiness_checked": False, "mounted_edge_template_checked": False,
+                "runtime_readiness_checked": False, "mounted_edge_template_checked": edge is not None,
+                "combined_edge_template": edge_summary,
                 "public_ingress_checked": False, "activation_supported": False, "production_admission": False,
                 "remaining_milestones": ["managed_website_transition_and_recovery",
-                                         "mounted_edge_template_and_public_ingress_qualification"]}
+                                         "edge_runtime_and_public_ingress_qualification"]}
 
 
 def check(selection_file: Path, assets: Path, *, gh: Path, cosign: Path,

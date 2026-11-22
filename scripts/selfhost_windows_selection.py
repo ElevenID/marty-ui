@@ -1226,7 +1226,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 # Inspection uses only config/inspect reads. In particular it
                 # must not call the kernel-witness or native custody producers.
                 return inspect_composition(cfg, choice, values, record, assets,
-                    gh=gh, cosign=cosign, registry_config=registry_config)
+                    gh=gh, cosign=cosign, registry_config=registry_config,
+                    owner_root=_root.parent, held=stack)
         def prepare_expired_current(output_dir,logical_project):
             nonlocal expired_started
             with lease_lock:
