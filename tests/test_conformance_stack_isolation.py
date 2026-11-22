@@ -992,8 +992,8 @@ def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> Non
     assert (
         "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
     )
-    owner = profile.split("  owner-migrations:\\n", 1)[1].split(
-        "\\n  organization:\\n", 1
+    owner = profile.split("  owner-migrations:\n", 1)[1].split(
+        "\n  organization:\n", 1
     )[0]
     assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in owner
     assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in owner
