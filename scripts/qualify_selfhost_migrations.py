@@ -68,6 +68,7 @@ def native_command(operation: str) -> str:
     if operation == "migrate":
         commands = (
             ("marty-organization", "migrate"),
+            ("marty-organization", "bootstrap"),
             ("marty-credential-template", "bootstrap"),
             ("marty-presentation-policy", "migrate"),
             ("marty-presentation-policy", "bootstrap-builtins"),
@@ -228,7 +229,10 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and native["environment"] == {
                 "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
                 "MARTY_ORG_ID": ORG_ID,
+                "MARTY_ORG_NAME": "Marty",
                 "MARTY_ORG_SLUG": "marty",
+                "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
+                "MARTY_ORG_REVIEWER_EMAIL": "reviewer@migration.invalid",
                 "MARTY_MIGRATION_PROFILE": "selfhost-production",
                 "PUBLIC_DOMAIN": "migration.invalid",
                 "PUBLIC_API_URL": "https://migration.invalid",
