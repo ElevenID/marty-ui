@@ -416,8 +416,21 @@ ordinary journal continuation, and renders the original combined source
 and retained overlays under both current credential environments. It checks
 the live split's mounts, edge configuration, ingress and native credentials.
 Retain the returned plan and its digest with the observed generation.
-This is a read-only planning operation. Execution after renewal still
-requires a managed restore that checks that exact plan against the live owner.
+Generate a fresh v2 plan before edge restoration. In rehearsal, supply its
+digest as `--current-plan-sha256` to `--restore-current-edge`, along with the
+same forward evidence and inputs. The owner rechecks the selected generation,
+records the plan and installs the shared guard before recreating only the
+edge with the retained staged overlay and current credentials. A successful
+receipt identifies the replacement edge, restored routing configuration,
+ingress and unchanged protected runtime.
+
+Use `--reconcile-current-edge` with the same inputs after an interrupted
+readback. It requires a durable successful Compose return and freshly verifies
+the running edge. A missing or failed return requires operator reconciliation.
+The receipt leaves the shared guard active, the candidate installed and the
+split generation selected. Completing rollback still requires qualifying the
+combined public and application routes, retiring the candidate, publishing
+the combined selection and releasing the guard.
 
 ## Required integration before activation
 

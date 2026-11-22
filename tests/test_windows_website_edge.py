@@ -12,6 +12,7 @@ from tests.test_package_web_composition import candidate as candidate
 from tests.test_windows_website_plan import planned, propose
 from tests.test_windows_website_store import paths
 import selfhost_windows_selection as selection
+import selfhost_windows_website_current_backout as current_backout
 import selfhost_windows_website_edge as edge
 import selfhost_windows_website_plan as contract
 import selfhost_windows_website_stage as stage
@@ -58,7 +59,7 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
-    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout', 'readmitted-restart'])
+    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout', 'readmitted-restart', 'renewed-observation'])
 def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
@@ -122,6 +123,10 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                 ui['RestartCount'] = 1
             if state == 'split' and fault == 'unexpected-bind':
                 edge._edge(rows)['Mounts'][-1]['RW'] = True
+            if fault == 'renewed-observation':
+                row = edge._edge(rows)
+                row['Config']['Env'] = ['PUBLIC_DOMAIN=example.test']
+                row['NetworkSettings']['Ports'] = {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29382'}]}
             return rows
 
         def volumes(self):
@@ -230,6 +235,26 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         routed = advance(staged, edge.FORWARD)
         assert state == 'split' and routed['model_state'] == 'split'
         assert routed['permitted_record_phases'] == ['verify-website', 'restore-combined']
+        if fault == 'renewed-observation':
+            current_layouts = {'combined': (base_command, combined, hashes)}
+            for name, (overlay, configured, service_hashes) in layouts.items():
+                model = deepcopy(configured)
+                model['services']['edge']['environment'] = {'PUBLIC_DOMAIN': 'example.test'}
+                current_layouts[name] = (base_command + ['-f', overlay], model, service_hashes)
+            with ExitStack() as held:
+                context, routes = current_backout._context(config, 'new', {}, record, plan, docker,
+                    {'new': current_layouts}, proposal, held, None, 'split')
+                _, before_edge = current_backout._observe(context, proposal, routes, 'split', before_intent=True)
+                restored = advance(routed, edge.BACKOUT)
+                _, after_edge = current_backout._observe(context, proposal, routes, 'staged', before_intent=False)
+                assert restored['model_state'] == 'staged'
+                assert before_edge['edge_configuration']['container_id'] != after_edge['edge_configuration']['container_id']
+                assert before_edge['protected_runtime_sha256'] == after_edge['protected_runtime_sha256']
+                assert after_edge['ingress_sha256'] == contract.digest(('example.test', 29382))
+                current_layouts['staged'][1]['services']['edge']['ports'][0]['published'] = '29383'
+                with pytest.raises(ValueError):
+                    current_backout._observe(context, proposal, routes, 'staged', before_intent=False)
+            return
         if fault in {'sealed-backout', 'readmitted-restart'}:
             for phase in ('verify-website', 'seal-forward'):
                 for event in ('started', 'completed'):

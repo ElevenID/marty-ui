@@ -231,6 +231,11 @@ def _start_observation(plan, status, context, items, edge_configuration):
     }
 
 
+def recreate_command(compose):
+    return [*compose, 'up', '--no-deps', '--no-build', '--pull', 'never',
+            '--force-recreate', '--wait', '--wait-timeout', '90', 'edge']
+
+
 def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosign, registry_config,
         authority_file, held):
     """Switch or restore edge routing under the independently pinned owner."""
@@ -268,8 +273,7 @@ def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosi
         check_routes()
     if current != target:
         command, _model, _hashes = context.layouts[target]
-        outcome = renewal.run_owned_mutation([*command, 'up', '--no-deps', '--no-build', '--pull', 'never',
-            '--force-recreate', '--wait', '--wait-timeout', '90', 'edge'], timeout=120)
+        outcome = renewal.run_owned_mutation(recreate_command(command), timeout=120)
         if outcome.returncode != 0:
             raise renewal.UncertainComposeMutation('Website edge change requires operator reconciliation')
     after = context.check()

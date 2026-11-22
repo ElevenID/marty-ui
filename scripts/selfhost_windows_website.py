@@ -350,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--release-combined", action="store_true")
     modes.add_argument("--readmit-backout", action="store_true")
     modes.add_argument("--plan-current-backout", action="store_true")
+    modes.add_argument("--restore-current-edge", action="store_true")
+    modes.add_argument("--reconcile-current-edge", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -366,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--intent-sha256")
     parser.add_argument("--forward-intent-sha256")
     parser.add_argument("--release-sha256")
+    parser.add_argument("--current-plan-sha256")
     parser.add_argument("--readmission-sha256")
     parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate"))
     args = parser.parse_args(argv)
@@ -392,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.readmit_website_backout, BACKOUT_ERROR
     elif args.plan_current_backout:
         operation, error = selection.plan_current_website_backout, BACKOUT_ERROR
+    elif args.restore_current_edge or args.reconcile_current_edge:
+        operation, error = selection.restore_current_website_edge, BACKOUT_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
@@ -403,13 +408,17 @@ def main(argv: list[str] | None = None) -> int:
             forward.update(pins)
         else:
             selection.require(not any(pins.values()))
-        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout)
+        current_edge = args.restore_current_edge or args.reconcile_current_edge
+        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge else args.current_plan_sha256 is None)
+        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge)
         selection.require(args.readmission_sha256 is None or (
             args.backout_published and args.backout_phase == "restore-combined" and product_journal.sha(args.readmission_sha256)))
-        if args.readmit_backout or args.plan_current_backout:
+        if args.readmit_backout or args.plan_current_backout or current_edge:
             selection.require(all(product_journal.sha(pin) for pin in (args.release_sha256, args.intent_sha256))
                               and args.forward_intent_sha256 is None and args.backout_phase is None)
             extra = {'intent_sha256': args.intent_sha256, 'release_sha256': args.release_sha256}
+            if current_edge:
+                extra.update(current_plan_sha256=args.current_plan_sha256, reconcile=args.reconcile_current_edge)
         elif args.release_forward or args.release_combined:
             selection.require(product_journal.sha(args.intent_sha256) and args.forward_intent_sha256 is None
                               and args.backout_phase is None)

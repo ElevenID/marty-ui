@@ -662,8 +662,10 @@ def test_readmit_archived_split_guard_and_require_the_exact_fresh_baseline(monke
         assert calls == ['readmit', 'restore']
 
 
-def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys):
+@pytest.mark.parametrize('fault', [None, 'timeout', 'nonzero', 'after-return', 'protected-drift', 'historical-evidence'])
+def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys, fault):
     import selfhost_windows_website_current_backout as backout
+    from types import SimpleNamespace
 
     with fixture(monkeypatch) as (root, phase, transaction, outcome, path, config):
         combined = {'b'*64: {'service': 'edge', 'image': 'sha256:'+'b'*64, 'mounts': []}}
@@ -701,11 +703,31 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
             assert combined['renewed_env'] == current['renewed_env'] == next_config['renewed_env']
             assert choice == 'new' and record['selected'] == selected['selected'] and historical == plan
             calls.append('layout')
-            return None, {side: {state: (None, {'side': side}, {'state': state})
-                                 for state in plan['states']} for side in ('old', 'new')}, {}
+            models = {}
+            for side, env in [('old', current['current_env']), ('new', current['renewed_env'])]:
+                base = ['docker', 'compose', '--env-file', env, '-f', combined['compose_file']]
+                staged = base + ['-f', str(attempt / 'stage.compose.json')]
+                commands = {'combined': base, 'staged': staged, 'split': staged + ['-f', str(attempt / 'route.compose.json')]}
+                models[side] = {state: (command, {'side': side}, {'state': state}) for state, command in commands.items()}
+            return None, models, {}
 
         monkeypatch.setattr(backout, '_layouts', layouts)
-        monkeypatch.setattr(backout, '_observe', lambda *_: {'runtime_sha256': 'b'*64})
+        monkeypatch.setattr(backout, '_context', lambda _cfg, choice, _values, _record, _plan, _docker, layouts, *_:
+                            (SimpleNamespace(layouts=layouts[choice]), lambda: None))
+        operation_state = {'layout': 'split', 'dispatched': 0, 'fail_readback': fault == 'after-return'}
+
+        def observe(_context, _proposal, _routes, state, *, before_intent):
+            assert state == operation_state['layout']
+            if state == 'staged' and operation_state['fail_readback']:
+                raise RuntimeError('Synthetic readback interruption')
+            edge_id = 'c'*64 if state == 'split' else 'd'*64
+            runtime = {edge_id: {'service': 'edge', 'restarts': 0}}
+            return runtime, {'runtime_sha256': digest(runtime), 'ingress_sha256': 'e'*64, 'networks': ['owned'],
+                'protected_runtime_sha256': 'f'*64 if state == 'staged' and fault == 'protected-drift' else 'a'*64,
+                'edge_configuration': {'container_id': edge_id, 'default_sha256': 'b'*64,
+                                       'routes_sha256': plan['states'][state]['routes_sha256']}}
+
+        monkeypatch.setattr(backout, '_observe', observe)
         assert website.main(args[:-1] + ['0'*64]) == 2
         assert calls == []
         capsys.readouterr()
@@ -730,5 +752,44 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
         assert continued['owner']['selection_sequence'] == 1 and continued['owner']['generation_sequence'] == 2
         assert continued['owner']['selected_sha256'] == output['owner']['selected_sha256']
         assert continued['plan_sha256'] != output['plan_sha256']
-        (attempt/'stage-before.json').write_bytes(b'{}')
-        assert website.main(args) == 2 and calls == ['layout', 'layout']
+        if fault == 'historical-evidence':
+            (attempt/'stage-before.json').write_bytes(b'{}')
+            assert website.main(args) == 2 and calls == ['layout', 'layout']
+            return
+
+        def mutate(command, *, timeout):
+            assert timeout == 120 and command == forward.edge.recreate_command(
+                ['docker', 'compose', '--env-file', next_config['renewed_env'], '-f', config['compose_file'],
+                 '-f', str(attempt / 'stage.compose.json')])
+            assert operation_state['dispatched'] == 0
+            assert selection.decode(renewal.product_transition_guard(config).read_bytes()) == backout.edge_guard(plan, continued['plan_sha256'])
+            operation_state['dispatched'] += 1
+            if fault == 'timeout':
+                raise renewal.UncertainComposeMutation('Synthetic timeout')
+            if fault == 'nonzero':
+                return SimpleNamespace(returncode=1)
+            operation_state['layout'] = 'staged'
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(renewal, 'run_owned_mutation', mutate)
+        restore = ['--restore-current-edge', *args[1:], '--current-plan-sha256', continued['plan_sha256']]
+        reconcile = ['--reconcile-current-edge', *restore[1:]]
+        assert website.main(restore[:-1] + [output['plan_sha256']]) == 2  # Stale pre-continuation pin.
+        assert website.main(reconcile) == 2
+        assert not renewal.product_transition_guard(config).exists()
+        capsys.readouterr()
+        rc = website.main(restore)
+        assert operation_state['dispatched'] == 1
+        assert rc == (0 if fault is None else 2)
+        first = capsys.readouterr().out
+        if rc == 0:
+            assert selection.decode(first.encode())['guard_retained']
+        with pytest.raises(ValueError):
+            selection.status(path)
+        assert website.main(restore) == 2
+        capsys.readouterr()
+        operation_state['fail_readback'] = False
+        assert website.main(reconcile) == (2 if fault in {'timeout', 'nonzero', 'protected-drift'} else 0)
+        if rc == 0:
+            assert capsys.readouterr().out == first
+        assert operation_state['dispatched'] == 1

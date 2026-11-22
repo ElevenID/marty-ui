@@ -218,7 +218,7 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None, _pending_website_sha256=None, _pending_website_selection_sha256=None):
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None, _pending_website_sha256=None, _pending_website_selection_sha256=None, _current_edge_guard=None):
     from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
@@ -231,6 +231,8 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         if _pending_website_sha256 is not None:
             require(_pending_product_sha256 is None and _pending_recovery_sha256 is None)
         require(_pending_website_selection_sha256 is None or _pending_website_sha256 is not None)
+        if _current_edge_guard is not None:
+            require(_pending_website_selection_sha256 is None and digest(packed(_current_edge_guard)) == _pending_website_sha256)
         guard_pin = _pending_product_sha256 if _pending_website_sha256 is None else _pending_website_sha256
         if guard_pin is None:
             require(not renewal.namespace_entry_exists(product_guard))
@@ -243,7 +245,12 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
             if _pending_website_sha256 is not None:
                 from selfhost_windows_website_guard import SCHEMA as WEBSITE_GUARD_SCHEMA
                 website_guard = decode(guard_body)
-                require(type(website_guard) is dict and website_guard.get('schema') == WEBSITE_GUARD_SCHEMA)
+                if _current_edge_guard is None:
+                    require(type(website_guard) is dict and website_guard.get('schema') == WEBSITE_GUARD_SCHEMA)
+                else:
+                    from selfhost_windows_website_current_backout import GUARD_SCHEMA
+                    require(website_guard == _current_edge_guard and website_guard['schema'] == GUARD_SCHEMA
+                            and guard_body == packed(website_guard))
             require(not any(renewal.namespace_entry_exists(getter(config)) for getter in (
                 renewal.recovery_guard, renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
                 renewal.model_repair_guard, renewal.continuation_guard)))
@@ -1151,7 +1158,12 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     ancestry = []
     if _current_website_backout is not None:
         require(terminal_guard_sha256 is None and _pending_website is None and not website_actions)
+        plan, operation, pins = _current_website_backout
         options['_preserve_history'] = ancestry.extend
+        if operation == 'reconcile':
+            from selfhost_windows_website_current_backout import edge_guard
+            marker = edge_guard(plan, pins['current_plan_sha256'])
+            options.update(_current_edge_guard=marker, _pending_website_sha256=digest(packed(marker)))
     with _session(config_path, _coordination=_coordination, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
@@ -1161,7 +1173,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             require(not renewal.namespace_entry_exists(renewal.continuation_guard(_config)))
             guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
             require(digest(guard_raw) == terminal_guard_sha256)
-        elif _pending_website is None:
+        elif _pending_website is None and '_current_edge_guard' not in options:
             require(not renewal.recovery_pending(_config))
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
@@ -1211,8 +1223,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             model_raw = stack.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=2*1024*1024))
             require(digest(model_raw) == cfg['compose_sha256'])
             owner = {**website_owner(), 'model_sha256': digest(packed(decode(model_raw)))}
-            plan, pins = _current_website_backout
-            yield prepare(cfg, choice, values, record, owner, (_root, raw), ancestry, plan, held=stack, **pins)
+            yield prepare(cfg, choice, values, record, owner, (_root, raw), ancestry, plan, held=stack, operation=operation, **pins)
             return
 
         if _pending_website is not None:
@@ -1561,9 +1572,17 @@ def readmit_website_backout(config_path, plan, **options):
 
 
 def plan_current_website_backout(config_path, plan, **options):
-    with _selected_inputs(config_path, _current_website_backout=(plan, options)) as result:
+    with _selected_inputs(config_path, _current_website_backout=(plan, 'plan', options)) as result:
         prepared = result
     return prepared
+
+
+def restore_current_website_edge(config_path, plan, *, reconcile, current_plan_sha256, **options):
+    require(type(reconcile) is bool)
+    mode = 'reconcile' if reconcile else 'restore'
+    pins = dict(options, current_plan_sha256=current_plan_sha256)
+    with _selected_inputs(config_path, _current_website_backout=(plan, mode, pins)) as result:
+        return result
 
 
 def reconcile_existing(config_path, *, authority_file=None):
