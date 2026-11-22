@@ -2061,7 +2061,7 @@ fn assert_native_external_postgres_models(
         .arg(bundle.join("scripts/load-secrets-env.sh"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("DATABASE_URL_TEMPLATE", &template)
+        .env("DATABASE_URL_TEMPLATE", template)
         .env("MARTY_DB_PASSWORD", "synthetic%40@:$'")
         .output()
         .unwrap();
