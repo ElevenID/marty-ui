@@ -41,18 +41,37 @@ def fixture_metadata(root, token):
     quoted_root = str(root).replace("'", "''")
     quoted_token = str(token).replace("'", "''")
     command = (
-        "$ErrorActionPreference='Stop';$i=[Security.Principal.WindowsIdentity]::GetCurrent();"
-        "$u=$i.User.Value;$r='" + quoted_root + "';$f='" + quoted_token + "';"
-        "$ro=(Get-Acl -LiteralPath $r).GetOwner([Security.Principal.SecurityIdentifier]).Value;"
-        "$fo=(Get-Acl -LiteralPath $f).GetOwner([Security.Principal.SecurityIdentifier]).Value;"
-        "@{filesystem=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($r)).DriveFormat;"
-        "token_owner_matches_user=($i.Owner.Value -eq $u);"
-        "root_owner_matches_user=($ro -eq $u);file_owner_matches_user=($fo -eq $u);"
-        "file_owner_is_administrators=($fo -eq 'S-1-5-32-544')} | ConvertTo-Json -Compress"
+        "$ErrorActionPreference='Stop';$data=@{metadata_query_succeeded=$false};$stage='identity';"
+        "try{$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$user=$identity.User.Value;"
+        "$data.token_owner_matches_user=($identity.Owner.Value -eq $user);"
+        "$rootPath='" + quoted_root + "';$filePath='" + quoted_token + "';"
+        "$stage='root-owner';$rootAcl=[IO.Directory]::GetAccessControl($rootPath);"
+        "$rootOwner=$rootAcl.GetOwner([Security.Principal.SecurityIdentifier]);"
+        "$data.root_owner_matches_user=($rootOwner.Value -eq $user);"
+        "$stage='file-owner';$fileAcl=[IO.File]::GetAccessControl($filePath);"
+        "$fileOwner=$fileAcl.GetOwner([Security.Principal.SecurityIdentifier]);"
+        "$data.file_owner_matches_user=($fileOwner.Value -eq $user);"
+        "$data.file_owner_is_administrators=($fileOwner.Value -eq 'S-1-5-32-544');"
+        "$stage='filesystem';$drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($rootPath));"
+        "$data.filesystem=$drive.DriveFormat;$data.metadata_query_succeeded=$true"
+        "}catch{$data.metadata_error_stage=$stage;"
+        "$data.metadata_error_type=$_.Exception.GetType().FullName;"
+        "$data.metadata_error_id=$_.FullyQualifiedErrorId};$data | ConvertTo-Json -Compress"
     )
-    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
-                            capture_output=True, text=True, timeout=15, check=True)
-    return json.loads(result.stdout)
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
+                                capture_output=True, text=True, timeout=15, check=False)
+        if result.returncode:
+            return {'metadata_query_succeeded': False, 'metadata_process_exit': result.returncode,
+                    'metadata_error_type': 'PowerShellProcessFailure'}
+        if len(result.stdout) > 8192:
+            raise ValueError('Metadata exceeded diagnostic bound')
+        value = json.loads(result.stdout)
+        if type(value) is not dict or type(value.get('metadata_query_succeeded')) is not bool:
+            raise ValueError('Metadata did not return a diagnostic record')
+        return value
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return {'metadata_query_succeeded': False, 'metadata_error_type': type(error).__name__}
 
 
 def main():
@@ -66,14 +85,14 @@ def main():
     # exception messages, SIDs, token handles, or fixture payloads.
     with private_fixture() as (root, token):
         result = {'schema': 'marty.synthetic-windows-source-environment/v1',
-                  'guard_sha256': hashlib.sha256(Path(windows.__file__).read_bytes()).hexdigest(),
-                  **fixture_metadata(root, token)}
+                  'guard_sha256': hashlib.sha256(Path(windows.__file__).read_bytes()).hexdigest()}
         result['probes'] = [
             probe('private-directory', windows._held_private_input(root, directory=True)),
             probe('namespace', windows.hold_storage_namespace(root)),
             probe('public-file', windows.hold_public_input(token)),
             probe('private-file', windows.hold_private_input(token)),
         ]
+        result.update(fixture_metadata(root, token))
     print(json.dumps(result, sort_keys=True))
     if not all(item['passed'] for item in result['probes']):
         raise SystemExit('Synthetic Windows test environment does not satisfy unchanged NTFS custody')

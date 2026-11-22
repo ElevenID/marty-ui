@@ -116,11 +116,16 @@ def test_native_completion_gate_executes_and_rejects_missing_or_skipped_evidence
         assert 'zero skips or failures' in result.stderr
 
 
-def test_environment_probe_retains_guard_failure_and_restores_trace(monkeypatch):
+def environment_probe():
     spec = importlib.util.spec_from_file_location('windows_environment_probe',
         ROOT / 'scripts/ci/probe_windows_source_environment.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_environment_probe_retains_guard_failure_and_restores_trace(monkeypatch):
+    module = environment_probe()
     monkeypatch.setattr(module.ctypes, 'get_last_error', lambda: 32, raising=False)
     guard = {}
     exec(compile("def require(value):\n if not value: raise ValueError('DO_NOT_LOG_PAYLOAD')\n",
@@ -138,3 +143,22 @@ def test_environment_probe_retains_guard_failure_and_restores_trace(monkeypatch)
                                         'win32_last_error': 32}]
     assert 'DO_NOT_LOG_PAYLOAD' not in repr(result)
     assert sys.gettrace() is previous
+
+
+@pytest.mark.parametrize('fault', ['process', 'timeout', 'malformed', 'non-record', 'oversized'])
+def test_metadata_query_failure_returns_safe_status_without_aborting_guard_diagnostics(monkeypatch, fault):
+    module = environment_probe()
+
+    def run(*_args, **kwargs):
+        assert kwargs['check'] is False and kwargs['timeout'] == 15
+        if fault == 'timeout':
+            raise subprocess.TimeoutExpired('DO_NOT_LOG_COMMAND', 15, stderr='DO_NOT_LOG_PAYLOAD')
+        value = {'process': '', 'malformed': 'bad', 'non-record': '[]', 'oversized': ' ' * 8193}[fault]
+        return subprocess.CompletedProcess([], 1 if fault == 'process' else 0,
+                                           value, 'DO_NOT_LOG_PAYLOAD')
+
+    monkeypatch.setattr(module.subprocess, 'run', run)
+    result = module.fixture_metadata(Path('synthetic-root'), Path('synthetic-root/token'))
+    assert result['metadata_query_succeeded'] is False
+    assert result['metadata_error_type']
+    assert 'DO_NOT_LOG_' not in repr(result)
