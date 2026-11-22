@@ -115,7 +115,7 @@ def test_owner_observation_uses_exact_signed_cache_and_engine_route_path(planned
     commerce = metadata['commerce_extension']['source_sha']
     row = {'Os': 'linux', 'Architecture': 'amd64', 'Id': planned['website_image_id'], 'RepoDigests': [image],
            'Config': {'ExposedPorts': {'80/tcp': {}}, 'Labels': {
-               'org.opencontainers.image.source': 'https://github.com/ElevenID/marty-subscriptions',
+               'org.opencontainers.image.source': 'https://github.com/' + plan.ui.COMMERCE_REPOSITORY,
                'org.opencontainers.image.revision': commerce,
                'org.opencontainers.image.version': metadata['revision'],
                'com.elevenid.website.repository': metadata['repository'],
