@@ -9,6 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
+import { validateApplicationReleaseConsumer } from '../../scripts/application_release_inputs.mjs';
 import { APPLICATION_TEST_CONFIG } from './application-test-profile.mjs';
 import {
   APPLICATION_LOCALE_NAMESPACES, APPLICATION_RETAINED_PUBLIC_FILES, APPLICATION_RESOURCE_MIME_TYPES,
@@ -249,6 +250,61 @@ test('the approved historical package keeps its original 24-file, 296-assertion 
   arbitrary.test_profile = input.manifest.test_profile;
   arbitrary.contract.sha256 = `sha256:${'0'.repeat(64)}`;
   assert.throws(() => validateApplicationPackageBaseline(input.baseline, arbitrary), /unapproved source contract/);
+});
+
+test('release input validation keeps exact current and historical test profiles', async (t) => {
+  const current = fixture(t);
+  const historical = fixture(t, { historical: true });
+  assert.deepEqual(current.manifest.test_profile.files.filter((name) => !historical.manifest.test_profile.files.includes(name)), [
+    'src/components/console/agents/AgentTrustPages.test.tsx',
+    'src/services/__tests__/agentTrustApi.test.ts',
+  ]);
+  assert.ok(historical.manifest.test_profile.files.every((name) => current.manifest.test_profile.files.includes(name)));
+  // The retained 296 cases plus the 13 administration/approval and 12 Gateway
+  // client/retry cases form the current 321-case profile; neither is a minimum.
+  for (const [input, assertions, otherAssertions] of [[current, 321, 296], [historical, 296, 321]]) {
+    const report = await input.run();
+    assert.equal(report.status, 'fixture-passed', JSON.stringify(report.failure));
+    assert.equal(report.fixture, true);
+    assert.ok(Object.values(report.qualification).every((value) => value === false));
+    // Construct inert validator arguments in memory. The injected execution and
+    // its persisted report remain nonqualifying; no production receipt is made.
+    const consumer = structuredClone(report);
+    consumer.status = 'passed';
+    consumer.fixture = false;
+    consumer.cleanup.runtime_context_removed = false;
+    for (const name of ['source_package_verified', 'restored_source_preserved', 'independent_dependency_installation',
+      'application_build_completed', 'application_tests_completed', 'sdk_wasm_initialized_in_node', 'sdk_wasm_output_bound',
+      'application_output_checked', 'public_assets_preserved', 'application_resource_smoke_completed',
+      'runtime_context_prepared', 'runtime_payload_identical']) consumer.qualification[name] = true;
+    const baseline = structuredClone(input.baseline);
+    baseline.dependency_install.sdk = structuredClone(consumer.dependency_install.sdk);
+    const snapshots = Object.fromEntries([
+      ['archive', 'archivePath'], ['manifest', 'manifestPath'],
+      ['producer_report', 'producerReportPath'], ['baseline_report', 'baselineReportPath'],
+    ].map(([name, option]) => [name, readFileSync(input.options[option])]));
+    const { path: contextRoot, manifest_sha256: manifestSha256, ...contextManifest } = consumer.runtime_context;
+    const options = { manifest: input.manifest, baseline, snapshots,
+      verified: { root: contextRoot, manifest: contextManifest, manifest_sha256: manifestSha256 } };
+    assert.equal(consumer.tests.test_count, assertions);
+    assert.doesNotThrow(() => validateApplicationReleaseConsumer(consumer, options));
+    for (const count of [otherAssertions, assertions - 1, assertions + 1]) {
+      const changed = structuredClone(consumer);
+      changed.tests.test_count = count;
+      assert.throws(() => validateApplicationReleaseConsumer(changed, options), /approved source test profile/);
+    }
+    const incomplete = structuredClone(consumer);
+    incomplete.tests.completed_files.pop();
+    assert.throws(() => validateApplicationReleaseConsumer(incomplete, options));
+    const wrongRoster = structuredClone(input.manifest);
+    wrongRoster.test_profile.files.pop();
+    assert.throws(() => validateApplicationReleaseConsumer(consumer, { ...options, manifest: wrongRoster }), /roster changed/);
+    const unknown = structuredClone(input.manifest);
+    unknown.contract.sha256 = `sha256:${'0'.repeat(64)}`;
+    assert.throws(() => validateApplicationReleaseConsumer(consumer, { ...options, manifest: unknown }), /unapproved source contract/);
+    assert.equal(JSON.parse(readFileSync(input.options.reportPath)).fixture, true);
+    assert.equal(JSON.parse(readFileSync(input.options.reportPath)).status, 'fixture-passed');
+  }
 });
 
 test('only the exact 54 public modes may change; output bytes, paths, unexpected modes and resource records remain bound', (t) => {

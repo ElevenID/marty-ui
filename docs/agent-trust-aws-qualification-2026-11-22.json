@@ -16,7 +16,7 @@
     "core_pin": "bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0",
     "protocol_pin": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
     "runtime_source_changed_after_qualification": true,
-    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted main 284ca81ca901ad532b581d5286ad955afced6dfd was subsequently merged normally; its equivalent Flow artifact-binding extraction received the separate normal build and nine live PostgreSQL tests recorded below. Accepted main 5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7 then added Windows caller/docs/tests/required CI without changing that verified Rust subtree. The subsequent full-CI reconciliation below adjusts catalog test expectations, one standalone-probe lock edge and the application-source exporter CLI entry point; all Rust source and the production lock remain unchanged. The final integrated head is not claimed to have run on AWS."
+    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Later accepted main integration, the nine-test local PostgreSQL verification, CI verification-input/exporter fixes and read-only security triage are recorded separately. The later one-line equivalent canonical-sort correction produces Rust tree 15568a6077a07b1fa088ed65607b514410441f35 and received nineteen affected local tests plus a normal serving rebuild; the image-input bridge preserves both current and historical pinned profiles. Final protected CI remains independent. The final integrated head is not claimed to have run on AWS."
   },
   "operator_environment": {
     "existing_aws_instance_used": true,
@@ -2964,7 +2964,7 @@
     "Current branch protection, required GitHub Actions checks, human review requirements and the normal squash merge queue remain independent gates. No GitHub status or approval is created by this evidence.",
     "The screenshot is private user-facing console evidence and is not included in this public repository report. Raw provider logs, database state, account/resource identifiers, balances and access configuration are not published."
   ],
-  "updated_at_utc": "2026-11-22T08:07:53.345970+00:00",
+  "updated_at_utc": "2026-11-22T08:22:41.158058+00:00",
   "post_aws_main_reconciliation": {
     "status": "ACCEPTED_MAIN_INTEGRATED_AND_SCOPED_LOCAL_VERIFICATION_PASSED",
     "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
@@ -4269,7 +4269,7 @@
     "repository_path": "docs/agent-trust-ci-security-review-2026-11-22.json",
     "sha256": "371a82ec18d424e13c0b67f22f5c96da5b6941747aa5e7727c4a3cf84643df7f",
     "reviewed_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
-    "rust_source_unchanged": true,
+    "rust_source_unchanged": false,
     "alerts_reviewed": [
       324,
       326,
@@ -4277,6 +4277,20 @@
     ],
     "alerts_remain_open": true,
     "security_policy_or_status_changed": false,
-    "separate_from_aws_runtime_qualification": true
+    "separate_from_aws_runtime_qualification": true,
+    "reported_alert_source_files_unchanged": true,
+    "subsequent_rust_change": "The separately recorded equivalent canonical-sort expression in principal-runtime-binding changes the Rust subtree; none of the reviewed Flow/Organization alert source files changes."
+  },
+  "post_aws_ci_followup_reference": {
+    "repository_path": "docs/agent-trust-ci-followup-2026-11-22.json",
+    "sha256": "c2ff531b8787a22eff563a9bca3ffd19f44e09fa5fba7874f3eb472d0dc7ef2d",
+    "base_candidate": "af92f2ba661fbd6b99ff65d69785220f6da00603",
+    "effective_verified_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
+    "affected_local_rust_tests": 19,
+    "local_consumer_bridge_tests": 16,
+    "normal_local_host_sha256": "6ea77a00fe536c6425d49322f67f6af320af333bd379ba1323f1d9b0033aee91",
+    "hosted_probe_pass_is_prior_head_only": true,
+    "aws_restarted": false,
+    "final_required_ci_remains_independent": true
   }
 }
