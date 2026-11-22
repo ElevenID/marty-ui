@@ -82,19 +82,28 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
             "marty-credential-template bootstrap",
             "marty-presentation-policy migrate",
             "marty-presentation-policy bootstrap-builtins",
-            "marty-flow migrate",
         ]
         positions = [block.index(command) for command in commands]
         assert positions == sorted(positions)
-        for service in ("organization", "credential-template", "presentation-policy", "flow"):
+        for service in ("organization", "credential-template", "presentation-policy"):
             match = re.search(
                 rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
                 source,
             )
             assert match is not None
             assert "owner-migrations:" in match.group(1)
-            if service == "flow":
-                assert "MARTY_SCHEMA_STARTUP_MODE: validate" in match.group(1)
+
+    # Flow remains a separate schema owner; its existing db-migrate phase
+    # provisions it, and runtime is explicitly validation-only.
+    base = read("docker-compose.base.yml")
+    flow_match = re.search(
+        r"(?ms)^  flow:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        base,
+    )
+    assert flow_match is not None
+    assert "MARTY_SCHEMA_STARTUP_MODE: validate" in flow_match.group(1)
+    for dependency in ("organization", "credential-template", "presentation-policy"):
+        assert dependency + ":" in flow_match.group(1)
 
     helm = read("deploy/helm/marty/templates/migrations.yaml")
     ordered = [
