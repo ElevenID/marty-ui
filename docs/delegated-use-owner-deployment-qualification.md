@@ -17,7 +17,7 @@ The merged main source currently has these explicit boundaries:
 - The actual selected lifecycle's Issuance bootstrap is in-process. The host's reference/status reader uses configured HTTPS origins and the Issuance API key, but the live lifecycle does not yet prove the independently deployed Issuance service and its restricted database role.
 - rust/services/credential-template/src/main.rs has migrate and verify-owned-schema commands, but normal startup also migrates, reconciles legacy data and seeds the system catalog.
 - rust/services/presentation-policy/src/main.rs migrates its schema and reconciles built-in policies during normal startup; the executable currently has no equivalent explicit operator-only migration/bootstrap command.
-- rust/services/issuance/src/main.rs has migrate and verify-owned-schema commands and a schema startup mode. The deployed acceptance configuration must select validation-only startup and separately verify any other startup preparation paths.
+- rust/services/issuance/src/main.rs has migrate and verify-owned-schema commands and a schema startup mode. The deployed acceptance configuration must select validation-only startup. The application-ownership and external-association startup helpers are explicitly read-only schema/role preflights; they do not perform DDL or seed writes. Their independent database identity and privilege boundaries still require qualification.
 - The AWS replay qualified the selected composition in an isolated container on the existing development host. It did not qualify a bare-host deployment, the installed stack, or the external catalog/Issuance serving roles.
 
 These are source-backed limitations, not inferred deployment failures.
