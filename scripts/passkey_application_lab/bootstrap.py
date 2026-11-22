@@ -226,6 +226,7 @@ class ApplicationLab:
                 "REDIS_URL": "redis://redis:6379",
                 "REDIS_DB_GATEWAY": "2",
                 "MARTY_ORG_ID": self.settings["MARTY_ORG_ID"],
+                "MARTY_ORG_NAME": self.settings.get("MARTY_ORG_NAME", "Marty"),
                 "MARTY_ORG_SLUG": self.settings["MARTY_ORG_SLUG"],
                 "MARTY_ORG_ADMIN_EMAIL": self.settings["MARTY_ORG_ADMIN_EMAIL"],
                 "MARTY_ORG_REVIEWER_EMAIL": self.settings["MARTY_ORG_REVIEWER_EMAIL"],
@@ -244,6 +245,7 @@ class ApplicationLab:
             self.run_binary("marty-migration-bootstrap", env, files)
             self.run_binary("marty-notification", env, files, ["--migrate"])
             self.run_binary("marty-organization", env, files, ["migrate"])
+            self.run_binary("marty-organization", env, files, ["bootstrap"])
             self.run_binary("marty-credential-template", env, files, ["bootstrap"])
             self.run_binary("marty-presentation-policy", env, files, ["migrate"])
             self.run_binary("marty-presentation-policy", env, files, ["bootstrap-builtins"])
