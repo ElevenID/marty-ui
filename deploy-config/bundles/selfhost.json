@@ -163,6 +163,8 @@
     "scripts/selfhost_windows_selection.py",
     "scripts/selfhost_windows_website.py",
     "scripts/selfhost_windows_website_plan.py",
+    "scripts/selfhost_windows_website_journal.py",
+    "scripts/selfhost_windows_website_store.py",
     "scripts/selfhost_windows_model.py",
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",

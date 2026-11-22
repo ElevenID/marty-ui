@@ -160,6 +160,28 @@ runtime. A future owner must reconcile actual observations before recording a
 completion or choosing any recovery action. This contract does not guess whether
 a Docker action happened or replay it.
 
+### Durable storage
+
+The bundled `selfhost_windows_website_store.py` uses the selected owner's private
+NTFS writer. The transition caller must hold the existing project lock and
+provide the reconstructed plan. It allocates a private `journal` directory
+below the planned attempt and a separate `.<project>.website-tail-<cycle>`
+directory directly under the owner root.
+
+The store flushes the canonical phase record and verifies its held bytes before
+creating the corresponding immutable tail record. Each tail binds the exact
+phase record, plan and previous tail. The caller retains the accepted tail
+digest independently. Reads require that pin and check exact membership and
+the complete chain, including the separately stored initial-stage abort
+receipt when present.
+
+A partial write or an advancement past the retained pin requires
+reconciliation. The caller can re-anchor a fully written next phase record
+after independently verifying that record and its observations. This operation
+accepts the retained prior pin and exact verified record digest and writes only
+the missing tail. A durable started record still requires runtime
+reconciliation before any new operation.
+
 ### Failed initial-stage reconciliation
 
 An initial candidate may never be created, or may be created but fail startup or
