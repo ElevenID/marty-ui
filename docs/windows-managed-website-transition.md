@@ -314,9 +314,27 @@ match the admitted multi-file layouts. The candidate retains the original
 combined model, selected credential identity, signed proofs and empty future
 activation outputs. Use the returned candidate and qualification digests when
 reviewing the proposed publication. The journal stays at `verify-website` so
-combined rollback remains available during preparation. `seal-forward`,
-ancestor closure, owner publication and renewal/reboot qualification of the
-published successor remain separate steps.
+combined rollback remains available during preparation.
+
+### Guarded owner publication
+
+The selection resolver supports a typed website successor. Publication requires
+the exact candidate and qualification digests, a complete `seal-forward`
+journal with an independently pinned last anchor, and fresh live checks. The
+publisher checks the retained combined configuration and verification prefix,
+revalidates the native generation, and prepares a successor using the split
+Compose source. Its local sequence starts at one. The overall credential
+generation, selected inputs and native custody stay the same.
+
+The decision becomes visible through an atomic rename under the project lock.
+Reconciliation requires the exact intent digest and repeats the proofs before
+continuing. A partial publication fences the predecessor. The existing product
+guard stays active after the rename, including while the original entrypoint
+resolves the successor for inspection.
+
+The publisher is an internal owner operation. The guarded sealing and live
+verification entrypoint, postpublication backout, guard release, and scheduled
+renewal and reboot qualification remain separate integration steps.
 
 ## Required integration before activation
 

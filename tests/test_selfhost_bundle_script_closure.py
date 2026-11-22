@@ -70,7 +70,7 @@ for name in ['selfhost_windows_selection','selfhost_windows_website','selfhost_w
              'selfhost_windows_website_reconcile',
              'selfhost_windows_website_abort_release',
              'selfhost_windows_website_backout',
-             'selfhost_windows_website_forward',
+             'selfhost_windows_website_forward','selfhost_windows_website_owner',
              'selfhost_windows_product_journal',
              'selfhost_windows_product','selfhost_windows_product_probe','selfhost_windows_product_deploy',
              'selfhost_windows_staging_recovery','selfhost_windows_expired_origin','selfhost_windows_recovery_activation',
