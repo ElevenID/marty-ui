@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{
@@ -14,19 +9,22 @@ use chrono::Utc;
 use marty_credential_template::{
     application::{
         ControlPlaneError, CredentialTemplateApplication, CredentialTemplateControlPlane,
-        CredentialTemplateRepository, IssuerIdentity,
+        IssuerIdentity,
     },
-    catalog::{system_delivery_destination_catalog, system_wallet_catalog},
+    catalog::system_delivery_destination_catalog,
     http_service::{credential_template_router, CredentialTemplateHttpState},
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
     },
-    CredentialTemplate, CredentialTemplateRepositoryError, DeliveryDestinationEntry,
-    RuntimeEnvironment, TemplateStatus, WalletRegistryEntry,
+    RuntimeEnvironment,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use serde_json::{json, Value};
 use tower::ServiceExt;
+
+#[path = "support/transport_fixtures.rs"]
+mod transport_fixtures;
+use transport_fixtures::{Registry, Repository};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
@@ -46,170 +44,6 @@ fn privacy_posture_contract() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../contracts/credential-template-privacy-posture-behavior.json");
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
-}
-
-#[derive(Default)]
-struct Repository {
-    templates: Mutex<BTreeMap<String, CredentialTemplate>>,
-}
-
-#[derive(Default)]
-struct Registry {
-    wallets: Mutex<BTreeMap<String, WalletRegistryEntry>>,
-    destinations: Mutex<BTreeMap<String, DeliveryDestinationEntry>>,
-}
-
-#[async_trait]
-impl CredentialTemplateRegistryRepository for Registry {
-    async fn save_wallet(
-        &self,
-        wallet: &WalletRegistryEntry,
-    ) -> Result<(), CredentialTemplateRepositoryError> {
-        self.wallets
-            .lock()
-            .unwrap()
-            .insert(wallet.id.clone(), wallet.clone());
-        Ok(())
-    }
-
-    async fn wallet_by_id(
-        &self,
-        wallet_id: &str,
-    ) -> Result<Option<WalletRegistryEntry>, CredentialTemplateRepositoryError> {
-        Ok(self.wallets.lock().unwrap().get(wallet_id).cloned())
-    }
-
-    async fn wallets(
-        &self,
-        active_only: bool,
-    ) -> Result<Vec<WalletRegistryEntry>, CredentialTemplateRepositoryError> {
-        Ok(self
-            .wallets
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|wallet| !active_only || wallet.is_active)
-            .cloned()
-            .collect())
-    }
-
-    async fn delete_wallet(
-        &self,
-        wallet_id: &str,
-    ) -> Result<bool, CredentialTemplateRepositoryError> {
-        Ok(self.wallets.lock().unwrap().remove(wallet_id).is_some())
-    }
-
-    async fn save_destination(
-        &self,
-        entry: &DeliveryDestinationEntry,
-    ) -> Result<(), CredentialTemplateRepositoryError> {
-        self.destinations
-            .lock()
-            .unwrap()
-            .insert(entry.id.clone(), entry.clone());
-        Ok(())
-    }
-
-    async fn destination_by_id(
-        &self,
-        destination_id: &str,
-    ) -> Result<Option<DeliveryDestinationEntry>, CredentialTemplateRepositoryError> {
-        Ok(self
-            .destinations
-            .lock()
-            .unwrap()
-            .get(destination_id)
-            .cloned())
-    }
-
-    async fn destinations(
-        &self,
-        active_only: bool,
-        _organization_id: Option<&str>,
-        provider: Option<&str>,
-        mode: Option<&str>,
-    ) -> Result<Vec<DeliveryDestinationEntry>, CredentialTemplateRepositoryError> {
-        Ok(self
-            .destinations
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|entry| !active_only || entry.is_enabled)
-            .filter(|entry| provider.is_none_or(|value| entry.provider == value))
-            .filter(|entry| mode.is_none_or(|value| entry.mode == value))
-            .cloned()
-            .collect())
-    }
-
-    async fn delete_destination(
-        &self,
-        destination_id: &str,
-    ) -> Result<bool, CredentialTemplateRepositoryError> {
-        Ok(self
-            .destinations
-            .lock()
-            .unwrap()
-            .remove(destination_id)
-            .is_some())
-    }
-}
-
-#[async_trait]
-impl CredentialTemplateRepository for Repository {
-    async fn save(
-        &self,
-        template: &CredentialTemplate,
-    ) -> Result<(), CredentialTemplateRepositoryError> {
-        self.templates
-            .lock()
-            .unwrap()
-            .insert(template.id.clone(), template.clone());
-        Ok(())
-    }
-
-    async fn by_id(
-        &self,
-        template_id: &str,
-    ) -> Result<Option<CredentialTemplate>, CredentialTemplateRepositoryError> {
-        Ok(self.templates.lock().unwrap().get(template_id).cloned())
-    }
-
-    async fn by_organization(
-        &self,
-        organization_id: &str,
-        status: Option<TemplateStatus>,
-    ) -> Result<Vec<CredentialTemplate>, CredentialTemplateRepositoryError> {
-        Ok(self
-            .templates
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|template| {
-                template.organization_id == organization_id
-                    && status.is_none_or(|status| template.status == status)
-            })
-            .cloned()
-            .collect())
-    }
-
-    async fn all_internal(
-        &self,
-        status: Option<TemplateStatus>,
-    ) -> Result<Vec<CredentialTemplate>, CredentialTemplateRepositoryError> {
-        Ok(self
-            .templates
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|template| status.is_none_or(|status| template.status == status))
-            .cloned()
-            .collect())
-    }
-
-    async fn delete(&self, template_id: &str) -> Result<bool, CredentialTemplateRepositoryError> {
-        Ok(self.templates.lock().unwrap().remove(template_id).is_some())
-    }
 }
 
 struct ControlPlane;
@@ -302,21 +136,8 @@ fn router() -> axum::Router {
 
 fn router_with_service_auth(configured: bool) -> axum::Router {
     let repository = Arc::new(Repository::default());
-    let now = Utc::now();
-    let registry = Arc::new(Registry {
-        wallets: Mutex::new(
-            system_wallet_catalog(now)
-                .into_iter()
-                .map(|entry| (entry.id.clone(), entry))
-                .collect(),
-        ),
-        destinations: Mutex::new(
-            system_delivery_destination_catalog(now)
-                .into_iter()
-                .map(|entry| (entry.id.clone(), entry))
-                .collect(),
-        ),
-    });
+    // Return cross-tenant entries here to exercise application-level filtering.
+    let registry = Arc::new(Registry::seeded(false));
     let control_plane = Arc::new(ControlPlane);
     let application = Arc::new(CredentialTemplateApplication::new(
         repository.clone(),
