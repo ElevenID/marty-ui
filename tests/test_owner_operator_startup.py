@@ -93,6 +93,8 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
             )
             assert match is not None
             assert "owner-migrations:" in match.group(1)
+            if service == "flow":
+                assert "MARTY_SCHEMA_STARTUP_MODE: validate" in match.group(1)
 
     helm = read("deploy/helm/marty/templates/migrations.yaml")
     ordered = [
