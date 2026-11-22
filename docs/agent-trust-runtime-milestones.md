@@ -1155,3 +1155,14 @@ deployment, merge or capability promotion is part of this milestone.
    the public contract with its own durable command intent, domain permission,
    budgets/reservations, provider idempotency and business commit. This batch
    changes no Rifare execution behavior.
+
+
+## Current next milestone — separated owner deployment qualification
+
+After the managed public-caller gate merged in Marty UI PR #1994, the next milestone is to qualify the selected caller composition against separately provisioned Credential Template, Presentation Policy and Issuance services. The current local lifecycle gate still uses a disposable administrator pool for catalog/policy setup and starts those owner services in-process; Issuance bootstrap is also in-process. These boundaries do not qualify independently restricted owner processes.
+
+The scope, source-backed starting state, work packages OQ-1 through OQ-5, acceptance matrix and execution constraints are tracked in [delegated-use owner deployment qualification](delegated-use-owner-deployment-qualification.md).
+
+The first implementation blocker is privileged startup behavior: Credential Template normal startup currently migrates, reconciles legacy data and seeds the catalog; Presentation Policy normal startup migrates and reconciles built-in policies. These writes must move to explicit operator/bootstrap commands, while normal service startup becomes validation-only and read-only. Issuance already exposes migrate/verify-owned-schema commands and a schema startup mode; its deployed validation-only mode and remaining startup preparation helpers must be audited.
+
+No production credentials, production CA material, paid infrastructure, Actions dispatch, public support promotion or Rifare business execution are included in this milestone. AWS replay is deferred until the source and local acceptance gates pass and the existing Free-plan instance, automatic-stop safeguard and concurrent workload state are reverified.
