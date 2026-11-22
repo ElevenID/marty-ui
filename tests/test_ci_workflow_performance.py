@@ -1462,7 +1462,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         assert jobs[name]["if"]
 
     gate_needs = set(jobs["ci-gate"]["needs"])
-    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight"}
+    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight", "test-windows-owner-source"}
     gate_script = jobs["ci-gate"]["steps"][0]["run"]
     assert (
         'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
@@ -1517,6 +1517,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "release-preflight",
         "public-protocol-contract",
         "test-release-contracts",
+        "test-windows-owner-source",
     } | set().union(*groups.values())
     assert (
         "needs.changes.outputs.ui == 'true'" in jobs["public-protocol-contract"]["if"]
@@ -1565,6 +1566,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         leaf_only=False,
         flow_only=False,
         selfhost_only=False,
+        repository_private=False,
     ):
         selected = set(flags)
         if "ui" in selected:
@@ -1574,6 +1576,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         ):
             selected.add("rust_runtime")
         active = {"changes", "lint", "release-preflight"}
+        if not repository_private:
+            active.add("test-windows-owner-source")
         for flag, names in groups.items():
             if flag in selected:
                 active.update(names)
@@ -1594,6 +1598,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         )
         environment.update(selection_overrides or {})
         environment.setdefault("WEBSITE_ONLY", "false")
+        environment["REPOSITORY_PRIVATE"] = str(repository_private).lower()
         environment.setdefault("ROLLBACK_TEST_ONLY", "false")
         environment.setdefault("DIDCOMM_RELEASE_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
@@ -1609,7 +1614,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or len(gate["needs"]))
+        assert len(values[:result_count]) == (result_count or len(gate["needs"]))
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -1742,6 +1747,16 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), {"release-preflight": "skipped"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=16).returncode != 0
+    for event, flags in (("pull_request", ()), ("merge_group", tuple(selections.values()))):
+        for bad_result in ("failure", "cancelled", "skipped", ""):
+            assert exercise(flags, {"test-windows-owner-source": bad_result}, event=event).returncode != 0
+        assert exercise(flags, event=event, repository_private=True).returncode == 0
+        assert exercise(flags, {"test-windows-owner-source": "success"}, event=event,
+                        repository_private=True).returncode != 0
+    assert exercise(tuple(selections.values()), {"security": "skipped"}, event="merge_group",
+                    repository_private=True).returncode != 0
+    for visibility in ("", "TRUE", "public"):
+        assert exercise(selection_overrides={"REPOSITORY_PRIVATE": visibility}).returncode != 0
     didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
     assert exercise(("release",), selection_overrides=didcomm_mode).returncode == 0
     assert (
@@ -4481,15 +4496,41 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
         ("marty-presentation-policy", "marty-credential-template"),
         ("marty-presentation-policy", "marty-issuance-service"),
         ("marty-flow", "marty-presentation-policy"),
+        ("marty-flow", "marty-organization"),
         ("marty-gateway", "marty-auth"),
+        ("marty-delegated-use", "marty-credential-template"),
+        ("marty-delegated-use", "marty-presentation-policy"),
+        ("marty-delegated-use", "marty-issuance-service"),
+        ("marty-delegated-use", "marty-signing-keys"),
+        ("marty-delegated-use", "marty-trust-profile"),
     }, (
-        "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
+        "Only registered DIDComm, explicit-profile, managed-evidence and delegated-use fixtures may add service test edges: "
         f"{sorted(edges)}"
     )
     _assert_service_fixture_dependency(
         documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
         "marty-presentation-policy", "../presentation-policy",
     )
+    # Flow's delegated ingress fixture exercises current Organization-owned
+    # machine permissions, including withdrawal during signing and recovery.
+    _assert_service_fixture_dependency(
+        documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
+        "marty-organization", "../organization",
+    )
+    # The actual delegated-use host fixtures compose native template/policy
+    # reads, fresh issuance, remote signing custody and issuer trust records.
+    # Register only these exact test edges; none may enter the serving graph.
+    delegated_use = documents[rust / "services/delegated-use/Cargo.toml"]
+    for dependency, path in (
+        ("marty-credential-template", "../credential-template"),
+        ("marty-presentation-policy", "../presentation-policy"),
+        ("marty-issuance-service", "../issuance"),
+        ("marty-signing-keys", "../signing-keys"),
+        ("marty-trust-profile", "../trust-profile"),
+    ):
+        _assert_service_fixture_dependency(
+            delegated_use, workspace_dependencies, dependency, path,
+        )
     issuance = documents[rust / "services/issuance/Cargo.toml"]
     _assert_signing_keys_fixture_dependency(
         issuance, workspace_dependencies, "../signing-keys"
@@ -4560,6 +4601,10 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
     ("marty-credential-template", "../credential-template"),
     ("marty-flow", "../flow"),
     ("marty-auth", "../auth"),
+    ("marty-issuance-service", "../issuance"),
+    ("marty-presentation-policy", "../presentation-policy"),
+    ("marty-trust-profile", "../trust-profile"),
+    ("marty-organization", "../organization"),
 ])
 def test_service_fixture_dependencies_reject_production_edges(
     kind: str, target_specific: bool, dependency: str, path: str

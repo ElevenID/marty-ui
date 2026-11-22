@@ -539,7 +539,8 @@ pub fn verify_enrollment_proof(
     .map_err(|_| EnrollmentProofError::InvalidPublicKey)?;
     match header.alg {
         EnrollmentAlgorithm::ES256 => {
-            use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+            use p256::ecdsa::{signature::Verifier, Signature};
+            type VerifyingKey = ecdsa_core::VerifyingKey<p256::NistP256>;
             let y = thumbprint::decode_b64(
                 public
                     .get("y")

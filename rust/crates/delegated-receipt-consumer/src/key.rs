@@ -1,7 +1,9 @@
-use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+use p256::ecdsa::{signature::Verifier, Signature};
 use uuid::Uuid;
 
 use crate::{strict, Algorithm, Principal, ReceiptVerificationError as Error, Result};
+
+type VerifyingKey = ecdsa_core::VerifyingKey<p256::NistP256>;
 
 /// A dedicated receipt verification key selected outside the receipt. It
 /// carries no provider credentials, private material, or resolution mechanism.

@@ -195,9 +195,9 @@ deployment/MAP selection. A future catalog adapter needs its own typed machine
 authorization contract.
 
 Original Flow request/response URIs remain unchanged. The ordinary public Flow
-request endpoints reject delegated instances. This internal host does not make
-those public wallet URIs usable; a separately qualified public routing/client
-composition is still required.
+request endpoints reject delegated instances. The separately enabled managed
+caller routes described above serve those selected URLs on this host; general
+wallet and public Gateway routing remain outside this composition.
 
 ### Separate database connections
 
@@ -344,9 +344,8 @@ remain separately qualified deployment responsibilities.
 From the repository root:
 
 ```sh
-cargo build --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --bin marty-delegated-use
-cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --lib
-cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test host_smoke
+cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-delegated-use --lib
+cargo build --locked --offline --manifest-path rust/Cargo.toml -p marty-delegated-use --bin marty-delegated-use
 ```
 
 Configuration tests cover disabled-before-I/O behavior, explicit scope and
@@ -357,12 +356,27 @@ serving. Cross-owner PostgreSQL tests exercise the actual local composition with
 explicit remote test adapters; production provider/CA/custody qualification is
 separate from those fixtures.
 
+For actual executable qualification, follow the
+[artifact-capture and final host-build procedure](../../../docs/delegated-use-aws-qualification.md#capture-the-test-harnesses-then-build-the-normal-host-last).
+Test dependencies enable local signing fixtures; a host produced by `cargo test`
+can therefore differ from the normal serving binary. Capture the exact harness
+executables from Cargo JSON by package, manifest, target and `profile.test`,
+then build the normal `marty-delegated-use` binary **last** in the same target
+directory. The unchanged MMF/Core feature guards must pass. Record the normal
+host's SHA-256 and run the captured harnesses directly, with no subsequent Cargo
+build/test invocation, checking that digest again after the gates. This keeps
+test-only local signing fixtures in the harness while the actual child runs
+the normal production feature graph. The procedure uses the normal development
+profile and the package's ordinary features. Its separate normal-library check
+also compiles principal-runtime binding, delegated authority and the independent
+receipt consumer without their dev dependencies before the final host build.
+
 For the database acceptance suite, explicitly configure
 `DELEGATED_AUTHORITY_TEST_DATABASE_URL` to a disposable loopback PostgreSQL
-administrator fixture, then run:
+administrator fixture, then invoke the path captured by that procedure:
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test runtime_postgres -- --ignored --test-threads=1
+"$MARTY_QUALIFICATION_OWNER_TEST" --ignored --test-threads=1
 ```
 
 The suite creates isolated databases and real restricted LOGIN roles. It is
@@ -381,11 +395,15 @@ claims never supply the consumer's expected context.
 `tests/live_runtime.rs` starts the actual binary through its production
 configuration and `connect` path. Supply independently verified OpenBao 2.5.5
 and Redis 7.4.12 executables and the explicit disposable loopback PostgreSQL
-fixture. Build the Rust target before provisioning the short-lived providers:
+fixture. After capturing the harnesses and building the normal host last, run
+the recorded startup harness inside the short-lived providers:
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_runtime --no-run
-python3 scripts/with_disposable_delegated_use_runtime.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_runtime -- --ignored --exact actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_startup --test-threads=1
+python3 scripts/with_disposable_delegated_use_runtime.py \
+  --openbao /path/to/bao --redis-server /path/to/redis-server -- \
+  "$MARTY_QUALIFICATION_STARTUP_TEST" --ignored \
+  --exact actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_startup \
+  --test-threads=1
 ```
 
 The wrapper starts its own TLS OpenBao and password-protected nonpersistent
@@ -419,13 +437,23 @@ service. The host uses its own
 service permits that identity to read the selected policy, while presentation
 evaluation remains restricted to its existing callers.
 
-Build before provisioning the short-lived providers, then run with the same
-explicit disposable loopback PostgreSQL fixture used above:
+Capture this harness before the final normal host build. Then invoke it directly
+with the same explicit disposable loopback PostgreSQL fixture used above. Both
+the internal and public lifecycle tests must run:
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle --no-run
-python3 scripts/with_disposable_delegated_use_lifecycle.py --openbao /path/to/bao --redis-server /path/to/redis-server -- cargo test --locked --manifest-path rust/Cargo.toml -p marty-delegated-use --test live_lifecycle -- --ignored --test-threads=1
+python3 scripts/with_disposable_delegated_use_lifecycle.py \
+  --openbao /path/to/bao --redis-server /path/to/redis-server -- \
+  "$MARTY_QUALIFICATION_LIFECYCLE_TEST" --ignored --test-threads=1
 ```
+
+The repository's [`with_disposable_delegated_use_postgres.py`](../../../scripts/with_disposable_delegated_use_postgres.py)
+can enclose these commands using an independently verified native PostgreSQL
+directory. It creates a fresh loopback cluster, captures private evidence and
+stops its own processes; it never uses an existing database. The
+[AWS qualification runbook](../../../docs/delegated-use-aws-qualification.md)
+records the bounded development-host procedure and the remaining qualification
+limits.
 
 Fresh issuance invokes the real in-process initiation, pre-authorized token exchange,
 PostgreSQL nonce and transaction owners, native holder-proof verifier, managed
@@ -463,7 +491,16 @@ Rejected submissions retain no proof or consumption and add no signature or
 signing grant. After finalization, exact proof recovery must return the original
 submission and preserve every claim, proof, receipt and consumption count.
 
-Both tests have explicit setup boundaries.
+Each terminates and restarts the actual serving process after a completed
+finalization, using the same owner databases, custody and restricted-role
+configuration. A fresh caller reconstructs the original commands from retained
+local inputs and recovers their original result and identical receipt bytes.
+The public case also recovers the terminal proof. Claim, request, proof, receipt,
+consumption, artifact-signing and grant-minting counts must stay unchanged.
+This tests completed-result process restart; it does not simulate a crash inside
+an uncertain signing/COMMIT window or authorize pending-claim takeover.
+
+Both tests retain explicit setup boundaries.
 Organization/registry/trust/grant and active catalog records are
 provisioned under disposable administrator authority. The fourteen restricted
 database identities belong to the delegated-use child; the in-process catalog

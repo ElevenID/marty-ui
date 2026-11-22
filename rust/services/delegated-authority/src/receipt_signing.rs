@@ -16,7 +16,7 @@ use marty_signing_grant::{
     minter::{GrantMinter, GrantMinting},
     GrantBinding, SigningOrigin, HEADER_NAME,
 };
-use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+use p256::ecdsa::{signature::Verifier, Signature};
 use serde::{de, Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -29,6 +29,7 @@ use crate::{
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 type Error = DelegatedReceiptSigningError;
+type VerifyingKey = ecdsa_core::VerifyingKey<p256::NistP256>;
 
 /// Public key and exact managed identity chosen independently of receipt input.
 /// No private key is accepted, stored or used by this type.

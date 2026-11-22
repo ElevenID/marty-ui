@@ -4127,6 +4127,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "chrono",
+ "ecdsa",
  "ed25519-dalek 2.2.0",
  "hex",
  "marty-crypto",
@@ -4161,6 +4162,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "ecdsa",
  "ed25519-dalek 2.2.0",
  "p256",
  "serde",
@@ -5067,6 +5069,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "ecdsa",
  "ed25519-dalek 2.2.0",
  "p256",
  "serde",

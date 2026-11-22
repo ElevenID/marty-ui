@@ -3337,16 +3337,23 @@ jobs:
       - name: Audit Rust advisories, licenses, bans, and sources
         run: bash scripts/ci/run-cargo-deny.sh
 
+  test-windows-owner-source:
+    name: Windows owner source
+    if: github.event.repository.private == false
+    uses: ./.github/workflows/windows-owner-source.yml
+
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, release-preflight, lint, test-website, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, release-preflight, lint, test-website, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain, test-windows-owner-source]
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
     env:
       CI_LANE_RESULTS: ${{ join(needs.*.result, ' ') }}
+      REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      WINDOWS_SOURCE_RESULT: ${{ needs.test-windows-owner-source.result }}
       WEBSITE_SELECTED: ${{ needs.changes.outputs.website }}
       WEBSITE_ONLY: ${{ needs.changes.outputs.website_only }}
       WEBSITE_RESULT: ${{ needs.test-website.result }}
@@ -3388,7 +3395,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 20 ]]
+          [[ "${#results[@]}" -eq 21 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3404,6 +3411,17 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
+          # Native source custody is required independently of the component
+          # plan. Private repositories must skip this public-runner-only lane.
+          case "$REPOSITORY_PRIVATE" in
+            false)
+              require_result test-windows-owner-source "$WINDOWS_SOURCE_RESULT" success
+              expected_private_skips=0 ;;
+            true)
+              require_result test-windows-owner-source "$WINDOWS_SOURCE_RESULT" skipped
+              expected_private_skips=1 ;;
+            *) echo 'Missing or invalid repository visibility' >&2; exit 1 ;;
+          esac
           for selected in "$WEBSITE_SELECTED" "$WEBSITE_ONLY" "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY" "$DIDCOMM_RELEASE_TEST_ONLY"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
@@ -3428,9 +3446,15 @@ jobs:
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
                "$RUST_MATRIX" == '["contracts","flow","selfhost"]' ]]
+            private_skips=0
             for result in "${results[@]}"; do
-              [[ "$result" == success ]]
+              if [[ "$REPOSITORY_PRIVATE" == true && "$result" == skipped ]]; then
+                private_skips=$((private_skips + 1))
+              else
+                [[ "$result" == success ]]
+              fi
             done
+            [[ "$private_skips" -eq "$expected_private_skips" ]]
           else
             require_result changes "$CHANGES_RESULT" success
             require_result lint "$LINT_RESULT" success

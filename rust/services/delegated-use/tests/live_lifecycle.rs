@@ -7,7 +7,8 @@
 //! fixtures. The two gates exercise the internal surface and the explicitly
 //! enabled public delegated-machine caller/wallet surface with fresh owners.
 //! This qualifies the selected MachineCredential/KEY/exact-operation path,
-//! including returned request and signed response URI routing. It does not
+//! including returned request/signed response URI routing and original-result
+//! recovery after an actual serving-process restart. It does not
 //! qualify a production deployment or arbitrary consumer wallet compatibility.
 #![allow(dead_code)] // Shared legacy support is not invoked by this gate.
 
@@ -172,7 +173,7 @@ async fn exercise(surface: Surface) -> TestResult {
         );
     }
     let mut executable = Executable::start(&env).await?;
-    let network = Network::connect(origin.clone(), owned.organization, surface, None).await?;
+    let mut network = Network::connect(origin.clone(), owned.organization, surface, None).await?;
     for route in ["/health", "/ready"] {
         let response = network
             .client
@@ -337,29 +338,12 @@ async fn exercise(surface: Surface) -> TestResult {
         ..after_request
     };
     assert_eq!(SigningCounts::capture()?, after_final);
-    original(&network.command(&finish).await?, &completed)?;
-    original(&network.command(&recovery(&completed)).await?, &completed)?;
-    if surface == Surface::Public {
-        // A lost submission response can be recovered even when finalization
-        // has since made the Flow terminal. Recovery preserves the original
-        // proof identity and time; it cannot retain or consume another proof.
-        let before_terminal_recovery =
-            terminal_recovery_counts(&db, &network, challenge_id).await?;
-        assert_eq!(before_terminal_recovery, (2, 1, 1, 1, 1, 1));
-        let historical = network.submit(&wallet, &proof).await?;
-        assert!(historical.recovered);
-        assert_eq!(historical.submission_id, submitted.submission_id);
-        assert_eq!(historical.challenge_id, submitted.challenge_id);
-        assert_eq!(historical.proof_digest, submitted.proof_digest);
-        assert_eq!(historical.received_at, submitted.received_at);
-        assert_eq!(
-            terminal_recovery_counts(&db, &network, challenge_id).await?,
-            before_terminal_recovery,
-        );
-        assert_eq!(SigningCounts::capture()?, after_final);
-    }
-
-    let recovered = network.receipt(&recovery(&completed)).await?;
+    // Check initial freshness before retry and cold-restart probes consume the
+    // original signed evidence lifetime. Recovery must not extend that lifetime.
+    let recovered = network
+        .receipt(&recovery(&completed))
+        .await
+        .map_err(|error| format!("initial finalized receipt recovery: {error}"))?;
     original(&recovered.original_response, &completed)?;
     assert_eq!(recovered.receipt_ref, *receipt_ref);
     assert_eq!(recovered.receipt_digest, *receipt_digest);
@@ -467,6 +451,43 @@ async fn exercise(surface: Surface) -> TestResult {
     assert_eq!(historical.receipt_digest(), fresh.receipt_digest());
     assert_eq!(historical.expires_at(), fresh.expires_at());
 
+    original(
+        &network
+            .command(&finish)
+            .await
+            .map_err(|error| format!("pre-restart FINALIZE_USE replay: {error}"))?,
+        &completed,
+    )?;
+    original(
+        &network
+            .command(&recovery(&completed))
+            .await
+            .map_err(|error| format!("pre-restart final result recovery: {error}"))?,
+        &completed,
+    )?;
+    if surface == Surface::Public {
+        // A lost submission response can be recovered even when finalization
+        // has since made the Flow terminal. Recovery preserves the original
+        // proof identity and time; it cannot retain or consume another proof.
+        let before_terminal_recovery =
+            terminal_recovery_counts(&db, &network, challenge_id).await?;
+        assert_eq!(before_terminal_recovery, (2, 1, 1, 1, 1, 1));
+        let historical = network
+            .submit(&wallet, &proof)
+            .await
+            .map_err(|error| format!("pre-restart terminal proof recovery: {error}"))?;
+        assert!(historical.recovered);
+        assert_eq!(historical.submission_id, submitted.submission_id);
+        assert_eq!(historical.challenge_id, submitted.challenge_id);
+        assert_eq!(historical.proof_digest, submitted.proof_digest);
+        assert_eq!(historical.received_at, submitted.received_at);
+        assert_eq!(
+            terminal_recovery_counts(&db, &network, challenge_id).await?,
+            before_terminal_recovery,
+        );
+        assert_eq!(SigningCounts::capture()?, after_final);
+    }
+
     let mut wrong_recovery: Value = serde_json::from_slice(&recovery(&completed))?;
     wrong_recovery["expected_command_digest"] = json!(format!("sha256:{}", "fe".repeat(32)));
     let wrong_recovery = serde_json::to_vec(&wrong_recovery)?;
@@ -499,7 +520,10 @@ async fn exercise(surface: Surface) -> TestResult {
         )
         .await?;
     }
-    let again = network.receipt(&recovery(&completed)).await?;
+    let again = network
+        .receipt(&recovery(&completed))
+        .await
+        .map_err(|error| format!("receipt recovery after denial checks: {error}"))?;
     assert!(again.compact_jws == compact);
     assert_eq!(again.receipt_digest, *receipt_digest);
     assert_eq!(SigningCounts::capture()?, after_final);
@@ -523,7 +547,10 @@ async fn exercise(surface: Surface) -> TestResult {
     // A second proof is submitted while the grant is still active. Revocation
     // before FINALIZE_USE must prevent fresh signing/consumption, while the
     // first original receipt remains recoverable by its still-authorized actor.
-    let pending_start = network.command(&start(&grant)).await?;
+    let pending_start = network
+        .command(&start(&grant))
+        .await
+        .map_err(|error| format!("second fresh START_USE: {error}"))?;
     let DelegationUseCommandResult::Challenge {
         challenge_id: pending_id,
         ..
@@ -587,6 +614,89 @@ async fn exercise(surface: Surface) -> TestResult {
     )?;
     assert_eq!(historical.expires_at(), *authorization_expires_at);
     assert_eq!(SigningCounts::capture()?, after_second_request);
+
+    // Finish fresh-use and revocation checks within the original approval
+    // lifetime before cold-restart probes. Recovery cannot renew that authority.
+    // Terminate the actual serving process after a committed result, keeping
+    // the same owner databases, custody and restricted-role configuration.
+    // A fresh caller reconstructs its commands from the original local bytes;
+    // it never creates a replacement identity from a server-returned result.
+    // This proves completed-result recovery, not uncertain-claim takeover.
+    let before_restart = terminal_recovery_counts(&db, &network, challenge_id).await?;
+    drop(network);
+    executable.close().await?;
+    assert!(
+        tokio::net::TcpStream::connect(&env["DELEGATED_USE_LISTEN_ADDR"])
+            .await
+            .is_err()
+    );
+    executable = Executable::start(&env).await?;
+    network = Network::connect(origin.clone(), owned.organization, surface, None).await?;
+    let ready = network.client.get(format!("{origin}/ready")).send().await?;
+    protected(&ready, StatusCode::OK);
+    assert!(ready.bytes().await?.is_empty());
+    assert_eq!(SigningCounts::capture()?, after_second_request);
+    original(
+        &network
+            .command(&start_bytes)
+            .await
+            .map_err(|error| format!("post-restart START_USE replay: {error}"))?,
+        &started,
+    )?;
+    original(
+        &network
+            .command(&finish)
+            .await
+            .map_err(|error| format!("post-restart FINALIZE_USE replay: {error}"))?,
+        &completed,
+    )?;
+    original(
+        &network
+            .command(&recovery(&completed))
+            .await
+            .map_err(|error| format!("post-restart final result recovery: {error}"))?,
+        &completed,
+    )?;
+    let after_restart = network
+        .receipt(&recovery(&completed))
+        .await
+        .map_err(|error| format!("post-restart receipt recovery: {error}"))?;
+    original(&after_restart.original_response, &completed)?;
+    assert_eq!(after_restart.receipt_ref, *receipt_ref);
+    assert_eq!(after_restart.receipt_digest, *receipt_digest);
+    assert_eq!(after_restart.semantics, "EVIDENCE_ONLY");
+    assert!(after_restart.compact_jws == compact);
+    if surface == Surface::Public {
+        let proof_recovery = network
+            .submit(&wallet, &proof)
+            .await
+            .map_err(|error| format!("post-restart terminal proof recovery: {error}"))?;
+        assert!(proof_recovery.recovered);
+        assert_eq!(proof_recovery.submission_id, submitted.submission_id);
+        assert_eq!(proof_recovery.challenge_id, submitted.challenge_id);
+        assert_eq!(proof_recovery.proof_digest, submitted.proof_digest);
+        assert_eq!(proof_recovery.received_at, submitted.received_at);
+    }
+    assert_eq!(
+        terminal_recovery_counts(&db, &network, challenge_id).await?,
+        before_restart,
+    );
+    assert_eq!(SigningCounts::capture()?, after_second_request);
+
+    // Restart recovery retains the same signed evidence. Its original lifetime
+    // is not renewed, so verify authenticity historically after the cold restart.
+    let recovered_historical = consumer::verify_historical(
+        after_restart.compact_jws.as_bytes(),
+        &receipt_key,
+        &expectation,
+        Utc::now(),
+    )?;
+    assert_eq!(
+        recovered_historical.receipt_digest(),
+        fresh.receipt_digest()
+    );
+    assert_eq!(recovered_historical.issued_at(), fresh.issued_at());
+    assert_eq!(recovered_historical.expires_at(), fresh.expires_at());
 
     // Current permission withdrawal applies even to exact historical recovery
     // and duplicate proof paths; immutable stored artifacts survive denial.
