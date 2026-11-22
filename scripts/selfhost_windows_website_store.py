@@ -137,6 +137,21 @@ def _read_evidence(records, entries, references, held):
     return observed
 
 
+def forward_verification_prefix(plan, *, expected_anchor_sha256):
+    """Locate the exact verified split prefix inside the held forward journal."""
+    with _directories(plan) as (records, anchors, held):
+        entries, status, _names, _tails = _read(plan, records, anchors, held, expected_anchor_sha256)
+        matches = [(name, body) for name, body in entries.items()
+                   if name[7:] == 'verify-website.completed.json']
+        require(status['model_state'] == 'split' and len(matches) == 1
+                and status['completed_phases'] in (list(journal.FORWARD[:-1]), list(journal.FORWARD))
+                and status['pending_phase'] in (None, 'seal-forward'))
+        name, body = matches[0]
+        anchor = _hold_bytes(anchors / _tail_name(int(name[:6])), held)
+        require(selection.decode(anchor)['record_sha256'] == selection.digest(body))
+    return {'anchor_sha256': selection.digest(anchor), 'tail_sha256': selection.digest(body)}
+
+
 def read_evidence(plan, *, expected_anchor_sha256, references, held):
     """Hold private evidence authenticated by an independently pinned journal."""
     with _directories(plan) as (records, anchors, journal_inputs):

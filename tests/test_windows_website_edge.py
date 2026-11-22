@@ -58,7 +58,7 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
-    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout'])
+    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout'])
 def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
@@ -171,7 +171,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     def mutate(command, *, timeout):
         nonlocal state, edge_id
         phase = edge.FORWARD if state == 'staged' else edge.BACKOUT
-        sequence = '000004' if phase == edge.FORWARD else '000006'
+        sequence = '000004' if phase == edge.FORWARD else ('000010' if fault == 'sealed-backout' else '000006')
         assert (records / f'{sequence}.{phase}.started.json').is_file()
         assert (anchors / f'{sequence}.tail.json').is_file()
         assert command[-10:] == ['up', '--no-deps', '--no-build', '--pull', 'never',
@@ -226,6 +226,14 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         routed = advance(staged, edge.FORWARD)
         assert state == 'split' and routed['model_state'] == 'split'
         assert routed['permitted_record_phases'] == ['verify-website', 'restore-combined']
+        if fault == 'sealed-backout':
+            for phase in ('verify-website', 'seal-forward'):
+                for event in ('started', 'completed'):
+                    keys = (store.journal.START_EVIDENCE if event == 'started'
+                            else store.journal.COMPLETION_EVIDENCE[phase])
+                    routed = store.append(plan, expected_anchor_sha256=routed['anchor_sha256'], phase=phase, event=event,
+                                          evidence_sha256={key: 'a'*64 for key in keys})
+            assert routed['classification'] == 'forward-evidence-complete'
         site_unhealthy = True
         if fault == 'changed-default-before-backout':
             changed_default = True

@@ -230,8 +230,9 @@ def _start_observation(plan, status, context, items, edge_configuration):
 def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosign, registry_config,
         authority_file, held):
     """Switch or restore edge routing under the independently pinned owner."""
-    require(phase in {FORWARD, BACKOUT} and status['classification'] == 'phase-boundary'
-            and phase in status['permitted_record_phases'])
+    require(phase in {FORWARD, BACKOUT} and phase in status['permitted_record_phases']
+            and (status['classification'] == 'phase-boundary'
+                 or phase == BACKOUT and status['classification'] == 'forward-evidence-complete'))
     current = status['model_state']
     target = 'split' if phase == FORWARD else 'staged'
     require(current == 'staged' if phase == FORWARD else current in {'split', 'staged'})

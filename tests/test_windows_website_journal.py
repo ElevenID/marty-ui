@@ -37,13 +37,12 @@ def test_forward_chain_binds_exact_plan_but_does_not_publish_owner_or_claim_veri
     result = status(entries, plan)
     assert result['classification'] == 'forward-evidence-complete' and result['record_count'] == 9
     assert result['completed_phases'] == list(journal.FORWARD) and result['model_state'] == 'split'
-    assert result['permitted_record_phases'] == []
+    assert result['permitted_record_phases'] == ['restore-combined']
     assert not any(result[name] for name in ('receipt_contents_verified', 'automatic_replay_allowed',
         'owner_publication_supported', 'activation_supported', 'production_admission'))
-    with pytest.raises(ValueError):record(entries, plan, 'restore-combined', 'started')
 
 
-@pytest.mark.parametrize('through', [1, 2, 3])
+@pytest.mark.parametrize('through', [1, 2, 3, 4])
 def test_first_cutover_backout_restores_then_verifies_combined_before_retiring_candidate(planned, through):
     plan = plan_contract.plan(**planned)
     entries = journal.begin(plan)

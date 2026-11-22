@@ -1,4 +1,4 @@
-"""Prepare the selected Windows website successor while rollback is available."""
+"""Qualify and seal the live Windows website successor under its existing owner."""
 from copy import deepcopy
 from pathlib import Path
 import re
@@ -156,12 +156,9 @@ def _retain_successor(config, model_binding, attempt, assets, plan, status, reco
     return root, new_config, candidate
 
 
-def prepare(config, choice, values, record, plan, status, *, assets, gh, cosign, registry_config,
-            session_state_file, expected_account_sha256, expected_organization_sha256, authority_file, held):
-    """Qualify a forward candidate without advancing or sealing the transition journal."""
-    require(status['classification'] == 'phase-boundary' and status['model_state'] == 'split'
-            and status['completed_phases'] == list(store.journal.FORWARD[:-1])
-            and set(status['permitted_record_phases']) == {'seal-forward', 'restore-combined'})
+def _qualify(config, choice, values, record, plan, status, *, assets, gh, cosign, registry_config,
+             session_state_file, expected_account_sha256, expected_organization_sha256, authority_file, held,
+             candidate_status):
     context, proposal, verified, check_routes = edge._prepare(config, choice, values, record, plan, status,
         prior_phase='verify-website', current='split', target='split', create_routes=False, candidate_ready=True,
         assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
@@ -182,7 +179,7 @@ def prepare(config, choice, values, record, plan, status, *, assets, gh, cosign,
     attempt = Path(plan['attempt_directory'])
     binding, resolved = _candidate_layout(config, values, context, proposal, attempt, held)
     require(resolved[choice] == (layout, context.layouts['split'][2]))
-    root, new_config, candidate = _retain_successor(config, binding, attempt, assets, plan, status, record, resolved, held)
+    root, new_config, candidate = _retain_successor(config, binding, attempt, assets, plan, candidate_status, record, resolved, held)
     observed = selection._inspect(new_config, choice, values, held, expected_data=plan['states']['split']['data_sha256'])
     require(observed['model'] == resolved[choice][0]
             and renewal.context_snapshot(observed['owned']) == verified['runtime_after'])
@@ -195,10 +192,90 @@ def prepare(config, choice, values, record, plan, status, *, assets, gh, cosign,
     qualification = {'schema': SCHEMA, 'candidate_sha256': contract.digest(candidate),
         'runtime_sha256': contract.digest(verified['runtime_after']), 'public_routes_sha256': contract.digest(public),
         'anonymous_handoff_sha256': contract.digest(anonymous), 'authenticated_application': authenticated,
+        'authenticated_account_sha256': expected_account_sha256,
+        'authenticated_organization_sha256': expected_organization_sha256,
         'native_sha256': plan['owner']['native_sha256'], 'selected_sha256': plan['owner']['selected_sha256'],
         'foreign_storage_sha256': observed['context'].proof_sha256, 'foreign_storage_changes': observed['context'].proof_count}
+    return root, qualification, final, route, verified['runtime_after']
+
+
+def prepare(config, choice, values, record, plan, status, *, held, **options):
+    """Qualify a forward candidate at the verified split boundary."""
+    require(status['classification'] == 'phase-boundary' and status['model_state'] == 'split'
+            and status['completed_phases'] == list(store.journal.FORWARD[:-1])
+            and set(status['permitted_record_phases']) == {'seal-forward', 'restore-combined'})
+    root, qualification, _, _, _ = _qualify(config, choice, values, record, plan, status, held=held,
+                                            candidate_status=status, **options)
     pin = contract.digest(qualification)
-    stage._material(attempt / ('forward-qualification-' + pin + '.json'), qualification, held)
+    stage._material(root.parent / ('forward-qualification-' + pin + '.json'), qualification, held)
     return {**status, 'result': 'forward-candidate-prepared', 'candidate_directory': str(root),
             'candidate_sha256': qualification['candidate_sha256'], 'qualification_sha256': pin,
             'authenticated_application_exercised': True}
+
+
+def _pinned_qualification(attempt, candidate_sha256, qualification_sha256, held):
+    require(contract.sha(candidate_sha256) and contract.sha(qualification_sha256))
+    qualification_file = attempt / ('forward-qualification-' + qualification_sha256 + '.json')
+    for path, pin in ((attempt / 'successor' / 'candidate.json', candidate_sha256),
+                      (qualification_file, qualification_sha256)):
+        raw = held.enter_context(renewal.hold_private_input(path))
+        value = selection.decode(raw)
+        require(raw == selection.packed(value) and selection.digest(raw) == pin and value['schema'] == SCHEMA)
+    require(value['candidate_sha256'] == candidate_sha256
+            and all(value['authenticated_application'][key] is True for key in (
+                'account_matched', 'organization_matched', 'authenticated_application_exercised')))
+    return value
+
+
+def _recheck(config, choice, values, record, plan, status, *, candidate_sha256, qualification_sha256, held, **options):
+    """Re-run all acceptance checks against the original independently pinned candidate."""
+    attempt = Path(plan['attempt_directory'])
+    pinned = _pinned_qualification(attempt, candidate_sha256, qualification_sha256, held)
+    prefix = store.forward_verification_prefix(plan, expected_anchor_sha256=status['anchor_sha256'])
+    _, fresh, inventory, routes, runtime = _qualify(config, choice, values, record, plan, status, held=held,
+        candidate_status={**prefix, 'guard_sha256': status['guard_sha256']}, **options)
+    require(all(fresh[key] == pinned[key] for key in (
+        'candidate_sha256', 'runtime_sha256', 'native_sha256', 'selected_sha256',
+        'authenticated_account_sha256', 'authenticated_organization_sha256', 'foreign_storage_sha256', 'foreign_storage_changes')))
+    return runtime, routes, {
+        'engine_id': plan['owner']['engine_id'], 'inventory_sha256': contract.digest(renewal.context_snapshot(inventory)),
+        'changes_sha256': fresh['foreign_storage_sha256'], 'changes': fresh['foreign_storage_changes'],
+    }
+
+
+def seal(config, choice, values, record, plan, status, *, candidate_sha256, qualification_sha256, held, **options):
+    """Anchor live acceptance and allow prepublication backout from the sealed state."""
+    require(status['completed_phases'] == list(store.journal.FORWARD[:-1])
+            and status['model_state'] == 'split' and status['pending_phase'] in (None, 'seal-forward'))
+    phase = 'seal-forward'
+    runtime, routes, foreign = _recheck(config, choice, values, record, plan, status, held=held,
+        candidate_sha256=candidate_sha256, qualification_sha256=qualification_sha256, **options)
+    native = {key: plan['owner'][key] for key in ('native_sha256', 'selected_sha256')}
+    before = {'owner_lease': {'owner': plan['owner'], 'guard_sha256': status['guard_sha256']},
+              'runtime_before': {'containers': runtime, 'edge_configuration': routes},
+              'native_custody': native, 'foreign_storage': foreign}
+    after = {'runtime_after': runtime, 'native_custody': native, 'foreign_storage': foreign,
+             'successor_candidate': {'candidate_sha256': candidate_sha256, 'qualification_sha256': qualification_sha256}}
+    attempt = Path(plan['attempt_directory'])
+    start = stage._evidence(attempt / (phase + '-before.json'), before, held)
+    end = stage._evidence(attempt / (phase + '-after.json'), after, held)
+    anchor = status['anchor_sha256']
+    if status['pending_phase'] is None:
+        started = store.append(plan, expected_anchor_sha256=anchor, phase=phase, event='started', evidence_sha256=start)
+        anchor = started['anchor_sha256']
+    else:
+        recorded = store.read_evidence(plan, expected_anchor_sha256=anchor, held=held,
+            references={phase + '-before.json': (phase, 'started')})
+        require(recorded[phase + '-before.json'] == before)
+    sealed = store.append(plan, expected_anchor_sha256=anchor, phase=phase, event='completed', evidence_sha256=end)
+    return {**sealed, 'result': 'website-forward-sealed', 'guard_sha256': status['guard_sha256'],
+            **after['successor_candidate']}
+
+
+def check_publication(config, choice, values, record, plan, link, *, guard_sha256, held, **options):
+    """Refresh live acceptance through the exact terminal owner evidence."""
+    status = store.inspect(plan, expected_anchor_sha256=link['terminal_sha256'])
+    require(status['classification'] == 'forward-evidence-complete')
+    status['guard_sha256'] = guard_sha256
+    _recheck(config, choice, values, record, plan, status, held=held,
+             candidate_sha256=link['candidate_sha256'], qualification_sha256=link['qualification_sha256'], **options)

@@ -25,7 +25,7 @@ STAGE_ACTIONS = {'dispatch-authorized': 'stage_command', 'dispatch-returned': 's
                  'compensation-authorized': 'candidate_compensation', 'compensation-returned': 'compensation_result'}
 STAGE_ACTION_ORDER = tuple(STAGE_ACTIONS)
 RETIRE_RETURNED = 'retirement-returned'
-MAX_RECORDS = 1 + 2*(len(FORWARD)-1+len(BACKOUT)) + 3
+MAX_RECORDS = 1 + 2*(len(FORWARD)+len(BACKOUT)) + 3
 RECORD_NAME = re.compile(r'[0-9]{6}\.[a-z-]+\.(recorded|started|completed|reconciled-abort|'
                          + '|'.join((*STAGE_ACTIONS, RETIRE_RETURNED)) + r')\.json')
 FIELDS = {'schema', 'sequence', 'plan_sha256', 'parent_sha256', 'phase', 'event', 'state', 'evidence_sha256'}
@@ -78,8 +78,10 @@ def _next(completed):
     if not completed:
         return ('stage-candidate',)
     last = completed[-1]
-    if last in {'seal-forward', 'retire-candidate'}:
+    if last == 'retire-candidate':
         return ()
+    if last == 'seal-forward':
+        return ('restore-combined',)
     if last in BACKOUT:
         return (BACKOUT[BACKOUT.index(last)+1],)
     return (FORWARD[FORWARD.index(last)+1], 'restore-combined')
@@ -159,7 +161,7 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
         'stage_actions': stage_actions, 'started_stage_sha256': started_stage,
         'retirement_returned': retirement_returned,
         'completed_phases': completed, 'aborted_phase': 'stage-candidate' if aborted else None, 'model_state': state,
-        'permitted_record_phases': [] if pending or terminal or aborted else list(_next(completed)),
+        'permitted_record_phases': [] if pending or aborted else list(_next(completed)),
         'receipt_contents_verified': False, 'automatic_replay_allowed': False,
         'owner_publication_supported': False, 'activation_supported': False, 'production_admission': False}
 

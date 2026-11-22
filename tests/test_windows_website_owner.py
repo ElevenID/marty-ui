@@ -7,6 +7,7 @@ import pytest
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_selfhost_windows_selection import fixture
 from tests.test_windows_website_plan import planned, rehash
+import selfhost_windows_website as website
 import selfhost_windows_website_owner as owner
 
 selection, store, forward, renewal = owner.selection, owner.store, owner.forward, owner.renewal
@@ -68,6 +69,7 @@ def prepare(planned, root, original, config):
         native = {key: plan['owner'][key] for key in ('native_sha256', 'selected_sha256')}
         qualification = {'schema': forward.SCHEMA, 'candidate_sha256': candidate_pin, 'runtime_sha256': digest(runtime),
             'public_routes_sha256': 'b'*64, 'anonymous_handoff_sha256': 'c'*64, **native,
+            'authenticated_account_sha256': 'd'*64, 'authenticated_organization_sha256': 'e'*64,
             'foreign_storage_sha256': None, 'foreign_storage_changes': 0, 'authenticated_application': {
                 'account_matched': True, 'organization_matched': True, 'authenticated_application_exercised': True}}
         qualification_pin = digest(qualification)
@@ -88,15 +90,15 @@ def prepare(planned, root, original, config):
 
 @pytest.mark.parametrize('fault', [None, 'wrong-tail', 'changed-source', 'changed-seal', 'changed-proof',
                                   'changed-candidate', 'premature-activation', 'live-check', 'rename-interrupted'])
-def test_forward_guarded_selection_checks_and_resumes_exact_publication(planned, monkeypatch, fault):
+def test_forward_guarded_selection_checks_and_resumes_exact_publication(planned, monkeypatch, capsys, fault):
     with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
         source, starting, plan, guard_pin, pins, split, verified = prepare(planned, root, path, config)
         phase['data'] = plan['states']['split']['data_sha256']
         check_calls = []
         attempt = Path(plan['attempt_directory'])
 
-        def check_live(bound, selected, link, _stack):
-            assert bound['compose_file'] == str(split) and selected['choice'] == 'new'
+        def check_live(bound, choice, _values, selected, link, _stack):
+            assert bound['compose_file'] == config['compose_file'] and choice == selected['choice'] == 'new'
             assert link['terminal_sha256'] == pins['terminal_sha256']
             check_calls.append('qualified')
             if fault == 'live-check':
@@ -143,7 +145,35 @@ def test_forward_guarded_selection_checks_and_resumes_exact_publication(planned,
             assert check_calls == (['qualified'] if fault == 'live-check' else [])
             return
 
-        result = owner.finish(path, plan, **options)
+        if fault is None:
+            verified_prefix = store.forward_verification_prefix(plan, expected_anchor_sha256=pins['terminal_sha256'])
+            assert verified_prefix['anchor_sha256'] == verified
+            qualification_file = attempt / ('forward-qualification-' + pins['qualification_sha256'] + '.json')
+            qualification = selection.decode(qualification_file.read_bytes())
+
+            def qualify(bound, choice, _values, selected, supplied_plan, status, *, candidate_status, **_options):
+                assert supplied_plan == plan and status['anchor_sha256'] == pins['terminal_sha256']
+                assert candidate_status == {**verified_prefix, 'guard_sha256': guard_pin}
+                check_live(bound, choice, None, selected, {'terminal_sha256': status['anchor_sha256']}, None)
+                return attempt / 'successor', qualification, [], {}, []
+
+            monkeypatch.setattr(forward, '_qualify', qualify)
+            args = ['--publish-forward', '--selection-file', str(path),
+                    '--plan-file', str(attempt / 'journal' / store.PLAN), '--composition-dir', str(root / 'assets'),
+                    '--gh', str(root / 'gh'), '--cosign', str(root / 'cosign'), '--guard-sha256', guard_pin,
+                    '--expected-anchor-sha256', pins['terminal_sha256'], '--session-state-file', str(root / 'session.json'),
+                    '--expected-account-sha256', 'd'*64, '--expected-organization-sha256', 'e'*64,
+                    '--candidate-sha256', pins['candidate_sha256'], '--qualification-sha256', pins['qualification_sha256']]
+            assert website.main([*args, '--intent-sha256', 'wrong-pin']) == 2
+            captured = capsys.readouterr()
+            assert not captured.out and captured.err == website.FORWARD_ERROR + '\n'
+            assert check_calls == []
+            assert website.main(args) == 0
+            captured = capsys.readouterr()
+            assert not captured.err
+            result = selection.decode(captured.out.encode())
+        else:
+            result = owner.finish(path, plan, **options)
         assert check_calls == ['qualified'] * (2 if fault == 'rename-interrupted' else 1)
         assert result['generation_sequence'] == 1 and result['guards_retained'] is True
         assert result['selected_sha256'] == digest(selection.decode(starting['000001.selection.json'])['selected'])

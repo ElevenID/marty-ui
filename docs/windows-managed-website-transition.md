@@ -304,8 +304,8 @@ empty `origins` list. Keep the live session file outside Git and the attempt.
 
 The owner repeats the signed split, edge, public and OAuth handoff checks. It
 uses the scoped session cookie over canonical HTTPS for `/v1/auth/me` and
-`/v1/organizations/mine`, and retains only the confirmed checks and TLS
-observations. Perform the required interactive sign-in in the acceptance
+`/v1/organizations/mine`, and retains the independently supplied identifier digests, confirmed checks,
+and TLS observations. Perform the required interactive sign-in in the acceptance
 browser. Use a session exported from that qualification for this operation.
 
 Preparation also renders one persistent split Compose file with both retained
@@ -316,25 +316,35 @@ activation outputs. Use the returned candidate and qualification digests when
 reviewing the proposed publication. The journal stays at `verify-website` so
 combined rollback remains available during preparation.
 
-### Guarded owner publication
+### Seal and publish the guarded successor
 
-The selection resolver supports a typed website successor. Publication requires
-the exact candidate and qualification digests, a complete `seal-forward`
-journal with an independently pinned last anchor, and fresh live checks. The
+Run `--seal-forward` with the same plan, guard, signed composition and
+authenticated session inputs. Pass the last verified journal anchor via
+`--expected-anchor-sha256`, and the preparation result via
+`--candidate-sha256` and `--qualification-sha256`. The owner repeats live
+verification, including the account and organization checks, and records the
+unchanged running split in the phase journal. An anchored seal that started
+before an interruption can be completed with its exact started anchor and
+the same qualified candidate. Before publication begins, the original owner
+can still run `restore-combined` from the sealed anchor.
+
+Run `--publish-forward` with the same candidate and qualification digests,
+the sealed anchor via `--expected-anchor-sha256`, and current signed
+composition and authenticated session inputs. The publisher repeats the
+live checks with the same independently pinned identity. The
 publisher checks the retained combined configuration and verification prefix,
 revalidates the native generation, and prepares a successor using the split
 Compose source. Its local sequence starts at one. The overall credential
 generation, selected inputs and native custody stay the same.
 
 The decision becomes visible through an atomic rename under the project lock.
-Reconciliation requires the exact intent digest and repeats the proofs before
-continuing. A partial publication fences the predecessor. The existing product
+Reconciliation requires the exact `--intent-sha256` and repeats the proofs
+before continuing. A partial publication fences the predecessor. The existing product
 guard stays active after the rename, including while the original entrypoint
 resolves the successor for inspection.
 
-The publisher is an internal owner operation. The guarded sealing and live
-verification entrypoint, postpublication backout, guard release, and scheduled
-renewal and reboot qualification remain separate integration steps.
+Complete the rehearsed postpublication backout, guard release, and scheduled
+renewal and reboot qualification before admitting production cutover.
 
 ## Required integration before activation
 

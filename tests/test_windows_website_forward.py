@@ -118,7 +118,8 @@ def test_real_compose_compiles_one_source_identical_to_admitted_overlays_for_bot
         assert [row['target'] for row in normalized['services']['edge']['volumes']].count(contract.ROUTE_TARGET) == 1
 
 
-@pytest.mark.parametrize('fault',[None,'application','changed-proof','unverified'])
+@pytest.mark.parametrize('fault',[None,'application','changed-proof','unverified',
+                                   'changed-account','stale-qualification','interrupted-seal'])
 def test_forward_candidate_preserves_rollback_and_retains_exact_original_ownership(paths, planned, monkeypatch, fault):
     plan, records, _anchors = paths
     attempt = records.parent
@@ -181,18 +182,19 @@ def test_forward_candidate_preserves_rollback_and_retains_exact_original_ownersh
     session.write_bytes(selection.packed(session_state()))
     if fault=='changed-proof':
         (assets/'web-composition.zip').write_bytes(b'wrong synthetic proof')
+    preparation_fault = fault in {'application', 'changed-proof', 'unverified'}
     with ExitStack() as held:
         arguments=(config,'new',credentials,record,plan,status)
         options=dict(assets=assets,gh=None,cosign=None,registry_config=None,session_state_file=session,
-                     expected_account_sha256='c'*64,expected_organization_sha256='d'*64,authority_file=None,held=held)
-        if fault:
+                     expected_account_sha256='c'*64,expected_organization_sha256='d'*64,authority_file=None)
+        if preparation_fault:
             with pytest.raises(ValueError):
-                forward.prepare(*arguments,**options)
+                forward.prepare(*arguments,held=held,**options)
         else:
-            result=forward.prepare(*arguments,**options)
+            result=forward.prepare(*arguments,held=held,**options)
     readback=store.inspect(plan,expected_anchor_sha256=status['anchor_sha256'])
     assert readback['completed_phases']==status['completed_phases'] and 'restore-combined' in readback['permitted_record_phases']
-    if fault:
+    if preparation_fault:
         assert not (attempt/'successor/candidate.json').exists()
         return
     assert result['result']=='forward-candidate-prepared' and result['authenticated_application_exercised']
@@ -205,3 +207,43 @@ def test_forward_candidate_preserves_rollback_and_retains_exact_original_ownersh
     assert {name: selection.digest((root/'proofs'/name).read_bytes()) for name in plan['proof_sha256']}==plan['proof_sha256']
     assert all(item.read_bytes()==b'' for item in (root/'activation').iterdir())
     assert COOKIE.encode() not in b''.join(item.read_bytes() for item in attempt.glob('forward-qualification-*.json'))
+
+    pins = {key: result[key] for key in ('candidate_sha256', 'qualification_sha256')}
+    if fault == 'changed-account':
+        options['expected_account_sha256'] = 'a'*64
+    elif fault == 'stale-qualification':
+        pins['qualification_sha256'] = 'a'*64
+    if fault in ('changed-account', 'stale-qualification'):
+        with ExitStack() as held, pytest.raises((ValueError, OSError)):
+            forward.seal(*arguments, held=held, **options, **pins)
+        assert store.inspect(plan, expected_anchor_sha256=status['anchor_sha256']) == readback
+        assert not (attempt / 'seal-forward-before.json').exists()
+        return
+
+    if fault == 'interrupted-seal':
+        append = store.append
+
+        def interrupt(plan, **next_record):
+            if next_record['phase'] == 'seal-forward' and next_record['event'] == 'completed':
+                raise RuntimeError('Fixture interrupted the anchored seal')
+            return append(plan, **next_record)
+
+        with monkeypatch.context() as injected:
+            injected.setattr(store, 'append', interrupt)
+            with ExitStack() as held, pytest.raises(RuntimeError, match='anchored seal'):
+                forward.seal(*arguments, held=held, **options, **pins)
+        start = _anchors / store._tail_name(status['record_count'] + 1)
+        pin = selection.digest(start.read_bytes())
+        started = store.inspect(plan, expected_anchor_sha256=pin)
+        assert started['pending_phase'] == 'seal-forward'
+        arguments = (*arguments[:-1], {**started, 'guard_sha256': status['guard_sha256']})
+    with ExitStack() as held:
+        sealed = forward.seal(*arguments, held=held, **options, **pins)
+    assert sealed['classification'] == 'forward-evidence-complete'
+    assert sealed['permitted_record_phases'] == ['restore-combined']
+    assert sealed['completed_phases'] == list(store.journal.FORWARD)
+
+    link = {**pins, 'terminal_sha256': sealed['anchor_sha256']}
+    with ExitStack() as held:
+        forward.check_publication(*arguments[:5], link, guard_sha256=status['guard_sha256'], held=held, **options)
+    assert (root / 'candidate.json').read_bytes() == selection.packed(candidate_record)

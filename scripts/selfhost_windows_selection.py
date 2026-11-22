@@ -1221,8 +1221,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
                     gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=stack)
             if _website_forward is not None:
-                from selfhost_windows_website_forward import prepare
-                status = prepare(cfg, choice, values, record, plan, status, held=stack, **_website_forward)
+                operation, options = _website_forward
+                status = operation(cfg, choice, values, record, plan, status, held=stack, **options)
             yield status
             return
 
@@ -1451,13 +1451,39 @@ def prepare_website_forward(config_path, plan, *, guard_sha256, expected_anchor_
                             assets, gh, cosign, registry_config, session_state_file,
                             expected_account_sha256, expected_organization_sha256, authority_file=None):
     """Prepare the verified successor files while the original owner still has backout."""
+    from selfhost_windows_website_forward import prepare
     forward = {'assets': assets, 'gh': gh, 'cosign': cosign, 'registry_config': registry_config,
                'session_state_file': session_state_file, 'expected_account_sha256': expected_account_sha256,
                'expected_organization_sha256': expected_organization_sha256, 'authority_file': authority_file}
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
-                          _website_forward=forward) as result:
+                          _website_forward=(prepare, forward)) as result:
         prepared = result
     return prepared
+
+
+def seal_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256, **options):
+    """Refresh and seal the split under the exact original Windows selection."""
+    from selfhost_windows_website_forward import seal
+
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_forward=(seal, options)) as result:
+        sealed = result
+    return sealed
+
+
+def publish_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256, candidate_sha256,
+                            qualification_sha256, authority_file=None, intent_sha256=None, **options):
+    """Select the exact sealed split with a live proof through the original owner."""
+    from selfhost_windows_website_forward import check_publication
+    from selfhost_windows_website_owner import finish
+
+    def check_live(config, choice, values, record, link, held):
+        check_publication(config, choice, values, record, plan, link, guard_sha256=guard_sha256,
+                          authority_file=authority_file, held=held, **options)
+
+    return finish(config_path, plan, guard_sha256=guard_sha256, terminal_sha256=expected_anchor_sha256,
+                  candidate_sha256=candidate_sha256, qualification_sha256=qualification_sha256,
+                  check_live=check_live, authority_file=authority_file, intent_sha256=intent_sha256)
 
 
 def reconcile_existing(config_path, *, authority_file=None):

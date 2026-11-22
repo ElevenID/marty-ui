@@ -159,7 +159,9 @@ def _hold_successor(raw, expected, current_model, link, stack, *, admission):
     runtime, foreign = _sealed_evidence(plan, link, candidate, stack)
     require(qualification['schema'] == forward.SCHEMA and qualification['candidate_sha256'] == link['candidate_sha256']
             and qualification['runtime_sha256'] == forward.contract.digest(runtime)
-            and product.sha(qualification['public_routes_sha256']) and product.sha(qualification['anonymous_handoff_sha256'])
+            and all(product.sha(qualification[key]) for key in (
+                'public_routes_sha256', 'anonymous_handoff_sha256',
+                'authenticated_account_sha256', 'authenticated_organization_sha256'))
             and qualification['native_sha256'] == owner['native_sha256']
             and qualification['selected_sha256'] == owner['selected_sha256']
             and qualification['foreign_storage_sha256'] == foreign['changes_sha256']
@@ -207,7 +209,7 @@ def finish(config_path, plan, *, guard_sha256, terminal_sha256, candidate_sha256
     signed composition, edge and authenticated application. Reconcile with the
     exact existing intent pin after an interrupted publication.
     """
-    from selfhost_windows_model import history
+    from selfhost_windows_model import effective_config, history
 
     with ExitStack() as coordination:
         with selection._session(config_path, _coordination=coordination,
@@ -243,7 +245,11 @@ def finish(config_path, plan, *, guard_sha256, terminal_sha256, candidate_sha256
             require(snapshots == first['inputs'])
             require(selection._prove(config, selected['choice'], values, stack, expected_data=selected['data_sha256'],
                                      authority_file=authority_file) == selected['data_sha256'])
-            check_live(config, selected, link, stack)
+            original_intent = intents[len(selections)]
+            original_path = Path(original_intent['config_path'])
+            original = selection.decode(stack.enter_context(renewal.hold_private_input(original_path)))
+            check_live(effective_config(original, current_model), selected['choice'], values,
+                       selections[len(selections)], link, stack)
 
             if INTENT not in raw:
                 selection._append(source, raw, INTENT, link, stack)

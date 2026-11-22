@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect a managed Windows website composition or finish a combined rollback.
+"""Inspect or advance the managed Windows website transition.
 
 The check-only path reads selected identities and authenticates the composition.
-The terminal release paths requalify the combined owner before archiving its guard.
+Forward sealing and selection refresh the live split with the original owner guard held.
+Combined release requalifies the original runtime before archiving its guard.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
 RELEASE_ERROR = "Managed website abort release did not complete verification. Inspect the original guard and archive using the same pins."
 BACKOUT_ERROR = "Managed website backout did not complete verification. Preserve the guard and inspect the retained journal before continuing."
-FORWARD_ERROR = "Managed website forward preparation did not qualify. Preserve the guard and retained verification records."
+FORWARD_ERROR = "Managed website forward operation did not complete verification. Preserve the guard and retained verification records."
 
 ROUTE_TARGET = '/etc/nginx/marty-website'
 TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
@@ -341,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--retire-candidate", action="store_true")
     modes.add_argument("--release-backout", action="store_true")
     modes.add_argument("--prepare-forward", action="store_true")
+    modes.add_argument("--seal-forward", action="store_true")
+    modes.add_argument("--publish-forward", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -352,6 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-state-file", type=Path)
     parser.add_argument("--expected-account-sha256")
     parser.add_argument("--expected-organization-sha256")
+    parser.add_argument("--candidate-sha256")
+    parser.add_argument("--qualification-sha256")
+    parser.add_argument("--intent-sha256")
     args = parser.parse_args(argv)
     operation, error = None, ERROR
     if args.release_abort:
@@ -362,10 +368,24 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.release_website_backout, BACKOUT_ERROR
     elif args.prepare_forward:
         operation, error = selection.prepare_website_forward, FORWARD_ERROR
+    elif args.seal_forward:
+        operation, error = selection.seal_website_forward, FORWARD_ERROR
+    elif args.publish_forward:
+        operation, error = selection.publish_website_forward, FORWARD_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
-        selection.require(all(forward.values()) if args.prepare_forward else not any(forward.values()))
+        forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward
+        selection.require(all(forward.values()) if forward_operation else not any(forward.values()))
+        pins = {'candidate_sha256': args.candidate_sha256, 'qualification_sha256': args.qualification_sha256}
+        if args.seal_forward or args.publish_forward:
+            selection.require(all(product_journal.sha(pin) for pin in pins.values()))
+            forward.update(pins)
+        else:
+            selection.require(not any(pins.values()))
+        if args.intent_sha256 is not None:
+            selection.require(args.publish_forward and product_journal.sha(args.intent_sha256))
+            forward['intent_sha256'] = args.intent_sha256
         release_inputs = (args.plan_file, args.guard_sha256, args.expected_anchor_sha256)
         if operation is not None:
             selection.require(all(release_inputs) and args.plan_attempt_directory is None)
@@ -375,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = operation(args.selection_file.absolute(), plan,
                     guard_sha256=args.guard_sha256, expected_anchor_sha256=args.expected_anchor_sha256,
                     assets=args.composition_dir, gh=args.gh, cosign=args.cosign, registry_config=args.registry_config,
-                    authority_file=args.authority_file, **(forward if args.prepare_forward else {}))
+                    authority_file=args.authority_file, **(forward if forward_operation else {}))
         else:
             selection.require(not any(release_inputs) and args.authority_file is None)
             result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
