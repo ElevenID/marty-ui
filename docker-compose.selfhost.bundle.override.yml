@@ -65,6 +65,12 @@ services:
     environment:
       SERVICE_NAME: credential_template
 
+  owner-migrations:
+    <<: *selfhost-service-image
+    build: *selfhost-build-reset
+    environment:
+      SERVICE_NAME: credential_template
+
   trust-profile:
     <<: *selfhost-service-image
     build: *selfhost-build-reset
