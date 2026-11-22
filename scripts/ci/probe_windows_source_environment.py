@@ -74,7 +74,7 @@ def fixture_metadata(root, token):
         return {'metadata_query_succeeded': False, 'metadata_error_type': type(error).__name__}
 
 
-def main():
+def inspect_environment():
     if os.name != 'nt':
         raise SystemExit('Synthetic NTFS environment probe requires Windows')
     sys.path.insert(0, str(ROOT / 'tests'))
@@ -93,6 +93,11 @@ def main():
             probe('private-file', windows.hold_private_input(token)),
         ]
         result.update(fixture_metadata(root, token))
+    return result
+
+
+def main():
+    result = inspect_environment()
     print(json.dumps(result, sort_keys=True))
     if not all(item['passed'] for item in result['probes']):
         raise SystemExit('Synthetic Windows test environment does not satisfy unchanged NTFS custody')

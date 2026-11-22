@@ -47,6 +47,18 @@ not create or broaden ACLs. The destination itself must be absent; its name is
 exactly `windows-owner-source-<full-source-commit>-<first-16-archive-SHA256>`.
 Existing, partial, or linked destinations refuse.
 
+The operator process must also create objects owned by that same current user.
+Windows takes [new object ownership](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object)
+from the creating token's default owner. An elevated token can default to the
+Administrators group, even inside a directory explicitly owned by the user.
+Such output does not satisfy this installer's owner policy and refuses. The
+installer does not adjust the token, rewrite ownership, or broaden that policy.
+The public Windows CI launcher separately scopes the default owner of its
+disposable synthetic test process to its actual user, verifies fresh parent and
+isolated-child outputs with the unchanged guard, and restores the exact original
+default owner before success. That test setup is not a production installer or
+caller migration step.
+
 Pass the original retained configuration anchor and its independently observed
 digest. Do not substitute the latest generation's configuration or re-adopt a
 successor journal. The original anchor preserves access to the existing

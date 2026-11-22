@@ -40,12 +40,6 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pytest cryptography pyyaml
           if ($LASTEXITCODE -ne 0) { throw 'Public test dependency installation failed' }
-      - name: Diagnose synthetic Windows fixture custody
-        run: |
-          $env:TEMP = $env:RUNNER_TEMP
-          $env:TMP = $env:RUNNER_TEMP
-          python scripts/ci/probe_windows_source_environment.py
-          if ($LASTEXITCODE -ne 0) { throw 'Synthetic Windows fixture custody failed' }
       - name: Exercise exact source archive and portable installation contracts
         run: |
           $env:TEMP = $env:RUNNER_TEMP
@@ -59,7 +53,7 @@ jobs:
           $env:TEMP = $env:RUNNER_TEMP
           $env:TMP = $env:RUNNER_TEMP
           $report = Join-Path $env:RUNNER_TEMP 'windows-owner-source-native.xml'
-          python -X faulthandler -m pytest -q tests/test_windows_source_install_ntfs.py --junitxml=$report
+          python -X faulthandler scripts/ci/run_windows_source_tests.py --junitxml=$report
           if ($LASTEXITCODE -ne 0) { throw 'Native NTFS source contracts failed' }
           @'
           import os

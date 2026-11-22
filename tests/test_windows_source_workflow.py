@@ -66,13 +66,10 @@ def test_windows_source_workflow_uses_only_public_native_synthetic_execution():
     assert re.findall(r'\btests/[^\s`]+\.py', commands) == [
         'tests/test_windows_owner_source_bundle.py',
         'tests/test_windows_source_install.py',
-        'tests/test_windows_source_install_ntfs.py',
     ]
+    assert 'python -X faulthandler scripts/ci/run_windows_source_tests.py --junitxml=$report' in native_step()['run']
     assert '--junitxml=$report' in native_step()['run']
     assert "if ($LASTEXITCODE -ne 0)" in native_step()['run']
-    diagnostic = next(step for step in steps if step.get('name') == 'Diagnose synthetic Windows fixture custody')
-    assert 'python scripts/ci/probe_windows_source_environment.py' in diagnostic['run']
-    assert steps.index(diagnostic) < steps.index(native_step())
 
 
 def test_native_workflow_is_a_required_same_commit_ci_dependency():
