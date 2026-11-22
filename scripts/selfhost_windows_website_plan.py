@@ -1,0 +1,293 @@
+"""Inert first-cutover plan for the existing managed Windows generation owner.
+
+This describes one website slot and one edge route mount. It never authenticates
+an input, inspects Windows/Docker, writes a journal or grants runtime admission.
+The future owner must derive every input while holding its existing lease and
+must separately qualify mounted bytes, native custody, storage and live traffic.
+"""
+from copy import deepcopy
+from pathlib import PurePosixPath, PureWindowsPath
+import re
+
+import deploy_website as routing
+import package_web_composition as composition
+import selfhost_windows_product as product
+import selfhost_windows_product_journal as product_journal
+import selfhost_windows_selection as selection
+import ui_release as ui
+import website_release as web
+
+
+SCHEMA = 'marty.windows-website-transition-plan/v1'
+SLOT = routing.SLOTS[0]
+ROUTE_TARGET = '/etc/nginx/marty-website'
+TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
+ANCHOR_FIELDS = {'project', 'engine_id', 'docker_host', 'root', 'selection_sequence',
+    'generation_sequence', 'binding_sha256', 'journal_sha256', 'configuration_sha256', 'model_sha256',
+    'selection_sha256', 'selected_sha256', 'native_sha256', 'historical_tls_sha256', 'data_sha256'}
+UNQUALIFIED = {'composition_authenticated': False, 'owner_lease_held': False,
+    'native_custody_checked': False, 'foreign_storage_custody_checked': False,
+    'installed_image_bytes_checked': False, 'mounted_edge_template_checked': False,
+    'runtime_readiness_checked': False, 'public_ingress_checked': False,
+    'activation_supported': False, 'production_admission': False}
+PLAN_FIELDS = {'schema', 'operation', 'owner', 'composition_id', 'proof_sha256', 'website',
+    'application', 'backend', 'route_contract', 'attempt_directory', 'route_directory',
+    'edge_template', 'route_runtime_mount', 'declared_roles', 'mutable_existing_roles',
+    'protected_roles', 'states', 'backout', 'qualification', 'plan_sha256'}
+
+
+def require(value):
+    if not value:
+        raise ValueError('Managed website transition plan refused')
+
+
+def sha(value):
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
+def digest(value):
+    return selection.digest(selection.packed(value))
+
+
+def windows_path(value):
+    """A bounded, canonical local-drive spelling; no filesystem qualification."""
+    require(isinstance(value, str) and len(value) <= 1024 and not re.search(r'[\x00-\x1f\x7f]', value))
+    path = PureWindowsPath(value)
+    require(re.fullmatch(r'[A-Z]:', path.drive) and path.is_absolute() and str(path) == value
+            and len(path.parts) > 1 and all(part not in {'.', '..'} and ':' not in part
+                and part.rstrip(' .') == part and not PureWindowsPath(part).is_reserved()
+                for part in path.parts[1:]))
+    return path
+
+
+def _under(root, value):
+    path = windows_path(value)
+    require(str(path).startswith(str(root) + '\\'))
+    return path
+
+
+def _runtime_source(value):
+    """Only the existing documented local-drive Docker Desktop bridge forms."""
+    require(isinstance(value, str))
+    for prefix in ('/run/desktop/mnt/host/', '/host_mnt/', '/mnt/'):
+        if value.startswith(prefix):
+            match = re.fullmatch(r'([a-zA-Z])/(.+)', value[len(prefix):])
+            require(match is not None)
+            value = match[1].upper() + ':\\' + match[2].replace('/', '\\')
+            break
+    return windows_path(value)
+
+
+def validate_anchor(value):
+    require(type(value) is dict and set(value) == ANCHOR_FIELDS)
+    require(isinstance(value['project'], str) and re.fullmatch(
+        r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}', value['project']))
+    require(isinstance(value['engine_id'], str) and 10 <= len(value['engine_id']) <= 128
+            and not re.search(r'[\x00-\x20\x7f]', value['engine_id']))
+    require(value['docker_host'] in {'npipe:////./pipe/dockerDesktopLinuxEngine', 'npipe:////./pipe/docker_engine'})
+    windows_path(value['root'])
+    require(type(value['selection_sequence']) is int and 1 <= value['selection_sequence'] <= selection.MAX_SELECTIONS
+            and type(value['generation_sequence']) is int
+            and value['selection_sequence'] <= value['generation_sequence'] <= 2**63-1)
+    require(all(sha(value[name]) for name in ANCHOR_FIELDS if name.endswith('_sha256')))
+    return value
+
+
+def _data(value, roles):
+    require(type(value) is dict and set(value) == roles)
+    for row in value.values():
+        require(type(row) is dict and set(row) == {'image', 'mounts'}
+                and isinstance(row['image'], str) and re.fullmatch(r'sha256:[0-9a-f]{64}', row['image'])
+                and type(row['mounts']) is list)
+        targets = []
+        for mount in row['mounts']:
+            require(type(mount) is dict and mount.get('Type') in {'bind', 'volume', 'tmpfs'})
+            target = mount.get('Destination')
+            require(isinstance(target, str) and target.startswith('/')
+                    and '..' not in PurePosixPath(target).parts and not target.startswith('/run/secrets/'))
+            targets.append(target)
+        require(len(targets) == len(set(targets)) and targets == sorted(targets))
+
+
+def _edge_input(before, template, root):
+    edge = before['services']['edge']
+    require(not edge.get('depends_on') and
+            'http://127.0.0.1/edge-healthz' in edge.get('healthcheck', {}).get('test', []))
+    volumes = edge.get('volumes', [])
+    require(type(volumes) is list and all(type(mount) is dict for mount in volumes))
+    targets = [mount.get('target') for mount in volumes]
+    require(all(isinstance(target, str) for target in targets) and len(targets) == len(set(targets)))
+    require(not any(target == ROUTE_TARGET or target.startswith(ROUTE_TARGET + '/')
+                    or ROUTE_TARGET.startswith(target.rstrip('/') + '/') for target in targets))
+    mounts = [mount for mount in volumes if mount['target'] == TEMPLATE_TARGET]
+    require(len(mounts) == 1 and mounts[0].get('type') == 'bind' and mounts[0].get('read_only') is True)
+    _under(root, mounts[0].get('source'))
+    require(isinstance(template, bytes) and 0 < len(template) <= 1024*1024 and b'\0' not in template)
+    try:
+        text = template.decode('utf-8')
+    except UnicodeError:
+        raise ValueError('Managed website transition plan refused') from None
+    lines = [line.split('#', 1)[0].strip() for line in text.splitlines()]
+    require(lines.count(composition.EDGE_INCLUDE) == 1
+            and any(re.fullmatch(r'location\s+=\s+/edge-healthz\s*\{', line) for line in lines))
+    return {'source': mounts[0]['source'], 'target': TEMPLATE_TARGET,
+            'bytes': len(template), 'sha256': selection.digest(template)}
+
+
+def proposal(before, manifest, website_release, routes, anchor, *, attempt_directory,
+             edge_template, data_before, website_image_id, route_runtime_mount):
+    """Return exact model/route/data proposals, without creating or qualifying them.
+
+    `before` is the owner's retained all-profile Compose model. Additions use the
+    ordinary renderer's Compose source form: the proposed model hashes identify
+    those exact source objects, not fresh `compose config` output. A future owner
+    must additionally bind the normalized models before any runtime operation.
+    `data_before` has the existing renewal.data_mounts shape, including image config
+    IDs and read-only mounts. The full data hash changes when adding the slot and
+    route mount; all original rows/mounts survive those declared additions exactly.
+    """
+    validate_anchor(anchor)
+    composition.validate_record(manifest)
+    web.validate_release(website_release)
+    require(website_release['schema'] == web.STANDALONE_FULL_RELEASE_SCHEMA
+            and manifest['production_pages'] == 'full'
+            and manifest['producer']['repository'] == ui.COMMERCE_REPOSITORY
+            and manifest['application']['image']['uri'] == ui.COMMERCE_IMAGE
+            and manifest['application']['producer']['repository'] == ui.COMMERCE_REPOSITORY)
+    selected = manifest['website']
+    require(selected == {**{name: website_release[name] for name in ('source_sha', 'revision', 'image', 'producer')},
+                         'release_sha256': ui.digest(ui.canonical(website_release))})
+    require(web.route_identity(routes) == manifest['route_contract']
+            == website_release['image_metadata']['route_contract'])
+    require(type(before) is dict and type(before.get('services')) is dict
+            and len(selection.packed(before)) <= 2*1024*1024
+            and anchor['model_sha256'] == digest(before))
+    services = before['services']
+    require(not set(routing.SLOTS).intersection(services)
+            and set(services) == set(manifest['images']) | product.PROVIDER_ROLES)
+    require({'ui', 'edge', 'gateway'} <= services.keys())
+    for role, service in services.items():
+        require(type(service) is dict and 'build' not in service)
+        expected = manifest['openbao_didcomm_image'] if role in product.PROVIDER_ROLES else manifest['images'][role]
+        require(product.image_identity(service['image']) == product.image_identity(expected))
+    require(services['ui']['image'] == manifest['application']['image']['uri'] + '@' + manifest['application']['image']['digest'])
+    root = windows_path(anchor['root'])
+    attempt = _under(root, attempt_directory)
+    require(attempt.parent == root and re.fullmatch(r'windows-website-[0-9a-f]{32}', attempt.name))
+    route_directory = str(attempt / 'routes')
+    template = _edge_input(before, edge_template, root)
+    require(type(route_runtime_mount) is dict and set(route_runtime_mount) == {
+        'Type', 'Source', 'Destination', 'Mode', 'RW', 'Propagation'}
+        and route_runtime_mount['Type'] == 'bind' and route_runtime_mount['Destination'] == ROUTE_TARGET
+        and route_runtime_mount['Mode'] == 'ro' and route_runtime_mount['RW'] is False
+        and route_runtime_mount['Propagation'] == 'rprivate'
+        and str(_runtime_source(route_runtime_mount['Source'])) == route_directory)
+    require(isinstance(website_image_id, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', website_image_id))
+    _data(data_before, set(services) - product.renewal.INITIALIZERS)
+    require(digest(data_before) == anchor['data_sha256'])
+    mounted_template = [mount for mount in data_before['edge']['mounts'] if mount['Destination'] == TEMPLATE_TARGET]
+    require(len(mounted_template) == 1 and mounted_template[0]['Type'] == 'bind'
+        and mounted_template[0].get('RW') is False
+        and str(_runtime_source(mounted_template[0].get('Source'))) == template['source'])
+    template['runtime_mount_sha256'] = digest(mounted_template[0])
+    require(not any(mount['Destination'] == ROUTE_TARGET or mount['Destination'].startswith(ROUTE_TARGET + '/')
+        or ROUTE_TARGET.startswith(mount['Destination'].rstrip('/') + '/') for mount in data_before['edge']['mounts']))
+
+    # Reuse only the ordinary deployer's pure service/route definitions. This
+    # intermediate rendering object is never persisted as an independent owner.
+    render = routing.next_state(None, manifest, routes, {'project': anchor['project']}, {
+        'images': manifest['images'], 'openbao_didcomm_image': manifest['openbao_didcomm_image'],
+        'configuration_sha256': 'sha256:' + digest(before)})
+    overlay = routing.compose_overlay(render, before, PureWindowsPath(route_directory))
+    # Reusing a fixed address or alias from edge would give the new service a
+    # competing network identity. The initial contract accepts ordinary networks.
+    networks = services['edge'].get('networks', {})
+    require('network_mode' not in services['edge'] and type(networks) is dict and bool(networks)
+        and type(before.get('networks')) is dict and set(networks) <= set(before['networks'])
+        and all(value is None or type(value) is dict and
+        set(value) <= {'priority', 'gw_priority'} and all(type(item) is int and item >= 0 for item in value.values())
+        for value in networks.values()))
+    staged = deepcopy(before)
+    staged['services'][SLOT] = deepcopy(overlay['services'][SLOT])
+    split = deepcopy(staged)
+    split['services']['edge'].setdefault('volumes', []).extend(deepcopy(overlay['services']['edge']['volumes']))
+    staged_data = deepcopy(data_before)
+    staged_data[SLOT] = {'image': website_image_id, 'mounts': []}
+    split_data = deepcopy(staged_data)
+    split_data['edge']['mounts'].append(deepcopy(route_runtime_mount))
+    split_data['edge']['mounts'].sort(key=lambda mount: mount['Destination'])
+    return {'models': {'combined': deepcopy(before), 'staged': staged, 'split': split},
+            'data': {'combined': deepcopy(data_before), 'staged': staged_data, 'split': split_data},
+            'routes': {'combined': b'', 'staged': b'', 'split': routing.render_routes(render)},
+            'edge_template': template, 'route_directory': route_directory,
+            'route_runtime_mount': deepcopy(route_runtime_mount)}
+
+
+def plan(before, manifest, website_release, routes, anchor, *, proof_sha256, **kwargs):
+    """Build a closed first-cutover declaration, never a runtime authorization."""
+    proposed = proposal(before, manifest, website_release, routes, anchor, **kwargs)
+    require(type(proof_sha256) is dict and set(proof_sha256) == product_journal.ARTIFACTS
+            and all(sha(value) for value in proof_sha256.values())
+            and proof_sha256['web-composition.json'] == selection.digest(ui.canonical(manifest)))
+    value = {'schema': SCHEMA, 'operation': 'first-cutover', 'owner': deepcopy(anchor),
+        'composition_id': manifest['composition_id'], 'proof_sha256': deepcopy(proof_sha256),
+        'website': deepcopy(manifest['website']), 'application': deepcopy(manifest['application']),
+        'backend': deepcopy(manifest['backend']), 'route_contract': deepcopy(manifest['route_contract']),
+        'attempt_directory': kwargs['attempt_directory'], 'route_directory': proposed['route_directory'],
+        'edge_template': proposed['edge_template'], 'route_runtime_mount': proposed['route_runtime_mount'],
+        'declared_roles': [SLOT], 'mutable_existing_roles': ['edge'],
+        'protected_roles': sorted(set(before['services']) - {'edge'}),
+        'states': {name: {'model_sha256': digest(proposed['models'][name]),
+                         'data_sha256': digest(proposed['data'][name]),
+                         'routes_sha256': selection.digest(proposed['routes'][name])}
+                   for name in ('combined', 'staged', 'split')},
+        'backout': {'restore_state': 'staged', 'verify_state': 'staged', 'retire_candidate_state': 'combined',
+                    'application_role': 'ui', 'preserved_selected_sha256': anchor['selected_sha256']},
+        'qualification': deepcopy(UNQUALIFIED)}
+    value['plan_sha256'] = digest(value)
+    return value
+
+
+def validate_envelope(value):
+    """Closed record integrity, still requiring held-input validate_plan later."""
+    require(type(value) is dict and set(value) == PLAN_FIELDS and value['schema'] == SCHEMA
+            and value['operation'] == 'first-cutover')
+    validate_anchor(value['owner'])
+    require(type(value['qualification']) is dict and set(value['qualification']) == set(UNQUALIFIED)
+            and all(flag is False for flag in value['qualification'].values()))
+    require(value['declared_roles'] == [SLOT] and value['mutable_existing_roles'] == ['edge'])
+    require(type(value['protected_roles']) is list and all(isinstance(role, str) for role in value['protected_roles'])
+            and value['protected_roles'] == sorted(set(value['protected_roles']))
+            and {'ui', 'gateway', *product.PROVIDER_ROLES} <= set(value['protected_roles'])
+            and not {'edge', *routing.SLOTS}.intersection(value['protected_roles']))
+    require(type(value['states']) is dict and set(value['states']) == {'combined', 'staged', 'split'})
+    for state in value['states'].values():
+        require(type(state) is dict and set(state) == {'model_sha256', 'data_sha256', 'routes_sha256'}
+                and all(sha(item) for item in state.values()))
+    require(value['states']['combined']['data_sha256'] == value['owner']['data_sha256']
+            and value['states']['combined']['model_sha256'] == value['owner']['model_sha256']
+            and value['states']['combined']['routes_sha256'] == value['states']['staged']['routes_sha256']
+                == selection.digest(b''))
+    require(value['backout'] == {'restore_state': 'staged', 'verify_state': 'staged',
+        'retire_candidate_state': 'combined', 'application_role': 'ui',
+        'preserved_selected_sha256': value['owner']['selected_sha256']})
+    require(value['plan_sha256'] == digest({key: item for key, item in value.items() if key != 'plan_sha256'}))
+    return value
+
+
+def validate_plan(value, before, manifest, website_release, routes, anchor, *, proof_sha256, **kwargs):
+    """Rebuild from original held inputs, rejecting extra fields and every drift."""
+    validate_envelope(value)
+    require(value == plan(before, manifest, website_release, routes, anchor, proof_sha256=proof_sha256, **kwargs))
+    return value
+
+
+def check_models(value, before, staged, split):
+    """Check supplied source proposals against a previously reconstructed plan.
+
+    A caller must first use validate_plan with the original held inputs. These
+    digests do not authenticate a plan or qualify actual container identities.
+    """
+    validate_envelope(value)
+    require(all(digest(model) == value['states'][name]['model_sha256']
+                for name, model in (('combined', before), ('staged', staged), ('split', split))))

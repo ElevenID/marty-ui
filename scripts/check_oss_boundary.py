@@ -94,6 +94,10 @@ METADATA_IDENTITY_LINES = {
         '                    LEGACY_COMMERCE_WEBSITE_IMAGE: ui.COMMERCE_REPOSITORY,',
         '        "application": {ui.PUBLIC_IMAGE: ui.REPOSITORY, ui.COMMERCE_IMAGE: ui.COMMERCE_REPOSITORY},',
     ),
+    "scripts/selfhost_windows_website_plan.py": (
+        "            and manifest['producer']['repository'] == ui.COMMERCE_REPOSITORY",
+        "            and manifest['application']['producer']['repository'] == ui.COMMERCE_REPOSITORY)",
+    ),
 }
 IGNORED_PARTS = {"__pycache__", "node_modules", "dist", "build", "artifacts"}
 COMMERCIAL_CATALOG_KEYS = {
