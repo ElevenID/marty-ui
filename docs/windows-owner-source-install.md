@@ -168,6 +168,12 @@ directly rather than the repository's PowerShell wrapper. Its pinned follow-up
 operations, including an existing Google identity-provider configuration hook,
 must remain part of that migration contract.
 
+The separate [operational caller](windows-owner-source-caller.md) binds a new
+private invocation to this qualified installation while preserving ordinary
+renewal, the retained Google hook, and explicit recovery phases. Its read-only
+check and durable hook guard are prerequisites for a separately verified
+scheduled-task action handoff.
+
 Keep all historical source and inactive entrypoints. The existing managed task
 installer remains create-only. Task migration, explicit recovery-entrypoint
 coordination, and any authorized host operation remain separate work; this
