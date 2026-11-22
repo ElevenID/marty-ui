@@ -98,6 +98,59 @@ fn absent_selection_preserves_local_default_and_external_database_requires_exter
 }
 
 #[test]
+fn status_distinguishes_a_bound_selection_from_provider_health_or_recovery_evidence() {
+    let (parent, path, mut state) = installation();
+    assert!(state.with_inspection(status).unwrap().is_none());
+    let local = state
+        .with_inspection(|view| {
+            crate::installer_doctor::services(view, &path, Path::new("/unused/docker"))
+        })
+        .unwrap();
+    assert!(local.get("external_database").is_none());
+    choose(parent.path(), &mut state);
+    // Status uses retained evidence; it must not reread the operator's original
+    // password file or infer that the runtime can connect to the provider.
+    std::fs::remove_file(parent.path().join("database-password")).unwrap();
+    let report = state.with_inspection(status).unwrap().unwrap();
+    let doctor = state
+        .with_inspection(|view| {
+            crate::installer_doctor::services(view, &path, Path::new("/unused/docker"))
+        })
+        .unwrap();
+    assert_eq!(doctor["external_database"], report);
+    assert_eq!(doctor["services_observed"], false);
+    assert_eq!(report["selection_verified"], true);
+    assert_eq!(report["provider_health"], "not_observed");
+    for field in [
+        "connection_observed",
+        "local_postgres_managed",
+        "local_state_copy_includes_database",
+        "backup_observed",
+        "restore_observed",
+        "installer_password_rotation_supported",
+        "installation_ready",
+    ] {
+        assert_eq!(report[field], false, "asserted {field} from configuration");
+    }
+    assert_eq!(
+        report["backup_restore_owner"],
+        "operator_and_database_provider"
+    );
+    assert_eq!(report["backup_restore_qualification"], "not_assessed");
+    let text = report.to_string();
+    for private in [
+        "pooler.supabase.com",
+        "elevenid.projectref",
+        "database-password",
+        "test:pass@word",
+    ] {
+        assert!(!text.contains(private));
+    }
+    std::fs::remove_file(path.join("evidence").join(RECORD)).unwrap();
+    assert!(state.with_inspection(status).is_err());
+}
+
+#[test]
 fn input_contract_refuses_raw_urls_tls_downgrades_and_unknown_or_duplicate_fields() {
     let (parent, path, state) = installation();
     let before = std::fs::read(path.join("installation.json")).unwrap();

@@ -18,7 +18,7 @@ import time
 import uuid
 from pathlib import Path
 
-from check_selfhost_recovery_scope import recovery_scope
+from check_selfhost_recovery_scope import recovery_scope, require_local_postgres
 
 
 PROBE = "marty-recovery-probe"
@@ -98,6 +98,10 @@ def probe_check(pg: str, redis: str, applicant: Path, marker: str) -> None:
 def rehearse(source_model: dict, target_model: dict, source_digest: str, target_digest: str,
              source_version: str, target_version: str, work_root: Path) -> dict:
     """Run only in a fresh, disposable directory; never point at operator state."""
+    # Also protect direct callers, before directory creation or any container
+    # action. An external database is not covered by this local-state exercise.
+    require_local_postgres(source_model)
+    require_local_postgres(target_model)
     if work_root.exists() and any(work_root.iterdir()):
         raise ValueError("rehearsal work directory must be empty")
     work_root.mkdir(exist_ok=True)

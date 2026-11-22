@@ -202,8 +202,54 @@ That UI can use the project's custom design and brand. It is separate from
 Marty's provider label and from a Keycloak theme. Do not point Marty at a
 Supabase project merely because it supports social login; enable/configure its
 OAuth server, register the client, implement the consent journey, and apply
-the same metadata/browser/acceptance gates above. No Supabase project or
-custom Supabase authorization UI was provisioned by this change.
+the same metadata/browser/acceptance gates above. The repository includes a
+[static Supabase sign-in/consent companion](supabase-auth-ui.md) for existing
+verified accounts, with separate registered ElevenID and Rifare clients. It can
+be built independently for static hosting; it does not provision a project,
+register clients or qualify a hosted provider.
+
+### Supabase freshness and MFA source review
+
+On 2026-11-21, a review of upstream `supabase/auth` commit
+`10ef10789d1ee4fb422b448047e67e3e264c0482` found a material distinction between
+ordinary account authentication and the guarantees requested by Marty's default
+`prompt=consent login` and `max_age=0` policy:
+
+- The [authorization handler](https://github.com/supabase/auth/blob/10ef10789d1ee4fb422b448047e67e3e264c0482/internal/api/oauthserver/authorize.go)
+  does not parse or retain `prompt` or `max_age`. Its authorization-details GET
+  can approve an existing consent immediately, returning a callback instead of
+  new consent details.
+- The [code exchange](https://github.com/supabase/auth/blob/10ef10789d1ee4fb422b448047e67e3e264c0482/internal/api/oauthserver/handlers.go)
+  calls `IssueRefreshToken` before generating the ID token. The
+  [token service](https://github.com/supabase/auth/blob/10ef10789d1ee4fb422b448047e67e3e264c0482/internal/tokens/service.go)
+  sets `user.LastSignInAt` to the current time in that call, then signs it as
+  `auth_time`. From this source order, a numerically recent signed `auth_time`
+  can describe code exchange rather than the user's last interactive sign-in.
+- The OAuth routes use ordinary authenticated-session middleware, without an
+  AAL2 requirement. The reviewed ID-token claims have no `aal`, `acr` or `amr`.
+  A TOTP check performed by the companion is a requirement of that UI path;
+  it is not provider-wide enforcement or signed MFA evidence for Marty.
+
+This is a source-level observation, not a measurement of the selected hosted
+project or its deployed version. [OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest)
+defines `max_age` using the user's last active authentication. A normal successful
+login and a recently signed token therefore cannot establish this guarantee.
+
+The companion requires a new password sign-in and any required enrolled TOTP
+before calling the authorization-details endpoint. It uses an isolated
+memory-only SDK session, presents new consent explicitly, and labels a reused
+consent response separately. These controls improve that browser path; other
+callers of the provider API are outside its enforcement boundary. Keep Marty's
+default policy and signed-claim validation unchanged.
+
+Hosted qualification must include an older-session negative case: request
+`prompt=consent login&max_age=0` using a previously authenticated provider session
+and verify that a usable result cannot be obtained without new interaction.
+Inspect whether `auth_time` refers to that interaction, and separately verify
+whether MFA can be required beyond the companion. Until those behaviors are
+established, do not qualify Supabase for provider-enforced fresh authentication
+or MFA step-up. Ordinary OIDC identity validation and the PostgreSQL integration
+are separate questions.
 
 ## Deliberate boundaries
 

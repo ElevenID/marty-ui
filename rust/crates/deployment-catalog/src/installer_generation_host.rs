@@ -634,25 +634,6 @@ fn provision_selected(
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
-    fn host_output_owner_for_test() -> installer_helper_output::HelperOutputOwner {
-        let uid = unsafe { libc::geteuid() };
-        let profile = if uid == 0 {
-            crate::installer_state::RuntimeProfile::Rootful
-        } else {
-            crate::installer_state::RuntimeProfile::Rootless
-        };
-        installer_helper_output::expected_host_uid(&crate::installer_state::RuntimeBinding {
-            docker_host: if uid == 0 {
-                "unix:///var/run/docker.sock".into()
-            } else {
-                format!("unix:///run/user/{uid}/docker.sock")
-            },
-            engine_id: "engine-identity-123".into(),
-            openbao_port: 18200,
-            profile,
-        })
-        .unwrap()
-    }
 
     #[test]
     fn delivered_directory_custody_cannot_change_during_validation() {
@@ -668,8 +649,11 @@ mod tests {
             std::fs::write(&pending, b"retained transfer").unwrap();
             std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
             let held = directory(temp.path()).unwrap();
-            let result =
-                validate_delivery_using(temp.path(), &held, host_output_owner_for_test(), |_| {
+            let result = validate_delivery_using(
+                temp.path(),
+                &held,
+                installer_helper_output::test_support::host_output_owner(),
+                |_| {
                     let delivered = temp.path().join("delivered");
                     let moved = temp.path().join("moved");
                     match mutation {
@@ -693,110 +677,19 @@ mod tests {
                         _ => unreachable!(),
                     }
                     Ok(BTreeMap::new())
-                });
+                },
+            );
             assert_eq!(result.is_ok(), mutation == "unchanged", "{mutation}");
         }
     }
 
     #[test]
     fn retained_container_outputs_bind_host_owner_and_remain_private() {
-        let owner = host_output_owner_for_test();
-        let uid = unsafe { libc::geteuid() };
-        assert_eq!(owner.uid(), uid);
-        let rootful =
-            installer_helper_output::expected_host_uid(&crate::installer_state::RuntimeBinding {
-                docker_host: "unix:///var/run/docker.sock".into(),
-                engine_id: "engine-identity-123".into(),
-                openbao_port: 18200,
-                profile: crate::installer_state::RuntimeProfile::Rootful,
-            })
-            .unwrap();
-        assert_eq!(rootful.uid(), 0);
-        for mutation in [
-            "none",
-            "pending-mode",
-            "output-mode",
-            "pending-link",
-            "output-link",
-            "hardlink",
-            "pending-directory",
-            "output-file",
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-            let output = temp.path().join("output");
-            let pending = temp.path().join("transfer-pending.json");
-            std::fs::create_dir(&output).unwrap();
-            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700)).unwrap();
-            std::fs::write(&pending, b"synthetic retained transfer intent").unwrap();
-            std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600)).unwrap();
-            let held = directory(temp.path()).unwrap();
-            let snapshot = |path: &Path| {
-                let m = std::fs::symlink_metadata(path).unwrap();
-                (
-                    m.dev(),
-                    m.ino(),
-                    m.uid(),
-                    m.gid(),
-                    m.mode(),
-                    m.nlink(),
-                    m.len(),
-                )
-            };
-            let before = (snapshot(&output), snapshot(&pending));
-            validate_retained_entries(&held, owner).unwrap();
-            if uid != 0 {
-                // Rootful UID 0 is not an alternate accepted owner on rootless hosts.
-                assert!(validate_retained_entries(&held, rootful).is_err());
-            }
-            assert_eq!((snapshot(&output), snapshot(&pending)), before);
-            assert_eq!(
-                std::fs::read(&pending).unwrap(),
-                b"synthetic retained transfer intent"
-            );
-            match mutation {
-                "none" => continue,
-                "pending-mode" => {
-                    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o644))
-                        .unwrap()
-                }
-                "output-mode" => {
-                    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o750))
-                        .unwrap()
-                }
-                "pending-link" => {
-                    let original = temp.path().join("original-pending");
-                    std::fs::rename(&pending, &original).unwrap();
-                    symlink(original, &pending).unwrap();
-                }
-                "output-link" => {
-                    let original = temp.path().join("original-output");
-                    std::fs::rename(&output, &original).unwrap();
-                    symlink(original, &output).unwrap();
-                }
-                "hardlink" => {
-                    std::fs::hard_link(&pending, temp.path().join("linked-pending")).unwrap()
-                }
-                "pending-directory" => {
-                    std::fs::remove_file(&pending).unwrap();
-                    std::fs::create_dir(&pending).unwrap();
-                    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o600))
-                        .unwrap();
-                }
-                "output-file" => {
-                    std::fs::remove_dir(&output).unwrap();
-                    std::fs::write(&output, b"not a directory").unwrap();
-                    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700))
-                        .unwrap();
-                }
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                validate_retained_entries(&held, owner).unwrap_err(),
-                REFUSAL,
-                "accepted {mutation}"
-            );
-        }
+        installer_helper_output::test_support::assert_retained_output_cases(
+            directory,
+            validate_retained_entries,
+            REFUSAL,
+        );
     }
     #[test]
     fn held_output_directory_refuses_aliases_and_nonprivate_mode() {

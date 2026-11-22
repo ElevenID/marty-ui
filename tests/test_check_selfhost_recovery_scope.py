@@ -49,6 +49,60 @@ def test_records_complete_writable_state_scope_without_secret_values(tmp_path: P
     assert "OpenBao state/export" in result["separate_recovery_inputs"]
 
 
+@pytest.mark.parametrize("keep_local_postgres", [False, True])
+def test_external_database_cannot_be_claimed_by_a_local_state_inventory(
+    tmp_path: Path, keep_local_postgres: bool,
+) -> None:
+    value = model(tmp_path)
+    if not keep_local_postgres:
+        del value["services"]["postgres"]
+    value["secrets"] = {
+        "marty_db_password": {"file": str(tmp_path / "secrets/external_postgres_password")}
+    }
+    with pytest.raises(ValueError, match="external databases need a separate"):
+        GATE(value, tmp_path, "a" * 64)
+
+
+@pytest.mark.parametrize("variable,value", [
+    ("DATABASE_URL_TEMPLATE", "postgresql://marty:$${MARTY_DB_PASSWORD}@pooler.example.test:5432/postgres?sslmode=verify-full"),
+    ("DATABASE_URL", "postgresql://user:sensitive-password@pooler.example.test/postgres"),
+    ("DATABASE_URL", "postgresql://marty:private@postgres:5432/marty?host=pooler.example.test"),
+    ("DATABASE_URL_FILE", "/run/secrets/uninspected_database_url"),
+])
+def test_local_placeholder_postgres_does_not_cover_external_application_data(
+    tmp_path: Path, variable: str, value: str,
+) -> None:
+    rendered = model(tmp_path)
+    rendered["services"]["gateway"]["environment"] = {variable: value}
+    with pytest.raises(ValueError, match="external databases need a separate") as error:
+        GATE(rendered, tmp_path, "a" * 64)
+    assert value not in str(error.value)
+    assert "sensitive-password" not in str(error.value)
+
+
+def test_local_database_templates_remain_accepted(tmp_path: Path) -> None:
+    rendered = model(tmp_path)
+    rendered["services"]["gateway"]["environment"] = {
+        "DATABASE_URL_TEMPLATE": "postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
+    }
+    assert GATE(rendered, tmp_path, "a" * 64)["qualification"] == "unqualified"
+
+
+@pytest.mark.parametrize("environment", [
+    ["DATABASE_URL=postgresql://user:private@pooler.example.test/postgres"],
+    "DATABASE_URL=postgresql://user:private@pooler.example.test/postgres",
+    None,
+])
+def test_uninspectable_environment_cannot_hide_external_database(
+    tmp_path: Path, environment: object,
+) -> None:
+    rendered = model(tmp_path)
+    rendered["services"]["gateway"]["environment"] = environment
+    with pytest.raises(ValueError, match="external databases need a separate") as error:
+        GATE(rendered, tmp_path, "a" * 64)
+    assert "private" not in str(error.value)
+
+
 def test_project_scoped_redis_socket_is_ephemeral_and_not_backed_up(tmp_path: Path) -> None:
     value = model(tmp_path)
     value["name"] = "marty-qualification"

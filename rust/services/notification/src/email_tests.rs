@@ -228,6 +228,81 @@ async fn provider_errors_remain_redacted_and_redirects_are_not_followed() {
 }
 
 #[tokio::test]
+async fn conflicting_payloads_and_requests_in_progress_have_distinct_retry_policy() {
+    for (status, name, code, retry) in [
+        (
+            StatusCode::CONFLICT,
+            "concurrent_idempotent_requests",
+            "EMAIL_PROVIDER_REQUEST_IN_PROGRESS",
+            true,
+        ),
+        (
+            StatusCode::CONFLICT,
+            "invalid_idempotent_request",
+            "EMAIL_IDEMPOTENCY_CONFLICT",
+            false,
+        ),
+        (
+            StatusCode::CONFLICT,
+            "unknown_provider_error",
+            "EMAIL_PROVIDER_REJECTED",
+            false,
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            "validation_error",
+            "EMAIL_PROVIDER_SENDER_REJECTED",
+            false,
+        ),
+        (
+            StatusCode::UNAUTHORIZED,
+            "concurrent_idempotent_requests",
+            "EMAIL_PROVIDER_AUTH_FAILED",
+            false,
+        ),
+    ] {
+        let body = json!({"name":name, "message":format!("{KEY} one@example.test private provider detail")}).to_string();
+        let (adapter, seen, handle) = mock(status, body).await;
+        let result = adapter
+            .send(&notification(), "one@example.test", Utc::now())
+            .await;
+        assert!(!result.success);
+        assert_eq!(result.error_code.as_deref(), Some(code));
+        assert_eq!(result.should_retry, Some(retry));
+        let recorded = serde_json::to_string(&result).unwrap();
+        assert!(!recorded.contains(KEY));
+        assert!(!recorded.contains("one@example.test"));
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "classification must not retry automatically"
+        );
+        handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn malformed_or_oversized_conflict_responses_do_not_enable_retry() {
+    let prefix = r#"{"name":"concurrent_idempotent_requests","message":""#;
+    for body in [
+        "not json".to_owned(),
+        format!("{prefix}{}\"}}", "x".repeat(4097)),
+    ] {
+        let (adapter, seen, handle) = mock(StatusCode::CONFLICT, body).await;
+        let result = adapter
+            .send(&notification(), "one@example.test", Utc::now())
+            .await;
+        assert_eq!(
+            result.error_code.as_deref(),
+            Some("EMAIL_PROVIDER_REJECTED")
+        );
+        assert_eq!(result.should_retry, Some(false));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        handle.abort();
+    }
+}
+
+#[tokio::test]
 async fn malformed_success_and_oversized_body_are_not_delivery_evidence() {
     for body in [
         json!({"ok":true}).to_string(),

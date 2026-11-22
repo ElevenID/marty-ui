@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 STATE_MOUNTS = {
@@ -19,6 +20,58 @@ STATE_MOUNTS = {
     ("applicant", "/app/data"): "applicant",
 }
 EPHEMERAL_SOCKET_MOUNT = ("redis", "/data/run")
+LOCAL_DATABASE_ONLY = (
+    "This recovery path requires local PostgreSQL; external databases need "
+    "a separate provider-aware backup and restore."
+)
+
+
+def require_local_postgres(model: dict) -> None:
+    """Refuse external database inputs without reading credentials or probing.
+
+    A leftover local PostgreSQL mount cannot make a local state copy cover an
+    application configured against an external database.
+    """
+    services = model.get("services") if isinstance(model, dict) else None
+    if not isinstance(services, dict) or not isinstance(services.get("postgres"), dict):
+        raise ValueError(LOCAL_DATABASE_ONLY)
+    declarations = model.get("secrets", {})
+    if isinstance(declarations, dict):
+        password = declarations.get("marty_db_password", {})
+        source = password.get("file") if isinstance(password, dict) else None
+        if isinstance(source, str) and Path(source).name == "external_postgres_password":
+            raise ValueError(LOCAL_DATABASE_ONLY)
+    for service in services.values():
+        environment = service.get("environment", {}) if isinstance(service, dict) else {}
+        if not isinstance(environment, dict):
+            # Canonical Compose output uses a mapping. Do not let an alternate
+            # shape hide a remote endpoint from the backup-scope inventory.
+            raise ValueError(LOCAL_DATABASE_ONLY)
+        if environment.get("DATABASE_URL_FILE") not in (None, ""):
+            # A separate credential file cannot establish a local database
+            # boundary without reading private values; this tool never does so.
+            raise ValueError(LOCAL_DATABASE_ONLY)
+        for name in ("DATABASE_URL_TEMPLATE", "DATABASE_URL"):
+            value = environment.get(name)
+            if value in (None, ""):
+                continue
+            try:
+                endpoint = urlsplit(value) if isinstance(value, str) else None
+                local = (
+                    endpoint is not None
+                    and endpoint.scheme in ("postgres", "postgresql", "postgresql+asyncpg")
+                    and endpoint.hostname == "postgres"
+                    and endpoint.port in (None, 5432)
+                    # Driver-specific query parameters can override the host
+                    # or select a connection service. The reviewed local
+                    # templates have neither query parameters nor fragments.
+                    and not endpoint.query
+                    and not endpoint.fragment
+                )
+            except ValueError:
+                local = False
+            if not local:
+                raise ValueError(LOCAL_DATABASE_ONLY)
 
 
 def has_symlink_component(path: Path) -> bool:
@@ -39,6 +92,7 @@ def recovery_scope(model: dict, state_root: Path, model_sha256: str) -> dict:
     services = model.get("services")
     if not isinstance(services, dict) or not services:
         raise ValueError("complete Compose service model is required")
+    require_local_postgres(model)
     observed: dict[tuple[str, str], str] = {}
     socket_volume = False
     for service_name, service in services.items():

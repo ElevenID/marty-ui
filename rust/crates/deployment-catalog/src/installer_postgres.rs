@@ -9,7 +9,7 @@ use crate::{
     installer_state::{InstallerState, Journal, LockedInspection, Phase},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     net::IpAddr,
@@ -290,6 +290,29 @@ pub(crate) fn load(view: &LockedInspection) -> Result<Option<Selection>> {
     }
     require(crate::installer_oidc::load(view)?.is_some())?;
     selected(&raw.ok_or(REFUSED)?, view.journal()).map(Some)
+}
+
+/// Report the responsibility boundary without probing the provider or reading
+/// operational credentials. A bound selection is not a database health check,
+/// backup, restore, or qualification observation.
+pub(crate) fn status(view: &LockedInspection) -> Result<Option<Value>> {
+    if load(view)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(json!({
+        "mode": "external",
+        "selection_verified": true,
+        "provider_health": "not_observed",
+        "connection_observed": false,
+        "local_postgres_managed": false,
+        "local_state_copy_includes_database": false,
+        "backup_restore_owner": "operator_and_database_provider",
+        "backup_observed": false,
+        "restore_observed": false,
+        "backup_restore_qualification": "not_assessed",
+        "installer_password_rotation_supported": false,
+        "installation_ready": false
+    })))
 }
 
 pub(crate) fn record(

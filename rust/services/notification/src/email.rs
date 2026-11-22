@@ -128,6 +128,30 @@ fn idempotency_key(notification: &Notification, recipient: &str) -> String {
     format!("elevenid-email-{:x}", digest.finalize())
 }
 
+async fn bounded_response_body(response: &mut reqwest::Response) -> Option<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= 4096 => body.extend_from_slice(&chunk),
+            Ok(None) => return Some(body),
+            _ => return None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderErrorName {
+    ConcurrentIdempotentRequests,
+    InvalidIdempotentRequest,
+    ValidationError,
+}
+
+#[derive(Deserialize)]
+struct ProviderError {
+    name: ProviderErrorName,
+}
+
 impl ResendEmail {
     fn new(sender: &str, api_key: &str, endpoint: &str) -> Result<Self, &'static str> {
         let mut authorization =
@@ -185,7 +209,34 @@ impl ResendEmail {
         };
         let status = response.status();
         if !status.is_success() {
-            let (code, retry) = if status.is_redirection() {
+            // Resend uses 409 for both a request still being processed and a
+            // conflicting payload. Only the former is safe to retry unchanged.
+            // On the send endpoint a 403 validation_error rejects the sender,
+            // rather than identifying a broken API key. Read only a bounded
+            // allowlisted name; provider messages can contain private values.
+            let name = if matches!(status, StatusCode::CONFLICT | StatusCode::FORBIDDEN) {
+                bounded_response_body(&mut response)
+                    .await
+                    .and_then(|body| serde_json::from_slice::<ProviderError>(&body).ok())
+                    .map(|error| error.name)
+            } else {
+                None
+            };
+            let (code, retry) = if status == StatusCode::CONFLICT {
+                match name {
+                    Some(ProviderErrorName::ConcurrentIdempotentRequests) => {
+                        ("EMAIL_PROVIDER_REQUEST_IN_PROGRESS", true)
+                    }
+                    Some(ProviderErrorName::InvalidIdempotentRequest) => {
+                        ("EMAIL_IDEMPOTENCY_CONFLICT", false)
+                    }
+                    _ => ("EMAIL_PROVIDER_REJECTED", false),
+                }
+            } else if status == StatusCode::FORBIDDEN
+                && matches!(name, Some(ProviderErrorName::ValidationError))
+            {
+                ("EMAIL_PROVIDER_SENDER_REJECTED", false)
+            } else if status.is_redirection() {
                 ("EMAIL_PROVIDER_REDIRECT_REJECTED", false)
             } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
                 ("EMAIL_PROVIDER_AUTH_FAILED", false)
@@ -199,16 +250,9 @@ impl ResendEmail {
             return outcome(notification, now, Some(code), retry);
         }
         // A 2xx without a bounded provider message ID is not delivery evidence.
-        let mut body = Vec::new();
-        loop {
-            match response.chunk().await {
-                Ok(Some(chunk)) if body.len() + chunk.len() <= 4096 => {
-                    body.extend_from_slice(&chunk)
-                }
-                Ok(None) => break,
-                _ => return outcome(notification, now, Some("EMAIL_RESPONSE_INVALID"), true),
-            }
-        }
+        let Some(body) = bounded_response_body(&mut response).await else {
+            return outcome(notification, now, Some("EMAIL_RESPONSE_INVALID"), true);
+        };
         #[derive(Deserialize)]
         struct Accepted {
             id: String,

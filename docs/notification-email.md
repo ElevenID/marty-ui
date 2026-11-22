@@ -66,6 +66,10 @@ message identifier. Existing `success`/`delivered_at` fields record that provide
 acceptance, not proof of inbox delivery. Invalid or oversized success responses
 remain failures. Invalid credentials, recipient/content problems, rate limits,
 provider failures and rejected redirects have distinct, redacted error codes.
+An HTTP 409 response is retryable only when Resend identifies the same request
+as still in progress. Reusing its idempotency key with a different payload is
+reported as a nonretryable conflict. Sender-validation failures are reported
+separately from API-key failures; provider error messages remain private.
 
 There is no automatic email retry worker in this change. Transient errors mark
 `should_retry`, but they do not silently schedule requests or create a billable
@@ -93,4 +97,5 @@ custom SMTP provider.
 
 - [Resend Send Email API](https://resend.com/docs/api-reference/emails/send-email)
 - [Resend idempotency behavior](https://resend.com/docs/dashboard/emails/idempotency-keys)
+- [Resend error codes](https://resend.com/docs/api-reference/errors)
 - [Supabase custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
