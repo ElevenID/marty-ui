@@ -16,7 +16,8 @@ import sys
 
 from probe_windows_source_environment import inspect_environment
 
-NATIVE_SUITE = 'tests/test_windows_source_install_ntfs.py'
+NATIVE_SUITES = ('tests/test_windows_source_install_ntfs.py',
+                 'tests/test_windows_source_caller_ntfs.py')
 CHILD_PAYLOAD = b'PUBLIC_SYNTHETIC_ISOLATED_CHILD\n'
 
 
@@ -141,7 +142,7 @@ def execute_suite(report, *, token_factory=ProcessTokenOwner):
         require(all(item['passed'] for item in configured['probes']))
         prove_parent_and_isolated_child_creation()
         print('Unchanged NTFS custody verified fresh parent and isolated child outputs', flush=True)
-        result = pytest.main(['-q', NATIVE_SUITE, '--junitxml=' + str(report)])
+        result = pytest.main(['-q', *NATIVE_SUITES, '--junitxml=' + str(report)])
     # A successful pytest report cannot override restoration or close failure.
     print('Synthetic test process default owner restored exactly', flush=True)
     return int(result)
