@@ -29,6 +29,9 @@ JOB_FLAGS = {
     "public-protocol-contract": ("ui", "python", "rust", "release"),
     "test-release-contracts": ("release", "verification", "rust"),
 }
+# This required lane is independent of file classification. It executes only
+# in public repositories; the gate verifies that budget boundary separately.
+PUBLIC_JOB = "test-windows-owner-source"
 PLAN_KEYS = {"schema_version", "event", "source_sha", "base_sha", "head_sha", "flags",
              "rust_matrix", "selected_jobs", "unselected_jobs"}
 
@@ -173,8 +176,14 @@ def validate_plan(plan, env):
 
 def check_results(plan, needs, env):
     validate_plan(plan, env)
-    if not isinstance(needs, dict) or set(needs) != set(JOB_FLAGS):
+    if not isinstance(needs, dict) or set(needs) != set(JOB_FLAGS) | {PUBLIC_JOB}:
         raise ValueError("required job results roster changed")
+    private = env.get("REPOSITORY_PRIVATE")
+    if private not in {"true", "false"}:
+        raise ValueError("missing or invalid repository visibility")
+    expected_public = "skipped" if private == "true" else "success"
+    if not isinstance(needs[PUBLIC_JOB], dict) or needs[PUBLIC_JOB].get("result") != expected_public:
+        raise ValueError(f"{PUBLIC_JOB} must report {expected_public}")
     for job in JOB_FLAGS:
         expected = "success" if job in plan["selected_jobs"] else "skipped"
         if not isinstance(needs[job], dict) or needs[job].get("result") != expected:
