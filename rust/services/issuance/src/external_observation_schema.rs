@@ -10,7 +10,10 @@ pub const MIGRATION_SQL: &str =
     include_str!("../migrations/0014_external_observation_authority.sql");
 pub const LOCK_MIGRATION_SQL: &str =
     include_str!("../migrations/0015_external_observation_runtime_locks.sql");
-pub const CATALOG_QUERY: &str = include_str!("../schema/external_observation_catalog_query.sql");
+pub const CATALOG_QUERY: &str = concat!(
+    include_str!("../schema/external_observation_catalog_scope.sql"),
+    include_str!("../schema/scoped_catalog_query.sql"),
+);
 const CATALOG: &str = include_str!("../schema/external_observation_catalog.json");
 // Registered0017 adds incoming foreign-key triggers to canonical bindings.
 // Keep the original owner catalog valid for14/15 databases and pin the exact

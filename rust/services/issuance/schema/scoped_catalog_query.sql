@@ -1,9 +1,9 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
 -- Execute with search_path=pg_catalog. No user rows or ACL secrets are read.
-WITH relations AS (
+relations AS (
  SELECT c.oid,c.relname,c.relkind,c.relpersistence,c.relrowsecurity,c.relforcerowsecurity,c.relacl,c.relowner
  FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
- WHERE n.nspname='issuance_service' AND c.relname ~ '^external_observation_'
+ WHERE n.nspname='issuance_service' AND c.relname ~ (SELECT relation_pattern FROM scope)
  AND c.relkind IN ('r','p','v','m','f','S')
 ), tables AS (
  SELECT jsonb_agg(jsonb_build_object('name',relname,'kind',relkind,'persistence',relpersistence,
@@ -36,7 +36,8 @@ WITH relations AS (
   'public_privileges',EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl WHERE acl.grantee=0))
   ORDER BY p.proname COLLATE "C",p.oid::regprocedure::text COLLATE "C") AS value
  FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
- WHERE n.nspname='issuance_service' AND p.proname ~ 'external_observation'
+ WHERE n.nspname='issuance_service' AND (p.proname ~ (SELECT function_pattern FROM scope)
+  OR p.proname IN (SELECT unnest(extra_functions) FROM scope))
 ), internal_triggers AS (
  SELECT jsonb_agg(jsonb_build_object('table',r.relname,'constraint',c.conname,
   'function',t.tgfoid::regprocedure::text,'type',t.tgtype,'enabled',t.tgenabled,

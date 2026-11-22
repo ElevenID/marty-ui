@@ -3,6 +3,7 @@
 """Actual isolated PostgreSQL ownership state/receipt tests; no HTTP auth claim."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from issuance_catalog import scoped_catalog_query
 import json
 import subprocess
 import uuid
@@ -53,7 +54,7 @@ def main():
             sql(locks[start:end])
         sql('REVOKE EXECUTE ON FUNCTION issuance_service.external_observation_lock_organization(uuid),issuance_service.external_observation_lock_application(text,text) FROM PUBLIC;')
         sql((ROOT/'rust/services/issuance/migrations/0016_application_ownership.sql').read_text())
-        catalog_query=(ROOT/'rust/services/issuance/schema/application_ownership_catalog_query.sql').read_text()
+        catalog_query=scoped_catalog_query('application_ownership')
         catalog_path=ROOT/'rust/services/issuance/schema/application_ownership_catalog.json'
         actual_catalog=json.loads(sql(catalog_query))
         if '--write-catalog' in options:
