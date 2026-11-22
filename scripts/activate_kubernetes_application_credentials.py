@@ -336,7 +336,7 @@ def migration_complete(job: dict, namespace: str, release_name: str, runtime: di
                       and main[0].get("image") == images["services"]
                       and main[0].get("command") == ["/usr/local/bin/marty-issuance-service", "migrate"]
                       and main[0].get("args", []) == [], "migration container differs")
-    expected_names = ["redis-trust", *MIGRATION_COMMANDS, "ready-organization", "ready-credential-template"]
+    expected_names = ["redis-trust", *MIGRATION_COMMANDS, "ready-organization", "ready-credential-template", "ready-presentation-policy"]
     bootstrap.require([item.get("name") for item in initial] == expected_names
                       and not spec.get("ephemeralContainers"), "migration container order differs")
     for entry in initial:
