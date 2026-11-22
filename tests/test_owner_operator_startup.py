@@ -1,7 +1,7 @@
 """Regression contracts for operator-owned catalog/schema provisioning."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,7 +27,10 @@ def test_organization_schema_and_catalog_writes_are_operator_only() -> None:
     assert "outbox.migrate()" not in runtime
 
     application = read("rust/services/organization/src/application.rs")
-    initialize = application[application.index("pub async fn initialize"):application.index("pub async fn create_organization")]
+    initialize = application[
+        application.index("pub async fn initialize"):
+        application.index("pub async fn create_organization")
+    ]
     assert "validate_organization_schema(self.store.pool())" in initialize
     assert "migrate_organization_schema(" not in initialize
     assert "self.outbox.migrate()" not in initialize
@@ -102,9 +105,19 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
 
 def test_kubernetes_activation_and_disposable_qualification_include_bootstrap_steps() -> None:
     activation = read("scripts/activate_kubernetes_application_credentials.py")
-    assert '"bootstrap-organization": ["/usr/local/bin/marty-organization", "bootstrap"]' in activation
-    assert '"credential-template": ["/usr/local/bin/marty-credential-template", "bootstrap"]' in activation
-    assert '"bootstrap-presentation-policy": ["/usr/local/bin/marty-presentation-policy", "bootstrap-builtins"]' in activation
+    assert (
+        '"bootstrap-organization": ["/usr/local/bin/marty-organization", "bootstrap"]'
+        in activation
+    )
+    assert (
+        '"credential-template": ["/usr/local/bin/marty-credential-template", "bootstrap"]'
+        in activation
+    )
+    assert (
+        '"bootstrap-presentation-policy": '
+        '["/usr/local/bin/marty-presentation-policy", "bootstrap-builtins"]'
+        in activation
+    )
 
     migration_probe = read("scripts/qualify_selfhost_migrations.py")
     assert '("marty-organization", "bootstrap")' in migration_probe
