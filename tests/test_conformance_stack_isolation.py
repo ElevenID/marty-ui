@@ -992,13 +992,18 @@ def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> Non
     assert (
         "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
     )
+    owner = profile.split("  owner-migrations:\\n", 1)[1].split(
+        "\\n  organization:\\n", 1
+    )[0]
+    assert "MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL" in owner
+    assert "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in owner
 
 
 def test_credentials_migration_is_a_required_one_shot() -> None:
     profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(
         encoding="utf-8"
     )
-    assert "issuance-migrations" in stack.ONE_SHOT_SERVICES
+    assert {"owner-migrations", "issuance-migrations"} <= stack.ONE_SHOT_SERVICES
     assert "  issuance-migrations:\n    container_name: !reset null" in profile
 
 
