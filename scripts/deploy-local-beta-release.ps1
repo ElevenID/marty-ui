@@ -1619,7 +1619,13 @@ try {
         -LogPath (Join-Path $logsDir "migration-live.log") `
         -FailureMessage "Live migration failed"
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "owner-migrations") `
+        -Arguments @(
+            "run", "--rm", "--no-deps",
+            "--env", "MARTY_ORG_ID=$PilotOrganizationId",
+            "--env", "MARTY_MIGRATION_PROFILE=beta",
+            "--env", "PUBLIC_API_URL=$BetaOrigin",
+            "owner-migrations"
+        ) `
         -LogPath (Join-Path $logsDir "owner-migrations-live.log") `
         -FailureMessage "Organization, credential catalog, and presentation policy bootstrap failed"
     $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
