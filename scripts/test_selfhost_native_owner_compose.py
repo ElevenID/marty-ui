@@ -369,10 +369,10 @@ def assert_models(
         "/usr/local/bin/marty-presentation-policy migrate\n"
         "exec /usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
     ]
-    assert owner["build"] == {
-        "context": ".", "dockerfile": "services/Dockerfile",
-        "args": {"SERVICE_NAME": "credential-template"},
-    }
+    assert set(owner["build"]) == {"context", "dockerfile", "args"}
+    assert Path(owner["build"]["context"]).resolve() == ROOT
+    assert owner["build"]["dockerfile"] == "services/Dockerfile"
+    assert owner["build"]["args"] == {"SERVICE_NAME": "credential-template"}
     assert owner["environment"] == {
         "DATABASE_URL_TEMPLATE": "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
         "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
