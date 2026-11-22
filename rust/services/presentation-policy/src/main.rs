@@ -56,7 +56,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if !arguments.is_empty() {
         return Err("supported commands: migrate, verify-owned-schema, bootstrap-builtins".into());
     }
-    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
