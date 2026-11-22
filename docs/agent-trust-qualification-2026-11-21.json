@@ -1377,7 +1377,7 @@
   },
   "aws_qualification_reference": {
     "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
-    "sha256": "b2c4eca56e365080c0b9cd40fd2d0c110d8b5c1b319930481869ca946d9bc851",
+    "sha256": "3e47e8a8eec91f32ccedb73e5afec705354a7707565aca51bc3036f182989594",
     "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
     "aws_rust_tests_passed": 210,
     "aws_gate_count": 14,
@@ -1449,6 +1449,28 @@
         "aws_restarted": false,
         "final_required_ci_and_queue": "PENDING_ON_NEXT_CANDIDATE"
       }
+    },
+    "post_aws_url_security_followup": {
+      "repository_path": "docs/agent-trust-url-security-followup-2026-11-22.json",
+      "bytes": 210224,
+      "sha256": "fc8b6e33df51bf06b15f1f6c7ea30956055d3e6afbfa13bf616c6e37f4393fa0",
+      "actual_local_execution_base": "b8ee491416272c08f5e53db2409c53f4bc93d5db",
+      "effective_verified_rust_tree": "ac6b83a48fb8ea322584eef03d41ccb94d1413a9",
+      "production_lock_sha256": "20c69485bee06962abc1cff5a3e787065d79d7cdb3dde0971a6324a920407e47",
+      "changed_registry_versions": {
+        "url": "2.5.8 -> 2.5.9",
+        "form_urlencoded": "1.2.2 -> 1.2.3"
+      },
+      "other_production_package_rows_unchanged": 813,
+      "distinct_actual_focused_tests": 20,
+      "unchanged_feature_guards": "PASSED",
+      "exact_unchanged_ci_supply_chain_audit": "PASSED_LOCALLY_ALL_FOUR_CATEGORIES",
+      "normal_serving_build": "PASSED_BUILD_ONLY",
+      "normal_host_sha256": "882ee5f67331d17756ccb89ac9e78850ab6727a12152e7785e198732387415f7",
+      "normal_host_executed": false,
+      "aws_restarted": false,
+      "required_ci_and_queue_on_next_candidate": "PENDING",
+      "frozen_probe_is_a_separate_unchanged_baseline": true
     }
   }
 }
