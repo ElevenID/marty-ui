@@ -78,7 +78,9 @@ def test_transport_refuses_cookie_on_plain_http_and_non_application_paths():
         verify._request(HOST, '/', ('127.0.0.1',), 443, ssl.create_default_context(), 0, session_cookie=('sessionId',COOKIE))
 
 
-def test_real_compose_compiles_one_source_identical_to_admitted_overlays_for_both_generations(paths, planned):
+def test_real_compose_compiles_one_source_identical_to_admitted_overlays_for_both_generations(paths, planned, monkeypatch):
+    import selfhost_windows_website_current_backout as backout
+
     plan, records, _anchors = paths
     attempt = records.parent
     proposal = propose(planned)
@@ -116,6 +118,31 @@ def test_real_compose_compiles_one_source_identical_to_admitted_overlays_for_bot
         normalized, hashes = resolved[key]
         assert contract.SLOT in normalized['services'] and contract.sha(hashes[contract.SLOT])
         assert [row['target'] for row in normalized['services']['edge']['volumes']].count(contract.ROUTE_TARGET) == 1
+
+    # Reuse the published source and both retained overlays after ordinary renewal.
+    # Docker Compose renders the two replacement environments from their actual files.
+    config.update(docker_host=plan['owner']['docker_host'], engine_id=plan['owner']['engine_id'])
+    for generation in ('current', 'renewed'):
+        secret_root = root / ('later-' + generation)
+        env = root / ('later-' + generation + '.env')
+        env.write_text('SELFHOST_SECRET_DIR=' + secret_root.as_posix() + '\n', encoding='ascii')
+        config[generation + '_env'], config[generation + '_secrets'] = str(env), str(secret_root)
+    monkeypatch.setattr(renewal, 'Docker', lambda *_: Docker())
+    monkeypatch.setattr(edge.website, 'inspect_composition', lambda *_, **_kw: (plan, proposal))
+    selected = dict(config, **binding)
+    with ExitStack() as held:
+        _, layouts, _ = backout._layouts(selected, config, 'new', values, {}, plan, attempt, planned['data_before'],
+            held, assets=root/'assets', gh=None, cosign=None, registry_config=None)
+    for side in ('old', 'new'):
+        assert layouts[side]['split'][1]['secrets'] != resolved[side][0]['secrets']
+        assert layouts[side]['split'][1]['secrets'] == layouts[side]['combined'][1]['secrets']
+        assert contract.SLOT not in layouts[side]['combined'][1]['services']
+    route_overlay = attempt / 'route.compose.json'
+    route_overlay.rename(attempt / 'saved-route.compose.json')
+    with pytest.raises(ValueError, match='absent or not private'), ExitStack() as held:
+        backout._layouts(selected, config, 'new', values, {}, plan, attempt, planned['data_before'],
+            held, assets=root/'assets', gh=None, cosign=None, registry_config=None)
+    assert not route_overlay.exists()
 
 
 @pytest.mark.parametrize('fault',[None,'application','changed-proof','unverified',

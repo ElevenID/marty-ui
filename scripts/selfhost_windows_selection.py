@@ -1127,7 +1127,7 @@ def renew_once(config_path,logical_project):
 @contextmanager
 def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
                      _website_edge=None, _website_forward=None, _coordination=None, _published_backout_intent=None,
-                     _published_readmission_sha256=None):
+                     _published_readmission_sha256=None, _current_website_backout=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1148,6 +1148,10 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
         require(_pending_website is not None and _website_edge is not None and _website_edge[0] in BACKOUT
                 and re.fullmatch(r'[0-9a-f]{64}', _published_backout_intent))
         options['_pending_website_selection_sha256'] = _published_backout_intent
+    ancestry = []
+    if _current_website_backout is not None:
+        require(terminal_guard_sha256 is None and _pending_website is None and not website_actions)
+        options['_preserve_history'] = ancestry.extend
     with _session(config_path, _coordination=_coordination, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
@@ -1201,6 +1205,15 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 'historical_tls_sha256': digest(packed(cfg['tls_init_receipt'])),
                 'data_sha256': record['data_sha256'],
             }
+
+        if _current_website_backout is not None:
+            from selfhost_windows_website_current_backout import prepare
+            model_raw = stack.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=2*1024*1024))
+            require(digest(model_raw) == cfg['compose_sha256'])
+            owner = {**website_owner(), 'model_sha256': digest(packed(decode(model_raw)))}
+            plan, pins = _current_website_backout
+            yield prepare(cfg, choice, values, record, owner, (_root, raw), ancestry, plan, held=stack, **pins)
+            return
 
         if _pending_website is not None:
             from selfhost_windows_website_guard import inspect
@@ -1545,6 +1558,12 @@ def release_selected_website(config_path, plan, *, mode, **options):
 def readmit_website_backout(config_path, plan, **options):
     from selfhost_windows_website_abort_release import readmit_forward_backout
     return readmit_forward_backout(config_path, plan, **options)
+
+
+def plan_current_website_backout(config_path, plan, **options):
+    with _selected_inputs(config_path, _current_website_backout=(plan, options)) as result:
+        prepared = result
+    return prepared
 
 
 def reconcile_existing(config_path, *, authority_file=None):

@@ -408,6 +408,17 @@ backout phases use each new terminal anchor and the recorded readmission.
 When an ordinary renewal or model repair has advanced the split owner, a
 new plan against the current selection is required before restoring.
 
+After an ordinary renewal, run `--plan-current-backout` with the same
+selection file, signed composition, forward plan, guard, sealed anchor,
+forward intent and release digests used for readmission. It verifies the
+archived release, traces the selected split through credential renewal and
+ordinary journal continuation, and renders the original combined source
+and retained overlays under both current credential environments. It checks
+the live split's mounts, edge configuration, ingress and native credentials.
+Retain the returned plan and its digest with the observed generation.
+This is a read-only planning operation. Execution after renewal still
+requires a managed restore that checks that exact plan against the live owner.
+
 ## Required integration before activation
 
 The next runtime milestone must join the existing owner rather than introduce an

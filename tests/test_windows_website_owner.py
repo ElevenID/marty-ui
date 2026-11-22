@@ -61,8 +61,13 @@ def prepare(planned, root, original, config, *, combined_runtime=None):
         status = owner.guard.initialize(config, plan, held)
         guard_pin = status['guard_sha256']
         for phase in store.journal.FORWARD[:-1]:
+            started = {key: 'a'*64 for key in store.journal.START_EVIDENCE}
+            if phase == 'stage-candidate' and combined_runtime is not None:
+                before = dict.fromkeys(store.journal.START_EVIDENCE)
+                before['runtime_before'] = combined_runtime
+                started = forward.stage._evidence(attempt / 'stage-before.json', before, held)
             status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase, event='started',
-                evidence_sha256={key: 'a'*64 for key in store.journal.START_EVIDENCE})
+                evidence_sha256=started)
             after = ({key: {} for key in store.journal.COMPLETION_EVIDENCE[phase]} | {'runtime_after': runtime})
             if phase == 'stage-candidate' and combined_runtime is not None:
                 after['candidate_health'] = {'container_id': candidate_id}
@@ -655,3 +660,75 @@ def test_readmit_archived_split_guard_and_require_the_exact_fresh_baseline(monke
             selection.backout_published_website(path, plan, **options, backout_phase='restore-combined',
                 readmission_sha256=result['readmission_sha256'])
         assert calls == ['readmit', 'restore']
+
+
+def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys):
+    import selfhost_windows_website_current_backout as backout
+
+    with fixture(monkeypatch) as (root, phase, transaction, outcome, path, config):
+        combined = {'b'*64: {'service': 'edge', 'image': 'sha256:'+'b'*64, 'mounts': []}}
+        phase['data'] = digest(forward.edge._retained_data(combined))
+        _, _, plan, guard_pin, pins, split, _ = prepare(planned, root, path, config, combined_runtime=combined)
+        phase['data'] = plan['states']['split']['data_sha256']
+        committed = owner.finish(path, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        attempt = Path(plan['attempt_directory'])
+        qualification = attempt / ('forward-qualification-' + pins['qualification_sha256'] + '.json')
+        monkeypatch.setattr(forward, 'check_publication', lambda *_, **_kw: selection.decode(qualification.read_bytes()))
+        released = selection.release_selected_website(path, plan, mode='forward', guard_sha256=guard_pin,
+            expected_anchor_sha256=pins['terminal_sha256'], intent_sha256=committed['intent_sha256'],
+            assets=root/'assets', gh=None, cosign=None, registry_config=None)
+        args = ['--plan-current-backout', '--selection-file', str(path), '--composition-dir', str(root/'assets'),
+                '--gh', str(root/'gh'), '--cosign', str(root/'cosign'), '--plan-file', str(attempt/'journal'/store.PLAN),
+                '--guard-sha256', guard_pin, '--expected-anchor-sha256', pins['terminal_sha256'],
+                '--intent-sha256', committed['intent_sha256'], '--release-sha256', released['release_sha256']]
+        assert website.main(args) == 2  # No intervening renewal.
+        capsys.readouterr()
+
+        next_path, next_config = transaction(2)
+        next_config.update(compose_file=str(split), compose_sha256=selection.digest(split.read_bytes()),
+                           tls_init_receipt=config['tls_init_receipt'])
+        next_path.write_bytes(selection.packed(next_config))
+        assert selection.prepare(next_path) == 2
+        assert website.main(args) == 2  # Incomplete selection.
+        capsys.readouterr()
+        phase['active'] = Path(next_config['renewed_secrets'])
+        outcome(next_config, 'activated')
+        selected = selection.complete(next_path)
+        calls = []
+
+        def layouts(current, combined, choice, values, record, historical, *_args, **_options):
+            assert current['compose_file'] == str(split) and combined['compose_file'] == config['compose_file']
+            assert combined['renewed_env'] == current['renewed_env'] == next_config['renewed_env']
+            assert choice == 'new' and record['selected'] == selected['selected'] and historical == plan
+            calls.append('layout')
+            return None, {side: {state: (None, {'side': side}, {'state': state})
+                                 for state in plan['states']} for side in ('old', 'new')}, {}
+
+        monkeypatch.setattr(backout, '_layouts', layouts)
+        monkeypatch.setattr(backout, '_observe', lambda *_: {'runtime_sha256': 'b'*64})
+        assert website.main(args[:-1] + ['0'*64]) == 2
+        assert calls == []
+        capsys.readouterr()
+        assert website.main(args) == 0
+        output = selection.decode(capsys.readouterr().out.encode())
+        assert output['owner']['generation_sequence'] == 2
+        assert output['owner']['selected_sha256'] == digest(selected['selected']) != plan['owner']['selected_sha256']
+        assert output['historical_release']['release_sha256'] == released['release_sha256']
+        assert output['plan_sha256'] == digest({k: v for k, v in output.items() if k != 'plan_sha256'})
+        assert calls == ['layout'] and not renewal.product_transition_guard(config).exists()
+        class Runtime:
+            def containers(self):
+                return []
+
+        monkeypatch.setattr(selection, '_inspect', lambda *_, **_kw: {'docker': Runtime(), 'baseline': []})
+        with selection.selected_inputs(path) as lease:
+            assert lease.compose_file == split and lease.secrets_dir == phase['active']
+            new_journal = lease.continue_journal()['journal']
+        assert website.main(args) == 0
+        continued = selection.decode(capsys.readouterr().out.encode())
+        assert continued['selected_journal'] == new_journal
+        assert continued['owner']['selection_sequence'] == 1 and continued['owner']['generation_sequence'] == 2
+        assert continued['owner']['selected_sha256'] == output['owner']['selected_sha256']
+        assert continued['plan_sha256'] != output['plan_sha256']
+        (attempt/'stage-before.json').write_bytes(b'{}')
+        assert website.main(args) == 2 and calls == ['layout', 'layout']
