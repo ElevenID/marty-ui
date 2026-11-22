@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?;
         if !matches!(public_api_origin.scheme(), "http" | "https")
             || public_api_origin.host_str().is_none()
+            || public_api_origin.path() != "/"
             || !public_api_origin.username().is_empty()
             || public_api_origin.password().is_some()
             || public_api_origin.query().is_some()
@@ -103,9 +104,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &authority,
             &["orgs", &slug],
         );
+        if !issuer_did.starts_with("did:") {
+            return Err("invalid MARTY_ISSUER_DID for Credential Template bootstrap".into());
+        }
         let migration_profile = std::env::var("MARTY_MIGRATION_PROFILE")
             .unwrap_or_else(|_| "dev".into())
             .to_ascii_lowercase();
+        if !matches!(
+            migration_profile.as_str(),
+            "dev" | "beta" | "prod" | "production" | "selfhost-production" | "test"
+        ) {
+            return Err("invalid MARTY_MIGRATION_PROFILE for Credential Template bootstrap".into());
+        }
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&database_url)
