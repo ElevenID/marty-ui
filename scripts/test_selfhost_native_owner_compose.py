@@ -407,7 +407,7 @@ def assert_models(
         "build", "command", "depends_on", "entrypoint", "environment",
         "healthcheck", "mem_limit", "networks", "restart", "secrets", "volumes",
     }
-    assert set(owner["networks"]) == {"marty-network"}, owner["networks"]
+    assert set(owner["networks"]) == {"default"}, owner["networks"]
     assert len(owner["volumes"]) == 1
     mount = owner["volumes"][0]
     assert mount["target"] == "/app/load-secrets-env.sh" and mount["read_only"] is True
