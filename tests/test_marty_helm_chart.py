@@ -424,6 +424,8 @@ def test_ordered_bounded_migrations_wait_for_seeded_catalog(rendered: list[dict]
     assert names.index("revocation-profile") < names.index("bootstrap-notification")
     assert names.index("organization") < names.index("credential-template")
     assert names.index("credential-template") < names.index("ready-credential-template")
+    assert names.index("presentation-policy") < names.index("bootstrap-presentation-policy")
+    assert names.index("bootstrap-presentation-policy") < names.index("ready-presentation-policy")
     bootstrap = next(container for container in pod["initContainers"] if container["name"] == "bootstrap-notification")
     assert next(env["value"] for env in bootstrap["env"] if env["name"] == "REDIS_URL") == "rediss://redis:6379/2"
     for container in pod["initContainers"]:
