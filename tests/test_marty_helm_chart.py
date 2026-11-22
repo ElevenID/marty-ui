@@ -422,7 +422,8 @@ def test_ordered_bounded_migrations_wait_for_seeded_catalog(rendered: list[dict]
     pod = job["spec"]["template"]["spec"]
     names = [container["name"] for container in pod["initContainers"]]
     assert names.index("revocation-profile") < names.index("bootstrap-notification")
-    assert names.index("organization") < names.index("credential-template")
+    assert names.index("organization") < names.index("bootstrap-organization")
+    assert names.index("bootstrap-organization") < names.index("credential-template")
     assert names.index("credential-template") < names.index("ready-credential-template")
     assert names.index("presentation-policy") < names.index("bootstrap-presentation-policy")
     assert names.index("bootstrap-presentation-policy") < names.index("ready-presentation-policy")
