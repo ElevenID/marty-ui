@@ -44,7 +44,7 @@ EXPECTED_DEPENDENCIES = {
     # The local edge liveness endpoint must remain available while product
     # services are starting. Product readiness has separate upstream probes.
     "edge": {},
-    "flow": {"credential-template": H, "db-migrate": C,
+    "flow": {"credential-template": H, "db-migrate": C, "owner-migrations": C,
              "deployment-profile": H, "issuance": H, "issuance-native": H,
              "organization": H, "presentation-policy": H, "redis": H,
              "trust-profile": H},
