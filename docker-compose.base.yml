@@ -394,6 +394,48 @@ services:
     networks:
       - marty-network
 
+  # Provision the credential catalog and built-in policies with an
+  # explicit operator identity before the read-only owner services start.
+  owner-migrations:
+    mem_limit: ${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        . /app/load-secrets-env.sh
+        /usr/local/bin/marty-credential-template bootstrap
+        /usr/local/bin/marty-presentation-policy migrate
+        exec /usr/local/bin/marty-presentation-policy bootstrap-builtins
+    environment:
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    secrets:
+      - marty_db_password
+    volumes:
+      - ./scripts/load-secrets-env.sh:/app/load-secrets-env.sh:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - marty-network
+
   # Run the native issuance migrator from the same Rust build as the API.
   issuance-migrations:
     mem_limit: ${MARTY_ISSUANCE_MIGRATIONS_MEMORY_LIMIT:-1g}
@@ -408,7 +450,7 @@ services:
       SERVICE_NAME: issuance_native
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       organization:
         condition: service_healthy
@@ -692,7 +734,7 @@ services:
       - "127.0.0.1:8003:8003"
       - "127.0.0.1:9003:9003"
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       revocation-profile:
         condition: service_healthy
@@ -880,7 +922,7 @@ services:
       - "127.0.0.1:8009:8009"
       - "127.0.0.1:9009:9009"
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       issuance-native:
         condition: service_healthy
