@@ -141,6 +141,33 @@ the runtime selection cannot fall back to them. Existing cleanup semantics
 continue to retain state. Removing local PostgreSQL from a new installation is
 not permission to delete data from an existing one.
 
+## Source validation
+
+The 2026-11-21 implementation was checked with Rust 1.95.0, locked workspace
+dependencies and Docker Compose 5.6.1. The completed targeted checks were:
+
+| Check | Result |
+| --- | --- |
+| Installer, database URL, Compose ownership, bundle closure, optional-secret and runtime-plan Python tests | 635 passed, 5 fixture-dependent skips |
+| Deployment-catalog PostgreSQL selection, application settings, command, environment, ACME preparation and credential-alias Rust tests | 47 passed |
+| Native packaged-source and filtering/merge/restart Compose integration tests | 2 passed |
+| Notification email adapter and bounded database-pool Rust tests | 8 passed |
+| Issuance primary database-pool configuration Rust test | 1 passed |
+
+The native Compose checks exercise the real Compose executable against the
+packaged installer layers, including external OIDC plus external PostgreSQL,
+startup and retained maintenance models, password interpolation, secret aliases
+and dependency closure. They render configuration without starting containers.
+Their baseline assertions name every expected core service; the optional tunnel
+add-on is checked separately.
+
+The notification and issuance checks run inside their actual workspace crates.
+Email tests use local mock HTTP servers and synthetic credentials. Rust checks
+cover the selected components rather than the complete workspace suite. These
+results establish source and configuration behavior; live provider migrations,
+browser authentication, capacity and recovery still require the following
+deployment qualification.
+
 ## Deployment qualification
 
 Use a disposable provider database and the exact intended release to verify:

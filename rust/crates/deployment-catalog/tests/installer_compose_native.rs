@@ -15,6 +15,37 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+const CORE_BUNDLE_SERVICES: [&str; 28] = [
+    "applicant",
+    "auth",
+    "compliance-profile",
+    "credential-template",
+    "db-migrate",
+    "deployment-profile",
+    "device-registration",
+    "edge",
+    "event-stream",
+    "flow",
+    "gateway",
+    "issuance",
+    "issuance-migrations",
+    "issuance-native",
+    "keycloak",
+    "keycloak-configurator",
+    "kms-initialize",
+    "notification",
+    "organization",
+    "postgres",
+    "presentation-policy",
+    "redis",
+    "revocation-profile",
+    "revocation-profile-migrate",
+    "signing-keys",
+    "trust-profile",
+    "ui",
+    "verification",
+];
+
 struct PrivateFixture(Option<tempfile::TempDir>);
 impl PrivateFixture {
     fn new() -> Self {
@@ -384,7 +415,13 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         .keys()
         .map(|name| (name.clone(), image.clone()))
         .collect();
-    assert!(services.len() >= 29);
+    // The core bundle has 28 named owners after optional tunnel hosting moved
+    // into its selected add-on. Compare the complete inventory rather than a
+    // stale lower bound that could hide an added or missing application owner.
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(CORE_BUNDLE_SERVICES)
+    );
     let stack_lock: Value =
         serde_json::from_slice(&fs::read(source.join("release/stack-lock.json")).unwrap()).unwrap();
     let image_lock = root.join("synthetic-images.json");
@@ -1365,7 +1402,12 @@ fn assert_actual_installer_layers(
         &[],
     );
     let services = install["services"].as_object().unwrap();
-    assert!(services.len() >= 30);
+    let mut installed_owners = BTreeSet::from(CORE_BUNDLE_SERVICES);
+    installed_owners.insert("installer-ingress");
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        installed_owners
+    );
     assert_eq!(
         services["auth"]["depends_on"]["keycloak-configurator"]["condition"],
         "service_completed_successfully",
