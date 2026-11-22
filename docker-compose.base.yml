@@ -415,6 +415,7 @@ services:
         /usr/local/bin/marty-credential-template bootstrap
         /usr/local/bin/marty-presentation-policy migrate
         exec /usr/local/bin/marty-presentation-policy bootstrap-builtins
+        exec /usr/local/bin/marty-flow migrate
     environment:
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -1033,6 +1034,7 @@ services:
       <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       FLOW_SERVICE_PORT: "8011"
+      MARTY_SCHEMA_STARTUP_MODE: validate
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ORG_GRPC_TARGET: organization:9002
