@@ -61,7 +61,7 @@ EXPECTED_DEPENDENCIES = {
     "keycloak": {"postgres": H},
     "keycloak-configurator": {"keycloak": H},
     "kms-initialize": {"db-migrate": C},
-    "owner-migrations": {"db-migrate": C, "organization": H},
+    "owner-migrations": {"db-migrate": C},
     "notification": {"db-migrate": C},
     "organization": {"db-migrate": C, "redis": H},
     "presentation-policy": {"owner-migrations": C},
