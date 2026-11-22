@@ -19,6 +19,7 @@ BEFORE = 'retire-candidate-before.json'
 RETURNED = 'retire-candidate-returned.json'
 AFTER = 'retire-candidate-after.json'
 HISTORY = {'stage-after.json': ('stage-candidate', 'completed'),
+           'restore-combined-before.json': (edge.BACKOUT, 'started'),
            'restore-combined-after.json': (edge.BACKOUT, 'completed'),
            'verify-combined-after.json': ('verify-combined', 'completed')}
 RETIREMENT = {BEFORE: (PHASE, 'started'), RETURNED: (PHASE, journal.RETIRE_RETURNED)}
@@ -33,7 +34,17 @@ def _verified_candidate(plan, evidence):
     candidate_id = stage_after['candidate_health']['container_id']
     require(re.fullmatch(r'[0-9a-f]{64}', candidate_id) and routed['mounted_template'] == plan['edge_template'])
     staged = verified['runtime_after']
-    require(staged == routed['runtime_after'] and staged[candidate_id] == stage_after['runtime_after'][candidate_id])
+    before = evidence.get('restore-combined-before.json', {}).get('runtime_before', {})
+    if 'readmission_sha256' in before:
+        require(contract.sha(before['readmission_sha256']))
+        baseline = before['containers']
+        candidate_ids = [key for key, row in baseline.items() if row['service'] == contract.SLOT]
+        require(len(candidate_ids) == 1)
+        candidate_id = candidate_ids[0]
+    else:
+        baseline = stage_after['runtime_after']
+    require(re.fullmatch(r'[0-9a-f]{64}', candidate_id)
+            and staged == routed['runtime_after'] and staged[candidate_id] == baseline[candidate_id])
     require({key for key, row in staged.items() if row['service'] == contract.SLOT} == {candidate_id})
     require(staged[candidate_id]['project'] == plan['owner']['project'])
     return candidate_id, staged, routed['edge_configuration']

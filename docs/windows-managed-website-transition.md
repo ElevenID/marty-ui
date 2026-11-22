@@ -389,8 +389,24 @@ repeating runtime actions.
 Complete the scheduled renewal and reboot rehearsal and verify a usable
 combined backout before opening the production cutover. The guarded
 `--backout-published` sequence applies while the website guard is active.
-A rollback after forward guard release requires a new guarded admission
-against the selected configuration and the current credential generation.
+
+### Readmit rollback after forward guard release
+
+Run `--readmit-backout` with the original selection file, signed composition,
+plan and guard. Supply the committed forward `--intent-sha256`, the sealed
+`--expected-anchor-sha256`, and `--release-sha256` from the forward release
+result. The owner holds the exact split selection, requalifies its live
+configuration and native generation, and records the current runtime and
+mounts. This handles restarted containers when the admitted configuration
+and selected inputs still agree, including an unhealthy website candidate
+with the protected application ready. The existing project lock fences the
+same-handle move of the archived guard back into service.
+
+Use the returned `readmission_sha256` as `--readmission-sha256` for the
+first `--backout-published --backout-phase restore-combined` call. Later
+backout phases use each new terminal anchor and the recorded readmission.
+When an ordinary renewal or model repair has advanced the split owner, a
+new plan against the current selection is required before restoring.
 
 ## Required integration before activation
 

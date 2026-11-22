@@ -123,8 +123,12 @@ def rollback(paths, planned, monkeypatch):
                            ('verify-combined','verify-combined-after.json', {'runtime_after': snapshot,
                             'public_routes': {}, 'application_handoffs': {}})])
             for name, path, fields in phases:
+                hashes = {key: 'a'*64 for key in backout.journal.START_EVIDENCE}
+                if name == 'restore-combined':
+                    hashes = stage._evidence(attempt/'restore-combined-before.json',
+                                             {key: {} for key in hashes}, held)
                 status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=name,
-                    event='started', evidence_sha256={key: 'a'*64 for key in backout.journal.START_EVIDENCE})
+                    event='started', evidence_sha256=hashes)
                 status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=name,
                     event='completed', evidence_sha256=stage._evidence(attempt/path, fields, held))
             directory = Path(plan['route_directory'])

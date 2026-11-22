@@ -18,6 +18,8 @@ import selfhost_windows_website_verify as verify
 SCHEMA = 'marty.windows-website-abort-release/v1'
 RELEASE = 'abort-release.json'
 BACKOUT_RELEASE = 'backout-release.json'
+READMISSION = 'forward-backout-readmission.json'
+READMISSION_SCHEMA = 'marty.windows-website-forward-backout-readmission/v1'
 MODES = {
     'abort': (SCHEMA, RELEASE),
     'backout': ('marty.windows-website-backout-release/v1', BACKOUT_RELEASE),
@@ -302,13 +304,7 @@ def finalize_selected(config_path, plan, *, guard_sha256, expected_anchor_sha256
             require(link['attempt_dir'] == str(attempt) and link['terminal_sha256'] == expected_anchor_sha256)
             status = store.inspect(plan, expected_anchor_sha256=expected_anchor_sha256)
             status['guard_sha256'] = guard_sha256
-            selected = selection.decode(initial['000001.selection.json'])['selected']
-            require(contract.digest(selected) == plan['owner']['selected_sha256'])
-            expected = {'schema': MODES[mode][0], 'plan_sha256': plan['plan_sha256'], 'guard_sha256': guard_sha256,
-                'anchor_sha256': expected_anchor_sha256, 'terminal_record_sha256': status['tail_sha256'],
-                'intent_sha256': intent_sha256, 'decision_sha256': decision_sha256,
-                'selection_sha256': selection.digest(initial['000001.selection.json']), 'journal': str(target),
-                'selected_sha256': plan['owner']['selected_sha256'], 'generation_sequence': plan['owner']['generation_sequence']}
+            expected = _selection_release_checkpoints(plan, status, intent_sha256, decision_sha256, target, initial, mode)
             retained = pinned = None
             if mode == 'forward':
                 require(status['classification'] == 'forward-evidence-complete')
@@ -318,7 +314,8 @@ def finalize_selected(config_path, plan, *, guard_sha256, expected_anchor_sha256
                 retained, _ = hold_retirement(plan, status, stack)
 
             if active_present:
-                require(current == target and raw == initial and not renewal.namespace_entry_exists(archive))
+                require(current == target and raw == initial and not renewal.namespace_entry_exists(archive)
+                        and (mode != 'forward' or not renewal.namespace_entry_exists(attempt / READMISSION)))
                 identities = _path_identities(active)
                 fresh = _refresh_selected(plan, origin, initial, stack, mode, link, retained,
                     assets=assets, gh=gh, cosign=cosign, registry_config=registry_config,
@@ -338,4 +335,142 @@ def finalize_selected(config_path, plan, *, guard_sha256, expected_anchor_sha256
         else:
             require(coordination.enter_context(renewal.hold_private_input(archive)) == original)
         require(not renewal.namespace_entry_exists(active))
-    return {**release, 'result': 'website-' + mode + '-guard-archived', 'guard_archived': True}
+    return {**release, 'result': 'website-' + mode + '-guard-archived', 'guard_archived': True,
+            'release_sha256': contract.digest(release)}
+
+
+def _selection_release_checkpoints(plan, status, intent_pin, decision_pin, target, initial, mode):
+    body = initial['000001.selection.json']
+    require(contract.digest(selection.decode(body)['selected']) == plan['owner']['selected_sha256'])
+    return {'schema': MODES[mode][0], 'plan_sha256': plan['plan_sha256'], 'guard_sha256': status['guard_sha256'],
+            'anchor_sha256': status['anchor_sha256'], 'terminal_record_sha256': status['tail_sha256'],
+            'intent_sha256': intent_pin, 'decision_sha256': decision_pin, 'selection_sha256': selection.digest(body),
+            'journal': str(target), 'selected_sha256': plan['owner']['selected_sha256'],
+            'generation_sequence': plan['owner']['generation_sequence']}
+
+
+def _readmission_binding(plan, status, published, release_pin):
+    return {'schema': READMISSION_SCHEMA, 'plan_sha256': plan['plan_sha256'], 'guard_sha256': status['guard_sha256'],
+            'sealed_anchor_sha256': status['anchor_sha256'], 'published_selection': published,
+            'release_sha256': release_pin}
+
+
+def _hold_record(path, held):
+    raw = held.enter_context(renewal.hold_private_input(path))
+    value = selection.decode(raw)
+    require(type(value) is dict and raw == selection.packed(value))
+    return raw, value
+
+
+def hold_readmission(plan, status, published, held, *, expected_sha256=None, release_sha256=None):
+    """Verify the exact re-admission receipt and its separately retained runtime."""
+    attempt = Path(plan['attempt_directory'])
+    raw, receipt = _hold_record(attempt / READMISSION, held)
+    if expected_sha256 is not None:
+        require(selection.digest(raw) == expected_sha256)
+    release_raw, _release = _hold_record(attempt / MODES['forward'][1], held)
+    release_pin = selection.digest(release_raw)
+    require(release_sha256 is None or release_pin == release_sha256)
+    binding = _readmission_binding(plan, status, published, release_pin)
+    pin = receipt['runtime_sha256']
+    require(contract.sha(pin) and receipt == {**binding, 'runtime_sha256': pin})
+    runtime_raw, runtime = _hold_record(attempt / ('forward-backout-runtime-' + pin + '.json'), held)
+    require(selection.digest(runtime_raw) == pin
+            and set(runtime) == {'runtime_after', 'edge_configuration', 'native_custody', 'foreign_storage'}
+            and runtime['native_custody'] == {key: plan['owner'][key] for key in ('selected_sha256', 'native_sha256')}
+            and contract.digest(edge._retained_data(runtime['runtime_after'])) == plan['states']['split']['data_sha256'])
+    foreign = runtime['foreign_storage']
+    count = foreign['changes']
+    require(set(foreign) == {'engine_id', 'inventory_sha256', 'changes_sha256', 'changes'}
+            and foreign['engine_id'] == plan['owner']['engine_id'] and contract.sha(foreign['inventory_sha256'])
+            and type(count) is int and ((count == 0 and foreign['changes_sha256'] is None)
+                                       or (count > 0 and contract.sha(foreign['changes_sha256']))))
+    return receipt, runtime
+
+
+def _qualify_released_split(config, choice, values, record, plan, status, *, held, **options):
+    """Re-derive the active split under the saved plan, including after a restart."""
+    context, proposal, _previous, check_routes = edge._prepare(config, choice, values, record, plan, status,
+        prior_phase=edge.FORWARD, current='split', target='split', create_routes=False, candidate_ready=False,
+        include_http=True, qualify_restarted_split=True, held=held, **options)
+    items = context.check(before_intent=True)
+    original = edge._edge(edge._owned(items, config['project']))
+    _, layout, _ = context.layouts['split']
+    ingress = verify._installed_ingress(original, layout)
+    observed = edge._probe(context.docker, original, proposal, 'split')
+    final = context.check(before_intent=True)
+    selected = edge._edge(edge._owned(final, config['project']))
+    require(verify._installed_ingress(selected, layout) == ingress
+            and edge._probe(context.docker, selected, proposal, 'split') == observed)
+    check_routes()
+    witness = edge._start_observation(plan, status, context, final, observed)
+    return {'runtime_after': witness['runtime_before']['containers'], 'edge_configuration': observed,
+            'native_custody': witness['native_custody'], 'foreign_storage': witness['foreign_storage']}
+
+
+def readmit_forward_backout(config_path, plan, *, guard_sha256, expected_anchor_sha256, intent_sha256, release_sha256,
+                           assets, gh, cosign, registry_config, authority_file=None):
+    """Re-open the verified rollback guard at the still-selected credential generation."""
+    from selfhost_windows_model import effective_config, history
+    from selfhost_windows_product_journal import anchor
+    from selfhost_windows_website_forward import _pinned_qualification, verify_qualification
+    from selfhost_windows_website_owner import _published_binding
+
+    require(all(contract.sha(pin) for pin in (guard_sha256, expected_anchor_sha256, intent_sha256, release_sha256)))
+    config = selection.decode(renewal.read_private_bytes(Path(config_path)))
+    selection.binding(config)
+    attempt, active, archive = _paths(config, plan, 'forward')
+    original = selection.packed(guard.marker(plan))
+    require(selection.digest(original) == guard_sha256)
+    ancestry = []
+
+    with ExitStack() as coordination:
+        active_present = renewal.namespace_entry_exists(active)
+        with selection._session(config_path, _coordination=coordination, _preserve_history=ancestry.extend,
+                _pending_website_sha256=guard_sha256 if active_present else None) as (base, _, _, current, raw, stack):
+            require(_paths(base, plan, 'forward') == (attempt, active, archive))
+            require(renewal.namespace_entry_exists(archive) != active_present
+                    and (active_present or not renewal.recovery_pending(base)))
+            guard_path = active if active_present else archive
+            require(stack.enter_context(renewal.hold_private_input(guard_path)) == original)
+            origin, link, (target, initial), decision_pin = _selected_lineage(ancestry, (current, raw), intent_sha256, 'forward')
+            require(current == target and raw == initial and link['attempt_dir'] == str(attempt)
+                    and link['terminal_sha256'] == expected_anchor_sha256)
+            status = store.inspect(plan, expected_anchor_sha256=expected_anchor_sha256)
+            require(status['classification'] == 'forward-evidence-complete')
+            status['guard_sha256'] = guard_sha256
+            expected = _selection_release_checkpoints(plan, status, intent_sha256, decision_pin, target, initial, 'forward')
+            release, observed = _hold_release(attempt, expected, coordination, 'forward')
+            require(contract.digest(release) == release_sha256)
+            pinned = _pinned_qualification(attempt, link['candidate_sha256'], link['qualification_sha256'], stack)
+            verify_qualification(observed, pinned)
+            published = _published_binding(origin[1], link, initial)
+            if not active_present:
+                _, original_raw = origin
+                owner = selection.decode(original_raw['owner.json'])['binding']
+                first, original_record, generation = anchor(original_raw, owner)
+                records = selection._parse(original_raw, owner)[1]
+                _, combined_model, _ = history(original_raw, owner, records)
+                original_config = selection.decode(stack.enter_context(renewal.hold_private_input(Path(first['config_path']))))
+                original_config = effective_config(original_config, combined_model)
+                values, snapshots = selection._inputs(original_config, stack)
+                require(snapshots == first['inputs'] == selection.decode(initial['000001.intent.json'])['inputs']
+                        and generation == plan['owner']['generation_sequence'])
+                runtime = _qualify_released_split(original_config, original_record['choice'], values, original_record,
+                    plan, status, assets=assets, gh=gh, cosign=cosign, registry_config=registry_config,
+                    authority_file=authority_file, held=stack)
+                pin = contract.digest(runtime)
+                stage._material(attempt / ('forward-backout-runtime-' + pin + '.json'), runtime, stack)
+                stage._material(attempt / READMISSION, {**_readmission_binding(plan, status, published, release_sha256),
+                                'runtime_sha256': pin}, stack)
+                identities = _path_identities(archive)
+            receipt, _runtime = hold_readmission(plan, status, published, coordination, release_sha256=release_sha256)
+            for name, body in initial.items():
+                require(coordination.enter_context(renewal.hold_private_input(target / name)) == body)
+            coordination.enter_context(_held_private_input(target, directory=True))
+        if not active_present:
+            _archive_guard(config, archive, active, original, identities, coordination)
+        else:
+            require(coordination.enter_context(renewal.hold_private_input(active)) == original)
+        require(not renewal.namespace_entry_exists(archive))
+    return {**receipt, 'result': 'website-forward-backout-readmitted', 'readmission_sha256': contract.digest(receipt)}

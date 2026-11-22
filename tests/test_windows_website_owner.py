@@ -45,7 +45,6 @@ def prepare(planned, root, original, config, *, combined_runtime=None):
         body = name.encode()
         plan['proof_sha256'][name] = selection.digest(body)
         (assets / name).write_bytes(body)
-    rehash(plan)
     split = root / ('website-' + 'a'*32 + '.compose.json')
     split.write_bytes(selection.packed(selection.decode(model_bytes)))
     model = {'compose_file': str(split), 'compose_sha256': selection.digest(split.read_bytes())}
@@ -54,6 +53,9 @@ def prepare(planned, root, original, config, *, combined_runtime=None):
                      'mounts': [], 'status': 'running'}
     runtime = ([{'synthetic': 'runtime'}] if combined_runtime is None
                else {**combined_runtime, candidate_id: candidate_row})
+    if combined_runtime is not None:
+        plan['states']['split']['data_sha256'] = digest(forward.edge._retained_data(runtime))
+    rehash(plan)
     routing = {'synthetic': 'edge-configuration'}
     with ExitStack() as held:
         status = owner.guard.initialize(config, plan, held)
@@ -542,3 +544,112 @@ def test_release_forward_archives_exact_guard_with_locked_readback(monkeypatch, 
             assert website.main(args) == 0
             assert selection.decode(capsys.readouterr().out.encode()) == released
         assert calls == ['live'] * (2 if fault == 'before-rename' else 1)
+
+
+@pytest.mark.parametrize('fault', [None, 'wrong-release', 'renewal-intent', 'interrupted-after', 'failed-live'])
+def test_readmit_archived_split_guard_and_require_the_exact_fresh_baseline(monkeypatch, planned, capsys, fault):
+    import selfhost_windows_website_abort_release as release
+
+    with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
+        combined = {'b'*64: {'project': config['project'], 'service': 'edge', 'image': 'sha256:'+'b'*64,
+                             'mounts': [], 'status': 'running'}}
+        phase['data'] = digest(forward.edge._retained_data(combined))
+        _, _, plan, guard_pin, pins, _, _ = prepare(planned, root, path, config, combined_runtime=combined)
+        phase['data'] = plan['states']['split']['data_sha256']
+        committed = owner.finish(path, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        attempt, active, archive = release._paths(config, plan, 'forward')
+        qualification = selection.decode((attempt / ('forward-qualification-' + pins['qualification_sha256'] + '.json')).read_bytes())
+        monkeypatch.setattr(forward, 'check_publication', lambda *_, **_kw: qualification)
+        options = {'guard_sha256': guard_pin, 'expected_anchor_sha256': pins['terminal_sha256'],
+                   'intent_sha256': committed['intent_sha256'], 'assets': root/'assets',
+                   'gh': None, 'cosign': None, 'registry_config': None}
+        original = active.read_bytes()
+        original_identity = release._path_identities(active)
+        released = selection.release_selected_website(path, plan, **options, mode='forward')
+        assert not active.exists() and archive.exists()
+        calls = []
+
+        with ExitStack() as held:
+            historical = store.read_evidence(plan, expected_anchor_sha256=pins['terminal_sha256'], held=held,
+                references={'route-website-after.json': ('route-website', 'completed')})['route-website-after.json']['runtime_after']
+        runtime = {'c'*64: dict(historical['b'*64], pid=412),
+                   'd'*64: dict(historical['a'*64], pid=513)}
+        fresh = {'runtime_after': runtime, 'edge_configuration': {'container_id': 'c'*64},
+                 'native_custody': {key: plan['owner'][key] for key in ('selected_sha256', 'native_sha256')},
+                 'foreign_storage': {'engine_id': config['engine_id'], 'inventory_sha256': 'e'*64,
+                                     'changes_sha256': None, 'changes': 0}}
+
+        def qualify(combined_cfg, choice, _values, _record, supplied_plan, status, **kwargs):
+            assert combined_cfg['compose_file'] == config['compose_file'] and choice == 'new'
+            assert supplied_plan == plan and status['anchor_sha256'] == pins['terminal_sha256']
+            calls.append('readmit')
+            if fault == 'failed-live':
+                raise ValueError('Synthetic storage refusal')
+            return fresh
+
+        monkeypatch.setattr(release, '_qualify_released_split', qualify)
+        if fault == 'renewal-intent':
+            selected = Path(committed['journal'])
+            first = selection.decode((selected/'000001.intent.json').read_bytes())
+            first.update(sequence=2, operation='activation',
+                         parent=selection.digest((selected/'000001.selection.json').read_bytes()))
+            first['inputs']['old'] = first['inputs']['new']
+            selection._new_private(selected/'000002.intent.json', selection.packed(first))
+        args = ['--readmit-backout', '--selection-file', str(path), '--composition-dir', str(root/'assets'),
+                '--gh', str(root/'gh'), '--cosign', str(root/'cosign'), '--plan-file', str(attempt/'journal'/store.PLAN),
+                '--guard-sha256', guard_pin, '--expected-anchor-sha256', pins['terminal_sha256'],
+                '--intent-sha256', committed['intent_sha256'], '--release-sha256',
+                '0'*64 if fault == 'wrong-release' else released['release_sha256']]
+
+        if fault in {'wrong-release', 'renewal-intent', 'failed-live'}:
+            assert website.main(args) == 2
+            assert calls == (['readmit'] if fault == 'failed-live' else [])
+            assert not active.exists() and archive.read_bytes() == original
+            assert not (attempt/release.READMISSION).exists()
+            return
+        if fault == 'interrupted-after':
+            hold = release._held_private_input
+
+            @contextmanager
+            def interrupt(path_to_hold, **kwargs):
+                with hold(path_to_hold, **kwargs) as value:
+                    yield value
+                if kwargs.get('_rename_to') == active:
+                    raise RuntimeError('Interrupted after reopening the guard')
+
+            with monkeypatch.context() as injected:
+                injected.setattr(release, '_held_private_input', interrupt)
+                assert website.main(args) == 2
+            assert active.exists() and not archive.exists()
+            capsys.readouterr()
+
+        assert website.main(args) == 0
+        output = capsys.readouterr()
+        result = selection.decode(output.out.encode())
+        assert not output.err and calls == ['readmit']
+        assert result['result'] == 'website-forward-backout-readmitted'
+        assert not archive.exists() and active.read_bytes() == original
+        assert release._path_identities(active) == original_identity
+        with pytest.raises(ValueError):
+            selection.release_selected_website(path, plan, **options, mode='forward')
+        with pytest.raises(ValueError):
+            selection.status(path)
+
+        def restore(*_args, **_kwargs):
+            status = _args[5]
+            assert status['readmitted_runtime'] == fresh
+            assert status['readmission_sha256'] == result['readmission_sha256']
+            calls.append('restore')
+            return status
+
+        monkeypatch.setattr(forward.edge, 'run', restore)
+        with pytest.raises(ValueError):
+            selection.backout_published_website(path, plan, **options, backout_phase='restore-combined')
+        assert selection.backout_published_website(path, plan, **options, backout_phase='restore-combined',
+            readmission_sha256=result['readmission_sha256'])['guards_retained']
+        assert calls == ['readmit', 'restore']
+        (attempt / ('forward-backout-runtime-' + result['runtime_sha256'] + '.json')).write_bytes(b'{}')
+        with pytest.raises(ValueError):
+            selection.backout_published_website(path, plan, **options, backout_phase='restore-combined',
+                readmission_sha256=result['readmission_sha256'])
+        assert calls == ['readmit', 'restore']

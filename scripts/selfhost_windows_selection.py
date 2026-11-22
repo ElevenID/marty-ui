@@ -1126,7 +1126,8 @@ def renew_once(config_path,logical_project):
 
 @contextmanager
 def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
-                     _website_edge=None, _website_forward=None, _coordination=None, _published_backout_intent=None):
+                     _website_edge=None, _website_forward=None, _coordination=None, _published_backout_intent=None,
+                     _published_readmission_sha256=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1141,6 +1142,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
         options['_pending_website_sha256'] = _pending_website[1]
+    require(_published_readmission_sha256 is None or _published_backout_intent is not None)
     if _published_backout_intent is not None:
         from selfhost_windows_website_journal import BACKOUT
         require(_pending_website is not None and _website_edge is not None and _website_edge[0] in BACKOUT
@@ -1215,7 +1217,15 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                     require(status['classification'] == 'forward-evidence-complete'
                             and status['anchor_sha256'] == published['sealed_anchor_sha256'])
                     status['published_selection'] = published
+                    from selfhost_windows_website_abort_release import READMISSION, hold_readmission
+                    readmitted = renewal.namespace_entry_exists(Path(plan['attempt_directory']) / READMISSION)
+                    require(readmitted == (_published_readmission_sha256 is not None))
+                    if readmitted:
+                        _, baseline = hold_readmission(plan, status, published, stack,
+                                                      expected_sha256=_published_readmission_sha256)
+                        status.update(readmitted_runtime=baseline, readmission_sha256=_published_readmission_sha256)
                 else:
+                    require(_published_readmission_sha256 is None)
                     verify_backout_binding(plan, status, published, stack)
             if _website_stage is not None:
                 require(status['record_count'] == 1 and status['permitted_record_phases'] == ['stage-candidate'])
@@ -1469,12 +1479,13 @@ def release_website_backout(config_path, plan, *, guard_sha256, expected_anchor_
 
 
 def backout_published_website(config_path, plan, *, guard_sha256, expected_anchor_sha256, intent_sha256,
-                              backout_phase, assets, gh, cosign, registry_config, authority_file=None):
+                              backout_phase, assets, gh, cosign, registry_config, authority_file=None,
+                              readmission_sha256=None):
     """Restore the combined runtime under the guard and committed split selection."""
-    require(intent_sha256 is not None)
+    require(intent_sha256 is not None and (readmission_sha256 is None or re.fullmatch(r'[0-9a-f]{64}', readmission_sha256)))
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
             _website_edge=(backout_phase, assets, gh, cosign, registry_config, authority_file),
-            _published_backout_intent=intent_sha256) as status:
+            _published_backout_intent=intent_sha256, _published_readmission_sha256=readmission_sha256) as status:
         result = dict(status, published_intent_sha256=intent_sha256, guards_retained=True)
     return result
 
@@ -1529,6 +1540,11 @@ def release_selected_website(config_path, plan, *, mode, **options):
     """Archive the website guard for the exact selected destination."""
     from selfhost_windows_website_abort_release import finalize_selected
     return finalize_selected(config_path, plan, mode=mode, **options)
+
+
+def readmit_website_backout(config_path, plan, **options):
+    from selfhost_windows_website_abort_release import readmit_forward_backout
+    return readmit_forward_backout(config_path, plan, **options)
 
 
 def reconcile_existing(config_path, *, authority_file=None):

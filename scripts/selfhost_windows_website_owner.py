@@ -250,6 +250,16 @@ def verify_backout_binding(plan, status, published, held):
                                   references={name: ('restore-combined', 'started')}, held=held)[name]
     require(receipt['owner_lease'] == {'guard_sha256': status['guard_sha256'], 'owner': plan['owner'],
                                        'published_selection': published})
+    from selfhost_windows_website_abort_release import READMISSION, hold_readmission
+    before = receipt['runtime_before']
+    pin = before.get('readmission_sha256')
+    require(renewal.namespace_entry_exists(Path(plan['attempt_directory']) / READMISSION) == (pin is not None))
+    if pin is not None:
+        require(forward.contract.sha(pin))
+        sealed = {'guard_sha256': status['guard_sha256'], 'anchor_sha256': published['sealed_anchor_sha256']}
+        _, baseline = hold_readmission(plan, sealed, published, held, expected_sha256=pin)
+        require(before['containers'] == baseline['runtime_after']
+                and before['edge_configuration'] == baseline['edge_configuration'])
 
 
 def finish(config_path, plan, *, guard_sha256, terminal_sha256, candidate_sha256,

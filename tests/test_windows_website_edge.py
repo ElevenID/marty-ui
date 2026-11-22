@@ -58,7 +58,7 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
-    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout'])
+    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout', 'readmitted-restart'])
 def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
@@ -68,6 +68,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     calls = []
     site_unhealthy = fault == 'unready-site'
     changed_default = False
+    restarted = False
     hashes = {role: f'{index+1:064x}' for index, role in enumerate(proposal['models']['staged']['services'])}
     routed_hashes = {**hashes, 'edge': 'f'*64}
     combined = proposal['models']['combined']
@@ -83,7 +84,10 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
             status = {'StartedAt': 'synthetic', 'Status': 'exited' if exited else 'running', 'ExitCode': 0}
             if model.get('healthcheck'):
                 status.update(health)
-            rows.append({'Id': f'{edge_id if role == "edge" else index+1:064x}', 'Image': data['image'],
+            container_id = edge_id if role == 'edge' else index+1
+            if restarted and role == contract.SLOT:
+                container_id += 500
+            rows.append({'Id': f'{container_id:064x}', 'Image': data['image'],
                          'Mounts': deepcopy(data['mounts']), 'Config': {'Image': model['image'], 'Labels': {
                              'com.docker.compose.project': project, 'com.docker.compose.service': role,
                              'com.docker.compose.config-hash': (routed_hashes if state == 'split' else hashes)[role]}},
@@ -171,7 +175,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     def mutate(command, *, timeout):
         nonlocal state, edge_id
         phase = edge.FORWARD if state == 'staged' else edge.BACKOUT
-        sequence = '000004' if phase == edge.FORWARD else ('000010' if fault == 'sealed-backout' else '000006')
+        sequence = '000004' if phase == edge.FORWARD else ('000010' if fault in {'sealed-backout', 'readmitted-restart'} else '000006')
         assert (records / f'{sequence}.{phase}.started.json').is_file()
         assert (anchors / f'{sequence}.tail.json').is_file()
         assert command[-10:] == ['up', '--no-deps', '--no-build', '--pull', 'never',
@@ -226,7 +230,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         routed = advance(staged, edge.FORWARD)
         assert state == 'split' and routed['model_state'] == 'split'
         assert routed['permitted_record_phases'] == ['verify-website', 'restore-combined']
-        if fault == 'sealed-backout':
+        if fault in {'sealed-backout', 'readmitted-restart'}:
             for phase in ('verify-website', 'seal-forward'):
                 for event in ('started', 'completed'):
                     keys = (store.journal.START_EVIDENCE if event == 'started'
@@ -238,6 +242,21 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                          'sealed_anchor_sha256': routed['anchor_sha256'], 'split_selection_sha256': 'e'*64}
             routed['published_selection'] = published
         site_unhealthy = True
+        if fault == 'readmitted-restart':
+            import selfhost_windows_website_abort_release as release
+
+            restarted = True
+            edge_id += 25
+            with pytest.raises(ValueError):
+                advance(routed, edge.BACKOUT)
+            assert not (records / '000010.restore-combined.started.json').exists()
+            monkeypatch.setattr(release.verify, '_installed_ingress', lambda *_: ('example.test', 443))
+            with ExitStack() as held:
+                baseline = release._qualify_released_split(config, 'new', {}, record, plan,
+                    {**routed, 'guard_sha256': pin}, assets=attempt, gh=None, cosign=None,
+                    registry_config=None, authority_file=None, held=held)
+            assert baseline['edge_configuration']['container_id'] == f'{edge_id:064x}'
+            routed.update(readmitted_runtime=baseline, readmission_sha256=contract.digest(baseline))
         if fault == 'changed-default-before-backout':
             changed_default = True
             with pytest.raises(ValueError):
@@ -248,10 +267,17 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         restored = advance(routed, edge.BACKOUT)
         assert state == 'staged' and restored['model_state'] == 'staged'
         assert restored['permitted_record_phases'] == ['verify-combined']
-        if fault == 'sealed-backout':
+        if fault in {'sealed-backout', 'readmitted-restart'}:
             with ExitStack() as held:
                 retained = store.read_evidence(plan, expected_anchor_sha256=restored['anchor_sha256'], held=held,
                     references={'restore-combined-before.json': ('restore-combined', 'started')})
-            assert retained['restore-combined-before.json']['owner_lease']['published_selection'] == published
-        assert calls == ['authenticate', 'native', edge.FORWARD, 'authenticate', 'native', edge.BACKOUT]
+            start = retained['restore-combined-before.json']
+            assert start['owner_lease']['published_selection'] == published
+            if fault == 'readmitted-restart':
+                assert start['runtime_before']['readmission_sha256'] == routed['readmission_sha256']
+                assert start['runtime_before']['containers'] == routed['readmitted_runtime']['runtime_after']
+        expected = ['authenticate', 'native', edge.FORWARD]
+        if fault == 'readmitted-restart':
+            expected += ['authenticate', 'authenticate', 'native']
+        assert calls == [*expected, 'authenticate', 'native', edge.BACKOUT]
         assert (attempt / 'routes/active.conf').read_bytes() == proposal['routes']['split']

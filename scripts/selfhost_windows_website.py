@@ -348,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--select-combined", action="store_true")
     modes.add_argument("--release-forward", action="store_true")
     modes.add_argument("--release-combined", action="store_true")
+    modes.add_argument("--readmit-backout", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -363,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qualification-sha256")
     parser.add_argument("--intent-sha256")
     parser.add_argument("--forward-intent-sha256")
+    parser.add_argument("--release-sha256")
+    parser.add_argument("--readmission-sha256")
     parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate"))
     args = parser.parse_args(argv)
     operation, error = None, ERROR
@@ -384,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.select_combined_website, BACKOUT_ERROR
     elif args.release_forward or args.release_combined:
         operation, error = selection.release_selected_website, RELEASE_ERROR
+    elif args.readmit_backout:
+        operation, error = selection.readmit_website_backout, BACKOUT_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
@@ -395,7 +400,14 @@ def main(argv: list[str] | None = None) -> int:
             forward.update(pins)
         else:
             selection.require(not any(pins.values()))
-        if args.release_forward or args.release_combined:
+        selection.require(args.release_sha256 is None or args.readmit_backout)
+        selection.require(args.readmission_sha256 is None or (
+            args.backout_published and args.backout_phase == "restore-combined" and product_journal.sha(args.readmission_sha256)))
+        if args.readmit_backout:
+            selection.require(all(product_journal.sha(pin) for pin in (args.release_sha256, args.intent_sha256))
+                              and args.forward_intent_sha256 is None and args.backout_phase is None)
+            extra = {'intent_sha256': args.intent_sha256, 'release_sha256': args.release_sha256}
+        elif args.release_forward or args.release_combined:
             selection.require(product_journal.sha(args.intent_sha256) and args.forward_intent_sha256 is None
                               and args.backout_phase is None)
             mode = 'forward' if args.release_forward else 'combined'
@@ -409,7 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.backout_published:
             selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256)
                               and args.forward_intent_sha256 is None)
-            extra = {'backout_phase': args.backout_phase, 'intent_sha256': args.intent_sha256}
+            extra = {'backout_phase': args.backout_phase, 'intent_sha256': args.intent_sha256,
+                     'readmission_sha256': args.readmission_sha256}
         else:
             selection.require(args.forward_intent_sha256 is None)
             selection.require(args.backout_phase is None)
