@@ -1,5 +1,8 @@
 # Marty Helm chart
 
+The bundled Keycloak scripts are generated from the repository's `scripts/` directory.
+After editing a source script, run `python scripts/sync_helm_keycloak_scripts.py` from the repository root.
+
 This chart installs the current Marty services, UI, PostgreSQL and Redis into
 an existing Kubernetes cluster. Managed remote-key Keycloak is the default
 login provider; a fresh installation can instead select external OIDC. It uses native
