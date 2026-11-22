@@ -382,7 +382,7 @@ def assert_models(
     }
     assert owner_environment["DATABASE_URL_TEMPLATE"] in {
         "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
-        "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
     }
     assert owner_environment["MARTY_DB_PASSWORD_FILE"] == "/run/secrets/marty_db_password"
     assert owner_environment["MARTY_ORG_ID"] == "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}"
