@@ -123,10 +123,15 @@ fn router_with_auth(configured: bool) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
         .expect("lazy PostgreSQL URL");
-    migrate_organization_schema(&pool).await.expect("organization schema migration");
+    migrate_organization_schema(&pool)
+        .await
+        .expect("organization schema migration");
     let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)
         .expect("organization outbox store");
-    outbox.migrate().await.expect("organization outbox migration");
+    outbox
+        .migrate()
+        .await
+        .expect("organization outbox migration");
     drop(outbox);
     let cache = OrganizationCache::new(
         Arc::new(MemoryCache::default()),
