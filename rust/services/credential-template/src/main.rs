@@ -72,19 +72,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await?;
         migrate_credential_template_schema(&pool).await?;
         validate_credential_template_schema(&pool).await?;
-        let public_hostname = config.public_api_origin.host_str()
-            .ok_or("PUBLIC_API_URL must include a hostname")?.to_owned();
-        reconcile_credential_template_data(&pool, &CredentialTemplateDataReconciliationConfig {
-            marty_organization_id: config.marty_organization_id.to_string(),
-            marty_issuer_did: config.marty_issuer_did.clone(),
-            public_api_origin: config.public_api_origin.to_string(),
-            public_hostname,
-            selfhost_production: config.migration_profile == "selfhost-production",
-        }).await?;
+        let public_hostname = config
+            .public_api_origin
+            .host_str()
+            .ok_or("PUBLIC_API_URL must include a hostname")?
+            .to_owned();
+        reconcile_credential_template_data(
+            &pool,
+            &CredentialTemplateDataReconciliationConfig {
+                marty_organization_id: config.marty_organization_id.to_string(),
+                marty_issuer_did: config.marty_issuer_did.clone(),
+                public_api_origin: config.public_api_origin.to_string(),
+                public_hostname,
+                selfhost_production: config.migration_profile == "selfhost-production",
+            },
+        )
+        .await?;
         let store = PostgresCredentialTemplateStore::new(pool.clone());
-        seed_system_catalog(&store, chrono::Utc::now(),
+        seed_system_catalog(
+            &store,
+            chrono::Utc::now(),
             &config.marty_organization_id.to_string(),
-            config.public_api_origin.as_str(), &config.marty_issuer_did).await?;
+            config.public_api_origin.as_str(),
+            &config.marty_issuer_did,
+        )
+        .await?;
         drop(store);
         pool.close().await;
         return Ok(());
