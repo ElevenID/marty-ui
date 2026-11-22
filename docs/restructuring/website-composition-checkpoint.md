@@ -26,10 +26,11 @@ planning after credential renewal. The Windows owner test exercised a
 completed renewal and a subsequent journal continuation. Docker Compose
 rendered both replacement credential environments.
 
-The [rollback PR](https://github.com/ElevenID/marty-ui/pull/2059) adds a
-guarded edge restore and receipt reconciliation for the renewed selection.
-The next rollback work is to verify combined public and application routes,
-retire the candidate and publish the combined selection under that guard.
+The [rollback PR](https://github.com/ElevenID/marty-ui/pull/2059) restores the
+edge under the renewed selection. It verifies combined public and loopback
+routes, authenticated account and organization access, and candidate identity
+before retirement. It repeats the live checks with the candidate absent.
+The next rollback step is to publish the combined selection and release the guard.
 Production activation still requires credential
 recovery, healthy application and identity checks, the signed full composition,
 and renewal and reboot rehearsal. Keep [#2017](https://github.com/ElevenID/marty-ui/pull/2017)

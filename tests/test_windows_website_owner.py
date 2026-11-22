@@ -662,8 +662,10 @@ def test_readmit_archived_split_guard_and_require_the_exact_fresh_baseline(monke
         assert calls == ['readmit', 'restore']
 
 
-@pytest.mark.parametrize('fault', [None, 'timeout', 'nonzero', 'after-return', 'protected-drift', 'historical-evidence'])
-def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys, fault):
+@pytest.mark.parametrize(('fault', 'retirement_fault'), [
+    (None, None), (None, 'missing-return'), (None, 'post-removal-http'), ('timeout', None),
+    ('nonzero', None), ('after-return', None), ('protected-drift', None), ('historical-evidence', None)])
+def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(monkeypatch, planned, capsys, fault, retirement_fault):
     import selfhost_windows_website_current_backout as backout
     from types import SimpleNamespace
 
@@ -722,6 +724,8 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
                 raise RuntimeError('Synthetic readback interruption')
             edge_id = 'c'*64 if state == 'split' else 'd'*64
             runtime = {edge_id: {'service': 'edge', 'restarts': 0}}
+            if state != 'combined':
+                runtime['1'*64] = {'service': backout.contract.SLOT, 'status': 'running'}
             return runtime, {'runtime_sha256': digest(runtime), 'ingress_sha256': 'e'*64, 'networks': ['owned'],
                 'protected_runtime_sha256': 'f'*64 if state == 'staged' and fault == 'protected-drift' else 'a'*64,
                 'edge_configuration': {'container_id': edge_id, 'default_sha256': 'b'*64,
@@ -793,3 +797,55 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
         if rc == 0:
             assert capsys.readouterr().out == first
         assert operation_state['dispatched'] == 1
+        if fault is not None:
+            return
+
+        subject = ('4'*64, '5'*64)
+        session_file = root / 'test.session'
+        verified_args = ['--backout-published', *restore[1:], '--session-state-file', str(session_file),
+                         '--expected-account-sha256', subject[0], '--expected-organization-sha256', subject[1],
+                         '--backout-phase', 'verify-combined']
+        interruptions = {'public': True, 'post': retirement_fault == 'post-removal-http'}
+        def http(context, routes, proposal, state, held, session, identity):
+            assert Path(session) == session_file
+            if interruptions['public'] or identity != subject or (state == 'combined' and interruptions['post']):
+                raise ValueError('HTTP qualification failed')
+            runtime, obs = observe(context, proposal, routes, state, before_intent=True)
+            del obs['protected_runtime_sha256']
+            return [], runtime, obs, {'application_handoffs_sha256': '9'*64}
+
+        custody = {'candidate_id': '1'*64, 'observed_candidate': {'service': backout.contract.SLOT, 'status': 'running'},
+                   'remove_command': ['container', 'rm', '1'*64]}
+        monkeypatch.setattr(backout, '_http_acceptance', http)
+        monkeypatch.setattr(backout, '_retirement_inputs', lambda *_: (None, custody))
+        removals = []
+        def remove(context, observed):
+            assert observed == custody and not removals
+            removals.append(observed['candidate_id'])
+            assert backout._evidence_path(plan, continued['plan_sha256'], 'retire-intent').is_file()
+            operation_state['layout'] = 'combined'
+            if retirement_fault == 'missing-return':
+                raise renewal.UncertainComposeMutation('Synthetic missing return after removal')
+            return {'candidate_id': observed['candidate_id'], 'stop_completed': True, 'completed_cli_job': True,
+                    'remove_returncode': 0, 'candidate_absent': True}
+
+        monkeypatch.setattr(backout.reconcile, '_remove_candidate', remove)
+        assert website.main(verified_args) == 2 and not removals
+        interruptions['public'] = False
+        assert website.main(verified_args) == 0
+        audit = selection.decode(capsys.readouterr().out.encode())
+        retire = [*verified_args[:-1], 'retire-candidate', '--qualification-sha256', audit['qualification_sha256']]
+        assert website.main(retire[:-1] + ['0'*64]) == 2 and not removals
+        interruptions['public'] = True
+        assert website.main(retire) == 2 and not removals
+        interruptions['public'] = False
+        assert website.main(retire) == (0 if retirement_fault is None else 2)
+        interruptions['post'] = False
+        assert website.main(retire) == (2 if retirement_fault == 'missing-return' else 0)
+        assert website.main(verified_args) == 2 and removals == ['1'*64]
+        assert website.main(reconcile) == 2
+        assert renewal.product_transition_guard(config).is_file()
+        if retirement_fault is None:
+            returned = backout._evidence_path(plan, continued['plan_sha256'], 'retire-returned')
+            returned.write_bytes(selection.packed({'completed_cli_job': False}))
+            assert website.main(retire) == 2 and removals == ['1'*64]

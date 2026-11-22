@@ -43,15 +43,18 @@ class AbortContext(stage.StageContext):
         return snapshot
 
 
-def _compose_candidate(candidate, project, command):
+def _compose_candidate(candidate, project, command, *, selected_compose_file=None):
     container = candidate['Id']
     labels = candidate['Config']['Labels']
     inputs = [command[index + 1] for index, item in enumerate(command) if item == '-f']
     observed = labels['com.docker.compose.project.config_files'].split(',')
     require(re.fullmatch(r'[0-9a-f]{64}', container) and candidate['Name'] == f'/{project}-{contract.SLOT}-1'
             and labels['com.docker.compose.container-number'] == '1' and labels['com.docker.compose.oneoff'].lower() == 'false'
-            and len(inputs) == len(observed) == 2 and all(renewal.windows_mount_path_equal(a, b)
-                 for a, b in zip(observed, inputs, strict=True)))
+            and len(inputs) == 2)
+    if selected_compose_file is not None and len(observed) == 1:
+        inputs = [selected_compose_file]
+    require(len(observed) == len(inputs) and all(renewal.windows_mount_path_equal(a, b)
+                for a, b in zip(observed, inputs, strict=True)))
     return container
 
 
@@ -70,8 +73,8 @@ def _record_action(plan, status, name, value, attempt, held):
                         event=name, evidence_sha256=hashes)
 
 
-def _removal_intent(candidate, project, command):
-    container = _compose_candidate(candidate, project, command)
+def _removal_intent(candidate, project, command, *, selected_compose_file=None):
+    container = _compose_candidate(candidate, project, command, selected_compose_file=selected_compose_file)
     initial = renewal.context_snapshot([candidate])[container]
     require(initial['status'] in STOPPED | {'running', 'restarting'})
     return {'candidate_id': container, 'observed_candidate': initial, 'remove_command': ['container', 'rm', container]}

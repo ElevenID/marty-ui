@@ -10,6 +10,7 @@ import selfhost_windows_website_edge as edge
 import selfhost_windows_website_forward as forward
 import selfhost_windows_website_guard as guard
 import selfhost_windows_website_plan as contract
+import selfhost_windows_website_reconcile as reconcile
 import selfhost_windows_website_stage as stage
 import selfhost_windows_website_store as store
 import selfhost_windows_website_verify as verify
@@ -141,9 +142,15 @@ def _observe(context, proposal, routes, state, *, before_intent):
 
 def prepare(config, choice, values, record, owner, current, ancestry, historical_plan, *, guard_sha256,
             expected_anchor_sha256, intent_sha256, release_sha256, assets, gh, cosign, registry_config,
-            authority_file=None, held, operation='plan', current_plan_sha256=None):
+            authority_file=None, held, operation='plan', current_plan_sha256=None, session_state_file=None,
+            expected_account_sha256=None, expected_organization_sha256=None, qualification_sha256=None):
     """Qualify the current owner before planning, dispatching or reconciling edge restoration."""
-    require(operation in {'plan', 'restore', 'reconcile'})
+    acceptance = operation in {'verify-combined', 'retire-candidate'}
+    require(acceptance or operation in {'plan', 'restore', 'reconcile'})
+    identity = (expected_account_sha256, expected_organization_sha256)
+    require((session_state_file is not None and all(contract.sha(v) for v in identity)) if acceptance
+            else session_state_file is None and identity == (None, None))
+    require(contract.sha(qualification_sha256) if operation == 'retire-candidate' else qualification_sha256 is None)
     require(current_plan_sha256 is None if operation == 'plan' else contract.sha(current_plan_sha256))
     require(all(contract.sha(pin) for pin in (guard_sha256, expected_anchor_sha256, intent_sha256, release_sha256)))
     require(owner['generation_sequence'] > historical_plan['owner']['generation_sequence']
@@ -151,7 +158,7 @@ def prepare(config, choice, values, record, owner, current, ancestry, historical
             and owner['historical_tls_sha256'] == historical_plan['owner']['historical_tls_sha256'])
     original, attempt, lineage, data = _history(config, current, ancestry, historical_plan, guard_sha256=guard_sha256,
         expected_anchor_sha256=expected_anchor_sha256, intent_sha256=intent_sha256, release_sha256=release_sha256,
-        active_guard=edge_guard(historical_plan, current_plan_sha256) if operation == 'reconcile' else None, held=held)
+        active_guard=edge_guard(historical_plan, current_plan_sha256) if acceptance or operation == 'reconcile' else None, held=held)
     combined = model.effective_config(config, original)
     for cfg in (combined, config):
         raw = held.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=forward.MODEL_LIMIT))
@@ -167,11 +174,26 @@ def prepare(config, choice, values, record, owner, current, ancestry, historical
              'selected_journal': str(current[0]), 'historical_release': lineage,
              'configuration': {'combined': original, 'split': model.model_binding(config)},
              'states': states}
-    state = 'staged' if operation == 'reconcile' else 'split'
-    context, routes = _context(config, choice, values, record, historical_plan, docker, layouts, proposal, held,
-                               authority_file, state)
-    if operation == 'reconcile':
-        return _reconcile(value, current_plan_sha256, historical_plan, context, routes, proposal, held)
+    state = 'staged' if operation == 'reconcile' or acceptance else 'split'
+    if state == 'staged':
+        # A stop/remove with no recorded return is uncertain, including when
+        # the candidate appears absent. A fresh command cannot replay it.
+        intent, returned = (renewal.namespace_entry_exists(_evidence_path(historical_plan, current_plan_sha256, name))
+                            for name in ('retire-intent', 'retire-returned'))
+        if intent or returned:
+            require(operation == 'retire-candidate' and intent and returned)
+            state = 'combined'
+    def live_context(model_state):
+        return _context(config, choice, values, record, historical_plan, docker, layouts, proposal, held,
+                        authority_file, model_state)
+
+    context, routes = live_context(state)
+    if operation == 'reconcile' or acceptance:
+        plan = _hold_dispatch(value, current_plan_sha256, historical_plan, context, held)
+        if acceptance:
+            return _accept_combined(plan, historical_plan, context, routes, proposal, state, config, held,
+                                    session_state_file, identity, qualification_sha256, live_context)
+        return _finish(plan, historical_plan, context, routes, proposal, held, resumed=True)
     _, observation = _observe(context, proposal, routes, state, before_intent=True)
     value['observation'] = observation
     plan = {**value, 'plan_sha256': contract.digest(value)}
@@ -238,7 +260,7 @@ def _restore(plan, historical, context, routes, proposal, config, held):
     return _finish(plan, historical, context, routes, proposal, held, resumed=False)
 
 
-def _reconcile(binding, pin, historical, context, routes, proposal, held):
+def _hold_dispatch(binding, pin, historical, context, held):
     """Read back a returned command under its exact guard without dispatching again."""
     raw = held.enter_context(renewal.hold_private_input(_evidence_path(historical, pin, 'plan')))
     plan = selection.decode(raw)
@@ -248,4 +270,116 @@ def _reconcile(binding, pin, historical, context, routes, proposal, held):
     command = edge.recreate_command(context.layouts['staged'][0])
     require(held.enter_context(renewal.hold_private_input(_evidence_path(historical, pin, 'returned')))
             == selection.packed(_returned(pin, command, 0)))
-    return _finish(plan, historical, context, routes, proposal, held, resumed=True)
+    return plan
+
+
+def _read_evidence(path, held):
+    raw = held.enter_context(renewal.hold_private_input(path))
+    value = selection.decode(raw)
+    require(raw == selection.packed(value))
+    return value
+
+
+def _http_acceptance(context, routes, proposal, state, held, session_file, identity):
+    model = context.layouts[state][1]
+    items = context.check(before_intent=True)
+    owned = edge._owned(items, context.project)
+    runtime = renewal.context_snapshot(owned)
+    installed = edge._edge(owned)
+    ingress = verify._installed_ingress(installed, model)
+    configuration = edge._probe(context.docker, installed, proposal, state)
+    public, anonymous = verify._observe(installed, model, proposal['http'], state)
+    session = held.enter_context(renewal.hold_private_input(Path(session_file).absolute()))
+    authenticated = forward._authenticated(ingress[0], model, selection.decode(session), *identity)
+    final = context.check(before_intent=True)
+    live = edge._owned(final, context.project)
+    last = edge._edge(live)
+    require(renewal.context_snapshot(live) == runtime and verify._installed_ingress(last, model) == ingress
+            and edge._probe(context.docker, last, proposal, state) == configuration)
+    routes()
+    proof = {'public_routes_sha256': contract.digest(public), 'application_handoffs_sha256': contract.digest(anonymous),
+             'authenticated_application': authenticated}
+    observed = {'runtime_sha256': contract.digest(runtime), 'edge_configuration': configuration,
+                'ingress_sha256': contract.digest(ingress), 'networks': sorted(last['NetworkSettings']['Networks'])}
+    return final, runtime, observed, proof
+
+
+def _retirement_inputs(context, items, config, proposal):
+    candidates = stage._candidate_rows(items, context.project)
+    require(len(candidates) == 1)
+    candidate = candidates[0]
+    command, staged, hashes = context.layouts['staged']
+    combined = context.layouts['combined'][1]
+    inspected = {'docker': context.docker, 'baseline': [row for row in items if row is not candidate], 'context': context}
+    removal = reconcile.AbortContext(inspected, config, combined, staged, hashes, proposal['data']['staged'],
+                                     context.secret_root, candidate['Id'])
+    removal.check()
+    custody = reconcile._removal_intent(candidate, context.project, command, selected_compose_file=config['compose_file'])
+    return removal, custody
+
+
+def _accept_combined(plan, historical, context, routes, proposal, state, config, held, session_file,
+                     identity, qualification_sha256, live_context):
+    pin = plan['plan_sha256']
+
+    def path(name):
+        return _evidence_path(historical, pin, name)
+
+    restored = _read_evidence(path('restored'), held)
+    guard_pin = contract.digest(edge_guard(historical, pin))
+    require(restored['schema'] == 'marty.windows-website-current-edge-restored/v1'
+            and restored['current_plan_sha256'] == pin and restored['guard_sha256'] == guard_pin
+            and restored['selected_sha256'] == plan['owner']['selected_sha256']
+            and restored['generation_sequence'] == plan['owner']['generation_sequence'])
+    binding = {'current_plan_sha256': pin, 'restored_sha256': contract.digest(restored), 'guard_sha256': guard_pin,
+               'selected_sha256': restored['selected_sha256'], 'generation_sequence': restored['generation_sequence'],
+               'account_sha256': identity[0], 'organization_sha256': identity[1]}
+    if qualification_sha256 is not None:
+        qualified = _read_evidence(_evidence_path(historical, qualification_sha256, 'verified'), held)
+        require(contract.digest(qualified) == qualification_sha256 and qualified['binding'] == binding
+                and qualified['schema'] == 'marty.windows-website-current-combined-verified/v1')
+
+    if state == 'staged':
+        result = _finish(plan, historical, context, routes, proposal, held, resumed=True)
+        require(result['receipt_sha256'] == binding['restored_sha256'])
+        items, runtime, observation, http = _http_acceptance(context, routes, proposal, state, held, session_file, identity)
+        require(all(value == restored['observation'][key] for key, value in observation.items()))
+        removal, custody = _retirement_inputs(context, items, config, proposal)
+        candidate_id = custody['candidate_id']
+        require(custody['observed_candidate'] == runtime[candidate_id])
+        remaining = {key: value for key, value in runtime.items() if key != candidate_id}
+        assertions = {'binding': binding, 'custody': custody, 'retained_runtime_sha256': contract.digest(remaining),
+                      'schema': 'marty.windows-website-current-combined-verified/v1'}
+        if qualification_sha256 is None:
+            proof = {**assertions, 'http': http}
+            qualified_pin = contract.digest(proof)
+            stage._material(_evidence_path(historical, qualified_pin, 'verified'), proof, held)
+            return {'result': 'current-generation-combined-verified', 'qualification_sha256': qualified_pin,
+                    'current_plan_sha256': pin, 'guard_retained': True}
+        require(qualified == {**assertions, 'http': qualified['http']})
+        require(not renewal.namespace_entry_exists(path('retire-intent'))
+                and not renewal.namespace_entry_exists(path('retire-returned')))
+        intent = {'qualification_sha256': qualification_sha256, 'candidate_id': candidate_id}
+        stage._material(path('retire-intent'), intent, held)
+        returned = reconcile._remove_candidate(removal, custody)
+        stage._material(path('retire-returned'), returned, held)
+        context, routes = live_context('combined')
+
+    custody = qualified['custody']
+    expected_return = {'candidate_id': custody['candidate_id'], 'remove_returncode': 0,
+                       'stop_completed': custody['observed_candidate']['status'] in {'running', 'restarting'},
+                       'completed_cli_job': True, 'candidate_absent': True}
+    require(_read_evidence(path('retire-intent'), held) == {
+        'qualification_sha256': qualification_sha256, 'candidate_id': custody['candidate_id']})
+    require(_read_evidence(path('retire-returned'), held) == expected_return)
+    _, runtime, observed, http = _http_acceptance(context, routes, proposal, 'combined', held, session_file, identity)
+    require(custody['candidate_id'] not in runtime and not any(row['service'] == contract.SLOT for row in runtime.values())
+            and observed['runtime_sha256'] == qualified['retained_runtime_sha256']
+            and all(observed[key] == restored['observation'][key] for key in ('ingress_sha256', 'edge_configuration', 'networks')))
+    acceptance = {**binding, 'qualification_sha256': qualification_sha256, 'retained_runtime_sha256': observed['runtime_sha256'],
+                  'retirement_sha256': contract.digest(expected_return), 'http': http,
+                  'schema': 'marty.windows-website-current-candidate-retired/v1'}
+    receipt_pin = contract.digest(acceptance)
+    stage._material(_evidence_path(historical, receipt_pin, 'retired'), acceptance, held)
+    return {'result': 'current-generation-candidate-retired', 'receipt_sha256': receipt_pin,
+            'current_plan_sha256': pin, 'guard_retained': True}

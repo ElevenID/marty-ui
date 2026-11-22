@@ -427,10 +427,26 @@ ingress and unchanged protected runtime.
 Use `--reconcile-current-edge` with the same inputs after an interrupted
 readback. It requires a durable successful Compose return and freshly verifies
 the running edge. A missing or failed return requires operator reconciliation.
-The receipt leaves the shared guard active, the candidate installed and the
-split generation selected. Completing rollback still requires qualifying the
-combined public and application routes, retiring the candidate, publishing
-the combined selection and releasing the guard.
+
+After the restore receipt, run `--backout-published --backout-phase verify-combined`
+with the current plan digest and the same historical evidence. Supply the
+private `--session-state-file`, `--expected-account-sha256` and
+`--expected-organization-sha256`. The owner tests the original application
+marker, console, gateway, OIDC and browser handoff, verifies combined routes
+over public HTTPS and the installed loopback edge, and exercises the account
+and organization endpoints with the scoped session. It binds the result to
+the restored edge, the candidate container ID and the other running services.
+Save the returned `qualification_sha256`.
+
+For `--backout-phase retire-candidate`, keep those inputs and pass that digest
+as `--qualification-sha256`. The owner repeats the live checks before writing
+the retirement intent. It stops and removes the exact candidate, records the
+returned result, and checks the combined runtime and authenticated endpoints
+again. After a recorded successful removal, the same invocation can finish an
+interrupted readback. A retirement intent without a successful return requires
+operator reconciliation even when the container is absent. The receipt leaves
+the guard active. Publishing the combined selection with the renewed credentials
+and releasing the guard remain pending.
 
 ## Required integration before activation
 

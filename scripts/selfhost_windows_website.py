@@ -398,22 +398,34 @@ def main(argv: list[str] | None = None) -> int:
     elif args.restore_current_edge or args.reconcile_current_edge:
         operation, error = selection.restore_current_website_edge, BACKOUT_ERROR
     try:
+        renewed_backout = args.backout_published and args.current_plan_sha256 is not None
+        if renewed_backout:
+            selection.require(args.backout_phase in {'verify-combined', 'retire-candidate'})
+            operation = selection.backout_current_website
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
         forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward or args.release_forward
-        selection.require(all(forward.values()) if forward_operation else not any(forward.values()))
+        selection.require(all(forward.values()) if forward_operation or renewed_backout else not any(forward.values()))
         pins = {'candidate_sha256': args.candidate_sha256, 'qualification_sha256': args.qualification_sha256}
         if args.seal_forward or args.publish_forward:
             selection.require(all(product_journal.sha(pin) for pin in pins.values()))
             forward.update(pins)
+        elif renewed_backout and args.backout_phase == 'retire-candidate':
+            selection.require(args.candidate_sha256 is None and product_journal.sha(args.qualification_sha256))
+            forward['qualification_sha256'] = args.qualification_sha256
         else:
             selection.require(not any(pins.values()))
         current_edge = args.restore_current_edge or args.reconcile_current_edge
-        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge else args.current_plan_sha256 is None)
-        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge)
+        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge or renewed_backout else args.current_plan_sha256 is None)
+        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge or renewed_backout)
         selection.require(args.readmission_sha256 is None or (
             args.backout_published and args.backout_phase == "restore-combined" and product_journal.sha(args.readmission_sha256)))
-        if args.readmit_backout or args.plan_current_backout or current_edge:
+        if renewed_backout:
+            selection.require(product_journal.sha(args.release_sha256) and product_journal.sha(args.intent_sha256)
+                              and args.forward_intent_sha256 is None and args.readmission_sha256 is None)
+            extra = dict(forward, intent_sha256=args.intent_sha256, release_sha256=args.release_sha256,
+                         current_plan_sha256=args.current_plan_sha256, backout_phase=args.backout_phase)
+        elif args.readmit_backout or args.plan_current_backout or current_edge:
             selection.require(all(product_journal.sha(pin) for pin in (args.release_sha256, args.intent_sha256))
                               and args.forward_intent_sha256 is None and args.backout_phase is None)
             extra = {'intent_sha256': args.intent_sha256, 'release_sha256': args.release_sha256}

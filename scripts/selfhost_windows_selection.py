@@ -1160,7 +1160,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
         require(terminal_guard_sha256 is None and _pending_website is None and not website_actions)
         plan, operation, pins = _current_website_backout
         options['_preserve_history'] = ancestry.extend
-        if operation == 'reconcile':
+        if operation in {'reconcile', 'verify-combined', 'retire-candidate'}:
             from selfhost_windows_website_current_backout import edge_guard
             marker = edge_guard(plan, pins['current_plan_sha256'])
             options.update(_current_edge_guard=marker, _pending_website_sha256=digest(packed(marker)))
@@ -1582,6 +1582,12 @@ def restore_current_website_edge(config_path, plan, *, reconcile, current_plan_s
     mode = 'reconcile' if reconcile else 'restore'
     pins = dict(options, current_plan_sha256=current_plan_sha256)
     with _selected_inputs(config_path, _current_website_backout=(plan, mode, pins)) as result:
+        return result
+
+
+def backout_current_website(config_path, plan, *, backout_phase, **options):
+    require(backout_phase in {'verify-combined', 'retire-candidate'})
+    with _selected_inputs(config_path, _current_website_backout=(plan, backout_phase, options)) as result:
         return result
 
 

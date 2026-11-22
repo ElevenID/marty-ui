@@ -11,6 +11,8 @@ import pytest
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_windows_website_plan import planned, propose
 from tests.test_windows_website_store import paths
+from tests.test_windows_website_verify import HOST, SIGNED, transport
+from tests.test_windows_website_forward import ACCOUNT, COOKIE, ORG, session_state, wire
 import selfhost_windows_selection as selection
 import selfhost_windows_website_current_backout as current_backout
 import selfhost_windows_website_edge as edge
@@ -60,7 +62,7 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
     'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout', 'readmitted-restart', 'renewed-observation'])
-def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
+def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault, transport):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
     attempt = records.parent
@@ -125,8 +127,12 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                 edge._edge(rows)['Mounts'][-1]['RW'] = True
             if fault == 'renewed-observation':
                 row = edge._edge(rows)
-                row['Config']['Env'] = ['PUBLIC_DOMAIN=example.test']
+                row['Config']['Env'] = ['PUBLIC_DOMAIN=' + HOST]
                 row['NetworkSettings']['Ports'] = {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29382'}]}
+                candidate = stage._candidate_rows(rows, project)[0]
+                candidate['Name'] = f'/{project}-{contract.SLOT}-1'
+                candidate['Config']['Labels'].update({'com.docker.compose.container-number': '1',
+                    'com.docker.compose.oneoff': 'False', 'com.docker.compose.project.config_files': str(attempt / 'selected-split.json')})
             return rows
 
         def volumes(self):
@@ -239,8 +245,9 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
             current_layouts = {'combined': (base_command, combined, hashes)}
             for name, (overlay, configured, service_hashes) in layouts.items():
                 model = deepcopy(configured)
-                model['services']['edge']['environment'] = {'PUBLIC_DOMAIN': 'example.test'}
-                current_layouts[name] = (base_command + ['-f', overlay], model, service_hashes)
+                model['services']['edge']['environment'] = {'PUBLIC_DOMAIN': HOST}
+                model['services']['auth'] = {'environment': {'AUTH_SESSION_COOKIE_NAME': 'sessionId'}}
+                current_layouts[name] = (base_command + ['-f', str(attempt / overlay)], model, service_hashes)
             with ExitStack() as held:
                 context, routes = current_backout._context(config, 'new', {}, record, plan, docker,
                     {'new': current_layouts}, proposal, held, None, 'split')
@@ -250,7 +257,33 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                 assert restored['model_state'] == 'staged'
                 assert before_edge['edge_configuration']['container_id'] != after_edge['edge_configuration']['container_id']
                 assert before_edge['protected_runtime_sha256'] == after_edge['protected_runtime_sha256']
-                assert after_edge['ingress_sha256'] == contract.digest(('example.test', 29382))
+                assert after_edge['ingress_sha256'] == contract.digest((HOST, 29382))
+                staged_context, staged_routes = current_backout._context(config, 'new', {}, record, plan, docker,
+                    {'new': current_layouts}, proposal, held, None, 'staged')
+                session_file = attempt / 'session.private.json'
+                stage._material(session_file, session_state(), held)
+                transport('staged')
+                fetch = current_backout.verify._request
+                def request(host, path, addresses, port, ssl_context, deadline, *, session_cookie=None):
+                    if session_cookie is None:
+                        return fetch(host, path, addresses, port, ssl_context, deadline)
+                    assert host == HOST and port == 443 and ssl_context.check_hostname and session_cookie == ('sessionId', COOKIE)
+                    if path == current_backout.verify.SESSION:
+                        return wire({'authenticated': True, 'user': {'id': ACCOUNT}})
+                    assert path == current_backout.verify.ORGANIZATIONS
+                    return wire([{'id': ORG}])
+                monkeypatch.setattr(current_backout.verify, '_request', request)
+                items_now, runtime_now, observation, proof = current_backout._http_acceptance(staged_context, staged_routes,
+                    {**proposal, 'http': SIGNED}, 'staged', held, session_file,
+                    (selection.digest(ACCOUNT.encode()), selection.digest(ORG.encode())))
+                assert observation['runtime_sha256'] == contract.digest(runtime_now)
+                assert proof['authenticated_application']['authenticated_application_exercised']
+                assert all(value not in json.dumps(proof) for value in (ACCOUNT, ORG, COOKIE))
+                with pytest.raises(ValueError):
+                    current_backout._retirement_inputs(staged_context, items_now, config, proposal)
+                selected = {**config, 'compose_file': str(attempt / 'selected-split.json')}
+                removal, custody = current_backout._retirement_inputs(staged_context, items_now, selected, proposal)
+                assert custody['candidate_id'] == stage._candidate_rows(removal.check(), project)[0]['Id']
                 current_layouts['staged'][1]['services']['edge']['ports'][0]['published'] = '29383'
                 with pytest.raises(ValueError):
                     current_backout._observe(context, proposal, routes, 'staged', before_intent=False)
