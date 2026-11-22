@@ -311,7 +311,7 @@ services:
       dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: credential-template
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         . /app/load-secrets-env.sh
@@ -319,10 +319,14 @@ services:
         /usr/local/bin/marty-presentation-policy migrate
         exec /usr/local/bin/marty-presentation-policy bootstrap-builtins
     environment:
-      <<: *runtime-env
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
       MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-selfhost-production}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://localhost}
     secrets:
       - marty_db_password
     volumes:
