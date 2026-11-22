@@ -388,6 +388,16 @@ def assert_models(
         "db-migrate": {"condition": "service_completed_successfully", "required": True},
     }
     assert owner["restart"] == "no"
+    assert owner["healthcheck"] == {"disable": True}
+    assert owner["mem_limit"] == "${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}"
+    assert set(owner) == {
+        "build", "command", "depends_on", "entrypoint", "environment",
+        "healthcheck", "mem_limit", "restart", "secrets", "volumes",
+    }
+    assert len(owner["volumes"]) == 1
+    mount = owner["volumes"][0]
+    assert mount["target"] == "/app/load-secrets-env.sh" and mount["read_only"] is True
+    assert mount["source"].endswith("/scripts/load-secrets-env.sh")
     expected["services"]["owner-migrations"] = deepcopy(owner)
     for service in ("credential-template", "presentation-policy"):
         assert actual["services"][service]["depends_on"] == {
