@@ -19,6 +19,9 @@ from scripts.verify_passport_beta_issuer_profiles import (
 from tests.test_probe_passport_beta_chain import certificates, public_chain_vectors
 
 
+pytestmark = pytest.mark.usefixtures("rootful_docker_environment")
+
+
 def resolution(role: str) -> dict:
     purpose = "csca" if role == "csca" else "x509_doc_signer"
     did = "did:web:beta.example:org:passport"

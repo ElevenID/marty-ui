@@ -1,10 +1,16 @@
-# Local disposable passport debugging only. The released services image remains
-# the source for every other service in the stack.
+# Local disposable passport debugging only. Never push this dependency image or
+# export its private source cache. passport_local_watch.py --prepare supplies a
+# private context containing only the two verified dependency directories.
+# This recipe deliberately has no RUN: rootless BuildKit can discard per-step
+# limits. Fetch and offline verification run in bounded ordinary containers.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
+ARG PASSPORT_WATCH_SEED_ID
+ARG PASSPORT_WATCH_LOCK_SHA256
+COPY --chown=0:0 cargo/registry/ /usr/local/cargo/registry/
+COPY --chown=0:0 cargo/git/ /usr/local/cargo/git/
+LABEL com.marty.passport.watch.seed="$PASSPORT_WATCH_SEED_ID" \
+      com.marty.passport.watch.cargo-lock="$PASSPORT_WATCH_LOCK_SHA256"
+ENV CARGO_NET_OFFLINE=true
 WORKDIR /workspace/rust
 ENTRYPOINT ["/bin/bash", "/workspace/scripts/passport-rust-watch.sh"]

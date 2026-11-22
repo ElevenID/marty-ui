@@ -125,11 +125,11 @@ def _execute_local(args: list[str], output: object, environment: dict[str, str])
     """Keep Docker output private; the key extractor alone receives a file."""
     try:
         result = subprocess.run(
-            ["docker", *args], env=environment,
+            ["docker", *args], env=_local_docker_environment(environment),
             stdout=output if output is not None else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, check=False, timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 

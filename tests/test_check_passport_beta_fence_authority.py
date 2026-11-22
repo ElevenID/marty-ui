@@ -657,11 +657,16 @@ def test_hidden_worktree_change_cannot_replace_protected_approval(
                                   lambda image, commit, version: True)
 
 
-def test_hidden_worktree_change_cannot_replace_verifier(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("relative", (
+    "scripts/sql/passport-beta-fence-verify.sql",
+    "scripts/local_docker.py",
+))
+def test_hidden_worktree_change_cannot_replace_verifier_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str,
 ) -> None:
+    assert relative in authority.PROTECTED_FILES
     approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
-    (authority.ROOT / "scripts/sql/passport-beta-fence-verify.sql").write_text(
+    (authority.ROOT / relative).write_text(
         "altered", encoding="utf-8"
     )
     with pytest.raises(HostProbeError, match="content differs"):

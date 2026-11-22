@@ -16,9 +16,13 @@ import os
 import re
 import secrets
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.local_docker import local_docker_environment
 
 
 class IssuerProfileEvidenceError(ValueError):
@@ -116,10 +120,7 @@ def _post_in_container(container_id: str, route: str, body: dict[str, Any]) -> d
         f'--data-binary @- http://127.0.0.1:8017{route}',
     ]
     try:
-        environment = os.environ.copy()
-        environment["DOCKER_HOST"] = "unix:///var/run/docker.sock"
-        for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
-            environment.pop(name, None)
+        environment = local_docker_environment(os.environ.copy())
         result = subprocess.run(command, input=payload, env=environment,
                                 capture_output=True, timeout=30, check=True)
         if len(result.stdout) > 256 * 1024:
