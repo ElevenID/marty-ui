@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .parse::<uuid::Uuid>()?;
                 let store = PostgresPolicyStore::new(pool.clone());
                 reconcile_builtin_policies(&store, organization_id).await?;
+                drop(store);
             }
             _ => {
                 return Err(
