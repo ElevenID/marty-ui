@@ -40,10 +40,8 @@ def test_real_compose_normalizes_staged_overlay_without_product_changes(paths, p
     docker = Docker()
     command = [*docker.prefix, 'compose', '--project-name', project, '--env-file', os.devnull, '-f', str(source)]
     combined = docker.json(command[1:] + ['--profile', '*', 'config', '--format', 'json'])
-    inspected = {'docker': docker, 'model': combined, 'owned': [], 'command': command}
-    receipt = {'id': 'a'*64, 'image': 'sha256:'+'b'*64, 'config_hash': 'b'*64}
     with ExitStack() as held:
-        stage_command, normalized, _hashes = stage._stage_model(inspected, expected, attempt, receipt, held)
+        stage_command, normalized, _hashes = stage._stage_model(docker, command, combined, expected, attempt, held)
     assert stage_command == command + ['-f', str(attempt / 'stage.compose.json')]
     assert normalized['services'][plan_contract.SLOT]['image'] == expected['models']['staged']['services'][plan_contract.SLOT]['image']
     assert set(normalized['services']) - set(combined['services']) == {plan_contract.SLOT}

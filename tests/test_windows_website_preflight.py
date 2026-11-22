@@ -236,7 +236,8 @@ def test_combined_edge_preflight_withholds_result_on_late_input_failure(runtime)
         run(runtime)
 
 
-def test_plan_request_holds_original_proof_files_and_uses_observed_template(runtime, monkeypatch):
+@pytest.mark.parametrize("mode", ["initial", "anchored-stage", "anchored-mismatch"])
+def test_plan_request_holds_original_proof_files_and_uses_observed_template(runtime, monkeypatch, mode):
     from contextlib import nullcontext
     import selfhost_windows_website_plan as plan
 
@@ -265,15 +266,36 @@ def test_plan_request_holds_original_proof_files_and_uses_observed_template(runt
         assert before["services"]["edge"]["volumes"][0]["read_only"]
         assert all(("hold-input", assets / name) in runtime.events for name in proofs)
         assert "proof-exit" not in runtime.events
-        return {"schema": plan.SCHEMA, "plan_sha256": "a"*64, "states": {}, "proof_sha256": proofs,
-                "attempt_directory": str(attempt)}
+        declared = {"schema": plan.SCHEMA, "plan_sha256": "a"*64, "states": {}, "proof_sha256": proofs,
+                    "attempt_directory": str(attempt)}
+        if mode != "initial":
+            assert kwargs["guarded_attempt"] and kwargs["docker"] is held_engine
+            assert kwargs["data_before"] == retained and runtime.live["reads"] == 0
+            return declared, {"retained": True}
+        return declared
 
     monkeypatch.setattr(plan, "from_observation", from_observation)
-    result = website.check(runtime.root / "selection.json", assets, plan_attempt_directory=attempt, **runtime.kwargs)
-    assert result["transition_plan"] == {"schema": plan.SCHEMA, "plan_sha256": "a"*64,
-                                        "states": {}, "proof_sha256": proofs}
-    assert str(attempt) not in json.dumps(result)
-    assert not result["activation_supported"] and not result["production_admission"]
+    if mode == "initial":
+        result = website.check(runtime.root / "selection.json", assets, plan_attempt_directory=attempt, **runtime.kwargs)
+        assert result["transition_plan"] == {"schema": plan.SCHEMA, "plan_sha256": "a"*64,
+                                            "states": {}, "proof_sha256": proofs}
+        assert str(attempt) not in json.dumps(result)
+        assert not result["activation_supported"] and not result["production_admission"]
+    else:
+        retained = website.renewal.data_mounts(runtime.items)
+        held_engine = object()
+        normalized = deepcopy(runtime.models["new"])
+        if mode == "anchored-mismatch":
+            normalized["services"]["edge"]["volumes"][0]["read_only"] = False
+        with website.selection.selected_inputs(runtime.root / "selection.json") as lease:
+            options = {**runtime.kwargs, "plan_attempt_directory": attempt, "held_plan_only": True,
+                       "guarded_attempt": True, "retained_edge_inputs": (held_engine, normalized, retained)}
+            if mode == "anchored-mismatch":
+                with pytest.raises(ValueError):
+                    lease.check_website_composition(assets, **options)
+                return
+            declared, proposal = lease.check_website_composition(assets, **options)
+            assert declared["proof_sha256"] == proofs and proposal == {"retained": True}
     assert all(runtime.events.index("proof-exit") < runtime.events.index(("release-input", assets / name))
                for name in proofs)
 

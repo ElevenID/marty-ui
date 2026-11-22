@@ -116,6 +116,27 @@ def inspect(plan, *, expected_anchor_sha256):
     return {**status, 'anchor_sha256': expected_anchor_sha256}
 
 
+def read_evidence(plan, *, expected_anchor_sha256, references, held):
+    """Hold private evidence authenticated by an independently pinned journal."""
+    with _directories(plan) as (records, anchors, journal_inputs):
+        entries, _status, _names, _tails = _read(plan, records, anchors, journal_inputs, expected_anchor_sha256)
+        expectations = {}
+        for name, (phase, event) in references.items():
+            path = records.parent / name
+            require(path.name == name and path.parent == records.parent)
+            matches = [body for filename, body in entries.items() if filename[7:] == f'{phase}.{event}.json']
+            require(len(matches) == 1)
+            expectations[name] = selection.decode(matches[0])['evidence_sha256']
+        observed = {}
+        for name, expected in expectations.items():
+            raw = _hold_bytes(records.parent / name, held)
+            value = selection.decode(raw)
+            require(type(value) is dict and raw == selection.packed(value)
+                    and {key: plan_contract.digest(item) for key, item in value.items()} == expected)
+            observed[name] = value
+        return observed
+
+
 def _publish(plan, records, anchors, held, entries, proposed, names, tails, prior, receipt=None):
     require(len(proposed) == len(entries) + 1 and set(entries) < set(proposed))
     name, = set(proposed) - set(entries)
