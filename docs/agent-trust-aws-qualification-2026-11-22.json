@@ -16,7 +16,7 @@
     "core_pin": "bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0",
     "protocol_pin": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
     "runtime_source_changed_after_qualification": true,
-    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted main 284ca81ca901ad532b581d5286ad955afced6dfd was subsequently merged normally; its equivalent Flow artifact-binding extraction changes Rust bytes and received a separate local build and nine live PostgreSQL tests. Accepted main 5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7 then added the Windows caller/docs/tests/required workflow without changing that verified Rust subtree, lockfile or qualification inputs. Evidence-only publication changes follow these source integrations. The final integrated head is not claimed to have run on AWS."
+    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted main 284ca81ca901ad532b581d5286ad955afced6dfd was subsequently merged normally; its equivalent Flow artifact-binding extraction received the separate normal build and nine live PostgreSQL tests recorded below. Accepted main 5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7 then added Windows caller/docs/tests/required CI without changing that verified Rust subtree. The subsequent full-CI reconciliation below adjusts catalog test expectations, one standalone-probe lock edge and the application-source exporter CLI entry point; all Rust source and the production lock remain unchanged. The final integrated head is not claimed to have run on AWS."
   },
   "operator_environment": {
     "existing_aws_instance_used": true,
@@ -2964,7 +2964,7 @@
     "Current branch protection, required GitHub Actions checks, human review requirements and the normal squash merge queue remain independent gates. No GitHub status or approval is created by this evidence.",
     "The screenshot is private user-facing console evidence and is not included in this public repository report. Raw provider logs, database state, account/resource identifiers, balances and access configuration are not published."
   ],
-  "updated_at_utc": "2026-11-22T07:38:35.106914+00:00",
+  "updated_at_utc": "2026-11-22T08:07:53.345970+00:00",
   "post_aws_main_reconciliation": {
     "status": "ACCEPTED_MAIN_INTEGRATED_AND_SCOPED_LOCAL_VERIFICATION_PASSED",
     "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
@@ -3624,5 +3624,659 @@
     },
     "additional_local_or_aws_tests_claimed": false,
     "final_head_required_ci": "The final protected CI Gate still requires the updated native Windows owner-source workflow, including its 49-case guard. Accepted-main success and historical local Python counts do not replace the final-head CI gate."
+  },
+  "post_aws_ci_reconciliation": {
+    "status": "THREE_INITIAL_CI_GAPS_CORRECTED_WITH_SCOPED_LOCAL_VERIFICATION_FINAL_REQUIRED_CI_REMAINS_INDEPENDENT",
+    "first_ci_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+    "first_ci_run": "https://github.com/ElevenID/marty-ui/actions/runs/44999310379",
+    "changed_files": [
+      {
+        "path": ".github/feature-regression/rust-probe/Cargo.lock",
+        "sha256": "70722460e2e66b348cc0358211efb122eb06cbbd62f21d2f6fdf3e851b2a8fc9"
+      },
+      {
+        "path": "ui/scripts/export-application-source.mjs",
+        "sha256": "d0a475a7191ccc8d8039125f47b00e493c48fce2958864d5ace26da29c5f6f8a"
+      },
+      {
+        "path": "ui/scripts/export-application-source.test.mjs",
+        "sha256": "8c8f60590c4d9af5da05c61fa17292df5d174a7d382c33419e169d33113c708b"
+      },
+      {
+        "path": "ui/src/services/__tests__/rbacApi.test.ts",
+        "sha256": "b9a4d273bb867011c24c4f8d5780df39dc617ad7a7a5527645ded609ee27d9da"
+      }
+    ],
+    "unchanged_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+    "unchanged_production_cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+    "review_findings": [
+      "RBAC test title and two cardinalities now reflect the already-authorized catalog expansion from 113 permissions/29 resources to 148/36. All 35 additions across seven resources are accounted for with no removed or duplicate permission pair. All other test bytes and runtime/catalog inputs are unchanged.",
+      "The standalone feature probe lockfile adds only the existing uuid dependency to marty-oid4vp-contract, matching its normal dependency graph. All 733 package identity/version/source/checksum tuples and all 57 checked manifests remain unchanged; no production lock, package version or dependency pin changes.",
+      "The application-source exporter CLI no longer holds module evaluation at a top-level await while the closure module imports the exporter policy. async main().catch preserves all option checks, output and diagnostics. Every byte before the CLI entry block remains identical. A bounded fresh-process regression reproduces the former child exit 13, then proves the intended post-closure baseline refusal, exit 1, no output and unchanged fixture.",
+      "Root reviewed all four diffs; a parallel independent review confirmed the CLI change preserves export checks and fixes the module-evaluation cycle."
+    ],
+    "local_scope": {
+      "rbac_tests_passed": 19,
+      "exporter_and_closure_tests_passed": 87,
+      "frozen_probe_source_lock_tests_passed": 8,
+      "rustfmt_1_95_workspace_check_exit_code": 0,
+      "production_locked_offline_metadata_exit_code": 0,
+      "unchanged_mmf_core_guards_passed": true
+    },
+    "local_limits": [
+      "The RBAC test used an owned overlay over existing cached dependencies. Nine inspected package versions match the lock; cached archive integrity and the entire transitive tree were not reverified. Final locked CI remains authoritative.",
+      "Actual standalone Rust probe execution was not run locally because unchanged exact registry pins, first unicode-ident 1.0.27, are absent from the existing cache. Locked offline fetch moved beyond the stale-lock error and stopped at that cache limitation without changing the corrected lock.",
+      "The local workspace Clippy precheck exited before compilation because the matching Rust 1.95.0 Clippy component is not installed. No Clippy pass is claimed; final hosted CI must execute it.",
+      "These selected local runs are separate from the 210 AWS Rust tests and earlier nine PostgreSQL integration tests. No AWS restart, altered security guard, synthetic GitHub status or bypass was used."
+    ],
+    "first_ci_native_windows_observation": {
+      "job_url": "https://github.com/ElevenID/marty-ui/actions/runs/44999310379/job/137137112700",
+      "conclusion": "success",
+      "native_cases_qualified": 49,
+      "head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+      "scope": "Observed on the first full CI candidate only; final-head native CI remains independently required."
+    },
+    "export_privacy_note": "Local absolute paths in the probe and Clippy records were replaced with explicit location aliases before their public exports were hashed. Original private records and first-failure logs remain retained; no raw log or private path is embedded.",
+    "records": {
+      "probe_lock": {
+        "original_export": {
+          "file_name": "probe-lock-reconciliation-public.json",
+          "bytes": 3126,
+          "sha256": "17c5e40a95540273fc5463710a05a9e75f39772eceae8d3b6dff34750cc13264"
+        },
+        "data": {
+          "lock_sha256_before": "51ea0cb7b4d84d468642a7d70b4c89887fed053e42766ffb0c935529b2f62d5a",
+          "lock_sha256_after": "70722460e2e66b348cc0358211efb122eb06cbbd62f21d2f6fdf3e851b2a8fc9",
+          "all_package_identities_preserved": 733,
+          "only_dependency_change": "marty-oid4vp-contract adds existing locked uuid",
+          "production_lock_unchanged": true,
+          "manifests_unchanged": 57,
+          "records": [
+            {
+              "name": "production-metadata",
+              "command": [
+                "cargo",
+                "metadata",
+                "--locked",
+                "--offline",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "--format-version",
+                "1"
+              ],
+              "exit_code": 0,
+              "seconds": 1.289,
+              "log_sha256": "931d1583010d9abde8e537b09d4cc7de4defdaf99ce46e0884ff381c7011cbe9",
+              "log_path": "$LOCAL_QUALIFICATION_ROOT/probe-lock-reconciliation/production-metadata.log"
+            },
+            {
+              "name": "check_mmf_security_features",
+              "command": [
+                "python3",
+                "scripts/ci/check_mmf_security_features.py"
+              ],
+              "exit_code": 0,
+              "seconds": 0.115,
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "log_path": "$LOCAL_QUALIFICATION_ROOT/probe-lock-reconciliation/check_mmf_security_features.log"
+            },
+            {
+              "name": "check_marty_core_kms_boundary",
+              "command": [
+                "python3",
+                "scripts/ci/check_marty_core_kms_boundary.py"
+              ],
+              "exit_code": 0,
+              "seconds": 0.766,
+              "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "log_path": "$LOCAL_QUALIFICATION_ROOT/probe-lock-reconciliation/check_marty_core_kms_boundary.log"
+            },
+            {
+              "name": "frozen-probe-source-guards",
+              "command": [
+                "$EXISTING_PYTHON_ENV/bin/python",
+                "-m",
+                "pytest",
+                "-q",
+                "tests/test_feature_regression_rust_probe.py"
+              ],
+              "exit_code": 0,
+              "seconds": 0.572,
+              "log_sha256": "da2d3a721ec5004f84ecc452e9165a61c0adfa86971ac498cd72e665529534f6",
+              "log_path": "$LOCAL_QUALIFICATION_ROOT/probe-lock-reconciliation/frozen-probe-source-guards.log"
+            }
+          ],
+          "missing_exact_registry_cache_count": 104,
+          "frozen_probe_runtime": "NOT_RUN_missing_existing_offline_cache",
+          "source_guard_counts": {
+            "passed": 8,
+            "warnings": 1,
+            "seconds": 0.3
+          },
+          "probe_execution_limit": {
+            "status": "NOT_EXECUTED_LOCALLY",
+            "reason": "Exact pre-existing probe registry dependency unicode-ident 1.0.27 is absent from the local offline cache; no cache population or package substitution performed.",
+            "locked_offline_fetch_exit_code": 101,
+            "lock_remained_unchanged": true,
+            "log_sha256": "a9a287a65f11230d0585a99dd09b346909e9e2db07c0b3b63dfaaac2194834bc"
+          },
+          "first_ci_failures": [
+            {
+              "job_id": 137137533022,
+              "name": "Rust Lint and Packaging",
+              "log_sha256": "57ba03f19891c6888d7c16b863bd2b057b0ffb22b103331ebc8459718478a1d2"
+            },
+            {
+              "job_id": 137137532991,
+              "name": "Rust Feature Regression Probe",
+              "log_sha256": "af7dff1c25a2d1222543bb4b5c80748c2138673e16a221048ea6febbc88f4ac0"
+            }
+          ]
+        }
+      },
+      "rbac_catalog": {
+        "original_export": {
+          "file_name": "ui-rbac-reconciliation.json",
+          "bytes": 10621,
+          "sha256": "44f89a815323a978dbdcbfb13451a214b1c7f0255b4009f9e9904f6294ba377c"
+        },
+        "data": {
+          "schema_version": 1,
+          "recorded_at_utc": "2026-11-22T07:53:02.505728+00:00",
+          "scope": "UI RBAC count expectation reconciliation only; no runtime, permission catalog, package manifest, or lockfile changes",
+          "source_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "accepted_main": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+          "first_failure": {
+            "ci_run_id": 44999310379,
+            "job_id": 137137532921,
+            "url": "https://github.com/ElevenID/marty-ui/actions/runs/44999310379/job/137137532921",
+            "test": "retains all 113 native catalog permissions across all 29 resource groups",
+            "source": "ui/src/services/__tests__/rbacApi.test.ts",
+            "line": 22,
+            "error": "expected resource group length 29; received 36",
+            "shard_tests": {
+              "passed": 917,
+              "failed": 1,
+              "skipped": 3
+            },
+            "private_log_file": "ui-shard-1-first-failure.log",
+            "log_bytes": 168339,
+            "log_sha256": "1ebe16466925eec514e96417c4d96f5f1ca6b5ee7815aa504c7e0ca6365769ff"
+          },
+          "catalog": {
+            "old_permission_count": 113,
+            "new_permission_count": 148,
+            "old_resource_count": 29,
+            "new_resource_count": 36,
+            "new_resource_counts": {
+              "agent-identity": 8,
+              "delegation-grant": 6,
+              "delegation-use-policy": 5,
+              "machine-authentication-policy": 1,
+              "machine-authorization-policy": 5,
+              "machine-identity": 6,
+              "machine-use-access": 4
+            },
+            "added_permission_pairs": [
+              {
+                "resource": "agent-identity",
+                "action": "create"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "enroll"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "retire"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "revoke"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "rotate-key"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "suspend"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "update"
+              },
+              {
+                "resource": "agent-identity",
+                "action": "view"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "approve"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "create"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "reinstate"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "revoke"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "suspend"
+              },
+              {
+                "resource": "delegation-grant",
+                "action": "view"
+              },
+              {
+                "resource": "delegation-use-policy",
+                "action": "activate"
+              },
+              {
+                "resource": "delegation-use-policy",
+                "action": "archive"
+              },
+              {
+                "resource": "delegation-use-policy",
+                "action": "create"
+              },
+              {
+                "resource": "delegation-use-policy",
+                "action": "update"
+              },
+              {
+                "resource": "delegation-use-policy",
+                "action": "view"
+              },
+              {
+                "resource": "machine-authentication-policy",
+                "action": "assign"
+              },
+              {
+                "resource": "machine-authorization-policy",
+                "action": "activate"
+              },
+              {
+                "resource": "machine-authorization-policy",
+                "action": "archive"
+              },
+              {
+                "resource": "machine-authorization-policy",
+                "action": "create"
+              },
+              {
+                "resource": "machine-authorization-policy",
+                "action": "update"
+              },
+              {
+                "resource": "machine-authorization-policy",
+                "action": "view"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "create"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "retire"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "revoke"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "suspend"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "update"
+              },
+              {
+                "resource": "machine-identity",
+                "action": "view"
+              },
+              {
+                "resource": "machine-use-access",
+                "action": "create"
+              },
+              {
+                "resource": "machine-use-access",
+                "action": "revoke"
+              },
+              {
+                "resource": "machine-use-access",
+                "action": "update"
+              },
+              {
+                "resource": "machine-use-access",
+                "action": "view"
+              }
+            ],
+            "removed_permission_pairs": [],
+            "duplicate_pairs": 0,
+            "catalog_blob_main": "7ec12d52be56bc1fd262e7bb24d2516fc7f54d4f",
+            "catalog_blob_candidate": "77c04126853c2fd4acd7e43e0a617603b76f8368"
+          },
+          "edit": {
+            "path": "ui/src/services/__tests__/rbacApi.test.ts",
+            "before_sha256": "45a709bd268826e6f7a2f1b5072b1ed45824caaec1dc8f19f3d52f82cf39e130",
+            "after_sha256": "b9a4d273bb867011c24c4f8d5780df39dc617ad7a7a5527645ded609ee27d9da",
+            "exact_replacements": [
+              {
+                "before": "retains all 113 native catalog permissions across all 29 resource groups",
+                "after": "retains all 148 native catalog permissions across all 36 resource groups"
+              },
+              {
+                "before": "expect(nativeGroups).toHaveLength(29);",
+                "after": "expect(nativeGroups).toHaveLength(36);"
+              },
+              {
+                "before": "expect(result).toHaveLength(113);",
+                "after": "expect(result).toHaveLength(148);"
+              }
+            ],
+            "all_other_bytes_identical": true,
+            "identity_equality_malformed_assertions_retained": true
+          },
+          "unchanged_inputs": {
+            "ui/package.json": {
+              "sha256": "0434dc2607a50e2d712c91ce0b147017b5e3cbac72aa9f53c5040c9f32e3cca0",
+              "unchanged_from_candidate": true
+            },
+            "ui/bun.lock": {
+              "sha256": "4437f4ccf2392d58795a4b9b80a4d0af10fb7c0fbb6598c8c7a16fc282b015a0",
+              "unchanged_from_candidate": true
+            },
+            "ui/src/services/rbacApi.js": {
+              "sha256": "7bce85c8478a833c3a93d745cef35dfefafdaa0c0832709b403025fd8e0c823d",
+              "unchanged_from_candidate": true
+            },
+            "contracts/organization-permission-catalog.json": {
+              "sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab",
+              "unchanged_from_candidate": true
+            }
+          },
+          "validation": {
+            "command": [
+              "node",
+              "{read_only_existing_cache}/vitest/vitest.mjs",
+              "run",
+              "src/services/__tests__/rbacApi.test.ts"
+            ],
+            "working_directory": "ui",
+            "exit_code": 0,
+            "files_passed": 1,
+            "tests_passed": 19,
+            "tests_failed": 0,
+            "tests_skipped": 0,
+            "duration_seconds": 1.87,
+            "attempt_count": 1,
+            "log_file": "rbacApi-targeted.log",
+            "log_sha256": "831a52b72b2cdc68a4266c709237df78b883a917d0977a4841a00863a60e0d7c",
+            "node_version": "v24.22.3",
+            "dependencies": [
+              {
+                "package": "vitest",
+                "installed_version": "5.0.5",
+                "declared_spec": "^5.0.5",
+                "lock_package_spec": "vitest@5.0.5",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "vite",
+                "installed_version": "8.3.8",
+                "declared_spec": "^8.3.6",
+                "lock_package_spec": "vite@8.3.8",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "react",
+                "installed_version": "19.2.8",
+                "declared_spec": "^19.2.8",
+                "lock_package_spec": "react@19.2.8",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "msw",
+                "installed_version": "3.0.5",
+                "declared_spec": "^3.0.3",
+                "lock_package_spec": "msw@3.0.5",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "@vitejs/plugin-react",
+                "installed_version": "6.3.0",
+                "declared_spec": "^6.1.2",
+                "lock_package_spec": "@vitejs/plugin-react@6.3.0",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "@elevenid/marty-api-core",
+                "installed_version": "0.3.6",
+                "declared_spec": "https://github.com/ElevenID/marty-cli/releases/download/v0.3.6/elevenid-marty-api-core-0.3.6.tgz",
+                "lock_package_spec": "@elevenid/marty-api-core@https://github.com/ElevenID/marty-cli/releases/download/v0.3.6/elevenid-marty-api-core-0.3.6.tgz",
+                "exact_lock_version_match": null,
+                "note": "Archive source version is 0.3.6; archive integrity was not reverified for the existing cache."
+              },
+              {
+                "package": "jsdom",
+                "installed_version": "30.1.3",
+                "declared_spec": "^30.1.3",
+                "lock_package_spec": "jsdom@30.1.3",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "chai",
+                "installed_version": "6.3.0",
+                "declared_spec": null,
+                "lock_package_spec": "chai@6.3.0",
+                "exact_lock_version_match": true,
+                "note": "Node createRequire from the Vitest package resolves its nested Chai 6.3.0. An unused top-level cache copy is 5.3.3; dependency version is taken from actual Vitest resolution."
+              },
+              {
+                "package": "@testing-library/react",
+                "installed_version": "16.3.3",
+                "declared_spec": "^16.3.3",
+                "lock_package_spec": "@testing-library/react@16.3.3",
+                "exact_lock_version_match": true,
+                "note": null
+              },
+              {
+                "package": "@testing-library/jest-dom",
+                "installed_version": "7.0.1",
+                "declared_spec": "^7.0.0",
+                "lock_package_spec": "@testing-library/jest-dom@7.0.1",
+                "exact_lock_version_match": true,
+                "note": null
+              }
+            ],
+            "dependency_source": "Existing cache through owned package symlink overlay; no package installation.",
+            "package_links": 439,
+            "owned_cache_directories": [
+              ".vite",
+              ".vite-temp",
+              ".cache"
+            ],
+            "cache_containment_verified": true,
+            "normal_ci_remains_authoritative": true,
+            "dependency_resolution_note": "Vitest, Vite, MSW and Chai paths were resolved from the Vitest package with Node createRequire; Chai resolves to the nested 6.3.0 package."
+          },
+          "limits": [
+            "This targeted run was not a fresh frozen-lock installation and did not verify the entire transitive dependency graph or cached archive integrity.",
+            "Nine inspected package versions match their exact lock entries, including Vitest-resolved Chai 6.3.0. API core archive version is 0.3.6, without a new archive integrity check. Other cached dependencies were not exhaustively reverified.",
+            "Other CI failures are owned by parallel workers and are not resolved by this test-only correction."
+          ]
+        }
+      },
+      "exporter_cli": {
+        "original_export": {
+          "file_name": "website-cli-reconciliation.json",
+          "bytes": 2340,
+          "sha256": "607c67f4cd510e6734f0f0cb81b5287deb2bd3f1601e030eb98685bbdccd77a5"
+        },
+        "data": {
+          "scope": "Website Surface CLI module-evaluation correction; local focused regression only, no AWS rerun or workflow mutation",
+          "baseline_pr_head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "observed_checkout_head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+          "first_ci_failure": {
+            "run_id": 44999310379,
+            "job_id": 137137532864,
+            "step": "Package the verified application source",
+            "child_exit_code": 13,
+            "diagnostic": "Detected unsettled top-level await",
+            "log_file": "website-surface-137137532864.log",
+            "log_sha256": "bb9c1a8f4b4697661a2e62a82e956f5bb72bded7c5f6535559400c893b55dcef"
+          },
+          "before": {
+            "command": [
+              "node",
+              "--test",
+              "--test-name-pattern=source exporter CLI resolves",
+              "ui/scripts/export-application-source.test.mjs"
+            ],
+            "exit_code": 1,
+            "bytes": 1246,
+            "sha256": "a00114a00f36218763acc5a50fd15675e221ef0939250ea8a7dc0b2817c331d8",
+            "source_sha256": "032a9a4832e27112cbddb8a03083eb00f72bb2303afcbbe69e63a00466adcf65",
+            "test_sha256": "8c8f60590c4d9af5da05c61fa17292df5d174a7d382c33419e169d33113c708b"
+          },
+          "after": {
+            "command": [
+              "node",
+              "--test",
+              "ui/scripts/export-application-source.test.mjs",
+              "ui/scripts/application-source-closure.test.mjs"
+            ],
+            "node_version": "v24.22.3",
+            "exit_code": 0,
+            "bytes": 8566,
+            "sha256": "48d8dbad1c25fdfaae39900e9c372b36938ed8341277ff00fa5651add357de77",
+            "source_sha256": "d0a475a7191ccc8d8039125f47b00e493c48fce2958864d5ace26da29c5f6f8a",
+            "test_sha256": "8c8f60590c4d9af5da05c61fa17292df5d174a7d382c33419e169d33113c708b"
+          },
+          "new_regression": {
+            "fresh_process": true,
+            "real_cli_entry": true,
+            "child_timeout_ms": 30000,
+            "old_child_exit_code": 13,
+            "corrected_child_exit_code": 1,
+            "corrected_diagnostic": "Application source export failed: ENOENT:",
+            "closure_import_completed_before_missing_baseline_refusal": true,
+            "no_output_files": true,
+            "fixture_git_source_unchanged": true
+          },
+          "focused_tests": {
+            "passed": 87,
+            "failed": 0,
+            "skipped": 0
+          },
+          "all_pre_cli_policy_manifest_receipt_code_byte_identical": true,
+          "source_paths": [
+            "ui/scripts/export-application-source.mjs",
+            "ui/scripts/export-application-source.test.mjs"
+          ],
+          "recorded_at_utc": "2026-11-22T07:51:55.828994+00:00"
+        }
+      },
+      "workspace_clippy_environment_limit": {
+        "original_export": {
+          "file_name": "workspace-clippy-precheck-public.json",
+          "bytes": 1966,
+          "sha256": "91f0a2a33d37670c26b8d73f4837ff9d4b04c286af1cee23bcce7dc27aa8d51f"
+        },
+        "data": {
+          "schema_version": 1,
+          "started_at_utc": "2026-11-22T07:55:15.475303+00:00",
+          "finished_at_utc": "2026-11-22T07:55:15.653522+00:00",
+          "duration_seconds": 0.178,
+          "command": [
+            "cargo",
+            "clippy",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "working_directory": "marty-qualification",
+          "environment": {
+            "CARGO_HOME": "$LOCAL_QUALIFICATION_ROOT/tooling/cargo",
+            "RUSTUP_HOME": "$LOCAL_QUALIFICATION_ROOT/tooling/rustup",
+            "RUSTUP_TOOLCHAIN": "1.95.0",
+            "CARGO_TARGET_DIR": "$LOCAL_QUALIFICATION_ROOT/tooling/target",
+            "CARGO_BUILD_JOBS": "2",
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_NET_OFFLINE": "true"
+          },
+          "identity": {
+            "uid": 1000,
+            "gid": 1000
+          },
+          "versions": {
+            "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+            "rustc": "rustc 1.95.0 (59807616e 2026-04-14)"
+          },
+          "source_before": {
+            "head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+            "rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+            "rust_status": ""
+          },
+          "source_after": {
+            "head": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+            "rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+            "rust_status": ""
+          },
+          "exit_code": 1,
+          "log_file": "workspace-clippy-precheck-first.log",
+          "log_bytes": 146,
+          "log_sha256": "3ed140b34eda44b9b5d2a898de74b86e714424b11cb4c6122fa75bf08aa452a7",
+          "attempt_count": 1,
+          "network_fetch_allowed": false,
+          "local_precheck_limit": "Rust 1.95.0 Clippy component is not installed. Exact required command exited before compilation; no lint result exists.",
+          "cache_check": {
+            "scope": [
+              "tooling/downloads",
+              "tooling/rustup/downloads"
+            ],
+            "matching_clippy_archive_found": false
+          },
+          "next_required_gate": "Normal CI must execute workspace Clippy after the private-fork probe-lock correction.",
+          "changes_made": [],
+          "downloads_or_installations": false
+        }
+      }
+    },
+    "final_required_ci": "Normal final-head Actions and the protected squash merge queue remain authoritative. No passing final CI result is asserted by this locally prepared evidence."
+  },
+  "post_aws_security_review_reference": {
+    "repository_path": "docs/agent-trust-ci-security-review-2026-11-22.json",
+    "sha256": "371a82ec18d424e13c0b67f22f5c96da5b6941747aa5e7727c4a3cf84643df7f",
+    "reviewed_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+    "rust_source_unchanged": true,
+    "alerts_reviewed": [
+      324,
+      326,
+      138
+    ],
+    "alerts_remain_open": true,
+    "security_policy_or_status_changed": false,
+    "separate_from_aws_runtime_qualification": true
   }
 }

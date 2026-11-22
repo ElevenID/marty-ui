@@ -554,16 +554,20 @@ export function restoreApplicationSourcePackage({ archivePath, manifestPath, exp
     source_inventory_sha256: manifest.source_inventory_sha256 };
 }
 
+async function main() {
+  const names = new Map([['--archive', 'archivePath'], ['--manifest', 'manifestPath'], ['--report', 'reportPath'], ['--baseline-report', 'baselineReportPath']]);
+  const args = process.argv.slice(2); const options = {};
+  while (args.length) {
+    const name = names.get(args.shift()); require(name && !Object.hasOwn(options, name) && args.length, 'Unknown, repeated or incomplete source export option');
+    options[name] = args.shift();
+  }
+  require(Object.keys(options).length === names.size, 'Source export requires --archive, --manifest, --report and --baseline-report');
+  const result = await exportApplicationSourcePackage(options);
+  console.log(JSON.stringify({ status: result.status, source_commit: result.source_commit, archive: result.archive, manifest: result.manifest }));
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
-  try {
-    const names = new Map([['--archive', 'archivePath'], ['--manifest', 'manifestPath'], ['--report', 'reportPath'], ['--baseline-report', 'baselineReportPath']]);
-    const args = process.argv.slice(2); const options = {};
-    while (args.length) {
-      const name = names.get(args.shift()); require(name && !Object.hasOwn(options, name) && args.length, 'Unknown, repeated or incomplete source export option');
-      options[name] = args.shift();
-    }
-    require(Object.keys(options).length === names.size, 'Source export requires --archive, --manifest, --report and --baseline-report');
-    const result = await exportApplicationSourcePackage(options);
-    console.log(JSON.stringify({ status: result.status, source_commit: result.source_commit, archive: result.archive, manifest: result.manifest }));
-  } catch (error) { console.error(`Application source export failed: ${error.message}`); process.exitCode = 1; }
+  // The planner imports the closure, which imports this module's policy.
+  // Complete module evaluation before awaiting that CLI work.
+  main().catch((error) => { console.error(`Application source export failed: ${error.message}`); process.exitCode = 1; });
 }

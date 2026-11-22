@@ -1377,7 +1377,7 @@
   },
   "aws_qualification_reference": {
     "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
-    "sha256": "f12a49bb936738995ffe226ad631acd2a1416f520b8d03e4b54396bace3810ca",
+    "sha256": "7477c6a61a2225208d9e106140ecbf809410689020c5cb2f951ee3ff92cd8e21",
     "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
     "aws_rust_tests_passed": 210,
     "aws_gate_count": 14,
@@ -1397,6 +1397,14 @@
       "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
       "rust_subtree_and_qualification_inputs_unchanged": true,
       "windows_qualification_remains_separate": true
+    },
+    "post_aws_ci_reconciliation": {
+      "first_ci_candidate": "38bc11dce4d774672f6fb4e94a29c67adbc6630d",
+      "rust_source_and_production_lock_unchanged": true,
+      "local_rbac_tests": 19,
+      "local_exporter_and_closure_tests": 87,
+      "local_probe_source_tests": 8,
+      "actual_probe_and_clippy_remain_final_ci_gates": true
     }
   }
 }

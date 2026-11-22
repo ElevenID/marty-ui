@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import {
@@ -199,6 +199,32 @@ test('historical source-map selection preserves its exact inventory and rejects 
   assert.throws(() => validateApplicationSourcePackageManifest(unknown), /unapproved source contract/);
   const arbitrary = structuredClone(legacyContract); arbitrary.inputs.pop();
   assert.throws(() => validateApplicationSourcePackageManifest(historical, { contract: arbitrary }), /not an approved/);
+});
+
+test('source exporter CLI resolves its closure import before bounded baseline refusal', (t) => {
+  const { directory, root } = sourceFixture(t);
+  const relative = 'ui/scripts/export-application-source.mjs';
+  const entry = path.join(root, relative);
+  // Exercise the current CLI in a clean, isolated Git fixture, including when
+  // these changes have not been committed to the checkout running this test.
+  writeFileSync(entry, readFileSync(new URL('./export-application-source.mjs', import.meta.url)));
+  git(root, 'add', relative);
+  git(root, 'commit', '--allow-empty', '--quiet', '-m', 'Current source exporter CLI fixture');
+  const output = artifacts(directory, '-cli');
+  const baseline = path.join(directory, 'absent-baseline.json');
+  const child = spawnSync(process.execPath, [entry,
+    '--archive', output.archivePath, '--manifest', output.manifestPath,
+    '--report', output.reportPath, '--baseline-report', baseline],
+  { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.signal, null);
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /Application source export failed: ENOENT:/);
+  assert.ok(child.stderr.includes(baseline), 'The CLI must reach the baseline read after planning');
+  assert.doesNotMatch(child.stderr, /unsettled top-level await/i);
+  assert.equal(child.stdout, '');
+  assert.ok(Object.values(output).every((filename) => !existsSync(filename)));
+  assert.equal(git(root, 'status', '--porcelain'), '');
 });
 
 test('the exact source map exports deterministically and restores a closed ordinary source inventory', async (t) => {
