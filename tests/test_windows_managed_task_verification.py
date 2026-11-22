@@ -53,6 +53,7 @@ $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.
 $recovery=Join-Path SCRIPTS 'recover-marty-after-reboot.ps1'
 $expected='-NoProfile -NonInteractive -WindowStyle Hidden -File "'+$recovery+'" -RecoveryConfigurationFile "'+CONFIG+'" -ManagedPython "'+PYTHON+'" -WaitForEngine'
 if ('CASE' -like 'renew*') { $expected+=' -RenewCredentials -LogicalTlsProject "marty-selfhost-synthetic"' }
+if ('CASE' -like 'renew-production-namespace*') { $expected=$expected.Replace('marty-selfhost-synthetic','marty-production-synthetic') }
 $global:task=[pscustomobject]@{
  TaskName='Marty-Candidate-Qualification';TaskPath='\';State='Ready';Date=''
  Principal=[pscustomobject]@{UserId=$user;LogonType='Interactive';RunLevel='Limited'}
@@ -151,6 +152,7 @@ function Set-ScheduledTask {throw 'Update forbidden'}
         if case=='renew-first-check':options+=' -FirstRenewalDelaySeconds 15'
         elif case=='renew-invalid-first-delay':options+=' -FirstRenewalDelaySeconds 14'
         elif case=='renew-wrong-delay-config':options+=' -FirstRenewalDelaySeconds 120'
+        elif case.startswith('renew-production-namespace'):options=options.replace('marty-selfhost-synthetic','marty-production-synthetic')
         if case.startswith('renew-window'):options+=' -RenewalWindowMinutes 300'
     for key, value in {'CASE': case, 'SCRIPTS': legacy.quote(scripts), 'ROOT': legacy.quote(tmp_path),
                        'CONFIG': legacy.quote(config), 'PYTHON': legacy.quote(python),
@@ -203,6 +205,13 @@ def test_oversized_preflight_budget_refuses_before_task_access(tmp_path):
     result,child,started=invoke(tmp_path,'oversized-preflight-check')
     assert result.returncode!=0 and not child.exists() and not started.exists()
     assert not (tmp_path/'task-accessed.json').exists()
+
+
+@pytest.mark.parametrize('case', ['renew-production-namespace', 'renew-production-namespace-check'])
+def test_unsupported_renewal_namespace_refuses_before_task_access_or_runner(tmp_path, case):
+    result, child, started = invoke(tmp_path, case)
+    assert result.returncode != 0 and not child.exists() and not started.exists()
+    assert not (tmp_path/'task-accessed.json').exists() and not (tmp_path/'owned.json').exists()
 
 
 @pytest.mark.parametrize('case', ['wrong-user', 'unknown-account', 'highest', 'wrong-logon', 'wrong-folder',

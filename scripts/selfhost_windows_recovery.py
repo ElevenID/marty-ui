@@ -413,10 +413,10 @@ def expired_operation(args, selection_file):
     import selfhost_windows_staging_recovery as staging
     selection.require(not any((args.check_only,args.wait_for_engine,args.renew_once)))
     phase=args.expired_current
-    selection.require(bool(args.logical_project)==(phase=='stage'))
+    selection.require(bool(args.logical_project)==(phase in ('prepare-selected','stage')))
     selection.require(bool(args.attempt_directory)==(phase!='inspect'))
     selection.require(bool(args.source_journal)==(phase in ('select','retire-helpers','finalize')))
-    selection.require(phase!='inspect' or args.operator_successor_file is None)
+    selection.require(phase not in ('inspect','prepare-selected') or args.operator_successor_file is None)
     with ExitStack() as held:
         option=None
         if args.operator_successor_file:
@@ -424,6 +424,9 @@ def expired_operation(args, selection_file):
             selection.require(type(option) is dict and set(option)=={'assets','expected','gh','cosign','verifier_sha256'})
         if phase=='inspect':return staging.inspect_failed_current(selection_file)
         output=Path(args.attempt_directory)
+        if phase=='prepare-selected':
+            from selfhost_windows_expired_origin import prepare_selected
+            return prepare_selected(selection_file,output,args.logical_project)
         if phase=='stage':return staging.stage_recovery_generation(selection_file,output,args.logical_project,operator_successor=option)
         if phase=='reconcile-stage':
             from selfhost_windows_recovery_leaf_caps import reconcile
@@ -453,7 +456,7 @@ def main(argv=None):
     parser.add_argument('--wait-for-engine',action='store_true')
     parser.add_argument('--renew-once',action='store_true')
     parser.add_argument('--logical-project')
-    parser.add_argument('--expired-current',choices=('inspect','stage','reconcile-stage','retire-unused-stage',
+    parser.add_argument('--expired-current',choices=('prepare-selected','inspect','stage','reconcile-stage','retire-unused-stage',
                                                    'publish','activate','select','retire-helpers','finalize'))
     parser.add_argument('--attempt-directory')
     parser.add_argument('--source-journal')
@@ -464,8 +467,8 @@ def main(argv=None):
         if not args.expired_current:
             selection.require(bool(args.logical_project)==args.renew_once)
             selection.require(not any((args.attempt_directory,args.source_journal,args.operator_successor_file)))
-        if args.renew_once:
-            selection.require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',args.logical_project))
+        if args.renew_once or args.expired_current in ('prepare-selected','stage'):
+            selection.require_logical_tls_project(args.logical_project)
         with renewal.hold_private_input(Path(args.configuration)) as raw:
             config=selection.decode(raw)
             selection.require(set(config)=={'schema','selection_file'}

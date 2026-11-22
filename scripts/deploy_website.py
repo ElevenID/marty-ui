@@ -28,6 +28,7 @@ import ui_release as ui
 import website_provenance as proof
 import website_release as web
 import website_producer_policy as policy
+import website_host_owner as owner
 
 SCHEMA = "marty.website-host/v1"
 SLOTS = ("website-a", "website-b", "website-c")
@@ -277,9 +278,14 @@ class DockerHost:
         self.openbao_file = openbao_file.absolute()
         self.openbao_environment = openbao_env_file.absolute()
         self.project, self.openbao_project = project, openbao_project
+        self.require_ordinary_owner()
         self.public_origin = origin(public_origin)
         self.ca_file = ca_file.absolute() if ca_file else None
         self.directory = self.stack / ".marty-website"
+
+    def require_ordinary_owner(self) -> None:
+        owner.require_ordinary_owner(self.project, [self.stack, self.environment.parent,
+                                     *(path.parent for path in self.files)])
 
     def identity(self) -> dict:
         return {"stack_directory": str(self.stack), "project": self.project, "compose_files": [str(path) for path in self.files],
@@ -288,6 +294,9 @@ class DockerHost:
                 "public_origin": self.public_origin, "ca_file": str(self.ca_file) if self.ca_file else None}
 
     def run(self, args: list[str], *, timeout: int = 180) -> str:
+        # Recheck positive ownership before each read or mutation. The separate
+        # website lock never grants authority over a selected-generation owner.
+        self.require_ordinary_owner()
         result = subprocess.run(args, cwd=self.stack, capture_output=True, text=True, timeout=timeout, check=False)
         ui.require(result.returncode == 0 and len(result.stdout) <= 4 * 1024 * 1024,
                    "Docker operation failed: " + " ".join(arg for arg in args[:3]))

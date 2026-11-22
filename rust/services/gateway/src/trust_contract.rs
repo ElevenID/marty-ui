@@ -18,6 +18,7 @@ pub enum ResponseKind {
 }
 
 const TRUST_PURPOSES: &[&str] = &[
+    "PRESENTATION_VERIFIER",
     "CREDENTIAL_ISSUER",
     "MACHINE_IDENTITY_CA",
     "MANUFACTURER_ENDORSER",
@@ -406,7 +407,13 @@ fn validate_trust_profile_fields(
     }
     if let Some(policy) = value.get_mut("revocation_policy") {
         if !policy.is_null() {
-            let mut policy = object(policy.take(), &["check_mode"])?;
+            let mut policy = object(
+                policy.take(),
+                &["check_mode", "check_ocsp", "check_crl", "check_status_list"],
+            )?;
+            for field in ["check_ocsp", "check_crl", "check_status_list"] {
+                validate_boolean(policy.get(field), false)?;
+            }
             policy.entry("check_mode").or_insert(json!("HARD_FAIL"));
             validate_enum(
                 &policy,
@@ -449,7 +456,70 @@ fn validate_trust_profile_fields(
     Ok(())
 }
 
+fn verifier_registration_field(value: &Value) -> Option<&'static str> {
+    match value.get("source_type")?.as_str()? {
+        "REGISTERED_VERIFIER" => Some("registered_verifier"),
+        "MANAGED_FLOW_VERIFIER" => Some("managed_flow_verifier"),
+        _ => None,
+    }
+}
+
+fn validate_verifier_source(
+    value: &Value,
+    field: &str,
+    readback: bool,
+) -> Result<(), TrustContractError> {
+    use marty_oid4vp_contract::wallet_verifier::{ManagedFlowVerifier, RegisteredVerifier};
+    let fields = object(
+        value.clone(),
+        &[
+            "id",
+            "source_type",
+            "enabled",
+            "purposes",
+            "description",
+            field,
+        ],
+    )?;
+    if fields.get("purposes") != Some(&json!(["PRESENTATION_VERIFIER"])) {
+        return Err(TrustContractError);
+    }
+    optional_string(&fields, "description", 256, true)?;
+    if readback || fields.contains_key("id") {
+        let id = required_string(&fields, "id", 36, 36)?;
+        if uuid::Uuid::parse_str(id)
+            .map_err(|_| TrustContractError)?
+            .is_nil()
+        {
+            return Err(TrustContractError);
+        }
+    }
+    if readback && !fields.contains_key("enabled") {
+        return Err(TrustContractError);
+    }
+    validate_boolean(fields.get("enabled"), false)?;
+    let registration = fields.get(field).ok_or(TrustContractError)?;
+    validate_metadata(Some(registration), false)?;
+    match field {
+        "registered_verifier" => serde_json::from_value::<RegisteredVerifier>(registration.clone())
+            .map_err(|_| TrustContractError)?
+            .validate()
+            .map_err(|_| TrustContractError),
+        "managed_flow_verifier" => {
+            serde_json::from_value::<ManagedFlowVerifier>(registration.clone())
+                .map_err(|_| TrustContractError)?
+                .validate()
+                .map_err(|_| TrustContractError)
+        }
+        _ => Err(TrustContractError),
+    }
+}
+
 fn canonicalize_trust_source(value: Value) -> Result<Value, TrustContractError> {
+    if let Some(field) = verifier_registration_field(&value) {
+        validate_verifier_source(&value, field, false)?;
+        return Ok(value);
+    }
     let mut value = object(
         value,
         &[
@@ -855,6 +925,14 @@ fn project_trust_profile(value: Value) -> Result<Value, TrustContractError> {
         false,
         TRUSTED_ASSERTION_FORMATS,
     )?;
+    for source in value["trust_sources"]
+        .as_array()
+        .ok_or(TrustContractError)?
+    {
+        if let Some(field) = verifier_registration_field(source) {
+            validate_verifier_source(source, field, true)?;
+        }
+    }
     let purposes = value.get("trust_purposes").and_then(Value::as_array);
     let credential_purpose = purposes.is_none_or(|purposes| {
         purposes
@@ -1517,6 +1595,70 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn preserve_explicit_revocation_services_for_authorized_profile_writes() {
+        let mut profile = json!({"organization_id":"org-1","name":"Wallet issuer",
+            "revocation_policy":{"check_ocsp":false,"check_crl":true,"check_status_list":false}});
+        for update in [false, true] {
+            let request = if update {
+                json!({"revocation_policy": profile["revocation_policy"]})
+            } else {
+                profile.clone()
+            };
+            let value = canonicalize_trust_profile(request, update).unwrap();
+            assert_eq!(
+                value["revocation_policy"],
+                json!({"check_mode":"HARD_FAIL",
+                "check_ocsp":false,"check_crl":true,"check_status_list":false})
+            );
+        }
+        for invalid in [json!(null), json!(0), json!("false")] {
+            profile["revocation_policy"]["check_crl"] = invalid;
+            assert!(canonicalize_trust_profile(profile.clone(), false).is_err());
+        }
+    }
+
+    #[test]
+    fn verifier_registration_round_trips_without_admitting_private_material() {
+        let registration = json!({
+          "client_id": "registered-client",
+          "request_key_id": "request-1",
+          "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+          },
+          "response_uris": [
+            "https://verifier.example/response"
+          ],
+          "valid_from": "2026-11-01T00:00:00Z",
+          "valid_until": "2026-12-01T00:00:00Z"
+        });
+        let mut source = json!({"source_type":"REGISTERED_VERIFIER", "purposes":["PRESENTATION_VERIFIER"], "registered_verifier":registration});
+        assert_eq!(canonicalize_trust_source(source.clone()).unwrap(), source);
+        assert!(validate_verifier_source(&source, "registered_verifier", true).is_err());
+        source["id"] = json!("00000000-0000-4000-8000-000000000001");
+        source["enabled"] = json!(false);
+        assert!(validate_verifier_source(&source, "registered_verifier", true).is_ok());
+        let mut managed = json!({"id":source["id"], "enabled":true, "source_type":"MANAGED_FLOW_VERIFIER",
+        "purposes":["PRESENTATION_VERIFIER"], "managed_flow_verifier":{
+            "producer_id":"flow-primary","public_base_url":"https://verifier.example",
+            "verifier_did":"did:web:verifier.example","request_key_id":"did:web:verifier.example#requests",
+            "public_jwk":registration["public_jwk"], "valid_from":registration["valid_from"], "valid_until":registration["valid_until"]
+        }});
+        assert_eq!(canonicalize_trust_source(managed.clone()).unwrap(), managed);
+        assert!(validate_verifier_source(&managed, "managed_flow_verifier", true).is_ok());
+        managed["purposes"] = json!(["CREDENTIAL_ISSUER", "PRESENTATION_VERIFIER"]);
+        assert!(canonicalize_trust_source(managed).is_err());
+        let mut mixed = source.clone();
+        mixed["issuer_did"] = json!("did:web:wrong.example");
+        assert!(canonicalize_trust_source(mixed).is_err());
+        source["registered_verifier"]["public_jwk"]["d"] = json!("private");
+        assert!(canonicalize_trust_source(source.clone()).is_err());
+        assert!(validate_verifier_source(&source, "registered_verifier", true).is_err());
+    }
+
     #[test]
     fn native_trust_readbacks_survive_gateway_projection() {
         let fixture: Value = serde_json::from_str(include_str!(

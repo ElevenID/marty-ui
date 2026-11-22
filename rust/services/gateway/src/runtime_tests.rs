@@ -2451,6 +2451,42 @@ async fn pairing_ticket_route_requires_fresh_session_and_active_tenant() {
 }
 
 #[tokio::test]
+async fn pairing_ticket_forwards_a_distinct_verifier_profile_to_its_owner() {
+    let (router, recorder) = actor_test_router();
+    let issuer = "11111111-2222-4333-8444-555555555555";
+    let verifier = "22222222-3333-4444-8555-666666666666";
+    for (id, expected) in [
+        (issuer, StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            "00000000-0000-0000-0000-000000000000",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("invalid", StatusCode::UNPROCESSABLE_ENTITY),
+        (verifier, StatusCode::OK),
+    ] {
+        let body = json!({"organization_id":"org-1", "trust_profile_id":issuer, "verifier_trust_profile_id":id});
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pairing-tickets")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=pairing-session")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let body: Value = serde_json::from_slice(calls[0].1.body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["verifier_trust_profile_id"], verifier);
+}
+
+#[tokio::test]
 async fn public_pairing_redemption_forwards_ticket_without_client_identity_headers() {
     let (router, recorder) = actor_test_router();
     let response = router

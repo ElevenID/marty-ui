@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,3 +39,25 @@ def test_help_is_intentional_and_does_not_read_private_inputs(monkeypatch,capsys
     monkeypatch.setattr(recovery.renewal,'hold_private_input',forbidden)
     assert recovery.main(['--help'])==0
     out=capsys.readouterr();assert '--renew-once' in out.out and not out.err
+
+
+@pytest.mark.parametrize('mode', [
+    ['--renew-once'],
+    ['--renew-once', '--check-only'],
+    ['--renew-once', '--wait-for-engine'],
+    ['--expired-current', 'stage', '--attempt-directory', 'PUBLIC_UNUSED_ATTEMPT'],
+])
+def test_unsupported_logical_namespace_refuses_before_private_inputs_or_dispatch(monkeypatch, capsys, mode):
+    # Substitute only the platform gate; no Win32 handle or native runner is used.
+    monkeypatch.setattr(recovery, 'os', SimpleNamespace(name='nt'))
+    calls = []
+    def forbidden(*_args, **_kwargs):
+        calls.append('private input or runner')
+        raise AssertionError('Invalid namespace reached private input or runner')
+    monkeypatch.setattr(recovery.renewal, 'hold_private_input', forbidden)
+    monkeypatch.setattr(recovery.selection, 'renew_once', forbidden)
+    monkeypatch.setattr(recovery, 'wait_for_engine', forbidden)
+    assert recovery.main(['--configuration', 'PRIVATE_SENTINEL', *mode,
+                          '--logical-project', 'marty-production-synthetic']) == 1
+    out = capsys.readouterr()
+    assert not calls and not out.out and 'PRIVATE_SENTINEL' not in out.err

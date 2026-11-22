@@ -24,6 +24,18 @@ RECOVERY_CONTRACT = {'schema':'marty.windows-recovery-operator/v1',
     'retained_certificates':True,'recovery_candidate':True,
     'expired_rollback':False,'automatic_activation':False}
 
+CERTIFICATE_INSPECTION_SCHEMA = 'marty.windows-current-certificate-inspection/v1'
+CERTIFICATE_LIFETIME_REFUSAL = 'renewed certificate is outside the required validity overlap'
+
+
+def certificate_inspection_result(outcome):
+    """A certificate subcheck never establishes token or whole-current admission."""
+    if outcome not in ('lifetime-refused', 'completed'):
+        raise ValueError('Windows current certificate inspection refused')
+    return {'schema': CERTIFICATE_INSPECTION_SCHEMA, 'operation': 'activation-certificates',
+            'outcome': outcome, 'authority_verified': True, 'tokens_examined': False,
+            'whole_current_proof': False, 'credential_admission': False}
+
 def require_recovery_capability(config, docker_prefix):
     """Refuse unsupported pinned operators before authority or credential writes.
 
@@ -652,6 +664,10 @@ for role,root in mirrors.items():
   with os.fdopen(fd,'wb') as f:
    assert f.write(expected)==len(expected);f.flush();os.fsync(f.fileno())
 token=pathlib.Path(d['token_file']).read_text().strip()
+inspection=d.get('certificate_inspection',False)
+assert type(inspection) is bool
+assert not inspection or (not d['transition'] and not d.get('initial_current',False)
+                          and not d.get('recovery',False))
 def native(op,body,network=False):
  args=[binary,'operator',op]
  if network:args += [d['bao_addr'],'/input/ca.crt']
@@ -659,7 +675,26 @@ def native(op,body,network=False):
  assert p.returncode==0
  r=json.loads(p.stdout);assert isinstance(r,dict) and set(r)=={'value'}
  return r['value']
-assert native('authority-check',{'token':token,'rotation':False},True) is None
+def inspected_native(op,body):
+ args=[binary,'operator',op,d['bao_addr'],'/input/ca.crt']
+ p=subprocess.run(args,input=json.dumps(body).encode(),capture_output=True,timeout=90)
+ assert p.returncode==0 and len(p.stdout)<=4096 and len(p.stderr)<=4096
+ def pairs(items):
+  result={}
+  for key,value in items:
+   assert key not in result
+   result[key]=value
+  return result
+ r=json.loads(p.stdout,object_pairs_hook=pairs)
+ if r=={'value':None}:return 'completed'
+ # The signed operator also wraps transport/HTTP/JSON failures in an error
+ # envelope. Only this reviewed, operation-specific semantic result qualifies.
+ assert (op=='activation-certificates' and type(r) is dict and set(r)=={'error'}
+         and r['error']=='renewed certificate is outside the required validity overlap')
+ return 'lifetime-refused'
+if inspection:
+ assert inspected_native('authority-check',{'token':token,'rotation':False})=='completed'
+else:assert native('authority-check',{'token':token,'rotation':False},True) is None
 if d['transition']:
  assert native('generation',{'operation':'verify','current':roots['old'],'candidate':roots['new'],
                             'ca_overlap':False,'ca_retire':False})==[d['count'],d['changed']]
@@ -670,14 +705,20 @@ body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minim
       'replacement':None,'retiring':False}
 recovery=d.get('recovery',False)
 assert type(recovery) is bool
-if recovery:
+if inspection:
+ outcome=inspected_native('activation-certificates',body)
+ result={'schema':'marty.windows-current-certificate-inspection/v1','operation':'activation-certificates',
+         'outcome':outcome,'authority_verified':True,'tokens_examined':False,
+         'whole_current_proof':False,'credential_admission':False}
+elif recovery:
  assert d['transition'] and not d.get('initial_current',False) and d['minimum_ttl']>=3600
  assert native('recovery-candidate',{'token':token,'old':roots['old'],'new':roots['new'],
                                    'minimum_ttl':d['minimum_ttl']},True) is None
 else:
  for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
-result={'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}
-if recovery:result['recovery']=True
+if not inspection:
+ result={'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}
+ if recovery:result['recovery']=True
 print(json.dumps(result))
 '''
 
@@ -699,6 +740,19 @@ def preflight_current(config, project, current, docker_prefix):
     return _preflight(config, project, current, current, docker_prefix, transition=False)
 
 
+def inspect_current_certificates(config, project, current, docker_prefix):
+    """Inspect the signed current certificate subcheck, never token admission.
+
+    Generic errors, nonzero exits, malformed output, and timeouts are uncertain
+    outcomes. They raise rather than become semantic refusal evidence. This
+    separate mode does not change ordinary or recovery preflight ordering.
+    """
+    config = dict(config)
+    config['renewed'] = config['current']
+    return _preflight(config, project, current, current, docker_prefix,
+                      transition=False, certificate_inspection=True)
+
+
 def preflight_initial_current(config, project, current, docker_prefix):
     """Read-only first-generation proof while initial root-descendant leaves exist.
 
@@ -712,7 +766,7 @@ def preflight_initial_current(config, project, current, docker_prefix):
 
 
 def _preflight(config, project, old, new, docker_prefix, *, transition,
-               initial_current=False, recovery=False):
+               initial_current=False, recovery=False, certificate_inspection=False):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
@@ -721,6 +775,8 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     changed = sum(old[name] != new[name] for name in old)
     require(type(initial_current) is bool and not (transition and initial_current))
     require(type(recovery) is bool and (not recovery or (transition and not initial_current)))
+    require(type(certificate_inspection) is bool and (not certificate_inspection
+            or not (transition or initial_current or recovery)))
     require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
@@ -747,6 +803,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
             if recovery:request['recovery']=True
+            if certificate_inspection:request['certificate_inspection']=True
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                     '--network', config['network'], '--tmpfs',
@@ -761,6 +818,13 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
             from selfhost_windows_renewal import run_owned_mutation
             p = run_owned_mutation(args, stdin_bytes=json.dumps(request).encode(), timeout=240)
             require(p.returncode == 0)
+            if certificate_inspection:
+                from selfhost_windows_selection import decode, packed
+                require(len(p.stdout)<=4096 and len(p.stderr)<=4096)
+                result=decode(p.stdout)
+                require(packed(result) in [packed(certificate_inspection_result(value))
+                        for value in ('lifetime-refused','completed')])
+                return result
             expected = {'authority': True, 'generation': transition, 'tokens': True, 'certificates': True}
             if recovery:expected['recovery']=True
             require(json.loads(p.stdout) == expected)

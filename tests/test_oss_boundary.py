@@ -12,6 +12,7 @@ METADATA_FILES = [
     "scripts/website_release.py",
     "scripts/website_provenance.py",
     "scripts/website_producer_policy.py",
+    "scripts/selfhost_windows_website_plan.py",
 ]
 
 

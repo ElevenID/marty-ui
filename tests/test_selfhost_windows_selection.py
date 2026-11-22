@@ -32,6 +32,61 @@ def test_staging_rejects_logical_project_unusable_by_signed_tls_helper(tmp_path)
     assert not (tmp_path/f'.{PROJECT}.renewal-staging.json').exists()
 
 
+@pytest.mark.parametrize('full_segment', [False, True])
+def test_renewal_rejects_unsupported_namespace_before_lease_or_attempt(monkeypatch, tmp_path, full_segment):
+    calls = []
+    def refused_stage(*_args):
+        calls.append('stage')
+        raise ValueError('Unsupported TLS namespace reached staging')
+    def continue_journal():
+        calls.append('continuation')
+        raise ValueError('Unsupported TLS namespace reached continuation')
+    @contextmanager
+    def lease(_path):
+        calls.append('lease')
+        yield SimpleNamespace(sequence=selection.MAX_SELECTIONS if full_segment else 1,
+            generation_sequence=1, secrets_dir=tmp_path/'generation', journal_path=tmp_path/'journal',
+            stage_renewal=refused_stage, continue_journal=continue_journal)
+    monkeypatch.setattr(selection, 'selected_inputs', lease)
+    with pytest.raises(ValueError):
+        selection.renew_once(tmp_path/'existing.json', 'marty-production-synthetic')
+    assert not calls and not list(tmp_path.iterdir())
+
+
+def test_production_project_renews_with_enrolled_selfhost_namespace(monkeypatch, tmp_path):
+    project = 'marty-production-synthetic'
+    events = []
+    def stage(root, logical):
+        assert root.is_dir() and logical == 'marty-selfhost-synthetic'
+        events.append('stage')
+        next_config = root/'config.json'
+        next_config.write_bytes(selection.packed({'project': project}))
+        return {'next_config': str(next_config), 'authority_file': 'PUBLIC_AUTHORITY', 'guard_sha256': 'a'*64}
+    @contextmanager
+    def lease(_path):
+        yield SimpleNamespace(project=project, sequence=1, generation_sequence=1,
+            secrets_dir=tmp_path/'generation', journal_path=tmp_path/'journal', stage_renewal=stage)
+        events.append('lease-exit')
+    def prepare(_path, **kwargs):
+        assert kwargs == {'authority_file': 'PUBLIC_AUTHORITY', 'staging_sha256': 'a'*64}
+        assert events == ['stage', 'lease-exit']
+        events.append('prepare')
+    def activate(config):
+        assert config['project'] == project
+        events.append('activate')
+        return {'result': 'activated'}
+    monkeypatch.setattr(selection, 'selected_inputs', lease)
+    monkeypatch.setattr(selection, 'prepare', prepare)
+    monkeypatch.setattr(selection.renewal, 'read_private_bytes', lambda path: path.read_bytes())
+    monkeypatch.setattr(selection.renewal, 'activate', activate)
+    monkeypatch.setattr(selection, 'complete', lambda *_args, **_kwargs: {'sequence': 2})
+    result = selection.renew_once(tmp_path/'existing.json', 'marty-selfhost-synthetic')
+    assert result['project'] == project and result['result'] == 'renewed-and-selected'
+    assert result['generation_sequence'] == 2
+    assert events == ['stage', 'lease-exit', 'prepare', 'activate']
+    assert len(list(tmp_path.glob('windows-renewal-*'))) == 1
+
+
 @contextmanager
 def fixture(monkeypatch, *, initial_current=False):
     if os.name != 'nt':pytest.skip('Actual private NTFS selection journal')
@@ -107,6 +162,24 @@ def test_initial_current_adoption_uses_real_current_proof_without_transition(mon
             assert lease.secrets_dir == Path(cfg['current_secrets'])
             assert lease.check_current() == 'd'*64
         with pytest.raises(ValueError):selection.adopt_current(path)
+
+
+def test_website_inspection_callback_is_scoped_to_the_real_selection_lease(monkeypatch):
+    import selfhost_windows_website as website
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, _cfg):
+        selection.adopt_current(path)
+        calls = []
+        def inspect(config, choice, _values, record, assets, **_kwargs):
+            calls.append((config['project'], choice, record['sequence'], assets))
+            return {'inspection_completed': True, 'activation_supported': False}
+        monkeypatch.setattr(website, 'inspect_composition', inspect)
+        with selection.selected_inputs(path) as lease:
+            assert lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None,
+                registry_config=None) == {'inspection_completed': True, 'activation_supported': False}
+        assert calls == [(PROJECT, 'old', 1, 'PUBLIC_ASSETS')]
+        with pytest.raises(ValueError):
+            lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None, registry_config=None)
+        assert len(calls) == 1
 
 
 def test_initial_current_pending_intent_completes_only_after_reproof(monkeypatch):

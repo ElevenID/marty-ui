@@ -58,7 +58,7 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
     async fn resolve(
         &self,
         request: &ProofPolicyRequest,
-    ) -> Result<KeyAttestationRequirements, TenantDiscoveryError> {
+    ) -> Result<Option<KeyAttestationRequirements>, TenantDiscoveryError> {
         let operation = if request.issuer_did.is_some() {
             "resolve-issuer-did"
         } else {
@@ -89,7 +89,7 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
         let operation = crate::signing_error_detail::SigningOperation::Context;
         let response = match crate::signing_http_response::classify(response, operation).await {
             Ok(crate::signing_http_response::SigningHttpResponse::NotFound) => {
-                return Ok(KeyAttestationRequirements::default())
+                return Ok(Some(KeyAttestationRequirements::default()));
             }
             Ok(crate::signing_http_response::SigningHttpResponse::Continue(response)) => response,
             Err(cause) => {
@@ -108,10 +108,10 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
                 TenantDiscoveryError::ProofPolicyResponseInvalid
             })?;
         let Some(payload) = payload.as_object() else {
-            return Ok(KeyAttestationRequirements::default());
+            return Ok(Some(KeyAttestationRequirements::default()));
         };
         if payload.get("ok").and_then(Value::as_bool) != Some(true) {
-            return Ok(KeyAttestationRequirements::default());
+            return Ok(Some(KeyAttestationRequirements::default()));
         }
         let profile = payload.get("issuer_profile").and_then(Value::as_object);
         if request.issuer_did.is_some()
@@ -126,15 +126,16 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
             .and_then(|profile| profile.get("key_attestation_policy"))
             .and_then(Value::as_object)
         else {
-            return Ok(KeyAttestationRequirements::default());
+            return Ok(Some(KeyAttestationRequirements::default()));
         };
-        if policy.get("mode").and_then(Value::as_str) != Some("required") {
-            return Ok(KeyAttestationRequirements::default());
+        match policy.get("mode").and_then(Value::as_str) {
+            Some("disabled" | "optional") => Ok(None),
+            Some("required") => Ok(Some(KeyAttestationRequirements {
+                key_storage: string_list(policy.get("required_key_storage")),
+                user_authentication: string_list(policy.get("required_user_authentication")),
+            })),
+            _ => Err(TenantDiscoveryError::ProofPolicyResponseInvalid),
         }
-        Ok(KeyAttestationRequirements {
-            key_storage: string_list(policy.get("required_key_storage")),
-            user_authentication: string_list(policy.get("required_user_authentication")),
-        })
     }
 }
 
@@ -227,10 +228,37 @@ mod tests {
         let resolver =
             HttpProofPolicyResolver::new(base_url, Some("service-secret"), Duration::from_secs(1))
                 .expect("resolver");
-        let requirements = resolver.resolve(&request()).await.expect("policy");
+        let requirements = resolver
+            .resolve(&request())
+            .await
+            .expect("policy")
+            .expect("required");
         assert_eq!(requirements.key_storage, ["iso_18045_high"]);
         assert_eq!(requirements.user_authentication, ["biometric"]);
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn omits_only_explicit_nonmandatory_policies() {
+        for mode in ["disabled", "optional", "required", "unknown"] {
+            let response = json!({"ok": true, "issuer_profile": {
+                "id": "profile-a", "key_attestation_policy": {"mode": mode}
+            }});
+            let (base_url, task) =
+                spawn(Router::new().fallback(move || async move { Json(response) })).await;
+            let resolver =
+                HttpProofPolicyResolver::new(base_url, None, Duration::from_secs(1)).unwrap();
+            let policy = resolver.resolve(&request()).await;
+            match mode {
+                "required" => assert_eq!(policy, Ok(Some(Default::default()))),
+                "unknown" => assert_eq!(
+                    policy,
+                    Err(TenantDiscoveryError::ProofPolicyResponseInvalid)
+                ),
+                _ => assert_eq!(policy, Ok(None)),
+            }
+            task.abort();
+        }
     }
 
     #[tokio::test]
@@ -240,7 +268,7 @@ mod tests {
             HttpProofPolicyResolver::new(base_url, None, Duration::from_secs(1)).expect("resolver");
         assert_eq!(
             resolver.resolve(&request()).await.expect("empty policy"),
-            Default::default()
+            Some(Default::default())
         );
         task.abort();
 

@@ -16,6 +16,22 @@ use crate::{
     Oid4vpClientIdScheme, RequestObjectCompatibility, RequestObjectOptions, RequestObjectTransport,
 };
 
+/// The custody key may carry the provider's did:web method ID. A derived
+/// did:jwk or did:key uses a different JOSE kid for the same public key.
+fn request_key_projection(
+    mut public_jwk: Value,
+    custody_method: &str,
+    request_kid: &str,
+) -> Result<Value, WalletVerifierRequestError> {
+    if let Some(kid) = public_jwk.get_mut("kid") {
+        if kid.as_str() != Some(custody_method) && kid.as_str() != Some(request_kid) {
+            return Err(WalletVerifierRequestError::Unavailable);
+        }
+        *kid = Value::String(request_kid.to_owned());
+    }
+    Ok(public_jwk)
+}
+
 const STORED_REQUEST: &str = "paired_wallet_signed_request_v1";
 const CONTRACT: &str = "marty.flow/wallet-verifier-request/v1";
 const MAXIMUM_BYTES: usize = 64 * 1024;
@@ -184,6 +200,25 @@ fn text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
+// The service configures expected origins even for request_uri deployments.
+// Only a DC API transport or a flow already bound to that transport is incompatible.
+fn incompatible_wallet_transport(
+    instance: &FlowInstanceRecord,
+    options: &RequestObjectOptions,
+) -> bool {
+    options.client_id_scheme != Oid4vpClientIdScheme::DecentralizedIdentifier
+        || options.compatibility != RequestObjectCompatibility::Standard
+        || options.transport != RequestObjectTransport::RequestUri
+        || options.wallet_nonce.is_some()
+        || instance.context.get("dc_api_expected_origins").is_some()
+        || instance.context.get("dc_api_protocol").is_some()
+        || instance.context.get("dc_api_response_mode").is_some()
+        || instance.context["flow_type"].as_str() == Some("siop_v2")
+        || instance.context["oid4vp_profile"].as_str() == Some("haip")
+        || instance.context["request_uri_method"].as_str() == Some("post")
+        || instance.context["request_transport"].as_str() == Some("url_query")
+}
+
 /// Prepare the owner's canonical signed request or revalidate its immutable
 /// stored JWS. The entry point deliberately accepts no caller recipient/key/JWS.
 /// `organization_id` must come from the authenticated governance owner.
@@ -217,15 +252,7 @@ pub async fn prepare_wallet_verifier_request(
         || parsed_base.password().is_some()
         || parsed_base.query().is_some()
         || parsed_base.fragment().is_some()
-        || options.client_id_scheme != Oid4vpClientIdScheme::DecentralizedIdentifier
-        || options.compatibility != RequestObjectCompatibility::Standard
-        || options.transport != RequestObjectTransport::RequestUri
-        || options.wallet_nonce.is_some()
-        || !options.expected_origins.is_empty()
-        || instance.context["flow_type"].as_str() == Some("siop_v2")
-        || instance.context["oid4vp_profile"].as_str() == Some("haip")
-        || instance.context["request_uri_method"].as_str() == Some("post")
-        || instance.context["request_transport"].as_str() == Some("url_query")
+        || incompatible_wallet_transport(&instance, options)
     {
         return Err(invalid());
     }
@@ -410,7 +437,11 @@ pub async fn prepare_wallet_verifier_request(
         request_uri: format!("{base}/v1/flows/instances/{}/request", instance.id),
         client_id: client_id.into(),
         request_key_id: request_key_id.into(),
-        public_jwk,
+        public_jwk: request_key_projection(
+            public_jwk,
+            &identity.verification_method_id,
+            &expected_key_id,
+        )?,
         request_jws_sha256: format!("{:x}", Sha256::digest(compact_request_jws.as_bytes())),
         compact_request_jws: compact_request_jws.clone(),
         response_uri: claims["response_uri"].as_str().ok_or_else(invalid)?.into(),
@@ -458,6 +489,24 @@ mod tests {
     use crate::{SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult};
     use async_trait::async_trait;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    #[test]
+    fn request_projection_binds_only_the_verified_method_alias() {
+        let custody = "did:web:issuer.example#signer";
+        let derived = "did:jwk:example#0";
+        let key = json!({"kty":"EC","kid":custody,"x":"public-x","y":"public-y"});
+        let mut expected = key.clone();
+        expected["kid"] = json!(derived);
+        assert_eq!(
+            request_key_projection(key.clone(), custody, derived).unwrap(),
+            expected
+        );
+        assert_eq!(
+            request_key_projection(key.clone(), custody, custody).unwrap(),
+            key
+        );
+        assert!(request_key_projection(key, "unrelated", derived).is_err());
+    }
 
     use std::{
         collections::BTreeMap,
@@ -657,6 +706,18 @@ mod tests {
             signing_identity: Some(signer),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn direct_post_accepts_configured_dc_api_origins_and_rejects_a_dc_api_instance() {
+        let mut flow = instance(Utc::now());
+        let config = RequestObjectOptions {
+            expected_origins: vec!["https://verifier.example".into()],
+            ..Default::default()
+        };
+        assert!(!incompatible_wallet_transport(&flow, &config));
+        flow.context["dc_api_expected_origins"] = json!(["https://verifier.example"]);
+        assert!(incompatible_wallet_transport(&flow, &config));
     }
 
     #[tokio::test]
