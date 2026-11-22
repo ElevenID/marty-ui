@@ -133,8 +133,9 @@ fn router_with_auth(configured: bool) -> axum::Router {
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
-    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool.clone()), cache)
-        .expect("application composition");
+    let application =
+        OrganizationApplication::new(PostgresOrganizationStore::new(pool.clone()), cache)
+            .expect("application composition");
     organization_core_router(OrganizationHttpState {
         application: Arc::new(application),
         service_authenticator: Arc::new(
