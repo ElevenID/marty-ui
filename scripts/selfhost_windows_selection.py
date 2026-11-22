@@ -48,6 +48,7 @@ class SelectedInputs:
     transition_product: Callable = field(repr=False, compare=False)
     check_website_composition: Callable = field(repr=False, compare=False)
     prepare_expired_current: Callable = field(repr=False, compare=False)
+    begin_website_transition: Callable = field(repr=False, compare=False)
 
 
 def require(value):
@@ -213,7 +214,7 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None):
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None, _pending_website_sha256=None):
     from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
@@ -223,13 +224,21 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         coordination=stack if _coordination is None else _coordination
         coordination.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
         product_guard = renewal.product_transition_guard(config)
-        if _pending_product_sha256 is None:
+        if _pending_website_sha256 is not None:
+            require(_pending_product_sha256 is None and _pending_recovery_sha256 is None)
+        guard_pin = _pending_product_sha256 if _pending_website_sha256 is None else _pending_website_sha256
+        if guard_pin is None:
             require(not renewal.namespace_entry_exists(product_guard))
         else:
             require(not create and not _discover_continuation and _pending_model_sha256 is None
-                    and _pending_continuation_sha256 is None and type(_pending_product_sha256) is str
-                    and re.fullmatch(r'[0-9a-f]{64}', _pending_product_sha256))
-            require(digest(stack.enter_context(renewal.hold_private_input(product_guard))) == _pending_product_sha256)
+                    and _pending_continuation_sha256 is None and type(guard_pin) is str
+                    and re.fullmatch(r'[0-9a-f]{64}', guard_pin))
+            guard_body = stack.enter_context(renewal.hold_private_input(product_guard))
+            require(digest(guard_body) == guard_pin)
+            if _pending_website_sha256 is not None:
+                from selfhost_windows_website_guard import SCHEMA as WEBSITE_GUARD_SCHEMA
+                website_guard = decode(guard_body)
+                require(type(website_guard) is dict and website_guard.get('schema') == WEBSITE_GUARD_SCHEMA)
             require(not any(renewal.namespace_entry_exists(getter(config)) for getter in (
                 renewal.recovery_guard, renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
                 renewal.model_repair_guard, renewal.continuation_guard)))
@@ -1105,7 +1114,7 @@ def renew_once(config_path,logical_project):
 
 
 @contextmanager
-def _selected_inputs(config_path, *, terminal_guard_sha256=None):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1114,10 +1123,12 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
     expired_completion=[];expired_started=False
-    with _session(config_path) as (_config, _cfg_raw, expected, _root, raw, stack):
-        if terminal_guard_sha256 is None:
-            require(not renewal.recovery_pending(_config))
-        else:
+    options = {}
+    if _pending_website is not None:
+        require(terminal_guard_sha256 is None and _pending_website[1] is not None)
+        options['_pending_website_sha256'] = _pending_website[1]
+    with _session(config_path, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
+        if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
             require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
             require(not renewal.namespace_entry_exists(renewal.renewal_staging_guard(_config)))
@@ -1125,6 +1136,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
             require(not renewal.namespace_entry_exists(renewal.continuation_guard(_config)))
             guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
             require(digest(guard_raw) == terminal_guard_sha256)
+        elif _pending_website is None:
+            require(not renewal.recovery_pending(_config))
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
         if _initial_current_record(record, records.get(1)):
@@ -1147,6 +1160,32 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
         require(digest(transition) == record['transition_intent_sha256'])
         require(digest(result) == record['result_sha256'] if record['result_sha256'] is not None else not result)
         selected = record['selected'];choice = record['choice']
+        generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
+
+        def website_owner():
+            return {
+                'project': cfg['project'], 'engine_id': cfg['engine_id'],
+                'docker_host': cfg['docker_host'], 'root': str(_root.parent),
+                'selection_sequence': sequence, 'generation_sequence': generation_sequence,
+                'binding_sha256': digest(packed(expected)),
+                'journal_sha256': digest(packed({name: digest(body) for name, body in raw.items()})),
+                'configuration_sha256': digest(cfg_raw),
+                'selection_sha256': digest(raw[f'{sequence:06}.selection.json']),
+                'selected_sha256': digest(packed(selected)),
+                'native_sha256': digest(packed(expected['native'])),
+                'historical_tls_sha256': digest(packed(cfg['tls_init_receipt'])),
+                'data_sha256': record['data_sha256'],
+            }
+
+        if _pending_website is not None:
+            from selfhost_windows_website_guard import inspect
+            plan, guard_pin, anchor_pin = _pending_website
+            model = stack.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=2*1024*1024))
+            require(digest(model) == cfg['compose_sha256'])
+            owner = {**website_owner(), 'model_sha256': digest(packed(decode(model)))}
+            yield inspect(cfg, plan, owner, guard_sha256=guard_pin, expected_anchor_sha256=anchor_pin, held=stack)
+            return
+
         lease_lock = threading.Lock();active = True
         def check_current(authority_file=None):
             with lease_lock:
@@ -1225,25 +1264,28 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                 from selfhost_windows_website import inspect_composition
                 # Inspection uses only config/inspect reads. In particular it
                 # must not call the kernel-witness or native custody producers.
-                plan_owner = None
-                if plan_attempt_directory is not None:
-                    plan_owner = {
-                        'project': cfg['project'], 'engine_id': cfg['engine_id'],
-                        'docker_host': cfg['docker_host'], 'root': str(_root.parent),
-                        'selection_sequence': sequence, 'generation_sequence': generation_sequence,
-                        'binding_sha256': digest(packed(expected)),
-                        'journal_sha256': digest(packed({name: digest(body) for name, body in raw.items()})),
-                        'configuration_sha256': digest(cfg_raw),
-                        'selection_sha256': digest(raw[f'{sequence:06}.selection.json']),
-                        'selected_sha256': digest(packed(selected)),
-                        'native_sha256': digest(packed(expected['native'])),
-                        'historical_tls_sha256': digest(packed(cfg['tls_init_receipt'])),
-                        'data_sha256': record['data_sha256'],
-                    }
+                plan_owner = website_owner() if plan_attempt_directory is not None else None
                 return inspect_composition(cfg, choice, values, record, assets,
                     gh=gh, cosign=cosign, registry_config=registry_config,
                     owner_root=_root.parent, held=stack, plan_owner=plan_owner,
                     plan_attempt_directory=plan_attempt_directory)
+        def begin_website_transition(assets, *, gh, cosign, registry_config, plan_attempt_directory,
+                                     expected_plan_sha256, authority_file=None):
+            nonlocal product_started
+            with lease_lock:
+                require(active and not completion and not staging and not model_completion and
+                        not continuation_started and not product_started and not expired_started
+                        and terminal_guard_sha256 is None and not _initial_current_record(record))
+                product_started = True
+                from selfhost_windows_website import inspect_composition
+                from selfhost_windows_website_guard import initialize
+                plan = inspect_composition(cfg, choice, values, record, assets, gh=gh, cosign=cosign,
+                    registry_config=registry_config, owner_root=_root.parent, held=stack, plan_owner=website_owner(),
+                    plan_attempt_directory=plan_attempt_directory, held_plan_only=True)
+                require(plan['plan_sha256'] == expected_plan_sha256)
+                require(_prove(cfg, choice, values, stack, expected_data=record['data_sha256'],
+                               authority_file=authority_file) == record['data_sha256'])
+                return initialize(cfg, plan, stack)
         def prepare_expired_current(output_dir,logical_project):
             nonlocal expired_started
             with lease_lock:
@@ -1258,14 +1300,13 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                     pending=start(cfg,choice,values,record,output_dir,logical_project,proof_stack)
                 expired_completion.append(pending)
                 return decode(packed(pending['result']))
-        from selfhost_windows_continuation import CHECKPOINT, checkpoint
-        generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
         try:
             yield SelectedInputs(cfg['project'], cfg['docker_host'], cfg['engine_id'], Path(cfg['compose_file']),
                 cfg['compose_sha256'], Path(selected['env_file']), Path(selected['secrets_dir']), sequence,
                 digest(packed(selected)), _root, generation_sequence,
                 check_configuration, check_current, recover_existing, stage_renewal, repair_model,
-                continue_journal, transition_product, check_website_composition, prepare_expired_current)
+                continue_journal, transition_product, check_website_composition, prepare_expired_current,
+                begin_website_transition)
         finally:
             with lease_lock:
                 active = False;values.clear()
@@ -1293,6 +1334,13 @@ def selected_inputs(config_path):
     """Hold selected inputs for current proof or guarded existing-ID recovery."""
     with _selected_inputs(config_path) as lease:
         yield lease
+
+
+def inspect_website_transition(config_path, plan, *, guard_sha256, expected_anchor_sha256):
+    """Read a pending guarded journal without granting an operation callback."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256)) as status:
+        result = status
+    return result
 
 
 def reconcile_existing(config_path, *, authority_file=None):

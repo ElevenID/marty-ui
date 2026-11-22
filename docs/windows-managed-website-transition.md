@@ -182,6 +182,22 @@ accepts the retained prior pin and exact verified record digest and writes only
 the missing tail. A durable started record still requires runtime
 reconciliation before any new operation.
 
+### Shared owner guard
+
+The managed selection lease can begin a website attempt after reconstructing
+the full plan under held inputs, matching the operator's expected plan digest,
+and passing existing current readiness, native authority and storage custody
+checks. It reserves the existing project product-transition guard before
+creating the attempt and initial journal. The guard binds the selected owner,
+exact plan, attempt and initial tail. The existing guard blocks ordinary
+renewal, recovery and other product transitions during a website attempt.
+
+A pending website read requires the exact guard and retained tail digests,
+replays the original selected generation and verifies the typed guard against
+that owner before opening the journal. This read returns phase status. The
+runtime executor must reconcile the actual workload and provide its evidence
+before advancing a pending phase or retiring the guard.
+
 ### Failed initial-stage reconciliation
 
 An initial candidate may never be created, or may be created but fail startup or

@@ -17,8 +17,7 @@ require = journal.require
 renewal = selection.renewal
 
 
-@contextmanager
-def _directories(plan):
+def namespace_paths(plan):
     plan_contract.validate_envelope(plan)
     owner_root = plan_contract.windows_path(plan['owner']['root'])
     attempt_path = plan_contract.path_under_owner(owner_root, plan['attempt_directory'])
@@ -27,8 +26,12 @@ def _directories(plan):
     attempt = Path(attempt_path)
     owner = Path(owner_root)
     cycle = attempt.name.removeprefix('windows-website-')
-    records = attempt / 'journal'
-    anchors = owner / ('.' + plan['owner']['project'] + '.website-tail-' + cycle)
+    return attempt / 'journal', owner / ('.' + plan['owner']['project'] + '.website-tail-' + cycle)
+
+
+@contextmanager
+def _directories(plan):
+    records, anchors = namespace_paths(plan)
     with ExitStack() as held:
         for path in (records, anchors):
             held.enter_context(renewal.hold_storage_namespace(path))
@@ -60,6 +63,11 @@ def _tail_value(plan, index, record_name, payload, prior):
 
 def _tail_name(index):
     return f'{index:06}.tail.json'
+
+
+def initial_anchor_sha256(plan):
+    (name, body), = journal.begin(plan).items()
+    return selection.digest(selection.packed(_tail_value(plan, 1, name, body, None)))
 
 
 def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next_record_sha256=None):
