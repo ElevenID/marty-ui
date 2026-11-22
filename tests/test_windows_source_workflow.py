@@ -1,5 +1,7 @@
 """Public native qualification must execute the retained NTFS source cases."""
 import os
+from contextlib import contextmanager
+import importlib.util
 from pathlib import Path
 import re
 import subprocess
@@ -68,6 +70,9 @@ def test_windows_source_workflow_uses_only_public_native_synthetic_execution():
     ]
     assert '--junitxml=$report' in native_step()['run']
     assert "if ($LASTEXITCODE -ne 0)" in native_step()['run']
+    diagnostic = next(step for step in steps if step.get('name') == 'Diagnose synthetic Windows fixture custody')
+    assert 'python scripts/ci/probe_windows_source_environment.py' in diagnostic['run']
+    assert steps.index(diagnostic) < steps.index(native_step())
 
 
 @pytest.mark.parametrize('fault', [None, 'additional-case', 'missing', 'empty', 'skipped',
@@ -109,3 +114,27 @@ def test_native_completion_gate_executes_and_rejects_missing_or_skipped_evidence
     else:
         assert result.returncode != 0 and result.stdout == ''
         assert 'zero skips or failures' in result.stderr
+
+
+def test_environment_probe_retains_guard_failure_and_restores_trace(monkeypatch):
+    spec = importlib.util.spec_from_file_location('windows_environment_probe',
+        ROOT / 'scripts/ci/probe_windows_source_environment.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.ctypes, 'get_last_error', lambda: 32, raising=False)
+    guard = {}
+    exec(compile("def require(value):\n if not value: raise ValueError('DO_NOT_LOG_PAYLOAD')\n",
+                 'selfhost_windows_inputs.py', 'exec'), guard)
+
+    @contextmanager
+    def refused():
+        guard['require'](False)
+        yield
+
+    previous = sys.gettrace()
+    result = module.probe('synthetic-refusal', refused())
+    assert result['passed'] is False and result['error_type'] == 'ValueError'
+    assert result['failed_checks'] == [{'function': 'refused', 'line': refused.__wrapped__.__code__.co_firstlineno + 2,
+                                        'win32_last_error': 32}]
+    assert 'DO_NOT_LOG_PAYLOAD' not in repr(result)
+    assert sys.gettrace() is previous
