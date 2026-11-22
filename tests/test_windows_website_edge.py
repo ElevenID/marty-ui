@@ -58,7 +58,7 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
-    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site'])
+    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout'])
 def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
@@ -67,6 +67,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     state = 'staged'
     calls = []
     site_unhealthy = fault == 'unready-site'
+    changed_default = False
     hashes = {role: f'{index+1:064x}' for index, role in enumerate(proposal['models']['staged']['services'])}
     routed_hashes = {**hashes, 'edge': 'f'*64}
     combined = proposal['models']['combined']
@@ -156,6 +157,8 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
             return SimpleNamespace(returncode=0, stdout=planned['edge_template'])
         assert args == ['nginx', '-T']
         details = b'# configuration file ' + edge.DEFAULT_CONFIG + b':\n' + edge.website.composition.EDGE_INCLUDE.encode() + b'\n\n'
+        if changed_default:
+            details += b'# configuration changed after routing\n'
         if state == 'split':
             details += b'# configuration file ' + edge.ACTIVE_ROUTE.encode() + b':\n' + proposal['routes']['split'] + b'\n'
             if fault == 'nginx-rejected':
@@ -210,7 +213,8 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         result = advance(staged, edge.BACKOUT)
         assert calls == ['authenticate', 'native']
         assert result['model_state'] == 'staged' and result['permitted_record_phases'] == ['verify-combined']
-    elif fault:
+    elif fault in {'failed-compose', 'changed-application', 'unexpected-bind', 'nginx-rejected',
+                   'foreign-storage-changed'}:
         with pytest.raises((ValueError, RuntimeError)):
             advance(staged, edge.FORWARD)
         assert calls == ['authenticate', 'native', edge.FORWARD]
@@ -223,6 +227,13 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         assert state == 'split' and routed['model_state'] == 'split'
         assert routed['permitted_record_phases'] == ['verify-website', 'restore-combined']
         site_unhealthy = True
+        if fault == 'changed-default-before-backout':
+            changed_default = True
+            with pytest.raises(ValueError):
+                advance(routed, edge.BACKOUT)
+            assert calls == ['authenticate', 'native', edge.FORWARD, 'authenticate', 'native']
+            assert not (records / '000006.restore-combined.started.json').exists()
+            return
         restored = advance(routed, edge.BACKOUT)
         assert state == 'staged' and restored['model_state'] == 'staged'
         assert restored['permitted_record_phases'] == ['verify-combined']

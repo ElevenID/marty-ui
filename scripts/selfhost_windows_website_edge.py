@@ -197,6 +197,8 @@ def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosi
     selection._native_current(config, choice, values, docker, authority_file)
     initial = context.check(before_intent=True)
     original_edge = _probe(docker, _edge(_owned(initial, config['project'])), proposal, current)
+    if current == 'split':
+        require(original_edge == evidence[prior]['edge_configuration'])
     started_evidence = stage._evidence(attempt / (phase + '-before.json'), {
         'owner_lease': {'guard_sha256': status['guard_sha256'], 'owner': plan['owner']},
         'native_custody': {'selected_sha256': plan['owner']['selected_sha256'],
@@ -209,7 +211,8 @@ def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosi
     }, held)
     started = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase,
                            event='started', evidence_sha256=started_evidence)
-    context.check(before_intent=True)
+    ready = context.check(before_intent=True)
+    require(_probe(docker, _edge(_owned(ready, config['project'])), proposal, current) == original_edge)
     if check_routes is not None:
         check_routes()
     if current != target:
