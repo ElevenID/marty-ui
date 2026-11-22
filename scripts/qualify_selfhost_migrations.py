@@ -65,10 +65,26 @@ NATIVE_BINARIES = (
 
 
 def native_command(operation: str) -> str:
+    if operation == "migrate":
+        commands = (
+            ("marty-organization", "migrate"),
+            ("marty-credential-template", "bootstrap"),
+            ("marty-presentation-policy", "migrate"),
+            ("marty-presentation-policy", "bootstrap-builtins"),
+            ("marty-device-registration", "migrate"),
+            ("marty-issuance-service", "migrate"),
+        )
+    elif operation == "verify-owned-schema":
+        commands = tuple(
+            (binary, "verify-owned-schema")
+            for binary in NATIVE_BINARIES
+        ) + (("marty-presentation-policy", "verify-owned-schema"),)
+    else:
+        raise QualificationError("Unsupported native schema operation")
     return ". /app/load-secrets-env.sh; " + " && ".join(
-        ("exec " if index == len(NATIVE_BINARIES) - 1 else "")
-        + f"/usr/local/bin/{binary} {operation}"
-        for index, binary in enumerate(NATIVE_BINARIES)
+        ("exec " if index == len(commands) - 1 else "")
+        + f"/usr/local/bin/{binary} {command}"
+        for index, (binary, command) in enumerate(commands)
     )
 
 
@@ -211,8 +227,13 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and native["command"] == [native_command("migrate")]
             and native["environment"] == {
                 "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                "MARTY_ORG_ID": ORG_ID,
+                "MARTY_ORG_SLUG": "marty",
+                "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                "PUBLIC_DOMAIN": "migration.invalid",
+                "PUBLIC_API_URL": "https://migration.invalid",
                 "DATABASE_URL_TEMPLATE":
-                    "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"}
+                    "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"}
             and native["secrets"] == [{
                 "source": "marty_db_password",
                 "target": "/run/secrets/marty_db_password"}]
