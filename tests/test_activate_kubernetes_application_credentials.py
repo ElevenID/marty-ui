@@ -90,7 +90,7 @@ def rendered_workloads(namespace, values):
                    "image": values["images"]["migrations" if name == "bootstrap-notification" else "services"]}
                   for name, command in activation.MIGRATION_COMMANDS.items()],
                 *[{"name": name, "image": values["images"]["services"]}
-                  for name in ("ready-organization", "ready-credential-template", "ready-presentation-policy")]],
+                  for name in ("ready-organization", "ready-credential-template")]],
             "volumes": [{"name": "bootstrap-secrets", "secret": {"secretName": "marty-secrets",
                 "items": [{"key": "NOTIFICATION_OPENBAO_TOKEN", "path": "notification_openbao_token"}]}}]}}},
         "status": {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}})
