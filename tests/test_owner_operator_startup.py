@@ -19,6 +19,7 @@ def test_organization_schema_and_catalog_writes_are_operator_only() -> None:
     assert 'command == "bootstrap"' in operator
     assert "migrate_organization_schema(&pool)" in operator
     assert "reconcile_organization_startup(" in operator
+    assert '.filter(|value| !value.trim().is_empty())' in operator
     assert "PostgresOutboxStore::new(" in operator
     assert '"organization"' in operator
     assert "ORGANIZATION_OUTBOX_PARTITIONS" in operator
