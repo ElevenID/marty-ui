@@ -289,7 +289,10 @@ def retired_provider_projection(value):
 def assert_models(
     approved, actual, *, interpolated=False, issuer_did="",
     ui_enabled_sections="public,console", bureau_api_key_file="",
-    passkeys_enabled="", passkey_rp_id="",
+    passkeys_enabled="", passkey_rp_id="", owner_org_id="",
+    owner_org_name="Marty", owner_org_slug="marty", owner_admin_email="",
+    owner_reviewer_email="", owner_migration_profile="selfhost-production",
+    owner_public_domain="localhost", owner_public_api_url="https://localhost",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = retired_provider_projection(deepcopy(approved))
@@ -385,15 +388,33 @@ def assert_models(
         "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
     }
     assert owner_environment["MARTY_DB_PASSWORD_FILE"] == "/run/secrets/marty_db_password"
-    assert owner_environment["MARTY_ORG_ID"] == "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}"
-    assert owner_environment["MARTY_ORG_NAME"] == "${MARTY_ORG_NAME:-Marty}"
-    assert owner_environment["MARTY_ORG_SLUG"] == "${MARTY_ORG_SLUG:-marty}"
-    assert owner_environment["MARTY_ORG_ADMIN_EMAIL"] == "${MARTY_ORG_ADMIN_EMAIL:-}"
-    assert owner_environment["MARTY_ORG_REVIEWER_EMAIL"] == "${MARTY_ORG_REVIEWER_EMAIL:-}"
-    assert owner_environment["MARTY_ISSUER_DID"] == "${MARTY_ISSUER_DID:-}"
-    assert owner_environment["MARTY_MIGRATION_PROFILE"] == "${MARTY_MIGRATION_PROFILE:-selfhost-production}"
-    assert owner_environment["PUBLIC_DOMAIN"] == "${PUBLIC_DOMAIN:-localhost}"
-    assert owner_environment["PUBLIC_API_URL"] == "${PUBLIC_API_URL:-https://localhost}"
+    expected_owner_inputs = {
+        "MARTY_ORG_ID": owner_org_id or "00000000-0000-0000-0000-000000000001",
+        "MARTY_ORG_NAME": owner_org_name,
+        "MARTY_ORG_SLUG": owner_org_slug,
+        "MARTY_ORG_ADMIN_EMAIL": owner_admin_email,
+        "MARTY_ORG_REVIEWER_EMAIL": owner_reviewer_email,
+        "MARTY_ISSUER_DID": issuer_did,
+        "MARTY_MIGRATION_PROFILE": owner_migration_profile,
+        "PUBLIC_DOMAIN": owner_public_domain,
+        "PUBLIC_API_URL": owner_public_api_url,
+    }
+    for key, value in expected_owner_inputs.items():
+        if interpolated:
+            assert owner_environment[key] == value, (key, owner_environment[key], value)
+        else:
+            fallback = {
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_ORG_NAME": "Marty",
+                "MARTY_ORG_SLUG": "marty",
+                "MARTY_ORG_ADMIN_EMAIL": "",
+                "MARTY_ORG_REVIEWER_EMAIL": "",
+                "MARTY_ISSUER_DID": "",
+                "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                "PUBLIC_DOMAIN": "localhost",
+                "PUBLIC_API_URL": "https://localhost",
+            }[key]
+            assert owner_environment[key] == "${" + key + ":-" + fallback + "}"
     assert owner["secrets"] == [{
         "source": "marty_db_password", "target": "/run/secrets/marty_db_password",
     }]
@@ -773,6 +794,14 @@ def interpolated_models():
                 bureau_api_key_file=values.get("PERSONALIZATION_BUREAU_API_KEY_FILE") or "",
                 passkeys_enabled=values.get("KEYCLOAK_PASSKEYS_ENABLED") or "",
                 passkey_rp_id=values.get("KEYCLOAK_PASSKEY_RP_ID") or "",
+                owner_org_id=values.get("MARTY_ORG_ID") or "",
+                owner_org_name=values.get("MARTY_ORG_NAME") or "Marty",
+                owner_org_slug=values.get("MARTY_ORG_SLUG") or "marty",
+                owner_admin_email=values.get("MARTY_ORG_ADMIN_EMAIL") or "",
+                owner_reviewer_email=values.get("MARTY_ORG_REVIEWER_EMAIL") or "",
+                owner_migration_profile=values.get("MARTY_MIGRATION_PROFILE") or "selfhost-production",
+                owner_public_domain=values.get("PUBLIC_DOMAIN") or "localhost",
+                owner_public_api_url=values.get("PUBLIC_API_URL") or "https://localhost",
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (
