@@ -12,7 +12,7 @@ use marty_organization::{
     ORGANIZATION_CEDAR_SCHEMA,
 };
 use mmf_data::{CacheBackend, CacheConfig, RedisCache};
-use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
+use mmf_messaging::{run_outbox_dispatcher, MessageTransport, PostgresOutboxStore};
 use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
@@ -41,8 +41,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
             if command == "migrate" {
                 migrate_organization_schema(&pool).await?;
+                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)?;
+                outbox.migrate().await?;
+                drop(outbox);
             } else {
                 validate_organization_schema(&pool).await?;
+                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)?;
+                outbox.health().await?;
+                drop(outbox);
             }
             pool.close().await;
             return Ok(());
