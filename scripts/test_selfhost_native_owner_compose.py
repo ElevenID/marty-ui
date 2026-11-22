@@ -363,6 +363,8 @@ def assert_models(
     assert owner["entrypoint"] == ["/bin/sh", "-ec"]
     assert owner["command"] == [
         ". /app/load-secrets-env.sh\n"
+        "/usr/local/bin/marty-organization migrate\n"
+        "/usr/local/bin/marty-organization bootstrap\n"
         "/usr/local/bin/marty-credential-template bootstrap\n"
         "/usr/local/bin/marty-presentation-policy migrate\n"
         "exec /usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
@@ -372,7 +374,7 @@ def assert_models(
         "args": {"SERVICE_NAME": "credential-template"},
     }
     assert owner["environment"] == {
-        "DATABASE_URL_TEMPLATE": "postgresql://marty:$\${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        "DATABASE_URL_TEMPLATE": "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
         "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
         "MARTY_ORG_ID": "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}",
         "MARTY_ORG_NAME": "${MARTY_ORG_NAME:-Marty}",
