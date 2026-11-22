@@ -24,6 +24,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if let [command] = arguments.as_slice() {
         let database_url = std::env::var("DATABASE_URL")?;
