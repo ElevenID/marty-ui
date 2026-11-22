@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Disposable real-PG source-grant lifecycle; no public identity/consent claim."""
 from pathlib import Path
+from issuance_catalog import scoped_catalog_query
 from concurrent.futures import ThreadPoolExecutor
 import json,os,shutil,subprocess,sys,time,uuid
 ROOT=Path(__file__).resolve().parents[1]
@@ -55,7 +56,7 @@ def main():
     ','.join(map(q,[identifier,ORG,source,'application-one','canonical-subject','synthetic-provider','synthetic-fact']))+",'{}'::jsonb,'{}'::jsonb,900000,0,true,'admin-one','admin-one');")
   sql((ROOT/'rust/services/issuance/migrations/0015_external_observation_runtime_locks.sql').read_text())
   sql((ROOT/'rust/services/issuance/migrations/0016_application_ownership.sql').read_text())
-  observation_query=(ROOT/'rust/services/issuance/schema/external_observation_catalog_query.sql').read_text()
+  observation_query=scoped_catalog_query('external_observation')
   assert json.loads(sql(observation_query))==json.loads((ROOT/'rust/services/issuance/schema/external_observation_catalog.json').read_text()),'pre-association canonical observation catalog differs'
   sql((ROOT/'rust/services/issuance/migrations/0017_external_associations.sql').read_text())
   extended_observation_path=ROOT/'rust/services/issuance/schema/external_observation_with_association_catalog.json'

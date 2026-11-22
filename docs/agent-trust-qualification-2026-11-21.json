@@ -1377,7 +1377,7 @@
   },
   "aws_qualification_reference": {
     "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
-    "sha256": "b54cbb1242c8acc9366b14929876b04b36b61c357b3ba264f6af34cfa08e932c",
+    "sha256": "9f280c83f461a100c98a384d27ea4318657ca454c25521a81cef30b8728ef20d",
     "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
     "aws_rust_tests_passed": 210,
     "aws_gate_count": 14,
@@ -1412,6 +1412,20 @@
       "effective_verified_rust_tree": "15568a6077a07b1fa088ed65607b514410441f35",
       "local_rust_tests": 19,
       "local_consumer_bridge_tests": 16
+    },
+    "post_aws_ci_rust_reconciliation": {
+      "repository_path": "docs/agent-trust-ci-rust-reconciliation-2026-11-22.json",
+      "sha256": "2cab17d798be564d82f1821db1794824d1302d51dc0481946deb2cd7d3dac072",
+      "qualified_correction_rust_tree": "509b793829358ebd1b1c4606fe3e3f03cc5427db",
+      "content_equivalent_public_correction_commit": "d4935ba9adf8bf4c178262df66427ad1fd06497d",
+      "distinct_local_library_database_tests": 257,
+      "original_hosted_failed_cases_reexecuted_and_passed": 23,
+      "accepted_main_commit": "79df832ed1a232cd73d769c18f3bc459f6477c1a",
+      "merged_rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+      "combined_normal_host_build": "PASSED_BUILD_ONLY",
+      "normal_host_sha256": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989",
+      "normal_host_executed_by_this_followup": false,
+      "aws_restarted": false
     }
   }
 }
