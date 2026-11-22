@@ -259,10 +259,12 @@ def _hold_plan_proofs(assets, held):
 def inspect_composition(config: dict, choice: str, values: dict, record: dict, assets: Path, *,
                         gh: Path, cosign: Path, registry_config: Path | None,
                         owner_root: Path, held, plan_owner=None, plan_attempt_directory=None,
-                        held_plan_only=False, guarded_attempt=False, retained_edge_inputs=None) -> dict | tuple:
+                        held_plan_only=False, guarded_attempt=False, retained_edge_inputs=None,
+                        include_http=False) -> dict | tuple:
     """Called only by the active selected-input callback under its project lock."""
     assets = Path(assets).absolute()
     selection.require((plan_owner is None) == (plan_attempt_directory is None))
+    selection.require(not include_http or retained_edge_inputs is not None)
     proof_hashes = _hold_plan_proofs(assets, held) if plan_owner is not None else None
     with composition.verified_package(assets, gh=Path(gh).absolute(), cosign=Path(cosign).absolute(),
                                       registry_config=registry_config) as (manifest, payload):
@@ -284,8 +286,14 @@ def inspect_composition(config: dict, choice: str, values: dict, record: dict, a
             selection.require(compatibility(normalized, manifest)['composition_matches_selected_product'])
             original, _binding, template = _held_edge_template(
                 config, normalized, retained_data['edge']['mounts'], owner_root, held)
-            return from_observation(original, manifest, docker=docker, edge_template=template,
-                                    data_before=retained_data, **planning)
+            declared, proposed = from_observation(original, manifest, docker=docker, edge_template=template,
+                                                  data_before=retained_data, **planning)
+            if include_http:
+                application = (payload / 'application' / 'production-web-release.json').read_bytes()
+                selection.require(ui.digest(application) == manifest['application']['release_sha256'])
+                proposed['http'] = {'application': selection.decode(application)['image_metadata'],
+                                    'website': release['image_metadata'], 'routes': planning['routes']}
+            return declared, proposed
         model, observed, edge, plan = _observe(config, choice, values, record, manifest,
             full_standalone=full_standalone, owner_root=owner_root, held=held, planning=planning)
         if held_plan_only:
