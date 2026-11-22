@@ -69,7 +69,7 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
         assert positions == sorted(positions)
         for service in ("organization", "credential-template", "presentation-policy"):
             match = re.search(
-                rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\\Z)",
+                rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
                 source,
             )
             assert match is not None
