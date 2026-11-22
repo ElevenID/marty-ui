@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::{TimeDelta, Timelike, Utc};
 use marty_organization::{
+    migration::migrate_organization_schema,
     organization_core_router,
     postgres::{PostgresOrganizationStore, RepositoryError},
     ApproveMemberCommand, AuditEventQuery, CreateOrganizationCommand, DomainError,
@@ -15,6 +16,7 @@ use marty_organization::{
     OrganizationCacheKeys, OrganizationHttpState, OrganizationType, PrincipalSource,
 };
 use mmf_data::{CacheStore, MemoryCache};
+use mmf_messaging::PostgresOutboxStore;
 use mmf_security::ServiceTokenAuthenticator;
 use serde_json::Value;
 use sqlx::{
@@ -165,6 +167,10 @@ async fn pending_approval_is_tenant_scoped_atomic_and_single_winner_when_configu
         )
         .await
         .expect("organization approval PostgreSQL contract database must connect");
+    migrate_organization_schema(&pool).await.unwrap();
+    let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16).unwrap();
+    outbox.migrate().await.unwrap();
+    drop(outbox);
     let memberships = Arc::new(MemoryCache::default());
     let permissions = Arc::new(MemoryCache::default());
     let application = Arc::new(
