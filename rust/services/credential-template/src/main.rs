@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
     }
-    if arguments.as_slice() == ["bootstrap"] {
+    if matches!(arguments.as_slice(), [command] if command == "bootstrap") {
         let config = CredentialTemplateServiceConfig::from_env().map_err(|error| {
             error!(%error, "invalid Credential Template bootstrap configuration");
             error
@@ -85,6 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         seed_system_catalog(&store, chrono::Utc::now(),
             &config.marty_organization_id.to_string(),
             config.public_api_origin.as_str(), &config.marty_issuer_did).await?;
+        drop(store);
         pool.close().await;
         return Ok(());
     }
