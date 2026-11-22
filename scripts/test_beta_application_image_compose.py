@@ -165,10 +165,11 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
                 str(ROOT / "scripts/compose_config_model.py")
             )
             environment = owner["environment_mapping"](service.get("environment", {}))
-            environment["SERVICE_NAME"] = (
-                "issuance_native" if name == "issuance" else name.replace("-", "_")
-            )
-            service["environment"] = environment
+            if name != "owner-migrations":
+                environment["SERVICE_NAME"] = (
+                    "issuance_native" if name == "issuance" else name.replace("-", "_")
+                )
+                service["environment"] = environment
         else:
             service["image"] = f"elevenid-local/{name}:{RELEASE}"
     owner_migrations = expected["services"]["owner-migrations"]
