@@ -543,6 +543,22 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
     assert len(profile_loops) == 1
     assert "$script:ComposeFiles += " + profile_append in profile_loops[0]["body"]
     assert attached[profile_append]["offset"] < new["offset"]
+    db_migration = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "migration-live.log" in item["text"]
+    )
+    owner_bootstrap = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "owner-migrations" in item["text"]
+    )
+    issuance_migration = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "issuance-migration-live.log" in item["text"]
+    )
+    assert db_migration["offset"] < owner_bootstrap["offset"] < issuance_migration["offset"]
     rehearsal = next(
         item
         for item in commands
