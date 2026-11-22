@@ -109,17 +109,14 @@ def _abort_receipt(plan, status, outcome, observed, attempt, held):
                    'owner_binding_sha256': plan['owner']['binding_sha256'],
                    'selected_sha256': plan['owner']['selected_sha256'], 'state': plan['states']['combined'],
                    'candidate_outcome': outcome, 'observations_sha256': hashes}
-    path = attempt / ('stage-abort-evidence-' + contract.digest(hashes) + '.json')
     if 'prepared_abort_sha256' in status:
-        raw = held.enter_context(renewal.hold_private_input(path))
-        retained = selection.decode(raw)
-        require(raw == selection.packed(retained) and {name: contract.digest(value) for name, value in retained.items()} == hashes)
+        retained = store.hold_abort_observations(attempt, hashes, held)
         for name in {'owner_lease', 'native_custody', 'runtime_after', 'normalized_model', 'retained_product',
                      'mounted_template', 'edge_configuration', 'candidate_absence', 'selected_credentials',
                      'candidate_compensation'} & observed.keys():
             require(retained[name] == observed[name])
     else:
-        require(stage._evidence(path, observed, held) == hashes)
+        require(stage._evidence(store.abort_observations_path(attempt, hashes), observed, held) == hashes)
     return store.reconciled_abort(plan, expected_anchor_sha256=anchor, receipt=receipt)
 
 

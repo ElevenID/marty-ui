@@ -140,6 +140,30 @@ def read_evidence(plan, *, expected_anchor_sha256, references, held):
         return observed
 
 
+def hold_terminal_abort(plan, *, expected_anchor_sha256, held):
+    """Keep the complete terminal journal and receipt held for an owner decision."""
+    records, anchors = namespace_paths(plan)
+    for path in (records, anchors):
+        held.enter_context(renewal.hold_storage_namespace(path))
+        held.enter_context(_held_private_input(path, directory=True))
+    _entries, status, _names, _tails = _read(plan, records, anchors, held, expected_anchor_sha256)
+    require(status['classification'] == 'abort-evidence-complete')
+    receipt = selection.decode(_hold_bytes(records / ABORT, held))
+    return status, receipt
+
+
+def abort_observations_path(attempt, hashes):
+    return attempt / ('stage-abort-evidence-' + plan_contract.digest(hashes) + '.json')
+
+
+def hold_abort_observations(attempt, hashes, held):
+    raw = _hold_bytes(abort_observations_path(attempt, hashes), held)
+    observed = selection.decode(raw)
+    require(type(observed) is dict and raw == selection.packed(observed)
+            and {name: plan_contract.digest(value) for name, value in observed.items()} == hashes)
+    return observed
+
+
 def read_prepared_abort(plan, *, expected_anchor_sha256, held):
     """Hold the exact receipt left before a terminal record was written."""
     with _directories(plan) as (records, anchors, journal_inputs):

@@ -1119,7 +1119,8 @@ def renew_once(config_path,logical_project):
 
 
 @contextmanager
-def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None, _website_edge=None):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
+                     _website_edge=None, _coordination=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1134,7 +1135,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
         options['_pending_website_sha256'] = _pending_website[1]
-    with _session(config_path, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
+    with _session(config_path, _coordination=_coordination, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
             require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
@@ -1207,6 +1208,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                     from selfhost_windows_website_verify import run
                 elif phase == 'reconcile-stage':
                     from selfhost_windows_website_reconcile import run
+                elif phase == 'release-abort':
+                    from selfhost_windows_website_abort_release import prepare as run
                 else:
                     from selfhost_windows_website_edge import run
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
@@ -1407,6 +1410,14 @@ def reconcile_website_stage(config_path, plan, *, guard_sha256, expected_anchor_
                           _website_edge=('reconcile-stage', assets, gh, cosign, registry_config, authority_file)) as status:
         result = status
     return result
+
+
+def release_website_abort(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                          assets, gh, cosign, registry_config, authority_file=None):
+    """Archive only the exact terminal abort and restore the existing owner path."""
+    from selfhost_windows_website_abort_release import finalize
+    return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
+                    assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file)
 
 
 def reconcile_existing(config_path, *, authority_file=None):

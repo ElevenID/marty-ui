@@ -9,11 +9,10 @@ validate Python objects and canonical record bytes in memory. They do not create
 files, hold the owner's lease, write guard markers, inspect Docker, change
 containers, publish a successor, or authorize production activation.
 
-The current owner does not consume these records. Do not place them in its active
-selection journal: the owner's closed namespace and ancestry rules remain in
-force. This milestone introduces no second record owner and does not change the
-[renewal activation](windows-renewal-activation.md) or
-[Compose recovery](windows-compose-recovery.md) entry points.
+The managed owner keeps these records in an attempt directory and an independently
+pinned tail namespace. The existing selection journal retains its closed namespace
+and ancestry rules. [Renewal activation](windows-renewal-activation.md) and
+[Compose recovery](windows-compose-recovery.md) still use that selection.
 
 The first operation is deliberately bounded: retain the selected combined
 application and its full audience, add `website-a`, then attach the website route
@@ -240,19 +239,39 @@ receipt as a separate held input; an embedded claim or a receipt supplied withou
 the terminal record cannot close the pending phase. The completed-phase list
 remains empty. No forward phase, ordinary backout, or repeated abort can follow it.
 
-Receipt structure and hashes do not establish freshness, execution order, actual
-absence, or custody. The future owner must verify those observations under its
-held lease, prove that any compensation changed only the declared candidate, and
-confirm that all retained product/provider/data/credential identities still
-match. The constructor executes no compensation and clears no real guard. A
-candidate still present or a changed baseline remains unresolved. Other
-interrupted phases retain `reconciliation-required` until independently qualified
-evidence supports their proper completion; their compensation paths remain future
-integration work.
+The owner verifies the observation preimages, the exact selected runtime and
+candidate absence. A separate dispatch authorization distinguishes a stage that
+never dispatched from one with an uncertain outcome. Completed compensation
+binds the original candidate and the removal result. Unknown command outcomes
+remain `reconciliation-required`.
+
+### Restore the combined owner after a terminal stage abort
+
+Use the selected owner with the private canonical plan, the original composition
+proofs, the original guard digest and the current terminal tail anchor digest.
+
+```powershell
+python -B scripts/selfhost_windows_website.py --release-abort `
+  --selection-file $selectionFile --plan-file $planFile `
+  --composition-dir $compositionDir --gh $pinnedGh --cosign $pinnedCosign `
+  --registry-config $registryConfig --guard-sha256 $guardSha256 `
+  --expected-anchor-sha256 $terminalAnchorSha256
+```
+
+`--authority-file` can select an existing native authority file when the current
+owner requires it. The owner reauthenticates the signed composition and refreshes
+readiness, native and foreign storage custody, combined Nginx configuration,
+public routes and application handoffs. It holds the original selected generation
+and writes the abort release evidence before a no-overwrite same-handle archive
+of the guard. The exclusive project lock stays held across the rename. The
+archived guard, terminal records and all observations remain available for review.
+Ordinary renewal can then enter the combined selection and must perform its own
+current checks. Repeating the command with the same pins reads the historical
+release if the archive is already present.
 
 `forward-evidence-complete`, `combined-backout-evidence-complete`, and
-`abort-evidence-complete` describe
-record structure only. They do not mean a durable successor was published.
+`abort-evidence-complete` describe the terminal record structure. A stage abort
+returns to the original combined selection through the separate archive step.
 `seal-forward` binds a successor candidate receipt; publication, immutability,
 ancestor closure, and selected-owner reseeding remain outside this module.
 

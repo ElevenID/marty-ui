@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Inspect website composition compatibility under the retained Windows lease.
+"""Inspect a managed Windows website composition or release a verified abort.
 
-This command does not deploy or grant production admission. It authenticates the
-composition and reads the selected model/container identities without creating
-Docker helpers, renewing credentials, initializing OpenBao or writing host state.
-Only the existing selection owner can resolve its predecessor/recovery chain.
+The check-only path reads selected identities and authenticates the composition.
+The abort-release path requalifies the combined owner before archiving its guard.
 """
 from __future__ import annotations
 
@@ -28,6 +26,7 @@ import website_release as web
 SCHEMA = "marty.windows-website-preflight/v1"
 WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
+RELEASE_ERROR = "Managed website abort release did not complete verification. Inspect the original guard and archive using the same pins."
 
 ROUTE_TARGET = '/etc/nginx/marty-website'
 TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
@@ -334,17 +333,35 @@ def main(argv: list[str] | None = None) -> int:
             self.exit(2, ERROR + "\n")
 
     parser = PrivateParser(description=__doc__)
-    parser.add_argument("--check-only", action="store_true", required=True)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--check-only", action="store_true")
+    modes.add_argument("--release-abort", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
     parser.add_argument("--plan-attempt-directory", type=Path)
+    parser.add_argument("--plan-file", type=Path)
+    parser.add_argument("--guard-sha256")
+    parser.add_argument("--expected-anchor-sha256")
+    parser.add_argument("--authority-file")
     args = parser.parse_args(argv)
     try:
-        result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
-                       registry_config=args.registry_config, plan_attempt_directory=args.plan_attempt_directory)
+        release_inputs = (args.plan_file, args.guard_sha256, args.expected_anchor_sha256)
+        if args.release_abort:
+            selection.require(all(release_inputs) and args.plan_attempt_directory is None)
+            with renewal.hold_private_input(args.plan_file.absolute(), max_bytes=2*1024*1024) as raw:
+                plan = selection.decode(raw)
+                selection.require(raw == selection.packed(plan))
+                result = selection.release_website_abort(args.selection_file.absolute(), plan,
+                    guard_sha256=args.guard_sha256, expected_anchor_sha256=args.expected_anchor_sha256,
+                    assets=args.composition_dir, gh=args.gh, cosign=args.cosign, registry_config=args.registry_config,
+                    authority_file=args.authority_file)
+        else:
+            selection.require(not any(release_inputs) and args.authority_file is None)
+            result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
+                           registry_config=args.registry_config, plan_attempt_directory=args.plan_attempt_directory)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, RuntimeError, subprocess.SubprocessError):
-        sys.stderr.write(ERROR + "\n")
+        sys.stderr.write((RELEASE_ERROR if args.release_abort else ERROR) + "\n")
         return 2
     sys.stdout.write(selection.packed(result).decode())
     return 0

@@ -170,6 +170,7 @@
     "scripts/selfhost_windows_website_edge.py",
     "scripts/selfhost_windows_website_verify.py",
     "scripts/selfhost_windows_website_reconcile.py",
+    "scripts/selfhost_windows_website_abort_release.py",
     "scripts/selfhost_windows_model.py",
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",
