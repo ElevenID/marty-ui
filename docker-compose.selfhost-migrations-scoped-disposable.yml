@@ -71,6 +71,11 @@ services:
     environment:
       ENVIRONMENT: production
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
+      MARTY_ORG_SLUG: marty
+      MARTY_MIGRATION_PROFILE: selfhost-production
+      PUBLIC_DOMAIN: migration.invalid
+      PUBLIC_API_URL: https://migration.invalid
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_ORG_ADMIN_EMAIL: probe@migration.invalid
       MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
@@ -100,7 +105,7 @@ services:
     image: ${PROBE_SERVICES_IMAGE:?exact bundle digest required}
     platform: linux/amd64
     entrypoint: [/bin/sh, -ec]
-    command: [. /app/load-secrets-env.sh; /usr/local/bin/marty-organization migrate && /usr/local/bin/marty-credential-template bootstrap && /usr/local/bin/marty-device-registration migrate && exec /usr/local/bin/marty-issuance-service migrate]
+    command: [. /app/load-secrets-env.sh; /usr/local/bin/marty-organization migrate && /usr/local/bin/marty-credential-template bootstrap && /usr/local/bin/marty-presentation-policy migrate && /usr/local/bin/marty-presentation-policy bootstrap-builtins && /usr/local/bin/marty-device-registration migrate && exec /usr/local/bin/marty-issuance-service migrate]
     environment:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
