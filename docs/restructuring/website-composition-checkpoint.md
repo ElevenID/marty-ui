@@ -5,6 +5,34 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Managed full-audience cutover, November 22
+
+The accepted private application image matches the installed v1.1.274
+application. A read-only comparison of the 30 installed backend and provider
+containers found that all 30 configured image references match the signed
+v1.1.274 inventory. Only edge, PostgreSQL and Redis match the v1.1.273
+inventory. The requested backend tag conflicts with preserving the installed
+digests. Hold final composition selection for release-owner disposition.
+The private producer owner still needs to qualify the signed full-audience
+standalone website. [Installed release inventory](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.274)
+
+The first-cutover planner landed through [#2042](https://github.com/ElevenID/marty-ui/pull/2042).
+The durable journal and dependent transition work start at
+[#2043](https://github.com/ElevenID/marty-ui/pull/2043). The Windows caller
+rehearsal in [#2058](https://github.com/ElevenID/marty-ui/pull/2058) exercised
+guarded and released selections with a synthetic runtime.
+Commit `b8768c295b8d6f6772866851be4d30437ac45a7d` adds read-only rollback
+planning after credential renewal. The Windows owner test exercised a
+completed renewal and a subsequent journal continuation. Docker Compose
+rendered both replacement credential environments.
+
+The next operator implementation must consume that plan under the managed
+owner and rehearse restoring the original combined configuration with the
+newly selected credentials. Production activation still requires credential
+recovery, healthy application and identity checks, the signed full composition,
+and renewal and reboot rehearsal. Keep [#2017](https://github.com/ElevenID/marty-ui/pull/2017)
+pending through actual routing, sign-in, application and backout acceptance.
+
 ## Qualified original releases
 
 The following exact completed attempts and non-expired archives were rechecked
