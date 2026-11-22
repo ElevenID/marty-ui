@@ -88,9 +88,13 @@ flushed and checked through the existing NTFS handles. Every source file and
 subdirectory receives exact byte/membership/ACL/namespace checks.
 
 All initial handles must close successfully before a separate complete reproof
-can promote the pending record through its verified handle. Promotion cannot
-overwrite a destination. Failures retain the partial directory and any pending
-record. There is no resume, overwrite, automatic cleanup, or reuse shortcut.
+can promote the pending record through its verified handle. All other private
+proof handles, including the installation directory, exit before the rename;
+the pending record and namespace handles remain held. This preserves the
+directory and ancestor identities while permitting Windows to open the target
+directory for the rename. A final complete reproof checks the published state.
+Promotion cannot overwrite a destination. Failures retain the partial directory
+and any pending record. There is no resume, overwrite, automatic cleanup, or reuse shortcut.
 A failure after rename is an uncertain publication requiring inspection; do not
 derive a success receipt from the presence of `installation.json` alone.
 

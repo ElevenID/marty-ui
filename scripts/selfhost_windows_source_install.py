@@ -237,13 +237,17 @@ def hold_files(root, files, windows, *, promote=False):
     """Private recursive namespace and byte custody; no catalog-derived code runs."""
     directories = membership(files)
     with ExitStack() as held:
-        held.enter_context(windows.hold_storage_namespace(root.parent))
-        held.enter_context(windows._held_private_input(root, directory=True, mutable_directory=promote))
-        require({path.name for path in root.iterdir()} == directories[""])
+        held.enter_context(windows.hold_storage_namespace(root))
         if promote:
             require(PENDING in files and INSTALLATION not in files)
+            # The rename opens its target parent for write access on Windows.
+            # Close every private proof handle, including the root directory,
+            # before promotion; retain the no-delete namespace handles across
+            # it. A failed proof exit still suppresses the pending rename.
             require(held.enter_context(windows._held_private_input(
                 root / PENDING, max_bytes=MAX_RECORD, _rename_to=root / INSTALLATION)) == files[PENDING])
+        held.enter_context(windows._held_private_input(root, directory=True))
+        require({path.name for path in root.iterdir()} == directories[""])
         for name in sorted(set(directories) - {""}, key=lambda value: (value.count("/"), value)):
             path = root / name
             held.enter_context(windows._held_private_input(path, directory=True))

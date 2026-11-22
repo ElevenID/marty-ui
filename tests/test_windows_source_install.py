@@ -154,17 +154,58 @@ def test_late_creation_input_failure_cannot_publish_ready_marker(prepared, name)
     assert not (options["destination"] / install.INSTALLATION).exists()
 
 
-def test_late_source_exit_suppresses_pending_marker_promotion(prepared):
+@pytest.mark.parametrize("failing_proof", ["source-file", "root-directory"])
+def test_late_source_exit_suppresses_pending_marker_promotion(prepared, failing_proof):
     options, windows, _bodies, _tooling = prepared
     promote_entered = lambda: any(row == ("enter", install.PENDING, False, True) for row in windows.events)
     def fail(path, write_value, directory, rename):
-        if path.name == "selfhost_windows_selection.py" and promote_entered() and write_value is None:
+        target = (path == options["destination"] and directory if failing_proof == "root-directory"
+                  else path.name == "selfhost_windows_selection.py" and not directory)
+        if target and promote_entered() and write_value is None:
             raise ValueError("synthetic late source custody failure")
     windows.fail = fail
     with pytest.raises(ValueError):
         install.install(**options)
     root = options["destination"]
     assert (root / install.PENDING).exists() and not (root / install.INSTALLATION).exists()
+
+
+def test_promotion_closes_private_parent_but_retains_its_namespace(prepared, monkeypatch):
+    options, windows, _bodies, _tooling = prepared
+    original = windows._held_private_input
+    private_directories, namespaces, promotions = [], [], []
+
+    @contextmanager
+    def namespace(path):
+        namespaces.append(path)
+        try:
+            yield
+        finally:
+            namespaces.remove(path)
+
+    @contextmanager
+    def private_input(path, *args, directory=False, **kwargs):
+        if directory:
+            private_directories.append(path)
+        try:
+            with original(path, *args, directory=directory, **kwargs) as raw:
+                yield raw
+                if kwargs.get("_rename_to") is not None:
+                    # Windows opens the rename's target parent for writing;
+                    # a remaining private read-sharing handle blocks it.
+                    if path.parent in private_directories:
+                        raise OSError("synthetic target-parent sharing violation")
+                    assert path.parent in namespaces
+                    promotions.append(path)
+        finally:
+            if directory:
+                private_directories.remove(path)
+
+    monkeypatch.setattr(windows, "hold_storage_namespace", namespace)
+    monkeypatch.setattr(windows, "_held_private_input", private_input)
+    install.install(**options)
+    assert promotions == [options["destination"] / install.PENDING]
+    assert not private_directories and not namespaces
 
 
 def test_new_file_allocation_identity_is_preserved_before_write(tmp_path):
