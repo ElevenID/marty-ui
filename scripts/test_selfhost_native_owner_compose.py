@@ -404,6 +404,13 @@ def assert_models(
     assert mount["target"] == "/app/load-secrets-env.sh" and mount["read_only"] is True
     assert mount["source"].endswith("/scripts/load-secrets-env.sh")
     expected["services"]["owner-migrations"] = deepcopy(owner)
+    assert actual["services"]["organization"]["depends_on"] == {
+        "owner-migrations": {"condition": "service_completed_successfully", "required": True},
+        "redis": {"condition": "service_healthy", "required": True},
+    }
+    expected["services"]["organization"]["depends_on"] = deepcopy(
+        actual["services"]["organization"]["depends_on"]
+    )
     for service in ("credential-template", "presentation-policy"):
         assert actual["services"][service]["depends_on"] == {
             "owner-migrations": {"condition": "service_completed_successfully", "required": True},
