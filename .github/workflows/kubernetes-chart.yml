@@ -28,6 +28,7 @@ on:
       - 'scripts/stack_tag_gate.py'
       - 'scripts/passport_remote_tls.py'
       - 'scripts/provision_selfhost_disposable_tls.py'
+      - 'scripts/sync_helm_keycloak_scripts.py'
       - 'scripts/setup-keycloak.sh'
       - 'scripts/setup-keycloak-selfhost-production.sh'
       - 'scripts/load-secrets-env.sh'
@@ -91,6 +92,8 @@ jobs:
           python -m pip install 'pytest==9.2.0' 'PyYAML==6.0.3'
       - name: Check Kubernetes acceptance against the public API contract
         run: node --test tests/scripts/run-kubernetes-acceptance.test.cjs tests/scripts/run-external-oidc-login.test.cjs
+      - name: Verify generated Keycloak scripts
+        run: python scripts/sync_helm_keycloak_scripts.py --check
       - name: Render actual chart and test the existing trust boundary
         shell: bash
         run: |
