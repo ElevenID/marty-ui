@@ -88,6 +88,7 @@ spec:
         {{- include "marty.migrationContainer" (dict "root" . "name" "revocation-profile" "command" (list "/usr/local/bin/marty-revocation-profile")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-notification" "role" "migrations" "command" (list "/app/run-migrations-with-secrets.sh")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "organization" "command" (list "/usr/local/bin/marty-organization" "migrate")) | nindent 8 }}
+        {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-organization" "command" (list "/usr/local/bin/marty-organization" "bootstrap")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "credential-template" "command" (list "/usr/local/bin/marty-credential-template" "bootstrap")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "presentation-policy" "command" (list "/usr/local/bin/marty-presentation-policy" "migrate")) | nindent 8 }}
         {{- include "marty.migrationContainer" (dict "root" . "name" "bootstrap-presentation-policy" "command" (list "/usr/local/bin/marty-presentation-policy" "bootstrap-builtins")) | nindent 8 }}
