@@ -99,17 +99,18 @@ def route_mount_proposal(template_mount, route_directory):
 
 
 def from_observation(before, manifest, website_release, routes, anchor, *, docker,
-                     proof_sha256, attempt_directory, edge_template, data_before):
+                     proof_sha256, attempt_directory, edge_template, data_before, guarded_attempt=False):
     """Derive application-preserving declarations from inputs held by the owner."""
     root = windows_path(anchor['root'])
     attempt = path_under_owner(root, str(attempt_directory))
     require(attempt.parent == root and re.fullmatch(r'windows-website-[0-9a-f]{32}', attempt.name))
-    require(not product.renewal.namespace_entry_exists(Path(attempt)))
+    require(product.renewal.namespace_entry_exists(Path(attempt)) == guarded_attempt)
     template = next(mount for mount in data_before['edge']['mounts'] if mount['Destination'] == TEMPLATE_TARGET)
-    return plan(before, manifest, website_release, routes, {**anchor, 'model_sha256': digest(before)},
+    declared, proposed = _declare(before, manifest, website_release, routes, {**anchor, 'model_sha256': digest(before)},
         proof_sha256=proof_sha256, attempt_directory=str(attempt), edge_template=edge_template,
         data_before=data_before, website_image_id=cached_website_image(docker, website_release),
         route_runtime_mount=route_mount_proposal(template, attempt / 'routes'))
+    return (declared, proposed) if guarded_attempt else declared
 
 
 def validate_anchor(value):
@@ -226,8 +227,7 @@ def proposal(before, manifest, website_release, routes, anchor, *, attempt_direc
             'route_runtime_mount': deepcopy(route_runtime_mount)}
 
 
-def plan(before, manifest, website_release, routes, anchor, *, proof_sha256, **kwargs):
-    """Build a closed first-cutover declaration, never a runtime authorization."""
+def _declare(before, manifest, website_release, routes, anchor, *, proof_sha256, **kwargs):
     proposed = proposal(before, manifest, website_release, routes, anchor, **kwargs)
     require(type(proof_sha256) is dict and set(proof_sha256) == product_journal.ARTIFACTS
             and all(sha(value) for value in proof_sha256.values())
@@ -248,7 +248,12 @@ def plan(before, manifest, website_release, routes, anchor, *, proof_sha256, **k
                     'application_role': 'ui', 'preserved_selected_sha256': anchor['selected_sha256']},
         'qualification': deepcopy(UNQUALIFIED)}
     value['plan_sha256'] = digest(value)
-    return value
+    return value, proposed
+
+
+def plan(before, manifest, website_release, routes, anchor, *, proof_sha256, **kwargs):
+    """Build a closed first-cutover declaration, never a runtime authorization."""
+    return _declare(before, manifest, website_release, routes, anchor, proof_sha256=proof_sha256, **kwargs)[0]
 
 
 def validate_envelope(value):

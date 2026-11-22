@@ -256,7 +256,7 @@ def _hold_plan_proofs(assets, held):
 def inspect_composition(config: dict, choice: str, values: dict, record: dict, assets: Path, *,
                         gh: Path, cosign: Path, registry_config: Path | None,
                         owner_root: Path, held, plan_owner=None, plan_attempt_directory=None,
-                        held_plan_only=False) -> dict:
+                        held_plan_only=False, guarded_attempt=False) -> dict | tuple:
     """Called only by the active selected-input callback under its project lock."""
     assets = Path(assets).absolute()
     selection.require((plan_owner is None) == (plan_attempt_directory is None))
@@ -271,6 +271,9 @@ def inspect_composition(config: dict, choice: str, values: dict, record: dict, a
             planning = {"anchor": plan_owner, "attempt_directory": plan_attempt_directory,
                         "proof_sha256": proof_hashes, "website_release": release,
                         "routes": web.read(payload / "website" / "web-surface-routes.json")}
+            if guarded_attempt:
+                selection.require(held_plan_only)
+                planning["guarded_attempt"] = True
         model, observed, edge, plan = _observe(config, choice, values, record, manifest,
             full_standalone=full_standalone, owner_root=owner_root, held=held, planning=planning)
         if held_plan_only:

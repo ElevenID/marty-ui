@@ -166,6 +166,7 @@
     "scripts/selfhost_windows_website_journal.py",
     "scripts/selfhost_windows_website_store.py",
     "scripts/selfhost_windows_website_guard.py",
+    "scripts/selfhost_windows_website_stage.py",
     "scripts/selfhost_windows_model.py",
     "scripts/selfhost_windows_continuation.py",
     "scripts/selfhost_windows_recovery.py",

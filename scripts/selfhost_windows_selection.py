@@ -1114,7 +1114,7 @@ def renew_once(config_path,logical_project):
 
 
 @contextmanager
-def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1123,6 +1123,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
     expired_completion=[];expired_started=False
+    require(_website_stage is None or _pending_website is not None)
     options = {}
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
@@ -1183,7 +1184,18 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             model = stack.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=2*1024*1024))
             require(digest(model) == cfg['compose_sha256'])
             owner = {**website_owner(), 'model_sha256': digest(packed(decode(model)))}
-            yield inspect(cfg, plan, owner, guard_sha256=guard_pin, expected_anchor_sha256=anchor_pin, held=stack)
+            status = inspect(cfg, plan, owner, guard_sha256=guard_pin, expected_anchor_sha256=anchor_pin, held=stack)
+            if _website_stage is not None:
+                require(status['record_count'] == 1 and status['permitted_record_phases'] == ['stage-candidate'])
+                assets, gh, cosign, registry_config, authority_file = _website_stage
+                from selfhost_windows_website import inspect_composition
+                from selfhost_windows_website_stage import run
+                rebuilt, proposal = inspect_composition(cfg, choice, values, record, assets, gh=gh, cosign=cosign,
+                    registry_config=registry_config, owner_root=_root.parent, held=stack, plan_owner=website_owner(),
+                    plan_attempt_directory=Path(plan['attempt_directory']), held_plan_only=True, guarded_attempt=True)
+                require(rebuilt == plan)
+                status = run(cfg, choice, values, record, plan, proposal, status, authority_file=authority_file, held=stack)
+            yield status
             return
 
         lease_lock = threading.Lock();active = True
@@ -1339,6 +1351,15 @@ def selected_inputs(config_path):
 def inspect_website_transition(config_path, plan, *, guard_sha256, expected_anchor_sha256):
     """Read a pending guarded journal without granting an operation callback."""
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256)) as status:
+        result = status
+    return result
+
+
+def stage_website_candidate(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, authority_file=None):
+    """Stage only the first website slot under a verified guard and initial tail."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_stage=(assets, gh, cosign, registry_config, authority_file)) as status:
         result = status
     return result
 
