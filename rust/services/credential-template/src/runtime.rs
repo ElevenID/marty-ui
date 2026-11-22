@@ -9,7 +9,6 @@ use crate::config::CredentialTemplateServiceConfig;
 pub enum CredentialTemplateDependency {
     Database,
     Schema,
-    SystemCatalog,
     ControlPlane,
     HttpListener,
     GrpcListener,
@@ -21,7 +20,6 @@ impl CredentialTemplateDependency {
         match self {
             Self::Database => "database",
             Self::Schema => "credential_template_schema",
-            Self::SystemCatalog => "system_catalog",
             Self::ControlPlane => "control_plane_clients",
             Self::HttpListener => "http_listener",
             Self::GrpcListener => "grpc_listener",
@@ -32,7 +30,6 @@ impl CredentialTemplateDependency {
         [
             Self::Database,
             Self::Schema,
-            Self::SystemCatalog,
             Self::ControlPlane,
             Self::HttpListener,
             Self::GrpcListener,
