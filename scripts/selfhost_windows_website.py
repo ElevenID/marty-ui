@@ -27,7 +27,7 @@ import website_release as web
 SCHEMA = "marty.windows-website-preflight/v1"
 WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
-RELEASE_ERROR = "Managed website abort release did not complete verification. Inspect the original guard and archive using the same pins."
+RELEASE_ERROR = "Managed website guard release did not complete verification. Inspect the original guard and archive using the same pins."
 BACKOUT_ERROR = "Managed website backout did not complete verification. Preserve the guard and inspect the retained journal before continuing."
 FORWARD_ERROR = "Managed website forward operation did not complete verification. Preserve the guard and retained verification records."
 
@@ -346,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--publish-forward", action="store_true")
     modes.add_argument("--backout-published", action="store_true")
     modes.add_argument("--select-combined", action="store_true")
+    modes.add_argument("--release-forward", action="store_true")
+    modes.add_argument("--release-combined", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -380,10 +382,12 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.backout_published_website, BACKOUT_ERROR
     elif args.select_combined:
         operation, error = selection.select_combined_website, BACKOUT_ERROR
+    elif args.release_forward or args.release_combined:
+        operation, error = selection.release_selected_website, RELEASE_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
-        forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward
+        forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward or args.release_forward
         selection.require(all(forward.values()) if forward_operation else not any(forward.values()))
         pins = {'candidate_sha256': args.candidate_sha256, 'qualification_sha256': args.qualification_sha256}
         if args.seal_forward or args.publish_forward:
@@ -391,7 +395,14 @@ def main(argv: list[str] | None = None) -> int:
             forward.update(pins)
         else:
             selection.require(not any(pins.values()))
-        if args.select_combined:
+        if args.release_forward or args.release_combined:
+            selection.require(product_journal.sha(args.intent_sha256) and args.forward_intent_sha256 is None
+                              and args.backout_phase is None)
+            mode = 'forward' if args.release_forward else 'combined'
+            extra = {'mode': mode, 'intent_sha256': args.intent_sha256}
+            if args.release_forward:
+                extra.update(forward)
+        elif args.select_combined:
             selection.require(product_journal.sha(args.forward_intent_sha256) and args.backout_phase is None
                               and (args.intent_sha256 is None or product_journal.sha(args.intent_sha256)))
             extra = {'forward_intent_sha256': args.forward_intent_sha256, 'intent_sha256': args.intent_sha256}

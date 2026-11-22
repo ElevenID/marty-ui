@@ -363,6 +363,10 @@ def test_reverse_publication_selects_exact_combined_owner(monkeypatch, planned, 
             assert retained['runtime_after'] == runtime
             if fault == 'live-refused':
                 raise ValueError('Fixture rejected live combined qualification')
+            return {'runtime_sha256': digest(runtime), 'edge_sha256': digest(retained['edge_configuration']),
+                    'public_routes_sha256': 'd'*64, 'application_handoffs_sha256': 'e'*64,
+                    'native_sha256': plan['owner']['native_sha256'], 'foreign_storage_sha256': None,
+                    'foreign_storage_changes': 0}
 
         monkeypatch.setattr(release, '_refresh', refresh)
         options = {'guard_sha256': guard_pin, 'expected_anchor_sha256': terminal['anchor_sha256'],
@@ -432,12 +436,109 @@ def test_reverse_publication_selects_exact_combined_owner(monkeypatch, planned, 
         assert calls == ['combined-proof'] * (3 if fault == 'interrupted' else 2)
         with pytest.raises(ValueError):
             selection.status(path)
-        # Model a separately qualified guard release on the synthetic tree,
-        # then enter the ordinary renewal reader through the original caller.
-        renewal.product_transition_guard(config).rename(attempt / 'fixture-archived-guard.json')
+        release_args = {key: value for key, value in options.items()
+                        if key not in {'forward_intent_sha256', 'intent_sha256'}}
+        _, active, archive = release._paths(config, plan, 'combined')
+        original_identity = release._path_identities(active)
+        original_guard = active.read_bytes()
+        with pytest.raises(ValueError):
+            selection.release_selected_website(path, plan, mode='combined', intent_sha256=committed['intent_sha256'],
+                                              **release_args)
+        closed = selection.release_selected_website(path, plan, mode='combined', intent_sha256=result['intent_sha256'],
+                                                    **release_args)
+        assert closed['result'] == 'website-combined-guard-archived' and closed['guard_archived']
+        assert not active.exists() and archive.read_bytes() == original_guard
+        assert release._path_identities(archive) == original_identity
+        assert selection.release_selected_website(path, plan, mode='combined', intent_sha256=result['intent_sha256'],
+                                                  **release_args) == closed
+        assert calls == ['combined-proof'] * (4 if fault == 'interrupted' else 3)
         phase['data'] = plan['owner']['data_sha256']
         with selection.selected_inputs(path) as lease:
             assert lease.compose_file == Path(config['compose_file']) and lease.journal_path == target
             assert lease.generation_sequence == committed['generation_sequence']
             assert lease.selected_sha256 == committed['selected_sha256']
             assert lease.check_current() == phase['data']
+
+
+@pytest.mark.parametrize('fault', [None, 'live-refused', 'before-rename', 'after-rename', 'tampered-receipt'])
+def test_release_forward_archives_exact_guard_with_locked_readback(monkeypatch, planned, capsys, fault):
+    import selfhost_windows_website_abort_release as release
+
+    with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
+        _source, _starting, plan, guard_pin, pins, split, _verified = prepare(planned, root, path, config)
+        phase['data'] = plan['states']['split']['data_sha256']
+        committed = owner.finish(path, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        attempt, active, archive = release._paths(config, plan, 'forward')
+        qualification = attempt / ('forward-qualification-' + pins['qualification_sha256'] + '.json')
+        original = active.read_bytes()
+        original_identity = release._path_identities(active)
+        calls = []
+
+        def check_publication(combined, choice, _values, record, supplied, link, **kwargs):
+            assert combined['compose_file'] == config['compose_file'] and choice == record['choice']
+            assert supplied == plan and link['terminal_sha256'] == pins['terminal_sha256']
+            assert kwargs['guard_sha256'] == guard_pin and kwargs['expected_account_sha256'] == 'd'*64
+            calls.append('live')
+            if fault == 'live-refused':
+                raise ValueError('Synthetic public failure')
+            return selection.decode(qualification.read_bytes())
+
+        monkeypatch.setattr(forward, 'check_publication', check_publication)
+        args = ['--release-forward', '--selection-file', str(path), '--composition-dir', str(root/'assets'),
+                '--gh', str(root/'gh'), '--cosign', str(root/'cosign'), '--plan-file', str(attempt/'journal'/store.PLAN),
+                '--guard-sha256', guard_pin, '--expected-anchor-sha256', pins['terminal_sha256'],
+                '--intent-sha256', committed['intent_sha256'], '--session-state-file', str(root/'session.private.json'),
+                '--expected-account-sha256', 'd'*64, '--expected-organization-sha256', 'e'*64]
+        wrong = list(args)
+        wrong[wrong.index('--intent-sha256') + 1] = '0'*64
+        assert website.main(wrong) == 2
+        assert not calls and active.exists() and not archive.exists()
+        capsys.readouterr()
+
+        if fault in {'before-rename', 'after-rename'}:
+            hold = release._held_private_input
+
+            @contextmanager
+            def interrupt(path_to_hold, **options):
+                archiving = options.get('_rename_to') == archive
+                if archiving and fault == 'before-rename':
+                    raise RuntimeError('Synthetic interruption before rename')
+                with hold(path_to_hold, **options) as body:
+                    yield body
+                if archiving and fault == 'after-rename':
+                    raise RuntimeError('Synthetic interruption after rename')
+
+            with monkeypatch.context() as injected:
+                injected.setattr(release, '_held_private_input', interrupt)
+                assert website.main(args) == 2
+            assert archive.exists() is (fault == 'after-rename')
+            assert active.exists() is (fault == 'before-rename')
+            assert (attempt/'forward-owner-release.json').exists()
+            capsys.readouterr()
+
+        if fault == 'live-refused':
+            assert website.main(args) == 2
+            assert calls == ['live'] and active.read_bytes() == original
+            assert not archive.exists() and not (attempt/'forward-owner-release.json').exists()
+            return
+        assert website.main(args) == 0
+        output = capsys.readouterr()
+        assert not output.err
+        released = selection.decode(output.out.encode())
+        assert released['result'] == 'website-forward-guard-archived' and released['guard_archived']
+        assert released['selected_sha256'] == committed['selected_sha256']
+        assert not active.exists() and archive.read_bytes() == original
+        assert release._path_identities(archive) == original_identity
+        with selection.selected_inputs(path) as lease:
+            assert lease.compose_file == split and lease.generation_sequence == committed['generation_sequence']
+            assert lease.selected_sha256 == committed['selected_sha256'] and lease.check_current() == phase['data']
+
+        if fault == 'tampered-receipt':
+            proof = attempt / ('forward-release-proof-' + released['qualification_sha256'] + '.json')
+            proof.write_bytes(b'{}')
+            assert website.main(args) == 2
+            assert not active.exists() and archive.read_bytes() == original
+        else:
+            assert website.main(args) == 0
+            assert selection.decode(capsys.readouterr().out.encode()) == released
+        assert calls == ['live'] * (2 if fault == 'before-rename' else 1)

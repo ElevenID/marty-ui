@@ -1525,6 +1525,12 @@ def select_combined_website(config_path, plan, *, guard_sha256, expected_anchor_
                            forward_intent_sha256=forward_intent_sha256, **options)
 
 
+def release_selected_website(config_path, plan, *, mode, **options):
+    """Archive the website guard for the exact selected destination."""
+    from selfhost_windows_website_abort_release import finalize_selected
+    return finalize_selected(config_path, plan, mode=mode, **options)
+
+
 def reconcile_existing(config_path, *, authority_file=None):
     """Read-only terminal reconciliation; unfinished commands remain blocked."""
     config = decode(renewal.read_private_bytes(Path(config_path)))

@@ -369,8 +369,28 @@ journal segment. The selected credential generation and both prior segments
 stay intact. An interrupted selection resumes with the new combined
 `--intent-sha256`. The existing guard remains active after selection.
 
-Guard release and scheduled renewal and reboot qualification are required
-before production cutover.
+### Release the selected owner
+
+After qualifying scheduled renewal and reboot in rehearsal, run
+`--release-forward` for a committed split or `--release-combined` for a
+committed restoration. Use the original selection file, plan, guard, signed
+composition inputs, and the exact `--intent-sha256` from the applicable
+selection result. Use the sealed anchor for forward release and the final
+retirement anchor for combined release. Forward release also requires the
+private browser session and both independently pinned identity digests.
+
+The live operation proves the exact committed selection again, refreshes
+its runtime, native and application checks, then writes a release receipt
+and archives the original guard under the project lock. The receipt pins the
+decision, selected journal and terminal evidence. If the archive already
+exists, the same operation verifies the receipt and ancestry without
+repeating runtime actions.
+
+Complete the scheduled renewal and reboot rehearsal and verify a usable
+combined backout before opening the production cutover. The guarded
+`--backout-published` sequence applies while the website guard is active.
+A rollback after forward guard release requires a new guarded admission
+against the selected configuration and the current credential generation.
 
 ## Required integration before activation
 

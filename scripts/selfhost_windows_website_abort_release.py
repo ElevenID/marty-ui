@@ -1,4 +1,4 @@
-"""Return the selected combined owner to service after a verified abort or rollback."""
+"""Archive the website guard after the exact selected owner qualifies."""
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -18,7 +18,12 @@ import selfhost_windows_website_verify as verify
 SCHEMA = 'marty.windows-website-abort-release/v1'
 RELEASE = 'abort-release.json'
 BACKOUT_RELEASE = 'backout-release.json'
-MODES = {'abort': (SCHEMA, RELEASE), 'backout': ('marty.windows-website-backout-release/v1', BACKOUT_RELEASE)}
+MODES = {
+    'abort': (SCHEMA, RELEASE),
+    'backout': ('marty.windows-website-backout-release/v1', BACKOUT_RELEASE),
+    'forward': ('marty.windows-website-forward-owner-release/v1', 'forward-owner-release.json'),
+    'combined': ('marty.windows-website-combined-owner-release/v1', 'combined-owner-release.json'),
+}
 require = selection.require
 renewal = selection.renewal
 
@@ -119,7 +124,7 @@ def _release_checkpoints(plan, status, receipt, mode):
             'selected_sha256': plan['owner']['selected_sha256'], 'generation_sequence': plan['owner']['generation_sequence']}
 
 
-def _read_release(attempt, expected, retained, owner, held, mode):
+def _hold_release(attempt, expected, held, mode):
     raw = held.enter_context(renewal.hold_private_input(attempt / MODES[mode][1]))
     record = selection.decode(raw)
     require(record == {**expected, 'qualification_sha256': record['qualification_sha256']}
@@ -127,8 +132,21 @@ def _read_release(attempt, expected, retained, owner, held, mode):
     proof = held.enter_context(renewal.hold_private_input(attempt / (mode + '-release-proof-' + record['qualification_sha256'] + '.json')))
     observed = selection.decode(proof)
     require(selection.digest(proof) == record['qualification_sha256'] and proof == selection.packed(observed))
+    return record, observed
+
+
+def _read_release(attempt, expected, retained, owner, held, mode):
+    record, observed = _hold_release(attempt, expected, held, mode)
     _verify_qualification(observed, retained, owner)
     return record
+
+
+def _record_release(attempt, expected, qualification, held, mode):
+    release_path = attempt / MODES[mode][1]
+    if not renewal.namespace_entry_exists(release_path):
+        pin = contract.digest(qualification)
+        stage._material(attempt / (mode + '-release-proof-' + pin + '.json'), qualification, held)
+        stage._material(release_path, {**expected, 'qualification_sha256': pin}, held)
 
 
 def _verify_qualification(observed, retained, owner):
@@ -157,11 +175,7 @@ def prepare(config, choice, values, record, plan, status, phase, *, assets, gh, 
     qualification = _refresh(config, choice, values, record, plan, retained, attempt, assets=assets, gh=gh,
                              cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=held)
     expected = _release_checkpoints(plan, status, receipt, mode)
-    release_path = attempt / MODES[mode][1]
-    if not renewal.namespace_entry_exists(release_path):
-        pin = contract.digest(qualification)
-        stage._material(attempt / (mode + '-release-proof-' + pin + '.json'), qualification, held)
-        stage._material(release_path, {**expected, 'qualification_sha256': pin}, held)
+    _record_release(attempt, expected, qualification, held, mode)
     release = _read_release(attempt, expected, retained, plan['owner'], held, mode)
     return release, identities
 
@@ -181,15 +195,7 @@ def finalize(config_path, plan, *, guard_sha256, expected_anchor_sha256, assets,
                     _website_edge=('release-' + mode, assets, gh, cosign, registry_config, authority_file)) as decision:
                 release, identities = decision
                 coordination.enter_context(renewal.hold_storage_namespace(attempt))
-            # Keep the project lock through the exact, no-overwrite rename.
-            require(not renewal.namespace_entry_exists(archive) and not any(
-                renewal.namespace_entry_exists(other(config)) for other in (renewal.recovery_guard,
-                    renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
-                    renewal.model_repair_guard, renewal.continuation_guard)))
-            with _held_private_input(active, _rename_to=archive, _expected_identities=identities) as body:
-                require(body == original)
-            require(_path_identities(archive) == identities)
-            require(coordination.enter_context(renewal.hold_private_input(archive)) == original)
+            _archive_guard(config, active, archive, original, identities, coordination)
         else:
             # A repeat verifies the historical release without requalifying or mutating the current selection.
             with selection._selected_inputs(config_path, _coordination=coordination) as lease:
@@ -201,5 +207,135 @@ def finalize(config_path, plan, *, guard_sha256, expected_anchor_sha256, assets,
                 status = {**status, 'anchor_sha256': expected_anchor_sha256, 'guard_sha256': guard_sha256}
                 retained, receipt = _terminal_inputs(plan, status, attempt, coordination, mode)
                 release = _read_release(attempt, _release_checkpoints(plan, status, receipt, mode), retained, owner, coordination, mode)
+        require(not renewal.namespace_entry_exists(active))
+    return {**release, 'result': 'website-' + mode + '-guard-archived', 'guard_archived': True}
+
+
+def _archive_guard(config, active, archive, original, identities, coordination):
+    # Coordination keeps the existing project lock held across the rename.
+    require(not renewal.namespace_entry_exists(archive) and not any(
+        renewal.namespace_entry_exists(other(config)) for other in (renewal.recovery_guard,
+            renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
+            renewal.model_repair_guard, renewal.continuation_guard)))
+    with _held_private_input(active, _rename_to=archive, _expected_identities=identities) as body:
+        require(body == original)
+    require(_path_identities(archive) == identities)
+    require(coordination.enter_context(renewal.hold_private_input(archive)) == original)
+
+
+def _selected_lineage(ancestry, current, intent_sha256, mode):
+    from selfhost_windows_continuation import CHECKPOINT, checkpoint
+    from selfhost_windows_website_owner import (
+        COMBINED_FILES, FORWARD_FILES, decision, validate_combined_marker, validate_marker,
+    )
+
+    names = FORWARD_FILES if mode == 'forward' else COMBINED_FILES
+    intent_name, decision_name, _ = names
+    matches = [index for index, (_root, entries) in enumerate(ancestry)
+               if intent_name in entries and selection.digest(entries[intent_name]) == intent_sha256]
+    require(len(matches) == 1)
+    index = matches[0]
+    source, raw = ancestry[index]
+    source_owner = selection.decode(raw['owner.json'])['binding']
+    if mode == 'forward':
+        origin = (source, raw)
+        link = validate_marker(raw, source_owner, source)
+    else:
+        require(index >= 1)
+        origin = ancestry[index - 1]
+        link = validate_combined_marker(raw, source_owner, source, origin)
+    target, selected_raw = (ancestry + [current])[index + 1]
+    require(target == Path(link['target_dir']))
+    initial = {name: selected_raw[name] for name in ('owner.json', CHECKPOINT, '000001.intent.json', '000001.selection.json')}
+    require(raw[decision_name] == selection.packed(decision(link, initial))
+            and checkpoint(initial)['intent_sha256'] == intent_sha256)
+    return origin, link, (target, initial), selection.digest(raw[decision_name])
+
+
+def _refresh_selected(plan, origin, initial, stack, mode, link, retained, **options):
+    from selfhost_windows_model import effective_config, history
+    from selfhost_windows_product_journal import anchor
+    from selfhost_windows_website_forward import check_publication
+
+    _, original_raw = origin
+    owner = selection.decode(original_raw['owner.json'])['binding']
+    original_intent, original_record, generation = anchor(original_raw, owner)
+    _, records = selection._parse(original_raw, owner)
+    _, model, _ = history(original_raw, owner, records)
+    original_config = selection.decode(stack.enter_context(renewal.hold_private_input(Path(original_intent['config_path']))))
+    original_config = effective_config(original_config, model)
+    first = selection.decode(initial['000001.intent.json'])
+    record = selection.decode(initial['000001.selection.json'])
+    config = selection.decode(stack.enter_context(renewal.hold_private_input(Path(first['config_path']))))
+    values, snapshots = selection._inputs(config, stack)
+    require(snapshots == first['inputs'] == original_intent['inputs'] and record['selected'] == original_record['selected']
+            and generation == plan['owner']['generation_sequence'])
+    if mode == 'forward':
+        return check_publication(original_config, original_record['choice'], values, original_record, plan, link,
+                                 guard_sha256=contract.digest(guard.marker(plan)), held=stack, **options)
+    return _refresh(original_config, original_record['choice'], values, original_record, plan, retained,
+                    Path(link['attempt_dir']), held=stack, **options)
+
+
+def finalize_selected(config_path, plan, *, guard_sha256, expected_anchor_sha256, intent_sha256, mode,
+                      assets, gh, cosign, registry_config, authority_file=None, **forward_options):
+    """Release the guard only for a verified and durably selected website owner."""
+    from selfhost_windows_website_forward import _pinned_qualification, verify_qualification
+
+    require(mode in {'forward', 'combined'} and all(
+        contract.sha(pin) for pin in (guard_sha256, expected_anchor_sha256, intent_sha256)))
+    config = selection.decode(renewal.read_private_bytes(Path(config_path)))
+    selection.binding(config)
+    attempt, active, archive = _paths(config, plan, mode)
+    original = selection.packed(guard.marker(plan))
+    require(selection.digest(original) == guard_sha256)
+    ancestry = []
+
+    with ExitStack() as coordination:
+        active_present = renewal.namespace_entry_exists(active)
+        with selection._session(config_path, _coordination=coordination, _preserve_history=ancestry.extend,
+                _pending_website_sha256=guard_sha256 if active_present else None) as (base, _, _, current, raw, stack):
+            require(_paths(base, plan, mode) == (attempt, active, archive))
+            guard_path = active if active_present else archive
+            require(stack.enter_context(renewal.hold_private_input(guard_path)) == original)
+            origin, link, (target, initial), decision_sha256 = _selected_lineage(ancestry, (current, raw), intent_sha256, mode)
+            require(link['attempt_dir'] == str(attempt) and link['terminal_sha256'] == expected_anchor_sha256)
+            status = store.inspect(plan, expected_anchor_sha256=expected_anchor_sha256)
+            status['guard_sha256'] = guard_sha256
+            selected = selection.decode(initial['000001.selection.json'])['selected']
+            require(contract.digest(selected) == plan['owner']['selected_sha256'])
+            expected = {'schema': MODES[mode][0], 'plan_sha256': plan['plan_sha256'], 'guard_sha256': guard_sha256,
+                'anchor_sha256': expected_anchor_sha256, 'terminal_record_sha256': status['tail_sha256'],
+                'intent_sha256': intent_sha256, 'decision_sha256': decision_sha256,
+                'selection_sha256': selection.digest(initial['000001.selection.json']), 'journal': str(target),
+                'selected_sha256': plan['owner']['selected_sha256'], 'generation_sequence': plan['owner']['generation_sequence']}
+            retained = pinned = None
+            if mode == 'forward':
+                require(status['classification'] == 'forward-evidence-complete')
+                pinned = _pinned_qualification(attempt, link['candidate_sha256'], link['qualification_sha256'], stack)
+            else:
+                from selfhost_windows_website_backout import hold_retirement
+                retained, _ = hold_retirement(plan, status, stack)
+
+            if active_present:
+                require(current == target and raw == initial and not renewal.namespace_entry_exists(archive))
+                identities = _path_identities(active)
+                fresh = _refresh_selected(plan, origin, initial, stack, mode, link, retained,
+                    assets=assets, gh=gh, cosign=cosign, registry_config=registry_config,
+                    authority_file=authority_file, **forward_options)
+                _record_release(attempt, expected, fresh, stack, mode)
+                for name, body in initial.items():
+                    require(coordination.enter_context(renewal.hold_private_input(target / name)) == body)
+                coordination.enter_context(_held_private_input(target, directory=True))
+            release, observed = _hold_release(attempt, expected, coordination, mode)
+            if mode == 'forward':
+                verify_qualification(observed, pinned)
+            else:
+                _verify_qualification(observed, retained, plan['owner'])
+            coordination.enter_context(renewal.hold_storage_namespace(attempt))
+        if active_present:
+            _archive_guard(config, active, archive, original, identities, coordination)
+        else:
+            require(coordination.enter_context(renewal.hold_private_input(archive)) == original)
         require(not renewal.namespace_entry_exists(active))
     return {**release, 'result': 'website-' + mode + '-guard-archived', 'guard_archived': True}

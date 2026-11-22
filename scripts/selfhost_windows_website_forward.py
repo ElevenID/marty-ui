@@ -234,13 +234,20 @@ def _recheck(config, choice, values, record, plan, status, *, candidate_sha256, 
     prefix = store.forward_verification_prefix(plan, expected_anchor_sha256=status['anchor_sha256'])
     _, fresh, inventory, routes, runtime = _qualify(config, choice, values, record, plan, status, held=held,
         candidate_status={**prefix, 'guard_sha256': status['guard_sha256']}, **options)
-    require(all(fresh[key] == pinned[key] for key in (
-        'candidate_sha256', 'runtime_sha256', 'native_sha256', 'selected_sha256',
-        'authenticated_account_sha256', 'authenticated_organization_sha256', 'foreign_storage_sha256', 'foreign_storage_changes')))
+    verify_qualification(fresh, pinned)
     return runtime, routes, {
         'engine_id': plan['owner']['engine_id'], 'inventory_sha256': contract.digest(renewal.context_snapshot(inventory)),
         'changes_sha256': fresh['foreign_storage_sha256'], 'changes': fresh['foreign_storage_changes'],
-    }
+    }, fresh
+
+
+def verify_qualification(fresh, pinned):
+    require(set(fresh) == set(pinned) and all(fresh[key] == pinned[key] for key in (
+        'schema', 'candidate_sha256', 'runtime_sha256', 'native_sha256', 'selected_sha256',
+        'authenticated_account_sha256', 'authenticated_organization_sha256', 'foreign_storage_sha256', 'foreign_storage_changes')))
+    require(all(contract.sha(fresh[key]) for key in ('public_routes_sha256', 'anonymous_handoff_sha256'))
+            and all(fresh['authenticated_application'][key] is True for key in (
+                'account_matched', 'organization_matched', 'authenticated_application_exercised')))
 
 
 def seal(config, choice, values, record, plan, status, *, candidate_sha256, qualification_sha256, held, **options):
@@ -248,7 +255,7 @@ def seal(config, choice, values, record, plan, status, *, candidate_sha256, qual
     require(status['completed_phases'] == list(store.journal.FORWARD[:-1])
             and status['model_state'] == 'split' and status['pending_phase'] in (None, 'seal-forward'))
     phase = 'seal-forward'
-    runtime, routes, foreign = _recheck(config, choice, values, record, plan, status, held=held,
+    runtime, routes, foreign, _qualification = _recheck(config, choice, values, record, plan, status, held=held,
         candidate_sha256=candidate_sha256, qualification_sha256=qualification_sha256, **options)
     native = {key: plan['owner'][key] for key in ('native_sha256', 'selected_sha256')}
     before = {'owner_lease': {'owner': plan['owner'], 'guard_sha256': status['guard_sha256']},
@@ -277,5 +284,6 @@ def check_publication(config, choice, values, record, plan, link, *, guard_sha25
     status = store.inspect(plan, expected_anchor_sha256=link['terminal_sha256'])
     require(status['classification'] == 'forward-evidence-complete')
     status['guard_sha256'] = guard_sha256
-    _recheck(config, choice, values, record, plan, status, held=held,
-             candidate_sha256=link['candidate_sha256'], qualification_sha256=link['qualification_sha256'], **options)
+    _, _, _, qualification = _recheck(config, choice, values, record, plan, status, held=held,
+        candidate_sha256=link['candidate_sha256'], qualification_sha256=link['qualification_sha256'], **options)
+    return qualification
