@@ -381,7 +381,8 @@ def assert_models(
         "/usr/local/bin/marty-organization bootstrap\n"
         "/usr/local/bin/marty-credential-template bootstrap\n"
         "/usr/local/bin/marty-presentation-policy migrate\n"
-        "exec /usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
+        "/usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
+        "exec /usr/local/bin/marty-flow migrate\n"
     ]
     assert set(owner["build"]) == {"context", "dockerfile", "args"}
     assert Path(owner["build"]["context"]).resolve() == ROOT
@@ -459,6 +460,15 @@ def assert_models(
         expected["services"][service]["depends_on"] = deepcopy(
             actual["services"][service]["depends_on"]
         )
+    assert actual["services"]["flow"]["depends_on"]["owner-migrations"] == {
+        "condition": "service_completed_successfully", "required": True,
+    }
+    expected["services"]["flow"]["depends_on"] = deepcopy(
+        actual["services"]["flow"]["depends_on"]
+    )
+    flow_environment = expected["services"]["flow"]["environment"]
+    assert "MARTY_SCHEMA_STARTUP_MODE" not in flow_environment
+    flow_environment["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
     assert actual["services"]["issuance-migrations"]["depends_on"] == {
         "credential-template": {"condition": "service_healthy", "required": True},
         "owner-migrations": {"condition": "service_completed_successfully", "required": True},
