@@ -40,15 +40,16 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pytest cryptography pyyaml
           if ($LASTEXITCODE -ne 0) { throw 'Public test dependency installation failed' }
-      - name: Exercise exact source archive and portable installation contracts
+      - name: Exercise exact source archive and portable installation and caller contracts
         run: |
           $env:TEMP = $env:RUNNER_TEMP
           $env:TMP = $env:RUNNER_TEMP
           python -X faulthandler -m pytest -q `
             tests/test_windows_owner_source_bundle.py `
-            tests/test_windows_source_install.py
-          if ($LASTEXITCODE -ne 0) { throw 'Source archive or installation contracts failed' }
-      - name: Require executed native NTFS placement and original-anchor replay
+            tests/test_windows_source_install.py `
+            tests/test_windows_source_caller.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source archive, installation or caller contracts failed' }
+      - name: Require executed native NTFS placement, caller custody and original-anchor replay
         run: |
           $env:TEMP = $env:RUNNER_TEMP
           $env:TMP = $env:RUNNER_TEMP
@@ -75,13 +76,57 @@ jobs:
           }
           identities = [(case.get('classname'), case.get('name')) for case in cases]
           expected = {('tests.test_windows_source_install_ntfs', name) for name in required}
-          if (not suites or len(cases) < len(required) or len(set(identities)) != len(cases)
+          caller_required = {
+              'test_isolated_caller_check_replays_original_anchor_without_runtime_or_log_writes',
+              'test_isolated_caller_refuses_wrong_profile_pin_without_owner_or_log_changes',
+              'test_isolated_caller_refuses_preloaded_owner_module',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-bytes]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-hardlink]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-extra]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-cache]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[source-junction]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-bytes]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-hardlink]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-extra]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-cache]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[caller-junction]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[profile-bytes]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[profile-hardlink]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[helper-bytes]',
+              'test_isolated_caller_refuses_unreviewed_or_aliased_inputs[helper-hardlink]',
+              'test_isolated_caller_requires_private_acl_for_every_new_input[caller]',
+              'test_isolated_caller_requires_private_acl_for_every_new_input[profile]',
+              'test_isolated_caller_requires_private_acl_for_every_new_input[helper]',
+              'test_native_caller_log_append_preserves_prefix_and_verifies_appended_bytes',
+              'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[partial-prefix]',
+              'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[full-log]',
+              'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[hardlink]',
+              'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[broad-acl]',
+              'test_native_caller_log_refusal_never_repairs_or_truncates_existing_bytes[junction]',
+              'test_native_hook_journal_publishes_and_replays_exact_completed_pair',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[pending]',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[empty-intent]',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[empty-completion]',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[changed-intent]',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[boolean-completion-attempt]',
+              'test_native_hook_history_refuses_pending_or_corrupt_records_without_changes[unexpected-entry]',
+              'test_native_hook_record_allocation_replacement_preserves_failed_evidence[intent]',
+              'test_native_hook_record_allocation_replacement_preserves_failed_evidence[complete]',
+              'test_native_hook_intent_survives_late_source_failure_without_completion',
+              'test_native_hook_state_requires_private_exclusive_custody[lock-hardlink]',
+              'test_native_hook_state_requires_private_exclusive_custody[owner-hardlink]',
+              'test_native_hook_state_requires_private_exclusive_custody[owner-broad-acl]',
+              'test_native_hook_state_requires_private_exclusive_custody[junction]',
+              'test_native_hook_state_requires_private_exclusive_custody[held-lock]',
+          }
+          expected |= {('tests.test_windows_source_caller_ntfs', name) for name in caller_required}
+          if (not suites or len(cases) < len(expected) or len(set(identities)) != len(cases)
                   or not expected <= set(identities)
                   or sum(int(suite.get('tests', '-1')) for suite in suites) != len(cases)
                   or any(int(suite.get(field, '-1')) != 0 for suite in suites
                          for field in ('failures', 'errors', 'skipped'))
                   or any(list(report.iter(tag)) for tag in ('failure', 'error', 'skipped'))):
-              raise SystemExit('Native source qualification requires every retained case and zero skips or failures')
-          print(f'Qualified {len(cases)} native NTFS cases, including all {len(required)} retained source contracts')
+              raise SystemExit('Native source and caller qualification requires every retained case and zero skips or failures')
+          print(f'Qualified {len(cases)} native NTFS cases, including all {len(expected)} retained source and caller contracts')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Native NTFS execution evidence is incomplete' }

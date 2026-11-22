@@ -84,9 +84,13 @@ Supply independently verified native executables for:
 | Tool | Required compatibility |
 | --- | --- |
 | Rust/Cargo | The reviewed toolchain; the previous caller gate used Rust 1.95 |
-| PostgreSQL | Matching `postgres`, `initdb` and `psql`, version 15 or newer |
+| PostgreSQL | Matching `postgres`, `initdb` and `psql`, version 17 or newer for this scoped replay |
 | OpenBao | 2.5.5 |
 | Redis | 7.4.12 |
+
+The PostgreSQL wrapper supports version 15 or newer, but the selected Flow
+ingress escalation gate explicitly exercises the PostgreSQL 17 `MAINTAIN`
+privilege. Use PostgreSQL 17 or newer to run that gate unchanged.
 
 The fixture version checks prove compatibility only. Keep the previously
 verified archive checksums/signature evidence with the host qualification.
@@ -102,10 +106,18 @@ export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 export CARGO_TARGET_DIR=/home/marty/qualification/pr1994-target
 export MARTY_QUALIFICATION_PG_BIN=/path/to/verified/postgresql/bin
+export MARTY_QUALIFICATION_PG_LIBRARY_PATH=/path/to/verified/postgresql/lib
 export MARTY_QUALIFICATION_BAO=/path/to/verified/bao
 export MARTY_QUALIFICATION_REDIS=/path/to/verified/redis-server
 export MARTY_QUALIFICATION_EVIDENCE=/home/marty/qualification/pr1994-evidence
 ```
+
+For extracted PostgreSQL packages, verify the matching executables and the
+actual `libpq.so.5` resolved by `psql`, retaining their package provenance and
+file hashes. Set `MARTY_QUALIFICATION_PG_LIBRARY_PATH` to that private library
+directory, or leave it empty when the verified native libraries resolve without
+an override. The fixture commands below apply this path only to their child
+processes; do not export it as a global `LD_LIBRARY_PATH` for the build.
 
 ### Capture the test harnesses, then build the normal host last
 
@@ -271,13 +283,20 @@ Run the standalone client/consumer and host configuration contracts first:
 "$(qualification_harness marty-delegated-authority:marty_delegated_authority)" receipt_signing::tests --test-threads=1
 "$(qualification_harness marty-delegated-authority:marty_delegated_authority)" use_http::tests --test-threads=1
 "$(qualification_harness marty-delegated-authority:marty_delegated_authority)" use_receipt_http::tests --test-threads=1
+"$MARTY_QUALIFICATION_FLOW_TEST" --test-threads=1
 ```
+
+These ten gates execute 197 tests: 89 focused contract tests, three host-smoke
+tests and 105 default Flow tests. The default Flow harness also reports 26
+existing ignored fixture tests. Seven of those run explicitly in the ingress
+gate below; the other 19 remain outside this selected replay.
 
 Run both actual executable lifecycle tests with fresh owner databases and
 purpose-separated remote signing custody:
 
 ```sh
-python3 scripts/with_disposable_delegated_use_postgres.py \
+env -u LD_PRELOAD LD_LIBRARY_PATH="${MARTY_QUALIFICATION_PG_LIBRARY_PATH:-}" \
+  python3 scripts/with_disposable_delegated_use_postgres.py \
   --postgres-bin "$MARTY_QUALIFICATION_PG_BIN" \
   --evidence-dir "$MARTY_QUALIFICATION_EVIDENCE/lifecycle" -- \
   python3 scripts/with_disposable_delegated_use_lifecycle.py \
@@ -288,7 +307,8 @@ python3 scripts/with_disposable_delegated_use_postgres.py \
 Run the actual executable's startup/readiness refusal gate separately:
 
 ```sh
-python3 scripts/with_disposable_delegated_use_postgres.py \
+env -u LD_PRELOAD LD_LIBRARY_PATH="${MARTY_QUALIFICATION_PG_LIBRARY_PATH:-}" \
+  python3 scripts/with_disposable_delegated_use_postgres.py \
   --postgres-bin "$MARTY_QUALIFICATION_PG_BIN" \
   --evidence-dir "$MARTY_QUALIFICATION_EVIDENCE/startup" -- \
   python3 scripts/with_disposable_delegated_use_runtime.py \
@@ -300,12 +320,14 @@ Run local-owner and current-access ingress regressions with separate fresh
 PostgreSQL clusters:
 
 ```sh
-python3 scripts/with_disposable_delegated_use_postgres.py \
+env -u LD_PRELOAD LD_LIBRARY_PATH="${MARTY_QUALIFICATION_PG_LIBRARY_PATH:-}" \
+  python3 scripts/with_disposable_delegated_use_postgres.py \
   --postgres-bin "$MARTY_QUALIFICATION_PG_BIN" \
   --evidence-dir "$MARTY_QUALIFICATION_EVIDENCE/owners" -- \
   "$MARTY_QUALIFICATION_OWNER_TEST" --ignored --test-threads=1
 
-python3 scripts/with_disposable_delegated_use_postgres.py \
+env -u LD_PRELOAD LD_LIBRARY_PATH="${MARTY_QUALIFICATION_PG_LIBRARY_PATH:-}" \
+  python3 scripts/with_disposable_delegated_use_postgres.py \
   --postgres-bin "$MARTY_QUALIFICATION_PG_BIN" \
   --evidence-dir "$MARTY_QUALIFICATION_EVIDENCE/ingress" -- \
   "$MARTY_QUALIFICATION_FLOW_TEST" authenticated_ingress --include-ignored --test-threads=1
@@ -318,6 +340,9 @@ before and after the executable gates; a changed binary invalidates the run.
 The authority selectors use Rust module names, not the source filenames: expect
 six receipt-signing, eight command-HTTP and five receipt-HTTP tests. A zero-test
 selection is a failed qualification gate.
+The four live gates require two lifecycle tests, one startup test, three owner
+regressions and seven ingress tests. Together with the ten preceding gates,
+the scoped replay executes 210 distinct Rust tests.
 
 The PostgreSQL wrapper sets only its own disposable database URLs, verifies that
 the loopback server's data directory belongs to this invocation before creating

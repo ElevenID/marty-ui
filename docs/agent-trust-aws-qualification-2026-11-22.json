@@ -1,0 +1,3628 @@
+{
+  "report_format_version": 1,
+  "report_id": "agent-trust-aws-qualification-2026-11-22",
+  "report_kind": "Completed selected AWS runtime qualification and owned-resource cleanup",
+  "recorded_at_utc": "2026-11-22T07:24:43.893936+00:00",
+  "status": "SCOPED_AWS_QUALIFICATION_PASSED_AND_EXISTING_INSTANCE_STOP_VERIFIED",
+  "scope": "Selected managed MachineCredential/full-machine/KEY/EXACT_OPERATION composition in an isolated rootless container on the existing AWS development instance.",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "pull_request": 1994,
+    "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+    "qualified_tree": "e61790f051cd277a4c2bff7c43d059ad880d3a4e",
+    "qualified_rust_tree": "ae3a43f10ba15b9622efef9644c717013734c23d",
+    "integrated_main_commit": "b7ceedc260924a5b88071f5fc6c55839691486e2",
+    "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+    "core_pin": "bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0",
+    "protocol_pin": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
+    "runtime_source_changed_after_qualification": true,
+    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted main 284ca81ca901ad532b581d5286ad955afced6dfd was subsequently merged normally; its equivalent Flow artifact-binding extraction changes Rust bytes and received a separate local build and nine live PostgreSQL tests. Accepted main 5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7 then added the Windows caller/docs/tests/required workflow without changing that verified Rust subtree, lockfile or qualification inputs. Evidence-only publication changes follow these source integrations. The final integrated head is not claimed to have run on AWS."
+  },
+  "operator_environment": {
+    "existing_aws_instance_used": true,
+    "instance_type": "m7i-flex.large",
+    "region": "us-east-2",
+    "account_plan_observed_before_start": "AWS Free plan with available credits",
+    "paid_plan_or_billing_upgrade_performed": false,
+    "new_aws_infrastructure_created": false,
+    "instance_resized": false,
+    "host_packages_installed": false,
+    "swap_added": false,
+    "iam_or_network_rules_changed": false,
+    "installed_workload_or_provider_configuration_changed": false,
+    "host_os_observed": "Ubuntu 24.04, amd64",
+    "container_os": "Debian GNU/Linux 12 (bookworm)",
+    "builder_image_reference_verified_against_official_registry": "rust@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1",
+    "existing_cached_builder_image_used_without_pull": true,
+    "automatic_stop_deadline_observed_unchanged_before_manual_stop_utc": "2026-11-22T11:49:16Z",
+    "operator_observation_scope": "Plan/credit availability, existing-instance identity, vendor-registry image lookup and host inventory were observed during authenticated preflight. Account identifiers, balances and raw control-plane responses remain private."
+  },
+  "export_encoding": "Each embedded data object preserves its original export key order. Re-encoding it as UTF-8 JSON with indent=2 and a final LF reproduces the recorded original-export byte count and SHA-256.",
+  "aws_runtime": {
+    "original_export": {
+      "file_name": "aws-driver-result.json",
+      "bytes": 87289,
+      "sha256": "0f0d34ef57eaa6550f5c75a8dbc0ed611265c65e3b594f3509f611c409ee9764"
+    },
+    "data": {
+      "format_version": 1,
+      "status": "AWS_SCOPED_CONTAINER_QUALIFICATION_PASSED",
+      "started_at_utc": "2026-11-22T06:37:55.913379+00:00",
+      "scope": "Selected delegated-use composition in the operator-verified isolated container on the existing AWS development host.",
+      "path_conventions": {
+        "$QUALIFICATION_ROOT": "Owned isolated qualification workspace mounted at the container execution root."
+      },
+      "execution": {
+        "source": "$QUALIFICATION_ROOT/source",
+        "evidence": "$QUALIFICATION_ROOT/evidence",
+        "cargo_home": "$QUALIFICATION_ROOT/cargo",
+        "target": "$QUALIFICATION_ROOT/target",
+        "uid": 65534,
+        "gid": 65534,
+        "cargo_jobs": 1,
+        "incremental": false,
+        "offline": true,
+        "expected_builder_image_id": "sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1",
+        "driver_sha256": "3df35d09db4937c15bcb329fa3c7666b512ca545817ccf8d3036005c5bc14145",
+        "total_timeout_seconds": 14400,
+        "build_timeout_seconds": 7200,
+        "minimum_free_bytes": 1073741824,
+        "pg_library_path_scope": "Fixture subprocesses only; absent from compilation environment."
+      },
+      "disk": {
+        "initial_free_bytes": 11884851200,
+        "minimum_observed_free_bytes": 2535329792,
+        "final_free_bytes": 2713600000
+      },
+      "commands": [
+        {
+          "name": "source-head-before",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD"
+          ],
+          "started_at_utc": "2026-11-22T06:37:55.919734+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:37:56.925080+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-head-before.log",
+            "sha256": "a9f796dece04fcaf8901a393a6934301278fc314915d77d61b1e25c9f1f58bca",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-tree-before",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD^{tree}"
+          ],
+          "started_at_utc": "2026-11-22T06:37:56.929603+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:37:57.935056+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-tree-before.log",
+            "sha256": "e4401bb1b12b6d93a4a5c9cddd1c9d25b7b4575391a95c3f6ab0da9c52a43afa",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-status-before",
+          "command": [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all"
+          ],
+          "started_at_utc": "2026-11-22T06:37:57.940276+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:37:58.945979+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-status-before.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "rustc-version",
+          "command": [
+            "rustc",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:37:58.954555+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:37:59.961234+00:00",
+          "seconds": 1.003,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/rustc-version.log",
+            "sha256": "f4d034f5660bb49f22bfcba3f3445be67e25b704c193ff421b53863b4faee148",
+            "bytes": 36
+          }
+        },
+        {
+          "name": "cargo-version",
+          "command": [
+            "cargo",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:37:59.966106+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:00.973782+00:00",
+          "seconds": 1.004,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/cargo-version.log",
+            "sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+            "bytes": 36
+          }
+        },
+        {
+          "name": "node-version",
+          "command": [
+            "/opt/qual-node/bin/node",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:00.978316+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:01.984188+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/node-version.log",
+            "sha256": "249baf635bb43877fcb9422efa1a4904b702d0ddf14d3949b7cd0950d5229c81",
+            "bytes": 9
+          }
+        },
+        {
+          "name": "postgres-version",
+          "command": [
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/postgres",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:01.989121+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:02.994733+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/postgres-version.log",
+            "sha256": "5eb4c7b619995e0130b21ee3fe726d5e68c3740c5bc663687d2b7c039864851c",
+            "bytes": 54
+          }
+        },
+        {
+          "name": "initdb-version",
+          "command": [
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/initdb",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:03.013599+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:04.020122+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/initdb-version.log",
+            "sha256": "8f3439fd6c62c8df48967ecffd4edf8e4b22edb52b9abb6f600e1aef73084e8d",
+            "bytes": 52
+          }
+        },
+        {
+          "name": "psql-version",
+          "command": [
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/psql",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:04.024861+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:05.031358+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/psql-version.log",
+            "sha256": "ce2bfe9ac4649c79370c6ade23cd043b5de5dcbe1a32e2dc8dadfe3914d589fc",
+            "bytes": 50
+          }
+        },
+        {
+          "name": "openbao-version",
+          "command": [
+            "$QUALIFICATION_ROOT/tools/providers/bao",
+            "version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:05.176073+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:06.183610+00:00",
+          "seconds": 1.003,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/openbao-version.log",
+            "sha256": "d7142d32fc1b8f0de40799409719959d9341a71150788bf969d035793eacad6b",
+            "bytes": 86
+          }
+        },
+        {
+          "name": "redis-version",
+          "command": [
+            "$QUALIFICATION_ROOT/tools/providers/redis-7.4.12/src/redis-server",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T06:38:06.188356+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:07.194525+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/redis-version.log",
+            "sha256": "28287d30a1e532b9657cd72574acab031a1fe071440111a178168a8358fb2fa2",
+            "bytes": 80
+          }
+        },
+        {
+          "name": "cargo-metadata",
+          "command": [
+            "cargo",
+            "metadata",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "--format-version",
+            "1"
+          ],
+          "started_at_utc": "2026-11-22T06:38:07.836209+00:00",
+          "timeout_seconds": 600,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:38:08.843777+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/cargo-metadata.json",
+            "sha256": "6637da68f85353c4d2fc7e38ab898acf79f888e42a3df262a4157a8e48a67c63",
+            "bytes": 4557124
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/cargo-metadata.stderr.log",
+            "sha256": "931d1583010d9abde8e537b09d4cc7de4defdaf99ce46e0884ff381c7011cbe9",
+            "bytes": 1962
+          }
+        },
+        {
+          "name": "host-test-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-delegated-use",
+            "--tests",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T06:38:08.913964+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 357,
+          "completed_at_utc": "2026-11-22T06:48:10.505213+00:00",
+          "seconds": 601.588,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/host-test-build.jsonl",
+            "sha256": "b85c84a34606e8ada25362a9cfc5e84424ef0d7e47983c5d2d240160870c5253",
+            "bytes": 628920
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/host-test-build.log",
+            "sha256": "1df9a51ce3c1aa1ac95a4cfcd7d3f0f5b7d2666bbc733a94ad5a675a0c3e7e34",
+            "bytes": 31187
+          }
+        },
+        {
+          "name": "authority-test-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-delegated-authority",
+            "-p",
+            "marty-principal-runtime-binding",
+            "--lib",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T06:48:10.542481+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 160,
+          "completed_at_utc": "2026-11-22T06:52:59.848022+00:00",
+          "seconds": 289.304,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/authority-test-build.jsonl",
+            "sha256": "b10a1d91f4c5859c6d6e19174da4d8dd726f860819fe0450af1a9eff4d0295f7",
+            "bytes": 562976
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/authority-test-build.log",
+            "sha256": "0346567efe15d326d7fb6a51c6e7b85759bfc9a9144b5d649ddde9eb25f40a0f",
+            "bytes": 11558
+          }
+        },
+        {
+          "name": "enrollment-test-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-principal-runtime-binding",
+            "--test",
+            "managed_enrollment",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T06:52:59.874076+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 26,
+          "completed_at_utc": "2026-11-22T06:53:33.913095+00:00",
+          "seconds": 34.033,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/enrollment-test-build.jsonl",
+            "sha256": "a1c4d58a39acd0dfa1c36da8fd0e4f1cb4d650ba495114595e19126f396cd6cb",
+            "bytes": 93575
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/enrollment-test-build.log",
+            "sha256": "10edeec2ef824d15bf9c90486dc46ce47274a6c2e0b840d8f9811e0c84a5051e",
+            "bytes": 4391
+          }
+        },
+        {
+          "name": "client-test-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-delegated-receipt-consumer",
+            "-p",
+            "marty-delegated-use-client",
+            "--tests",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T06:53:33.919252+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 41,
+          "completed_at_utc": "2026-11-22T06:54:29.984539+00:00",
+          "seconds": 56.062,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/client-test-build.jsonl",
+            "sha256": "5e9abffb8d7403e719dbe3480c9a37be7084cd72ad1261fb3b78d157fc8e5d46",
+            "bytes": 167221
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/client-test-build.log",
+            "sha256": "cf871bb3faf38fc728c5a5a44d21ca3709aa764ae3bfd0c7b36787aa97b6d310",
+            "bytes": 4879
+          }
+        },
+        {
+          "name": "flow-test-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-flow",
+            "--lib",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T06:54:29.992192+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 41,
+          "completed_at_utc": "2026-11-22T06:56:43.124734+00:00",
+          "seconds": 133.128,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/flow-test-artifacts.jsonl",
+            "sha256": "55eda09a76536cb489bb7b929a20f0ffc7358cecf7ee4b31a44c5018608f418b",
+            "bytes": 575049
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/flow-test-build.log",
+            "sha256": "9d1a159a8bfdc6c5bcdcd38d0bec7af33b18162cdbc465e0faf49008ad66dde3",
+            "bytes": 7978
+          }
+        },
+        {
+          "name": "check-mmf-security-features",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/ci/check_mmf_security_features.py"
+          ],
+          "started_at_utc": "2026-11-22T06:56:43.152331+00:00",
+          "timeout_seconds": 600,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "stdin": {
+            "path": "$QUALIFICATION_ROOT/evidence/cargo-metadata.json",
+            "sha256": "6637da68f85353c4d2fc7e38ab898acf79f888e42a3df262a4157a8e48a67c63",
+            "bytes": 4557124
+          },
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T06:56:44.176919+00:00",
+          "seconds": 1.003,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/check-mmf-security-features.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "check-marty-core-kms-boundary",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/ci/check_marty_core_kms_boundary.py"
+          ],
+          "started_at_utc": "2026-11-22T06:56:44.258143+00:00",
+          "timeout_seconds": 600,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "stdin": {
+            "path": "$QUALIFICATION_ROOT/evidence/cargo-metadata.json",
+            "sha256": "6637da68f85353c4d2fc7e38ab898acf79f888e42a3df262a4157a8e48a67c63",
+            "bytes": 4557124
+          },
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 2,
+          "completed_at_utc": "2026-11-22T06:56:49.297641+00:00",
+          "seconds": 5.005,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/check-marty-core-kms-boundary.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "normal-libraries",
+          "command": [
+            "cargo",
+            "check",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-principal-runtime-binding",
+            "-p",
+            "marty-delegated-authority",
+            "-p",
+            "marty-delegated-receipt-consumer",
+            "--lib"
+          ],
+          "started_at_utc": "2026-11-22T06:56:49.303989+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 218,
+          "completed_at_utc": "2026-11-22T07:00:59.561050+00:00",
+          "seconds": 250.251,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/normal-libraries.log",
+            "sha256": "9537e3bc59fe709eb65e3b48c9b05a00e96b53a19b5ec15856eac55b61653b2d",
+            "bytes": 23840
+          }
+        },
+        {
+          "name": "normal-host-last",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-delegated-use",
+            "--bin",
+            "marty-delegated-use",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T07:00:59.568757+00:00",
+          "timeout_seconds": 7200,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 64,
+          "completed_at_utc": "2026-11-22T07:04:45.788734+00:00",
+          "seconds": 226.214,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/production-build.jsonl",
+            "sha256": "449be8714b075166998bb2b2fffefdf717ee07ec949430d6f3246e247d28d497",
+            "bytes": 612883
+          },
+          "stderr": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/production-build.log",
+            "sha256": "65cbc3dc76ec7dff49a564db40f673c4eb443667dc7fc75ad2480bb897a57581",
+            "bytes": 10354
+          }
+        },
+        {
+          "name": "source-head-after-build",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD"
+          ],
+          "started_at_utc": "2026-11-22T07:05:01.265334+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:02.278695+00:00",
+          "seconds": 1.006,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-head-after-build.log",
+            "sha256": "a9f796dece04fcaf8901a393a6934301278fc314915d77d61b1e25c9f1f58bca",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-tree-after-build",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD^{tree}"
+          ],
+          "started_at_utc": "2026-11-22T07:05:02.285840+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:03.294022+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-tree-after-build.log",
+            "sha256": "e4401bb1b12b6d93a4a5c9cddd1c9d25b7b4575391a95c3f6ab0da9c52a43afa",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-status-after-build",
+          "command": [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all"
+          ],
+          "started_at_utc": "2026-11-22T07:05:03.301396+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:04.309884+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-status-after-build.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "client",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/client-2fabdf9f349250ca",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:04.711176+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:05.719878+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/client.log",
+            "sha256": "beb0ae67b50366403ad7c6c7364d37c414cee14a09c30a301f5406389fdb86e3",
+            "bytes": 1600
+          }
+        },
+        {
+          "name": "receipt-consumer",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/consumer-ad5b8f9b56dd7f90",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:06.096832+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:07.105739+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-consumer.log",
+            "sha256": "2d0bacbb150ed550f4bf8049a7313457e47574f05c96b5d71518e72f248f27b2",
+            "bytes": 1865
+          }
+        },
+        {
+          "name": "runtime-binding",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_principal_runtime_binding-87956a082f9be203",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:07.521081+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:08.529867+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/runtime-binding.log",
+            "sha256": "482f2ccd9c3dae380d150e04506ea7bfae9c2a3d01abd826500e2d3d8dd8d1c1",
+            "bytes": 307
+          }
+        },
+        {
+          "name": "managed-enrollment",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/managed_enrollment-8d440b3b2979b3a2",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:08.919951+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:09.929282+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/managed-enrollment.log",
+            "sha256": "940d948b9b7903747a4b81a5252390c727aa8edc16301de44b40462d18a00590",
+            "bytes": 1452
+          }
+        },
+        {
+          "name": "host-library",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_use-22fe0bcc12f43e6b",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:10.411827+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:11.421975+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/host-library.log",
+            "sha256": "2edfd5018733f1c2e0adc37f4a28f03b6448263537c0ffc46a7f01ea33dabb2e",
+            "bytes": 1280
+          }
+        },
+        {
+          "name": "receipt-signing",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_authority-86a77d0d81ee2bd8",
+            "receipt_signing::tests",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:11.960343+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:12.974104+00:00",
+          "seconds": 1.003,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-signing.log",
+            "sha256": "825da7e1d461ef7cd024f9982e2e02d31783c43771f3b21479e02da51d89bd71",
+            "bytes": 762
+          }
+        },
+        {
+          "name": "command-http",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_authority-86a77d0d81ee2bd8",
+            "use_http::tests",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:13.509478+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:14.519161+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/command-http.log",
+            "sha256": "9fb871caf55904e616ec21dbcc19a85c7c307cf2e7fc26d4d2ab95d8291ca759",
+            "bytes": 870
+          }
+        },
+        {
+          "name": "receipt-http",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_authority-86a77d0d81ee2bd8",
+            "use_receipt_http::tests",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:15.027390+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:16.036884+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-http.log",
+            "sha256": "ab12522c37ab1845d25df48123373824940bbf10d0154272bdbef5e2513b91ec",
+            "bytes": 609
+          }
+        },
+        {
+          "name": "flow-library",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:16.598913+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:30.616879+00:00",
+          "seconds": 14.01,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/flow-library.log",
+            "sha256": "4a7fc8b42d30d84a7f01dc3f23280a0538ec8c4466253feb6d76d6c89521c018",
+            "bytes": 15890
+          }
+        },
+        {
+          "name": "host-smoke",
+          "command": [
+            "$QUALIFICATION_ROOT/target/debug/deps/host_smoke-b56666cbb9f8a434",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:31.001698+00:00",
+          "timeout_seconds": 900,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:05:32.012002+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/host-smoke.log",
+            "sha256": "855a8b0f4791582e64e7b86349aebb1267d6b986a7b1889c56dc572524a1ca54",
+            "bytes": 348
+          }
+        },
+        {
+          "name": "lifecycle",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$QUALIFICATION_ROOT/evidence/lifecycle",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_lifecycle.py",
+            "--openbao",
+            "$QUALIFICATION_ROOT/tools/providers/bao",
+            "--redis-server",
+            "$QUALIFICATION_ROOT/tools/providers/redis-7.4.12/src/redis-server",
+            "--",
+            "$QUALIFICATION_ROOT/target/debug/deps/live_lifecycle-77c9f379ecb96063",
+            "--ignored",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:05:33.075958+00:00",
+          "timeout_seconds": 1200,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 208,
+          "completed_at_utc": "2026-11-22T07:06:11.273644+00:00",
+          "seconds": 38.189,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/lifecycle.log",
+            "sha256": "c54ff7cb729f6d9514ec27ed6ce24c3eea57dd0700fbe2f43e282801e1a3502c",
+            "bytes": 143
+          }
+        },
+        {
+          "name": "startup",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$QUALIFICATION_ROOT/evidence/startup",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_runtime.py",
+            "--openbao",
+            "$QUALIFICATION_ROOT/tools/providers/bao",
+            "--redis-server",
+            "$QUALIFICATION_ROOT/tools/providers/redis-7.4.12/src/redis-server",
+            "--",
+            "$QUALIFICATION_ROOT/target/debug/deps/live_runtime-ffaff2e811b6aaeb",
+            "--ignored",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:06:12.671927+00:00",
+          "timeout_seconds": 1200,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 194,
+          "completed_at_utc": "2026-11-22T07:06:24.747875+00:00",
+          "seconds": 12.067,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/startup.log",
+            "sha256": "40653614387ad22848583da8d98a30b3c1e8f073f73e5cb098b90921e7dbb196",
+            "bytes": 141
+          }
+        },
+        {
+          "name": "owners",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$QUALIFICATION_ROOT/evidence/owners",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "$QUALIFICATION_ROOT/target/debug/deps/runtime_postgres-c2c16b2a41ca9c3f",
+            "--ignored",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:06:25.899512+00:00",
+          "timeout_seconds": 1200,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 152,
+          "completed_at_utc": "2026-11-22T07:06:59.013753+00:00",
+          "seconds": 33.105,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/owners.log",
+            "sha256": "035151c4ce90059d4c2c71fcf78b5f361cc524f8bcd6ad81ec523e9efb4c6b57",
+            "bytes": 140
+          }
+        },
+        {
+          "name": "ingress",
+          "command": [
+            "/usr/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$QUALIFICATION_ROOT/evidence/ingress",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "$QUALIFICATION_ROOT/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+            "authenticated_ingress",
+            "--include-ignored",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:06:59.934775+00:00",
+          "timeout_seconds": 1200,
+          "status": "PASSED",
+          "fixture_environment": true,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 45,
+          "completed_at_utc": "2026-11-22T07:07:13.982848+00:00",
+          "seconds": 14.03,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/ingress.log",
+            "sha256": "955e205c7c19e1765aec332b0b1f25e116486ef529a6bf5edcd027b45c0e1614",
+            "bytes": 141
+          }
+        },
+        {
+          "name": "source-head-after-tests",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD"
+          ],
+          "started_at_utc": "2026-11-22T07:07:14.185452+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:07:15.196520+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-head-after-tests.log",
+            "sha256": "a9f796dece04fcaf8901a393a6934301278fc314915d77d61b1e25c9f1f58bca",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-tree-after-tests",
+          "command": [
+            "git",
+            "--no-replace-objects",
+            "rev-parse",
+            "HEAD^{tree}"
+          ],
+          "started_at_utc": "2026-11-22T07:07:15.207885+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:07:16.219653+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-tree-after-tests.log",
+            "sha256": "e4401bb1b12b6d93a4a5c9cddd1c9d25b7b4575391a95c3f6ab0da9c52a43afa",
+            "bytes": 41
+          }
+        },
+        {
+          "name": "source-status-after-tests",
+          "command": [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all"
+          ],
+          "started_at_utc": "2026-11-22T07:07:16.229358+00:00",
+          "timeout_seconds": 60,
+          "status": "PASSED",
+          "fixture_environment": false,
+          "process_exit_code": 0,
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "observed_owned_process_count": 1,
+          "completed_at_utc": "2026-11-22T07:07:17.240661+00:00",
+          "seconds": 1.002,
+          "stdout": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/source-status-after-tests.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        }
+      ],
+      "test_gates": [
+        {
+          "name": "client",
+          "command_record": "client",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/client.log",
+            "sha256": "beb0ae67b50366403ad7c6c7364d37c414cee14a09c30a301f5406389fdb86e3",
+            "bytes": 1600
+          },
+          "summary": {
+            "line": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 17,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              17,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.24
+          }
+        },
+        {
+          "name": "receipt-consumer",
+          "command_record": "receipt-consumer",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-consumer.log",
+            "sha256": "2d0bacbb150ed550f4bf8049a7313457e47574f05c96b5d71518e72f248f27b2",
+            "bytes": 1865
+          },
+          "summary": {
+            "line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 21,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              21,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.54
+          }
+        },
+        {
+          "name": "runtime-binding",
+          "command_record": "runtime-binding",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/runtime-binding.log",
+            "sha256": "482f2ccd9c3dae380d150e04506ea7bfae9c2a3d01abd826500e2d3d8dd8d1c1",
+            "bytes": 307
+          },
+          "summary": {
+            "line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 2,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              2,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.0
+          }
+        },
+        {
+          "name": "managed-enrollment",
+          "command_record": "managed-enrollment",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/managed-enrollment.log",
+            "sha256": "940d948b9b7903747a4b81a5252390c727aa8edc16301de44b40462d18a00590",
+            "bytes": 1452
+          },
+          "summary": {
+            "line": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 17,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              17,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.15
+          }
+        },
+        {
+          "name": "host-library",
+          "command_record": "host-library",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/host-library.log",
+            "sha256": "2edfd5018733f1c2e0adc37f4a28f03b6448263537c0ffc46a7f01ea33dabb2e",
+            "bytes": 1280
+          },
+          "summary": {
+            "line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 13,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              13,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.04
+          }
+        },
+        {
+          "name": "receipt-signing",
+          "command_record": "receipt-signing",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-signing.log",
+            "sha256": "825da7e1d461ef7cd024f9982e2e02d31783c43771f3b21479e02da51d89bd71",
+            "bytes": 762
+          },
+          "summary": {
+            "line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 234 filtered out; finished in 0.78s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 6,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 234
+            },
+            "expected_counts": [
+              6,
+              0,
+              0,
+              0,
+              234
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.78
+          }
+        },
+        {
+          "name": "command-http",
+          "command_record": "command-http",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/command-http.log",
+            "sha256": "9fb871caf55904e616ec21dbcc19a85c7c307cf2e7fc26d4d2ab95d8291ca759",
+            "bytes": 870
+          },
+          "summary": {
+            "line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 232 filtered out; finished in 0.31s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 8,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 232
+            },
+            "expected_counts": [
+              8,
+              0,
+              0,
+              0,
+              232
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.31
+          }
+        },
+        {
+          "name": "receipt-http",
+          "command_record": "receipt-http",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/receipt-http.log",
+            "sha256": "ab12522c37ab1845d25df48123373824940bbf10d0154272bdbef5e2513b91ec",
+            "bytes": 609
+          },
+          "summary": {
+            "line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 235 filtered out; finished in 0.01s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 5,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 235
+            },
+            "expected_counts": [
+              5,
+              0,
+              0,
+              0,
+              235
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.01
+          }
+        },
+        {
+          "name": "flow-library",
+          "command_record": "flow-library",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/flow-library.log",
+            "sha256": "4a7fc8b42d30d84a7f01dc3f23280a0538ec8c4466253feb6d76d6c89521c018",
+            "bytes": 15890
+          },
+          "summary": {
+            "line": "test result: ok. 105 passed; 0 failed; 26 ignored; 0 measured; 0 filtered out; finished in 13.04s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 105,
+              "failed": 0,
+              "ignored": 26,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              105,
+              0,
+              26,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 13.04
+          }
+        },
+        {
+          "name": "host-smoke",
+          "command_record": "host-smoke",
+          "exit_code": 0,
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/driver-logs/host-smoke.log",
+            "sha256": "855a8b0f4791582e64e7b86349aebb1267d6b986a7b1889c56dc572524a1ca54",
+            "bytes": 348
+          },
+          "summary": {
+            "line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 3,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              3,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 0.02
+          }
+        },
+        {
+          "name": "lifecycle",
+          "command_record": "lifecycle",
+          "exit_code": 0,
+          "private_evidence": [
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/lifecycle/postgres.log",
+              "sha256": "fad3b019cfa1da2668f24066637b8b9d11a4c5f6d135499e5a97ff718637c2ac",
+              "bytes": 2134
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/lifecycle/child.log",
+              "sha256": "06809f552207148715f37b51b9c9d063c11990ae08f364af83d7b15bb0e8d673",
+              "bytes": 394
+            }
+          ],
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/lifecycle/child.log",
+            "sha256": "06809f552207148715f37b51b9c9d063c11990ae08f364af83d7b15bb0e8d673",
+            "bytes": 394
+          },
+          "summary": {
+            "line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.24s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 2,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              2,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 34.24
+          }
+        },
+        {
+          "name": "startup",
+          "command_record": "startup",
+          "exit_code": 0,
+          "private_evidence": [
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/startup/postgres.log",
+              "sha256": "3db05bb7dca06617d612bfe121b08dc13c0db767e0edc5a7872038e5fddc46b5",
+              "bytes": 2336
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/startup/child.log",
+              "sha256": "f7282c53100657cb48feddaf173f935959802d8d5adf2c482a9766602ee49d9e",
+              "bytes": 293
+            }
+          ],
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/startup/child.log",
+            "sha256": "f7282c53100657cb48feddaf173f935959802d8d5adf2c482a9766602ee49d9e",
+            "bytes": 293
+          },
+          "summary": {
+            "line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.55s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 9.55
+          }
+        },
+        {
+          "name": "owners",
+          "command_record": "owners",
+          "exit_code": 0,
+          "private_evidence": [
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/owners/postgres.log",
+              "sha256": "4bb6ccc954e7b2bee3432f2fa3e5c3db31a580e08572a8fdffb549358d6aa5db",
+              "bytes": 3431
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/owners/child.log",
+              "sha256": "08c3ae70fb253ebc9c31dee058999de8c69daf43c848d56a847974e4cf635247",
+              "bytes": 376
+            }
+          ],
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/owners/child.log",
+            "sha256": "08c3ae70fb253ebc9c31dee058999de8c69daf43c848d56a847974e4cf635247",
+            "bytes": 376
+          },
+          "summary": {
+            "line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.02s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 3,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 0
+            },
+            "expected_counts": [
+              3,
+              0,
+              0,
+              0,
+              0
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 31.02
+          }
+        },
+        {
+          "name": "ingress",
+          "command_record": "ingress",
+          "exit_code": 0,
+          "private_evidence": [
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/ingress/postgres.log",
+              "sha256": "07579a43c7a57633fd23efdf8f45af04f77b8923233d2a6844f8e9fbfeb8b02f",
+              "bytes": 3178
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/evidence/ingress/child.log",
+              "sha256": "ba0795523ac51cb02773be72cc4d7cb695f9c8ce4554dc449d1b4b950610b0df",
+              "bytes": 1301
+            }
+          ],
+          "log": {
+            "path": "$QUALIFICATION_ROOT/evidence/ingress/child.log",
+            "sha256": "ba0795523ac51cb02773be72cc4d7cb695f9c8ce4554dc449d1b4b950610b0df",
+            "bytes": 1301
+          },
+          "summary": {
+            "line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 124 filtered out; finished in 11.01s",
+            "outcome": "ok",
+            "counts": {
+              "passed": 7,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered_out": 124
+            },
+            "expected_counts": [
+              7,
+              0,
+              0,
+              0,
+              124
+            ],
+            "exact_counts_match": true,
+            "seconds_reported": 11.01
+          }
+        }
+      ],
+      "host_digest_checks": [
+        {
+          "stage": "all-harnesses-captured-normal-host-last",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-client",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-client",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-receipt-consumer",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-receipt-consumer",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-runtime-binding",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-runtime-binding",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-managed-enrollment",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-managed-enrollment",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-host-library",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-host-library",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-receipt-signing",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-receipt-signing",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-command-http",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-command-http",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-receipt-http",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-receipt-http",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-flow-library",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-flow-library",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-host-smoke",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-host-smoke",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-lifecycle",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-lifecycle",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-startup",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-startup",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-owners",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-owners",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "before-ingress",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "after-ingress",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        },
+        {
+          "stage": "final",
+          "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+          "matches": true
+        }
+      ],
+      "fixture_cleanup": [
+        {
+          "gate": "lifecycle",
+          "result_available": true,
+          "postgres_version": "(PostgreSQL) 17.12",
+          "exit_code": 0,
+          "postgres_stopped": true,
+          "data_removed": true,
+          "temporary_removed": true,
+          "record": {
+            "path": "$QUALIFICATION_ROOT/evidence/lifecycle/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        },
+        {
+          "gate": "startup",
+          "result_available": true,
+          "postgres_version": "(PostgreSQL) 17.12",
+          "exit_code": 0,
+          "postgres_stopped": true,
+          "data_removed": true,
+          "temporary_removed": true,
+          "record": {
+            "path": "$QUALIFICATION_ROOT/evidence/startup/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        },
+        {
+          "gate": "owners",
+          "result_available": true,
+          "postgres_version": "(PostgreSQL) 17.12",
+          "exit_code": 0,
+          "postgres_stopped": true,
+          "data_removed": true,
+          "temporary_removed": true,
+          "record": {
+            "path": "$QUALIFICATION_ROOT/evidence/owners/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        },
+        {
+          "gate": "ingress",
+          "result_available": true,
+          "postgres_version": "(PostgreSQL) 17.12",
+          "exit_code": 0,
+          "postgres_stopped": true,
+          "data_removed": true,
+          "temporary_removed": true,
+          "record": {
+            "path": "$QUALIFICATION_ROOT/evidence/ingress/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        }
+      ],
+      "first_failure": null,
+      "cleanup_issues": [],
+      "local_only_evidence": {
+        "marty_python_tests": 231,
+        "protocol_python_tests": 561,
+        "protocol_python_subtests": 156,
+        "protocol_rust_tests": 10,
+        "protocol_typescript": "passed locally",
+        "executed_by_this_driver": false,
+        "reference": "docs/agent-trust-qualification-2026-11-21.json"
+      },
+      "limits": [
+        "AWS host identity, image/resource/security controls, network disconnection, original workloads and automatic-stop evidence are supplied separately by the operator.",
+        "This driver does not start, stop, inspect or alter installed workloads, containers, host packages, IAM, network rules or infrastructure.",
+        "Selected managed MachineCredential/KEY/exact-operation gates only; production activation remains off and receipt semantics remain EVIDENCE_ONLY.",
+        "Debug-profile normal serving binary; not a release deployment, public network deployment, installed-stack acceptance or Rifare business-operation qualification.",
+        "Restart qualifies committed-result recovery only; uncertain pending claims, production CA/key rotation and provider reconciliation remain separate gates.",
+        "Raw logs, stopped failure databases and provider files remain private; the result contains summaries and original-file hashes only.",
+        "The 231 Marty Python tests and Protocol reference suites are local-only evidence and are not rerun or counted as AWS gates here."
+      ],
+      "source_before": {
+        "head": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+        "tree": "e61790f051cd277a4c2bff7c43d059ad880d3a4e",
+        "clean": true,
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "toolchain": {
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+        "node": "v24.22.1",
+        "python": "3.11.2"
+      },
+      "providers": {
+        "initial_bootstrap": {
+          "provenance": {
+            "path": "$QUALIFICATION_ROOT/evidence/provider-bootstrap/provenance.json",
+            "sha256": "8fec4fb5cef43ae771ae434920e6956f3bd3c12e1330cb0aaee4468a6c5998fd",
+            "bytes": 4809
+          },
+          "verified_record": {
+            "state": "providers_ready",
+            "started_utc": "2026-11-22T06:22:25.263464+00:00",
+            "steps": [
+              {
+                "name": "rustc-version",
+                "exit_code": 0
+              },
+              {
+                "name": "cargo-version",
+                "exit_code": 0
+              },
+              {
+                "name": "node-version",
+                "exit_code": 0
+              },
+              {
+                "name": "openssl-development",
+                "exit_code": 0
+              },
+              {
+                "name": "debian-release-download",
+                "exit_code": 0
+              },
+              {
+                "name": "debian-release-signature",
+                "exit_code": 0
+              },
+              {
+                "name": "debian-package-index-download",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-download",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-15-download",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-15-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-15-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-15-download",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-15-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-15-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgres-libraries",
+                "exit_code": 0
+              },
+              {
+                "name": "postgres-version",
+                "exit_code": 0
+              },
+              {
+                "name": "initdb-libraries",
+                "exit_code": 0
+              },
+              {
+                "name": "initdb-version",
+                "exit_code": 0
+              },
+              {
+                "name": "psql-libraries",
+                "exit_code": 0
+              },
+              {
+                "name": "psql-version",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-bao_2.5.5_Linux_x86_64.tar.gz",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-bao_2.5.5_Linux_x86_64.tar.gz.gpgsig",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-checksums-linux.txt",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-checksums-linux.txt.gpgsig",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-public-key",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-public-keyring",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-verify-bao_2.5.5_Linux_x86_64.tar.gz",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-verify-checksums-linux.txt",
+                "exit_code": 0
+              },
+              {
+                "name": "bao-version",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-init",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-fetch",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-revision",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-checkout",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-build",
+                "exit_code": 0
+              },
+              {
+                "name": "redis-version",
+                "exit_code": 0
+              }
+            ],
+            "toolchain": {
+              "rustc": "rustc 1.95.0 (59807616e 2026-04-14)",
+              "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+              "node": "v24.22.1",
+              "cmake": "not required by selected aws-lc cc builder",
+              "protoc": "locked protoc-bin-vendored dependency"
+            },
+            "postgresql": {
+              "version": "15.20-0+deb12u1",
+              "metadata_date": "Sat, 21 Nov 2026 00:53:02 UTC",
+              "inrelease_sha256": "ddcdf4e1bf60ba944b7978e8ca426cc3bcd6d3cfa1a86963a647e1ba8f9b106e",
+              "packages_index_sha256": "8575ec1f224d635ce30646a2a1388bee267a7f37fae3f997687643c9ebb8fb43",
+              "packages": [
+                {
+                  "Package": "libpq5",
+                  "Version": "15.20-0+deb12u1",
+                  "Filename": "pool/updates/main/p/postgresql-15/libpq5_15.20-0+deb12u1_amd64.deb",
+                  "SHA256": "ac8a72cc33453f75ac605b4f6b8f9febae303b9d9a61255a042a87a7f69ac5c7"
+                },
+                {
+                  "Package": "postgresql-15",
+                  "Version": "15.20-0+deb12u1",
+                  "Filename": "pool/updates/main/p/postgresql-15/postgresql-15_15.20-0+deb12u1_amd64.deb",
+                  "SHA256": "8566850f295c2cb5034ff5dd5b40caf97eea81b75a841c8d1f691c05ab8815db"
+                },
+                {
+                  "Package": "postgresql-client-15",
+                  "Version": "15.20-0+deb12u1",
+                  "Filename": "pool/updates/main/p/postgresql-15/postgresql-client-15_15.20-0+deb12u1_amd64.deb",
+                  "SHA256": "779332f35a5adc7c97376a7bb6dd8a6a6b48f594953f01eecfaead2eab09dab1"
+                }
+              ]
+            },
+            "openbao": {
+              "archive_sha256": "2c5577707e97fc95c2086950f39880ead5e45b356c94388e5cb606f5a5c2b697",
+              "primary_fingerprint": "66D15FDD87287219C8E15478D200CD702853E6D0",
+              "archive_and_checksum_signatures": "valid",
+              "binary_sha256": "4e7e04cc5d13043b9d67850d875242a42fae5c5f01aaff226a6ebba77ccc27bb"
+            },
+            "redis": {
+              "repository": "https://github.com/redis/redis.git",
+              "tag": "7.4.12",
+              "commit": "f9bc2f89232fa3fc6147ee732309d2616117b85e",
+              "binary_sha256": "6c6d11d8e7c480975ef2620ac14e0e270dabf68995587d70308c2937bca889cc"
+            },
+            "free_bytes_after": 12921622528,
+            "finished_utc": "2026-11-22T06:23:13.096572+00:00"
+          },
+          "postgresql_from_this_initial_bootstrap_used": false
+        },
+        "selected_postgresql": {
+          "provenance": {
+            "path": "$QUALIFICATION_ROOT/evidence/postgresql17-bootstrap/provenance.json",
+            "sha256": "e6f19e5548a6b66b2f475affc8ec230afe7c8de4cfd50ae35b48e58389a16b29",
+            "bytes": 4252
+          },
+          "verified_record": {
+            "state": "postgresql_ready",
+            "started_utc": "2026-11-22T06:36:52.948819+00:00",
+            "steps": [
+              {
+                "name": "pgdg-key",
+                "exit_code": 0
+              },
+              {
+                "name": "pgdg-public-keyring",
+                "exit_code": 0
+              },
+              {
+                "name": "pgdg-inrelease",
+                "exit_code": 0
+              },
+              {
+                "name": "pgdg-inrelease-signature",
+                "exit_code": 0
+              },
+              {
+                "name": "pgdg-package-index",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-download",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "libpq5-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-17-download",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-17-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-17-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-17-download",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-17-identity",
+                "exit_code": 0
+              },
+              {
+                "name": "postgresql-client-17-extract",
+                "exit_code": 0
+              },
+              {
+                "name": "postgres-ldd",
+                "exit_code": 0
+              },
+              {
+                "name": "postgres-version",
+                "exit_code": 0
+              },
+              {
+                "name": "initdb-ldd",
+                "exit_code": 0
+              },
+              {
+                "name": "initdb-version",
+                "exit_code": 0
+              },
+              {
+                "name": "psql-ldd",
+                "exit_code": 0
+              },
+              {
+                "name": "psql-version",
+                "exit_code": 0
+              }
+            ],
+            "postgresql": {
+              "version": "17.12-1.pgdg12+1",
+              "libpq_version": "19.0-2.pgdg12+1",
+              "archive_url": "https://apt.postgresql.org/pub/repos/apt/",
+              "suite": "bookworm-pgdg",
+              "signing_primary_fingerprint": "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8",
+              "inrelease_sha256": "73be00a920f366559a825fa9ad685cb13290065a05ce20c1cfc51fd12f5aa816",
+              "packages_index_sha256": "91c1de76accf0eecdead3273237b4ee8b3f8bd57da19ec74bd2f75016d5ebd5d",
+              "metadata_date": "Fri, 20 Nov 2026 19:53:24 UTC",
+              "signed_row_hash_format": "raw stanza bytes excluding blank separator",
+              "packages": [
+                {
+                  "Package": "libpq5",
+                  "Version": "19.0-2.pgdg12+1",
+                  "Filename": "pool/main/p/postgresql-19/libpq5_19.0-2.pgdg12+1_amd64.deb",
+                  "SHA256": "2cdde71d22599be7a0a37821018b61fd38d4782a5109a0aa5c567087ff1971cf",
+                  "signed_row_sha256": "c548bf3c09c4b3bb67f358cff41d7b00b776bcb5cc63bc005f16bf96db385b96"
+                },
+                {
+                  "Package": "postgresql-17",
+                  "Version": "17.12-1.pgdg12+1",
+                  "Filename": "pool/main/p/postgresql-17/postgresql-17_17.12-1.pgdg12+1_amd64.deb",
+                  "SHA256": "40b74e0b676bab321b3d41acf7d5bed9a34ade59ac640b3e24c2fa87905e2ffd",
+                  "signed_row_sha256": "aebd5bf785651326e2db2f40e9a49327d2c201c99f10bd628ede62abaaa9b616"
+                },
+                {
+                  "Package": "postgresql-client-17",
+                  "Version": "17.12-1.pgdg12+1",
+                  "Filename": "pool/main/p/postgresql-17/postgresql-client-17_17.12-1.pgdg12+1_amd64.deb",
+                  "SHA256": "6c572106b1caedd8e8357ac932f52860f8f6dcec186579a56431ea964437ae32",
+                  "signed_row_sha256": "a0e6c964e22b824f9eb309c29d63b42eba0ab8f4a28eaed0b905561a58cca6b0"
+                }
+              ]
+            },
+            "binaries": {
+              "postgres": {
+                "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/postgres",
+                "sha256": "5a497342435d67f84119f5de3ea7d5efe97a07ebca766505abebe6caa008be36",
+                "version": "postgres (PostgreSQL) 17.12 (Debian 17.12-1.pgdg12+1)"
+              },
+              "initdb": {
+                "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/initdb",
+                "sha256": "2780202faeca9f951757646adac62aec4f7ff1f8714adc816e10e7c10907ff33",
+                "version": "initdb (PostgreSQL) 17.12 (Debian 17.12-1.pgdg12+1)"
+              },
+              "psql": {
+                "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/psql",
+                "sha256": "0ee77741106e1e6525648adaeb565bca4e7708ac1ff0d4dd2af80f3dc2d8b85f",
+                "version": "psql (PostgreSQL) 17.12 (Debian 17.12-1.pgdg12+1)"
+              },
+              "libpq": {
+                "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/x86_64-linux-gnu/libpq.so.5.19",
+                "sha256": "12d63e40f6e1637ef3567125043e7b026c8a2be1a909ca529f32f59cc9eaa699"
+              }
+            },
+            "finished_utc": "2026-11-22T06:36:56.494806+00:00"
+          },
+          "version": "(PostgreSQL) 17.12",
+          "binaries": [
+            {
+              "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/postgres",
+              "sha256": "5a497342435d67f84119f5de3ea7d5efe97a07ebca766505abebe6caa008be36",
+              "bytes": 10095104
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/initdb",
+              "sha256": "2780202faeca9f951757646adac62aec4f7ff1f8714adc816e10e7c10907ff33",
+              "bytes": 192424
+            },
+            {
+              "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/postgresql/17/bin/psql",
+              "sha256": "0ee77741106e1e6525648adaeb565bca4e7708ac1ff0d4dd2af80f3dc2d8b85f",
+              "bytes": 814624
+            }
+          ],
+          "libpq": {
+            "path": "$QUALIFICATION_ROOT/tools/postgresql17/usr/lib/x86_64-linux-gnu/libpq.so.5.19",
+            "sha256": "12d63e40f6e1637ef3567125043e7b026c8a2be1a909ca529f32f59cc9eaa699",
+            "bytes": 391584
+          }
+        },
+        "openbao": {
+          "path": "$QUALIFICATION_ROOT/tools/providers/bao",
+          "sha256": "4e7e04cc5d13043b9d67850d875242a42fae5c5f01aaff226a6ebba77ccc27bb",
+          "bytes": 187721400
+        },
+        "redis": {
+          "path": "$QUALIFICATION_ROOT/tools/providers/redis-7.4.12/src/redis-server",
+          "sha256": "6c6d11d8e7c480975ef2620ac14e0e270dabf68995587d70308c2937bca889cc",
+          "bytes": 8112520
+        },
+        "node": {
+          "path": "/opt/qual-node/bin/node",
+          "sha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb",
+          "bytes": 126879696
+        }
+      },
+      "network_interfaces_observed": [
+        "lo"
+      ],
+      "production_host": {
+        "path": "$QUALIFICATION_ROOT/target/debug/marty-delegated-use",
+        "sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+        "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+        "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+        "target_name": "marty-delegated-use",
+        "target_kind": "bin",
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": []
+      },
+      "test_harnesses": {
+        "marty-delegated-use:live_lifecycle": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/live_lifecycle-77c9f379ecb96063",
+          "sha256": "e630536b21ab06832ef98f92d9fed3c8f8e14cff489b3125bb9dc908be415e95",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+          "target_name": "live_lifecycle",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-use:live_runtime": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/live_runtime-ffaff2e811b6aaeb",
+          "sha256": "22c524ceebbbf5281d0d5c1d8b0803ae810991cb8a885fe693c5a9edddf75dc3",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+          "target_name": "live_runtime",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-use:runtime_postgres": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/runtime_postgres-c2c16b2a41ca9c3f",
+          "sha256": "986dd8be20838b65810d7d50b3105624ba558b1eb3a7d8af2503b62b86476582",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+          "target_name": "runtime_postgres",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-use:host_smoke": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/host_smoke-b56666cbb9f8a434",
+          "sha256": "487be87e72fae185fcfa239c2d8288b549b30eca4f0aee4018f14e3f0cadda78",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+          "target_name": "host_smoke",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-use:marty_delegated_use": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_use-22fe0bcc12f43e6b",
+          "sha256": "5b21ed1e16904407cd680266098cdd362122e813f5bfd940e2e8c6b5353da34d",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-use#marty-delegated-use@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-use/Cargo.toml",
+          "target_name": "marty_delegated_use",
+          "target_kind": "lib",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-authority:marty_delegated_authority": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/marty_delegated_authority-86a77d0d81ee2bd8",
+          "sha256": "cfa9bfb12124effb9cd9a76d7554fbe148619f528eea1d00eb0c7fc37fb91a64",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/delegated-authority#marty-delegated-authority@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/delegated-authority/Cargo.toml",
+          "target_name": "marty_delegated_authority",
+          "target_kind": "lib",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-principal-runtime-binding:marty_principal_runtime_binding": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/marty_principal_runtime_binding-87956a082f9be203",
+          "sha256": "f13991e92cd2633a3fbffc0ac89b83062babc33965d1c836f4c0472f9d3e7bc6",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/crates/principal-runtime-binding#marty-principal-runtime-binding@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/crates/principal-runtime-binding/Cargo.toml",
+          "target_name": "marty_principal_runtime_binding",
+          "target_kind": "lib",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-principal-runtime-binding:managed_enrollment": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/managed_enrollment-8d440b3b2979b3a2",
+          "sha256": "94e8036ce62e129ea52985da5dccebd0002b99c29cef81828c88fcabce911828",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/crates/principal-runtime-binding#marty-principal-runtime-binding@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/crates/principal-runtime-binding/Cargo.toml",
+          "target_name": "managed_enrollment",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-use-client:client": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/client-2fabdf9f349250ca",
+          "sha256": "2a430539e9f3fcc891fad219e244712e7eb326a0c05f9ed6d710cc237ddaa23b",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/crates/delegated-use-client#marty-delegated-use-client@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/crates/delegated-use-client/Cargo.toml",
+          "target_name": "client",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-delegated-receipt-consumer:consumer": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/consumer-ad5b8f9b56dd7f90",
+          "sha256": "0a4fe04a7cc40a1d83ea6fc1b087beb05c60e5950dfbd4bad9e70c1954ebf329",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/crates/delegated-receipt-consumer#marty-delegated-receipt-consumer@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/crates/delegated-receipt-consumer/Cargo.toml",
+          "target_name": "consumer",
+          "target_kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty-flow:marty_flow": {
+          "path": "$QUALIFICATION_ROOT/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+          "sha256": "a2f960bdf76c1e43fa03ba4631e6e90fcf07460bc46972328b9f2742efd03647",
+          "package_id": "path+file://$QUALIFICATION_ROOT/source/rust/services/flow#marty-flow@0.1.0",
+          "manifest_path": "$QUALIFICATION_ROOT/source/rust/services/flow/Cargo.toml",
+          "target_name": "marty_flow",
+          "target_kind": "lib",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        }
+      },
+      "artifact_manifests": [
+        {
+          "path": "$QUALIFICATION_ROOT/evidence/cargo-metadata.json",
+          "sha256": "6637da68f85353c4d2fc7e38ab898acf79f888e42a3df262a4157a8e48a67c63",
+          "bytes": 4557124
+        },
+        {
+          "path": "$QUALIFICATION_ROOT/evidence/test-artifacts.jsonl",
+          "sha256": "d3505f802e2172a1c39de434f46c9622b09362fc1f8491a9b116613478efb9ab",
+          "bytes": 1452692
+        },
+        {
+          "path": "$QUALIFICATION_ROOT/evidence/flow-test-artifacts.jsonl",
+          "sha256": "55eda09a76536cb489bb7b929a20f0ffc7358cecf7ee4b31a44c5018608f418b",
+          "bytes": 575049
+        },
+        {
+          "path": "$QUALIFICATION_ROOT/evidence/production-build.jsonl",
+          "sha256": "449be8714b075166998bb2b2fffefdf717ee07ec949430d6f3246e247d28d497",
+          "bytes": 612883
+        }
+      ],
+      "source_after-build": {
+        "head": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+        "tree": "e61790f051cd277a4c2bff7c43d059ad880d3a4e",
+        "clean": true,
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "source_after-tests": {
+        "head": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+        "tree": "e61790f051cd277a4c2bff7c43d059ad880d3a4e",
+        "clean": true,
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "totals": {
+        "aws_rust_tests_passed": 210,
+        "focused_contract_tests": 89,
+        "flow_default_passed": 105,
+        "flow_default_ignored": 26,
+        "flow_ignored_ingress_executed": 7,
+        "flow_unselected_fixture_cases": 19,
+        "host_smoke": 3,
+        "actual_lifecycle": 2,
+        "startup": 1,
+        "owner_regressions": 3,
+        "aws_python_or_protocol_reference_tests": 0
+      },
+      "completed_at_utc": "2026-11-22T07:07:17.446847+00:00",
+      "seconds": 1761.534,
+      "exit_code": 0,
+      "cleanup": {
+        "all_started_commands_stopped": true,
+        "fixture_results": [
+          {
+            "gate": "lifecycle",
+            "result_available": true,
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true,
+            "record": {
+              "path": "$QUALIFICATION_ROOT/evidence/lifecycle/result.json",
+              "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+              "bytes": 146
+            }
+          },
+          {
+            "gate": "startup",
+            "result_available": true,
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true,
+            "record": {
+              "path": "$QUALIFICATION_ROOT/evidence/startup/result.json",
+              "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+              "bytes": 146
+            }
+          },
+          {
+            "gate": "owners",
+            "result_available": true,
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true,
+            "record": {
+              "path": "$QUALIFICATION_ROOT/evidence/owners/result.json",
+              "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+              "bytes": 146
+            }
+          },
+          {
+            "gate": "ingress",
+            "result_available": true,
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true,
+            "record": {
+              "path": "$QUALIFICATION_ROOT/evidence/ingress/result.json",
+              "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+              "bytes": 146
+            }
+          }
+        ],
+        "container_and_host_cleanup": "Operator must remove only owned containers and verify workloads/automatic-stop separately.",
+        "driver_temporary_removed": true
+      }
+    }
+  },
+  "host_controls_after_owned_container_cleanup": {
+    "original_export": {
+      "file_name": "aws-host-controls.json",
+      "bytes": 5453,
+      "sha256": "3afcd750bfd04f500183688c2026dbfeae88aec6ba0409639477165a4488b633"
+    },
+    "data": {
+      "format_version": 1,
+      "status": "HOST_CONTROLS_VERIFIED",
+      "observed_at_utc": "2026-11-22T07:08:56.792266+00:00",
+      "file_hashes": {
+        "workloads_before": {
+          "sha256": "353ee4d4e19a9f3a93654c9ff7db971748b443b25f149cb4e7edd86ba4abd2a6",
+          "bytes": 8519
+        },
+        "workloads_after": {
+          "sha256": "8b108982b92fa9f216cca57cc587422174ed942d9eea3461c1990d5c58a04944",
+          "bytes": 12621
+        },
+        "container_stopped_inspection": {
+          "sha256": "68425dbd27b38a2f6f74c92ab7f873abac07594471f41836df838e5d8d139ce4",
+          "bytes": 8918
+        },
+        "owned_container_id_record": {
+          "sha256": "1657725b601e0cf9431cb164bb0976951ce2835761e41ccb256e70f402b3e0c8",
+          "bytes": 64
+        },
+        "network_disconnect_record": {
+          "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+          "bytes": 3
+        },
+        "effective_resource_limits": {
+          "sha256": "e3c361831f4d51f70c160ddbea6fe7dd023cce37bc327f72bcb1ba5e7132c456",
+          "bytes": 25
+        },
+        "ownership_restore": {
+          "sha256": "3534091d4216383e93b325fbb15344cdc2f91822c41c9b302a06b6727b69de4f",
+          "bytes": 28
+        },
+        "memory_events_final": {
+          "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+          "bytes": 70
+        },
+        "cargo_lock": {
+          "sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+          "bytes": 229326
+        },
+        "driver_result": {
+          "sha256": "0f0d34ef57eaa6550f5c75a8dbc0ed611265c65e3b594f3509f611c409ee9764",
+          "bytes": 87289
+        },
+        "source_import_proof": {
+          "sha256": "ea08124366f18d37acf105e412b2db9f7aa5dacf929ad22159042ca51671a385",
+          "bytes": 3562
+        },
+        "autostop_schedule": {
+          "sha256": "3240d78b580ca919b1b7834b27c8b12402b9730724688656111453d0b36ee6d7",
+          "bytes": 109
+        }
+      },
+      "checks": {
+        "original_container_identities_preserved": true,
+        "container_controls_verified": true,
+        "exact_source_clean": true,
+        "driver_passed": true,
+        "expected_driver_test_scope": true,
+        "driver_cleanup_complete": true,
+        "driver_has_no_failure_or_cleanup_issues": true,
+        "driver_source_matches": true,
+        "source_import_verified": true,
+        "automatic_stop_preserved": true
+      },
+      "installed_stack_health_qualified": false,
+      "final_ec2_stop": {
+        "observed": false,
+        "status": "PENDING_ROOT_OBSERVATION"
+      },
+      "workloads": {
+        "baseline_count": 78,
+        "current_count": 78,
+        "baseline_states": {
+          "exited": 52,
+          "running": 8,
+          "restarting": 18
+        },
+        "current_states": {
+          "exited": 52,
+          "running": 8,
+          "restarting": 18
+        },
+        "original_current_states": {
+          "exited": 52,
+          "running": 8,
+          "restarting": 18
+        },
+        "original_id_name_pairs_unchanged": 78,
+        "missing_original_count": 0,
+        "ambiguous_prefix_count": 0,
+        "renamed_original_count": 0,
+        "original_state_unchanged_count": 78,
+        "original_state_transitions": {},
+        "unexpected_new_count": 0,
+        "scope": "Identity/name preservation and state observations only. Existing exited/restarting states are not qualification failures or a stack health assessment."
+      },
+      "container": {
+        "image_id": "sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1",
+        "user": "65534:65534",
+        "controls": {
+          "expected_image": true,
+          "nonroot_user": true,
+          "root_filesystem_read_only": true,
+          "only_expected_bind_mounts": true,
+          "only_expected_private_tmpfs": true,
+          "no_published_ports": true,
+          "network_disconnected": true,
+          "capabilities_dropped": true,
+          "no_new_privileges": true,
+          "not_privileged": true,
+          "expected_resource_configuration": true,
+          "effective_limits_verified_by_launcher": true,
+          "no_oom_observed": true,
+          "container_stopped": true,
+          "recorded_container_absent": true,
+          "workspace_restored": true,
+          "owned_labels_absent": true,
+          "rootless_docker": true
+        },
+        "mount_roles": [
+          {
+            "role": "owned_qualification_workspace",
+            "present": true,
+            "read_write": true
+          },
+          {
+            "role": "verified_node_toolchain",
+            "present": true,
+            "read_write": false
+          }
+        ],
+        "tmpfs_configuration": {
+          "/tmp": "rw,nosuid,nodev,size=512m,mode=1777"
+        },
+        "memory_bytes": 5368709120,
+        "memory_plus_swap_bytes": 5368709120,
+        "cpu_limit": 1.5,
+        "pids_limit": 512,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        },
+        "stopped_container_exit_code": 137,
+        "owned_label_counts": {
+          "qualification": 0,
+          "helpers": 0
+        }
+      },
+      "source": {
+        "head": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+        "tree": "e61790f051cd277a4c2bff7c43d059ad880d3a4e",
+        "clean": true,
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "driver": {
+        "passed": true,
+        "exit_code": 0,
+        "test_gate_count": 14,
+        "rust_tests_passed": 210,
+        "all_started_commands_stopped": true,
+        "driver_temporary_removed": true
+      },
+      "source_import": {
+        "status": "EXACT_GIT_SOURCE_IMPORT_VERIFIED"
+      },
+      "automatic_stop": {
+        "active": true,
+        "enabled": true,
+        "schedule_recorded_privately": true,
+        "changed_by_collector": false
+      },
+      "completed_at_utc": "2026-11-22T07:09:01.792486+00:00",
+      "exit_code": 0
+    }
+  },
+  "existing_instance_stop_observation": {
+    "original_export": {
+      "file_name": "aws-ec2-stop.json",
+      "bytes": 792,
+      "sha256": "1f8738e3ec2dafcdbc55f499be3ca04dd2c90d6272fbab7923826ef17b5440ca"
+    },
+    "data": {
+      "status": "EXISTING_INSTANCE_STOP_VERIFIED",
+      "operation": "StopInstances",
+      "state": "stopped",
+      "instance_type": "m7i-flex.large",
+      "region": "us-east-2",
+      "active_target_sessions_before_stop": 0,
+      "observed_at_utc": "2026-11-22T07:16:45.986305+00:00",
+      "stop_request_recorded_at_utc": "2026-11-22T07:12:39.832757+00:00",
+      "resource_identity_matched": true,
+      "terminated": false,
+      "private_observation_hashes": {
+        "before_stop": "e5f16d72c46564633df524c206a6271f36375f6099e3a0ba6da36f4bc1c6d0d6",
+        "active_sessions_check": "de5480d1026d35dbff56a620b490e9982167c5a7be5af6f538acd0b60da601f0",
+        "stop_request": "3151d9f60a78ce0493a0751746e3515337be8fe5352c2c36183452704886a343",
+        "after_stop": "2ea8afb2ef583b6049ab152d4c22221558d008efddde9acb1201efd76f96d15a"
+      }
+    }
+  },
+  "local_preparation_reference": {
+    "repository_path": "docs/agent-trust-qualification-2026-11-21.json",
+    "record_at_qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+    "sha256_before_aws_cross_reference": "4084b18a8c99154d624f95da4acfc7884153f9c15807eca203f48d35ca4d899f",
+    "local_rust_tests": 210,
+    "local_marty_python_tests": 231,
+    "local_ci_and_workflow_reconciliation_tests": 381,
+    "local_postgresql_wrapper_safety_scenarios": 8,
+    "aws_rerun_of_python_or_protocol_reference_suites": false
+  },
+  "interpretation_notes": [
+    "All 14 AWS gates passed with exactly 210 distinct Rust tests using 11 captured harnesses. The two unchanged feature guards and three normal-library checks passed before the normal serving binary was built last.",
+    "All 30 normal-host SHA-256 comparisons matched. The normal development-profile AWS binary is distinct from the separately qualified local binary; cross-environment binary reproducibility is not claimed.",
+    "PostgreSQL 17.12 server/client used independently verified libpq 19.0. The completed initial PostgreSQL 15 preparation was retained but was not used for these PostgreSQL gates.",
+    "The default Flow suite reported 26 existing ignored fixtures; seven subsequently ran and passed in the selected ingress gate. Nineteen remain outside this scope.",
+    "The qualification driver and all 41 commands exited zero, with all owned descendants stopped. The idle container holder recorded exit 137 during the separate bounded Docker stop/removal; zero OOM counters were observed. Container PID1 teardown is not presented as an application-test failure or a graceful zero-exit shutdown.",
+    "All 78 original container identities, names and observed states were preserved: 52 exited, 8 running and 18 already restarting. These observations do not establish installed-stack health.",
+    "The immutable host-control export precedes the EC2 stop and correctly leaves that observation pending. The separate stopped-state record above completes the operator cleanup evidence after two checks found no other active target SSM session.",
+    "Accepted main advanced during AWS execution. The final integrated Rust subtree is 782f82d4d8e5f32e0ec061cf9061b809588fe3a5, distinct from the AWS-tested ae3a43f10ba15b9622efef9644c717013734c23d. Nine focused local PostgreSQL tests and a normal serving build validate that reviewed integration; they are not added to the AWS count."
+  ],
+  "limits": [
+    "AWS host identity, image/resource/security controls, network disconnection, original workloads and automatic-stop evidence are supplied separately by the operator.",
+    "This driver does not start, stop, inspect or alter installed workloads, containers, host packages, IAM, network rules or infrastructure.",
+    "Selected managed MachineCredential/KEY/exact-operation gates only; production activation remains off and receipt semantics remain EVIDENCE_ONLY.",
+    "Debug-profile normal serving binary; not a release deployment, public network deployment, installed-stack acceptance or Rifare business-operation qualification.",
+    "Restart qualifies committed-result recovery only; uncertain pending claims, production CA/key rotation and provider reconciliation remain separate gates.",
+    "Raw logs, stopped failure databases and provider files remain private; the result contains summaries and original-file hashes only.",
+    "The 231 Marty Python tests and Protocol reference suites are local-only evidence and are not rerun or counted as AWS gates here.",
+    "Current branch protection, required GitHub Actions checks, human review requirements and the normal squash merge queue remain independent gates. No GitHub status or approval is created by this evidence.",
+    "The screenshot is private user-facing console evidence and is not included in this public repository report. Raw provider logs, database state, account/resource identifiers, balances and access configuration are not published."
+  ],
+  "updated_at_utc": "2026-11-22T07:38:35.106914+00:00",
+  "post_aws_main_reconciliation": {
+    "status": "ACCEPTED_MAIN_INTEGRATED_AND_SCOPED_LOCAL_VERIFICATION_PASSED",
+    "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
+    "accepted_main_parent": "b7ceedc260924a5b88071f5fc6c55839691486e2",
+    "accepted_main_pull_request": "https://github.com/ElevenID/marty-ui/pull/2033",
+    "local_verified_commit": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+    "local_verified_tree": "c8693b88d194aa7ebfd6ec265966010077d7480f",
+    "local_verified_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+    "source_identity_note": "The local verification commit/tree includes the prior AWS documentation checkpoint. The final publication may have different commit and whole-tree identities because this reconciliation record is appended afterward; its Rust subtree and Cargo.lock must remain identical to the recorded local verification.",
+    "changed_main_paths": [
+      ".github/workflows/kubernetes-chart.yml",
+      "deploy/helm/marty/README.md",
+      "rust/crates/deployment-catalog/src/installer_generation_host.rs",
+      "rust/crates/deployment-catalog/src/installer_helper_output.rs",
+      "rust/crates/deployment-catalog/src/installer_renewal.rs",
+      "rust/services/flow/src/postgres.rs",
+      "scripts/sync_helm_keycloak_scripts.py"
+    ],
+    "review_findings": [
+      "All seventeen Flow artifact bind expressions, their ordering and conversions are identical; both INSERT statements are identical after Rust line-continuation normalization, and both UPSERT constants are unchanged.",
+      "Validation, transaction/pool selection, conflict rollback, affected-row checks and result decoding remain unchanged. All PR1994 delegated admission, context, SQL, database-clock and receipt guards are retained in the merged file.",
+      "The extraction writes flow_instance_artifacts; the selected delegated start supplies artifact=None. The second exact PostgreSQL test exercises save_artifact_record, save_started_instance with an artifact, and replace_active_artifacts.",
+      "The installer helper extraction is cfg(test)-only and preserves its existing two tests and eight mutation cases. The chart change adds generation/parity checking for existing bundled scripts without changing their contents.",
+      "No Cargo manifest, lockfile, dependency pin, feature guard, qualification wrapper or delegated lifecycle/owner/ingress test changed in the accepted-main delta."
+    ],
+    "verification_scope": "Local ordinary-user locked/offline Flow integration/library harness builds, unchanged MMF/Core feature guards, then the normal delegated-use serving binary built last; two exact real-PostgreSQL artifact contracts and seven selected authenticated-ingress cases executed directly with owned PostgreSQL 17.12 databases. This is separate from the 210-test AWS result.",
+    "aws_restarted": false,
+    "required_actions_and_merge_queue": "Independent final-head GitHub Actions, review requirements and the normal protected squash merge queue remain authoritative.",
+    "original_export": {
+      "file_name": "post-main-5b7-evidence/summary.json",
+      "bytes": 21673,
+      "sha256": "c494bad36dcd7dc8dd2f5db121ba207308dbe26212f63fe0b42c813647c25ea8"
+    },
+    "data": {
+      "status": "LOCAL_POST_MAIN_SCOPED_VERIFICATION_PASSED",
+      "started_at_utc": "2026-11-22T07:33:12.870312+00:00",
+      "scope": "Local verification after normal main integration; AWS attestation remains at 3c8a9386da87a18d8b3c1855614b7e7c18841c09.",
+      "execution": {
+        "uid": 1000,
+        "gid": 1000,
+        "rust_toolchain": "1.95.0",
+        "cargo_jobs": 2,
+        "incremental": false,
+        "offline": true,
+        "postgres_bin": "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+        "driver_sha256": "db059be081e59f1b470bde0f12633b174449bd901adc355b297deca836129740"
+      },
+      "commands": [
+        {
+          "name": "rustc-version",
+          "command": [
+            "rustc",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T07:33:12.898691+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.002,
+          "completed_at_utc": "2026-11-22T07:33:13.900886+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/rustc-version.log",
+            "sha256": "f4d034f5660bb49f22bfcba3f3445be67e25b704c193ff421b53863b4faee148",
+            "bytes": 36
+          }
+        },
+        {
+          "name": "cargo-version",
+          "command": [
+            "cargo",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T07:33:13.901562+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.004,
+          "completed_at_utc": "2026-11-22T07:33:14.906249+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/cargo-version.log",
+            "sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+            "bytes": 36
+          }
+        },
+        {
+          "name": "postgres-version",
+          "command": [
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/postgres",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T07:33:14.908022+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.002,
+          "completed_at_utc": "2026-11-22T07:33:15.910757+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/postgres-version.log",
+            "sha256": "db870bfa889d035767a512bbbc6a02039855c90a77fbceba48a43515636731a6",
+            "bytes": 53
+          }
+        },
+        {
+          "name": "initdb-version",
+          "command": [
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/initdb",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T07:33:15.911307+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.002,
+          "completed_at_utc": "2026-11-22T07:33:16.913785+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/initdb-version.log",
+            "sha256": "39b798f593a77c5013146eaaa59d7c6a40fc3256a975048541aa2c64d4c3d094",
+            "bytes": 51
+          }
+        },
+        {
+          "name": "psql-version",
+          "command": [
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin/psql",
+            "--version"
+          ],
+          "started_at_utc": "2026-11-22T07:33:16.914420+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.002,
+          "completed_at_utc": "2026-11-22T07:33:17.916579+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/psql-version.log",
+            "sha256": "1c3bbe438cca0212071195fc6a22891828278cf6eb468a3e3e96341eb4dfb8f7",
+            "bytes": 49
+          }
+        },
+        {
+          "name": "metadata",
+          "command": [
+            "cargo",
+            "metadata",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "--format-version",
+            "1"
+          ],
+          "started_at_utc": "2026-11-22T07:33:17.917266+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 2.003,
+          "completed_at_utc": "2026-11-22T07:33:19.920569+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/cargo-metadata.json",
+            "sha256": "ef758a5fe67cd35bed1b4b4ea7d7cb7dda3125526069a03c72fd692f103f0995",
+            "bytes": 4697444
+          },
+          "stderr": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/metadata.stderr.log",
+            "sha256": "931d1583010d9abde8e537b09d4cc7de4defdaf99ce46e0884ff381c7011cbe9",
+            "bytes": 1962
+          }
+        },
+        {
+          "name": "flow-harness-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-flow",
+            "--lib",
+            "--test",
+            "postgres_integration",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T07:33:19.985536+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 37.129,
+          "completed_at_utc": "2026-11-22T07:33:57.115343+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/flow-artifacts.jsonl",
+            "sha256": "a73f294fd8f7106164a81c1b0cbc4f8aef6e10b9f73d3912c5e6843ecd19c629",
+            "bytes": 647466
+          },
+          "stderr": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/flow-harness-build.stderr.log",
+            "sha256": "1889ee2f91ae9ac60e990fed610a9230b5cba89d93a2f503a459a0a0e8fb14bc",
+            "bytes": 2140
+          }
+        },
+        {
+          "name": "check-mmf-security-features",
+          "command": [
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "scripts/ci/check_mmf_security_features.py"
+          ],
+          "started_at_utc": "2026-11-22T07:33:57.116902+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.047,
+          "completed_at_utc": "2026-11-22T07:33:58.164685+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/check-mmf-security-features.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "check-marty-core-kms-boundary",
+          "command": [
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "scripts/ci/check_marty_core_kms_boundary.py"
+          ],
+          "started_at_utc": "2026-11-22T07:33:58.195525+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 1.009,
+          "completed_at_utc": "2026-11-22T07:33:59.215362+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/check-marty-core-kms-boundary.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          }
+        },
+        {
+          "name": "normal-host-last",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "marty-delegated-use",
+            "--bin",
+            "marty-delegated-use",
+            "--message-format=json"
+          ],
+          "started_at_utc": "2026-11-22T07:33:59.216119+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 27.119,
+          "completed_at_utc": "2026-11-22T07:34:26.335971+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/production-artifacts.jsonl",
+            "sha256": "d4b8979132da4604e972445fb150a5e12d329441a568b9dfd80b5457f1e69a48",
+            "bytes": 687765
+          },
+          "stderr": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/normal-host-last.stderr.log",
+            "sha256": "6819c929ac31ca450730cf909c2e9030365918820fdbfcf4b3522fc416d91295",
+            "bytes": 2261
+          }
+        },
+        {
+          "name": "physical-start",
+          "command": [
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/physical-start",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "-c",
+            "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ.get('FLOW_POSTGRES_TEST_URL','')); assert u.scheme=='postgresql' and u.hostname=='127.0.0.1' and u.port and u.path=='/marty_atomic_test', 'missing or unexpected owned database'; print('OWNED_LOOPBACK_DATABASE_CONFIRMED:marty_atomic_test', flush=True); os.execv(sys.argv[1],sys.argv[1:])",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/postgres_integration-174420d504a82b62",
+            "physical_start_intent_claim_replay_and_atomic_finalization",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:34:27.639735+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 2.012,
+          "completed_at_utc": "2026-11-22T07:34:29.652724+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/physical-start.log",
+            "sha256": "c9852d752dd173b5a20ed9f0f62228e8a98abf3413af3ca586ca0928c80858db",
+            "bytes": 179
+          }
+        },
+        {
+          "name": "artifact-contract",
+          "command": [
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/artifact-contract",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "-c",
+            "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ.get('FLOW_POSTGRES_TEST_URL','')); assert u.scheme=='postgresql' and u.hostname=='127.0.0.1' and u.port and u.path=='/marty_atomic_test', 'missing or unexpected owned database'; print('OWNED_LOOPBACK_DATABASE_CONFIRMED:marty_atomic_test', flush=True); os.execv(sys.argv[1],sys.argv[1:])",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/postgres_integration-174420d504a82b62",
+            "postgres_finalization_and_callback_leases_are_atomic",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:34:31.106699+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 20.24,
+          "completed_at_utc": "2026-11-22T07:34:51.356358+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/artifact-contract.log",
+            "sha256": "62663574d1b3a475640c0d7591d033f894bebeb56322e72ab9c800d1728b22fc",
+            "bytes": 182
+          }
+        },
+        {
+          "name": "authenticated-ingress",
+          "command": [
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "scripts/with_disposable_delegated_use_postgres.py",
+            "--postgres-bin",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/postgresql/usr/lib/postgresql/17/bin",
+            "--evidence-dir",
+            "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/authenticated-ingress",
+            "--timeout-seconds",
+            "900",
+            "--",
+            "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+            "-c",
+            "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ.get('FLOW_POSTGRES_TEST_URL','')); assert u.scheme=='postgresql' and u.hostname=='127.0.0.1' and u.port and u.path=='/marty_atomic_test', 'missing or unexpected owned database'; print('OWNED_LOOPBACK_DATABASE_CONFIRMED:marty_atomic_test', flush=True); os.execv(sys.argv[1],sys.argv[1:])",
+            "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+            "authenticated_ingress",
+            "--include-ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "started_at_utc": "2026-11-22T07:34:52.825083+00:00",
+          "exit_code": 0,
+          "cleanup": {
+            "all_owned_processes_stopped": true,
+            "forced_kill": false
+          },
+          "seconds": 14.059,
+          "completed_at_utc": "2026-11-22T07:35:06.890506+00:00",
+          "stdout": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/authenticated-ingress.log",
+            "sha256": "bc0c69bf33a3e2066faf3a94033ed6e55e7c57ca1e4211ac297f70e23a18944a",
+            "bytes": 186
+          }
+        }
+      ],
+      "test_gates": [
+        {
+          "name": "physical-start",
+          "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.15s",
+          "counts": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 2
+          },
+          "owned_database_proved": true,
+          "silent_skip_rejected": true,
+          "cleanup": {
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true
+          },
+          "log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/physical-start/child.log",
+            "sha256": "cc44fc7dc4ceb2e6dac0759915b1922fdbfabec73385ab6aca0191587f786487",
+            "bytes": 235
+          },
+          "postgres_log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/physical-start/postgres.log",
+            "sha256": "d7ebb88f04e970a798c1fd1161e0787c165351968d712d183701640878947f86",
+            "bytes": 4093
+          },
+          "wrapper_result": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/physical-start/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        },
+        {
+          "name": "artifact-contract",
+          "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 18.40s",
+          "counts": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 2
+          },
+          "owned_database_proved": true,
+          "silent_skip_rejected": true,
+          "cleanup": {
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true
+          },
+          "log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/artifact-contract/child.log",
+            "sha256": "2b24d634d86cafbfb0324a4c6f77ef48f90586e80f3de30c349d21ce783bd361",
+            "bytes": 230
+          },
+          "postgres_log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/artifact-contract/postgres.log",
+            "sha256": "21a9c092876813e79cfa7372befbcc5d78447cfee2b81fded892ca84a35d1cfc",
+            "bytes": 2694
+          },
+          "wrapper_result": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/artifact-contract/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        },
+        {
+          "name": "authenticated-ingress",
+          "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 124 filtered out; finished in 12.26s",
+          "counts": {
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered_out": 124
+          },
+          "owned_database_proved": true,
+          "silent_skip_rejected": true,
+          "cleanup": {
+            "postgres_version": "(PostgreSQL) 17.12",
+            "exit_code": 0,
+            "postgres_stopped": true,
+            "data_removed": true,
+            "temporary_removed": true
+          },
+          "log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/authenticated-ingress/child.log",
+            "sha256": "227195d84f9d62742be8a3c8f4862602d20ffe4da4851167b1a6a0d18a0fb3d2",
+            "bytes": 1353
+          },
+          "postgres_log": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/authenticated-ingress/postgres.log",
+            "sha256": "73d320007f2e00f3deddd39e4b5b1730517afe83350f3ac36d63027e19cca5bb",
+            "bytes": 3236
+          },
+          "wrapper_result": {
+            "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/authenticated-ingress/result.json",
+            "sha256": "c08f0c718ba619b12a86b7ac21c112acda90867d7cce53329cf20d1ce369e9cd",
+            "bytes": 146
+          }
+        }
+      ],
+      "host_checks": [
+        {
+          "gate": "physical-start",
+          "position": "before",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        },
+        {
+          "gate": "physical-start",
+          "position": "after",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        },
+        {
+          "gate": "artifact-contract",
+          "position": "before",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        },
+        {
+          "gate": "artifact-contract",
+          "position": "after",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        },
+        {
+          "gate": "authenticated-ingress",
+          "position": "before",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        },
+        {
+          "gate": "authenticated-ingress",
+          "position": "after",
+          "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae"
+        }
+      ],
+      "first_failure": null,
+      "source_before": {
+        "head": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+        "tree": "c8693b88d194aa7ebfd6ec265966010077d7480f",
+        "status": "",
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "harnesses": {
+        "postgres_integration": {
+          "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/postgres_integration-174420d504a82b62",
+          "sha256": "0e7e8bbab28fdae295404c2bcb8edc5677909fe3292a4807a0d71086c0ec09ab",
+          "bytes": 177257384,
+          "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/services/flow#marty-flow@0.1.0",
+          "target": "postgres_integration",
+          "kind": "test",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        },
+        "marty_flow": {
+          "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/deps/marty_flow-6e4cad7ca524d9fc",
+          "sha256": "25e1178a65ef9e4338acc5d0f4f5b1fe9558b97e62befdda6c0a3bec31f3f291",
+          "bytes": 278521240,
+          "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/services/flow#marty-flow@0.1.0",
+          "target": "marty_flow",
+          "kind": "lib",
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": "line-tables-only",
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": true
+          },
+          "features": []
+        }
+      },
+      "normal_host": {
+        "path": "$LOCAL_QUALIFICATION_ROOT/tooling/target/debug/marty-delegated-use",
+        "sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae",
+        "bytes": 245797760,
+        "package_id": "path+file://$LOCAL_QUALIFICATION_ROOT/marty-qualification/rust/services/delegated-use#marty-delegated-use@0.1.0",
+        "target": "marty-delegated-use",
+        "kind": "bin",
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": "line-tables-only",
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": []
+      },
+      "artifacts": [
+        {
+          "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/cargo-metadata.json",
+          "sha256": "ef758a5fe67cd35bed1b4b4ea7d7cb7dda3125526069a03c72fd692f103f0995",
+          "bytes": 4697444
+        },
+        {
+          "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/flow-artifacts.jsonl",
+          "sha256": "a73f294fd8f7106164a81c1b0cbc4f8aef6e10b9f73d3912c5e6843ecd19c629",
+          "bytes": 647466
+        },
+        {
+          "path": "$LOCAL_QUALIFICATION_ROOT/post-main-5b7-evidence/production-artifacts.jsonl",
+          "sha256": "d4b8979132da4604e972445fb150a5e12d329441a568b9dfd80b5457f1e69a48",
+          "bytes": 687765
+        }
+      ],
+      "source_after_build": {
+        "head": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+        "tree": "c8693b88d194aa7ebfd6ec265966010077d7480f",
+        "status": "",
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "source_after_tests": {
+        "head": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+        "tree": "c8693b88d194aa7ebfd6ec265966010077d7480f",
+        "status": "",
+        "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83"
+      },
+      "total_actual_tests_passed": 9,
+      "completed_at_utc": "2026-11-22T07:35:07.844974+00:00",
+      "seconds": 114.975,
+      "driver_temporary_removed": true
+    }
+  },
+  "post_aws_main_followup": {
+    "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+    "accepted_main_parent": "284ca81ca901ad532b581d5286ad955afced6dfd",
+    "accepted_main_pull_request": "https://github.com/ElevenID/marty-ui/pull/2034",
+    "local_integrated_commit": "958d215dc82a5e46ab35e5eb5471e8ee56d6d20f",
+    "local_integrated_tree": "d0ab3ad6abbcdd2939e1f4d1c20a01e46299cf2a",
+    "changed_main_paths": [
+      ".github/workflows/windows-owner-source.yml",
+      "docs/windows-owner-source-caller.md",
+      "docs/windows-owner-source-install.md",
+      "scripts/ci/run_windows_source_tests.py",
+      "scripts/selfhost_windows_source_caller.py",
+      "tests/test_windows_source_caller.py",
+      "tests/test_windows_source_caller_ntfs.py",
+      "tests/test_windows_source_test_owner.py",
+      "tests/test_windows_source_workflow.py"
+    ],
+    "rust_tree_before_and_after": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+    "cargo_lock_sha256_before_and_after": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+    "qualification_source_unchanged": true,
+    "qualification_source_identity_scope": "No Rust/Cargo file, dependency pin, feature guard, PostgreSQL wrapper or delegated qualification test changed; complete Rust subtree and lockfile match the prior local verification. The new Windows caller is separate functionality with its own accepted-main and final required Windows CI gates.",
+    "normal_merge_result": "Merged all nine accepted Windows caller/docs/tests/workflow files without conflict; no manual resolution or worker-file changes.",
+    "accepted_main_successful_check_urls": {
+      "policy": "https://github.com/ElevenID/marty-ui/actions/runs/44995900379/job/137126747406",
+      "workflow-quality / Workflow Quality": "https://github.com/ElevenID/marty-ui/actions/runs/44995901046/job/137126749780",
+      "dependency-review / Dependency Review": "https://github.com/ElevenID/marty-ui/actions/runs/44995901046/job/137126749406",
+      "CI Gate": "https://github.com/ElevenID/marty-ui/actions/runs/44995900349/job/137135558397",
+      "Analyze Actions": "https://github.com/ElevenID/marty-ui/actions/runs/44995900359/job/137126747498",
+      "Analyze Rust": "https://github.com/ElevenID/marty-ui/actions/runs/44995900377/job/137126747385",
+      "Windows owner source / Synthetic source custody on NTFS": "https://github.com/ElevenID/marty-ui/actions/runs/44995900349/job/137126748291"
+    },
+    "additional_local_or_aws_tests_claimed": false,
+    "final_head_required_ci": "The final protected CI Gate still requires the updated native Windows owner-source workflow, including its 49-case guard. Accepted-main success and historical local Python counts do not replace the final-head CI gate."
+  }
+}

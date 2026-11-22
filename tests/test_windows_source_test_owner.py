@@ -82,6 +82,7 @@ def test_launcher_runs_fixed_suite_and_returns_only_after_restoration(monkeypatc
     def pytest_main(arguments):
         assert token.current == token.user
         assert arguments == ['-q', 'tests/test_windows_source_install_ntfs.py',
+                             'tests/test_windows_source_caller_ntfs.py',
                              '--junitxml=' + str(tmp_path / 'native.xml')]
         events.append('pytest')
         return 0

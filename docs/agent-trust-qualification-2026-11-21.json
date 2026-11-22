@@ -23,7 +23,7 @@
   },
   "recorded_at_utc": "2026-11-22T05:50:58.632808+00:00",
   "status": "LOCAL_SCOPED_QUALIFICATION_PASSED",
-  "aws_replay": "IN_PROGRESS_ON_EXISTING_FREE_PLAN_HOST; LOCAL_EVIDENCE_ONLY; NO_AWS_PASS_OR_CLEANUP_ATTESTATION",
+  "aws_replay": "SCOPED_AWS_QUALIFICATION_PASSED_AND_EXISTING_INSTANCE_STOP_VERIFIED",
   "source": {
     "repository": "ElevenID/marty-ui",
     "pull_request": 1994,
@@ -1015,7 +1015,7 @@
     }
   ],
   "limits": [
-    "This is local preparation evidence. AWS replay and AWS instance cleanup/stop evidence are separate and pending/in progress.",
+    "This record contains local preparation evidence. The separately linked completed AWS report supplies its own runtime, workload-preservation, cleanup and stopped-instance observations.",
     "Debug-profile normal host with production dependency features; not a release deployment, public ingress qualification, or end-to-end Rifare business operation.",
     "Selected managed MachineCredential/KEY/exact-operation composition only. Host and public caller remain default-off; receipt semantics remain EVIDENCE_ONLY.",
     "Actual host uses 14 restricted serving database identities. Catalog/Issuance bootstrap and human approval authentication retain disclosed fixture boundaries.",
@@ -1374,5 +1374,29 @@
       "user": "65534:65534 (nobody:nogroup)"
     },
     "reason": "The existing host lacks native C/C++ and Rust tooling. The already cached official image supplies the required compiler without changing host packages or installed workloads."
+  },
+  "aws_qualification_reference": {
+    "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
+    "sha256": "f12a49bb936738995ffe226ad631acd2a1416f520b8d03e4b54396bace3810ca",
+    "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
+    "aws_rust_tests_passed": 210,
+    "aws_gate_count": 14,
+    "normal_aws_host_sha256": "19a46a4e8403a1d6399d13fb43ac291f30eaf379a4eb63c187097125024efc04",
+    "instance_final_state": "stopped",
+    "separate_original_exports_preserved": true,
+    "post_aws_main_reconciliation": {
+      "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
+      "local_verified_commit": "5b7f17a04aed87e229051470a0ee1f5a32b9f9b4",
+      "local_verified_rust_tree": "782f82d4d8e5f32e0ec061cf9061b809588fe3a5",
+      "local_actual_tests_passed": 9,
+      "normal_local_host_sha256": "23b4500ca30c7e42a3fa095b20bf93a7903b274e663d79bf0456b590463217ae",
+      "result_sha256": "c494bad36dcd7dc8dd2f5db121ba207308dbe26212f63fe0b42c813647c25ea8",
+      "aws_qualified_source_remains_separate": true
+    },
+    "post_aws_main_followup": {
+      "accepted_main_commit": "5b4fb0bbdbd22b06337393188e2fe0a85f4b4cb7",
+      "rust_subtree_and_qualification_inputs_unchanged": true,
+      "windows_qualification_remains_separate": true
+    }
   }
 }

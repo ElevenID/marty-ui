@@ -8,7 +8,11 @@ use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{
+    postgres::{PgArguments, PgRow},
+    query::Query,
+    PgPool, Postgres, QueryBuilder, Row,
+};
 use uuid::Uuid;
 
 use crate::repository::valid_sha256;
@@ -741,35 +745,10 @@ impl PostgresFlowRepository {
                 .execute(&mut *transaction).await.map_err(storage)?;
         }
         if let Some(artifact) = artifact {
-            let inserted = sqlx::query(
-                "INSERT INTO flow_service.flow_instance_artifacts \
-                 (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, \
-                  credential_offer_uris, credential_offer_labels, pre_authorized_code, \
-                  issuance_status, qr_payload, expires_at, scanned_at, status, state, \
-                  wallet_metadata, attempt_number, created_at, updated_at) VALUES \
-                 ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
-                 ON CONFLICT DO NOTHING",
-            )
-            .bind(&artifact.id)
-            .bind(&artifact.flow_instance_id)
-            .bind(&artifact.issuance_transaction_id)
-            .bind(&artifact.credential_offer_uri)
-            .bind(json(&artifact.credential_offer_uris)?)
-            .bind(json(&artifact.credential_offer_labels)?)
-            .bind(&artifact.pre_authorized_code)
-            .bind(&artifact.issuance_status)
-            .bind(&artifact.qr_payload)
-            .bind(artifact.expires_at)
-            .bind(artifact.scanned_at)
-            .bind(enum_string(artifact.status)?)
-            .bind(&artifact.state)
-            .bind(&artifact.wallet_metadata)
-            .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
-            .bind(artifact.created_at)
-            .bind(artifact.updated_at)
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage)?;
+            let inserted = bind_artifact_write(ARTIFACT_INSERT, artifact)?
+                .execute(&mut *transaction)
+                .await
+                .map_err(storage)?;
             if inserted.rows_affected() != 1 {
                 transaction.rollback().await.map_err(storage)?;
                 return Ok(false);
@@ -1099,35 +1078,10 @@ impl PostgresFlowRepository {
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
-        let inserted = sqlx::query(
-            "INSERT INTO flow_service.flow_instance_artifacts \
-             (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, \
-              credential_offer_uris, credential_offer_labels, pre_authorized_code, \
-              issuance_status, qr_payload, expires_at, scanned_at, status, state, \
-              wallet_metadata, attempt_number, created_at, updated_at) VALUES \
-             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(&artifact.id)
-        .bind(&artifact.flow_instance_id)
-        .bind(&artifact.issuance_transaction_id)
-        .bind(&artifact.credential_offer_uri)
-        .bind(json(&artifact.credential_offer_uris)?)
-        .bind(json(&artifact.credential_offer_labels)?)
-        .bind(&artifact.pre_authorized_code)
-        .bind(&artifact.issuance_status)
-        .bind(&artifact.qr_payload)
-        .bind(artifact.expires_at)
-        .bind(artifact.scanned_at)
-        .bind(enum_string(artifact.status)?)
-        .bind(&artifact.state)
-        .bind(&artifact.wallet_metadata)
-        .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
-        .bind(artifact.created_at)
-        .bind(artifact.updated_at)
-        .execute(&mut *transaction)
-        .await
-        .map_err(storage)?;
+        let inserted = bind_artifact_write(ARTIFACT_INSERT, artifact)?
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
         if inserted.rows_affected() != 1 {
             transaction.rollback().await.map_err(storage)?;
             return Ok(false);
@@ -1241,24 +1195,7 @@ impl PostgresFlowRepository {
         } else {
             ARTIFACT_UPSERT_BY_ID
         };
-        let row = sqlx::query(statement)
-            .bind(&artifact.id)
-            .bind(&artifact.flow_instance_id)
-            .bind(&artifact.issuance_transaction_id)
-            .bind(&artifact.credential_offer_uri)
-            .bind(json(&artifact.credential_offer_uris)?)
-            .bind(json(&artifact.credential_offer_labels)?)
-            .bind(&artifact.pre_authorized_code)
-            .bind(&artifact.issuance_status)
-            .bind(&artifact.qr_payload)
-            .bind(artifact.expires_at)
-            .bind(artifact.scanned_at)
-            .bind(enum_string(artifact.status)?)
-            .bind(&artifact.state)
-            .bind(&artifact.wallet_metadata)
-            .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
-            .bind(artifact.created_at)
-            .bind(artifact.updated_at)
+        let row = bind_artifact_write(statement, artifact)?
             .fetch_optional(&self.pool)
             .await
             .map_err(storage)?;
@@ -1794,6 +1731,30 @@ fn timestamp(value: u64) -> Result<DateTime<Utc>, RepositoryError> {
         .ok_or_else(|| RepositoryError::Storage("timestamp is out of range".into()))
 }
 
+fn bind_artifact_write<'a>(
+    statement: &'static str,
+    artifact: &'a FlowArtifactRecord,
+) -> Result<Query<'a, Postgres, PgArguments>, RepositoryError> {
+    Ok(sqlx::query(statement)
+        .bind(&artifact.id)
+        .bind(&artifact.flow_instance_id)
+        .bind(&artifact.issuance_transaction_id)
+        .bind(&artifact.credential_offer_uri)
+        .bind(json(&artifact.credential_offer_uris)?)
+        .bind(json(&artifact.credential_offer_labels)?)
+        .bind(&artifact.pre_authorized_code)
+        .bind(&artifact.issuance_status)
+        .bind(&artifact.qr_payload)
+        .bind(artifact.expires_at)
+        .bind(artifact.scanned_at)
+        .bind(enum_string(artifact.status)?)
+        .bind(&artifact.state)
+        .bind(&artifact.wallet_metadata)
+        .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
+        .bind(artifact.created_at)
+        .bind(artifact.updated_at))
+}
+
 fn storage(error: sqlx::Error) -> RepositoryError {
     RepositoryError::Storage(error.to_string())
 }
@@ -1822,6 +1783,14 @@ const INSTANCE_SELECT: &str = "SELECT id, flow_definition_id, organization_id, s
     current_step_id, context, step_history, state_history, subject_id, subject_type, \
     external_reference, application_flow_key_hash, started_at, completed_at, expires_at, \
     result, error, created_at, updated_at FROM flow_service.flow_instances WHERE id=$1";
+const ARTIFACT_INSERT: &str = "INSERT INTO flow_service.flow_instance_artifacts \
+ (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, \
+  credential_offer_uris, credential_offer_labels, pre_authorized_code, \
+  issuance_status, qr_payload, expires_at, scanned_at, status, state, \
+  wallet_metadata, attempt_number, created_at, updated_at) VALUES \
+ ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+ ON CONFLICT DO NOTHING";
+
 const ARTIFACT_UPSERT_BY_ID: &str = "INSERT INTO flow_service.flow_instance_artifacts \
     (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, credential_offer_uris, \
      credential_offer_labels, pre_authorized_code, issuance_status, qr_payload, expires_at, \
