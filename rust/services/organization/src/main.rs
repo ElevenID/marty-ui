@@ -78,8 +78,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
                 "marty",
             );
-            let admin_email = std::env::var("MARTY_ORG_ADMIN_EMAIL").ok();
-            let reviewer_email = std::env::var("MARTY_ORG_REVIEWER_EMAIL").ok();
+            let admin_email = std::env::var("MARTY_ORG_ADMIN_EMAIL")
+                .ok()
+                .filter(|value| !value.trim().is_empty());
+            let reviewer_email = std::env::var("MARTY_ORG_REVIEWER_EMAIL")
+                .ok()
+                .filter(|value| !value.trim().is_empty());
             let pool = PgPoolOptions::new()
                 .max_connections(1)
                 .connect(&database_url)
