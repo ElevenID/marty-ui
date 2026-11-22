@@ -23,7 +23,7 @@ def test_organization_schema_and_catalog_writes_are_operator_only() -> None:
     assert '"organization"' in operator
     assert "ORGANIZATION_OUTBOX_PARTITIONS" in operator
     assert "outbox.migrate().await?" in operator
-    assert "outbox.health().await?" in operator
+    assert "validate_organization_outbox_schema(&pool).await?" in operator
     assert "migrate_organization_schema(" not in runtime
     assert "reconcile_organization_startup(" not in runtime
     assert "outbox.migrate()" not in runtime
