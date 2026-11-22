@@ -18,6 +18,7 @@ pub mod http_security;
 pub mod http_service;
 #[cfg(target_os = "linux")]
 pub mod installer_bootstrap;
+mod locked_membership;
 pub mod machine_authorization;
 pub mod machine_registry;
 pub mod machine_use_access;
