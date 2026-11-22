@@ -52,7 +52,9 @@ digests and observations in the private deployment audit.
    printable ASCII bytes with no trailing newline into a mode `0600` file in
    an owner-only mode `0700` Linux directory outside the checkout. Store the
    [private PostgreSQL selector](installer-external-postgres.md#supported-configuration)
-   beside it with mode `0600` and use the password file's absolute path.
+   beside it with mode `0600` and use the password file's absolute path. Set
+   `external_postgres.root_certificate_pem` to the downloaded public certificate
+   as a JSON string.
    Enter connection passwords at prompts or through the supported file transport.
 5. Connect from the candidate host as the application role through the exact
    selected endpoint, using the downloaded CA and `sslmode=verify-full`.
@@ -65,10 +67,9 @@ digests and observations in the private deployment audit.
    `storage` objects. Compare to the pre-migration object inventory.
 6. Prove certificate and hostname verification from the actual migration and
    workload images. A successful host-side `psql` probe only covers the host
-   client. The current installer profile has no explicit CA input. For a
-   deployment that requires the project CA, hold migration until the admitted
-   profile can supply it to every database consumer and preserve it across
-   restart and recovery. Keep `verify-full` enabled.
+   client. Hold migration until the admitted installer supplies the required
+   CA to every database consumer and retains it across restart and recovery.
+   Keep `verify-full` enabled.
 
 ## 3. Wire the authorization UI and qualify OIDC
 

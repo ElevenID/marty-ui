@@ -507,6 +507,10 @@ fn start_inner(
         for (key, value) in postgres_env {
             append(&mut source_env, &key, &value)?;
         }
+        selection
+            .configuration
+            .external_postgres
+            .append_root_certificate(&mut source_env)?;
     }
     let bootstrap_env =
         crate::installer_verify::read_private_bytes(&bootstrap.environment.path, 65536)?;

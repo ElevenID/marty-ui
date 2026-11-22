@@ -1965,11 +1965,12 @@ fn assert_native_external_postgres_models(
         "@aws-0-region.pooler.supabase.com:5432/marty?sslmode=verify-full"
     );
     let expected = template.replace('$', "$$");
+    let root_certificate = "-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----";
     let env = temp.path().join("external-postgres.env");
     private_write(
         &env,
         format!(
-            "{}MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE='{template}'\n",
+            "{}MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE='{template}'\nPGSSLROOTCERT='{root_certificate}'\n",
             fs::read_to_string(oidc_env).unwrap()
         )
         .as_bytes(),
@@ -2011,6 +2012,7 @@ fn assert_native_external_postgres_models(
             {
                 consumers += 1;
                 assert_eq!(environment["DATABASE_URL_TEMPLATE"], expected, "{name}");
+                assert_eq!(environment["PGSSLROOTCERT"], root_certificate, "{name}");
                 assert_eq!(
                     environment["MARTY_DB_PASSWORD_FILE"], "/run/secrets/marty_db_password",
                     "{name}"

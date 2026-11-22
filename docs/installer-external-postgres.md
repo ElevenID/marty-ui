@@ -43,9 +43,14 @@ runtime secret loader; do not pre-encode the password.
 The endpoint is assembled from validated fields. There is no arbitrary URL,
 connection-options or insecure-TLS override: every selected connection uses
 `sslmode=verify-full`. The server certificate must validate against the
-application image's trusted roots and match the endpoint hostname. This first
-profile does not import a custom database CA; use a publicly trusted endpoint.
-Username and database name are percent-encoded separately.
+configured roots and match the endpoint hostname. For Supabase, download the
+server root certificate for the selected endpoint and put its PEM text in the
+optional `external_postgres.root_certificate_pem` JSON string. The installer
+retains that public certificate in the bound selection and supplies it to
+SQLx through `PGSSLROOTCERT` in both startup and retained Compose models.
+SQLx adds it to the image's default trust roots. When the field is omitted,
+the profile uses the image's default roots alone. Username and database name
+are percent-encoded separately.
 
 Example argument selection, with a reviewed release that contains this change:
 
@@ -193,8 +198,7 @@ required. The exercised paths share a two-connection pool.
 It also sends a password containing reserved URL punctuation through the real
 secret loader and SQLx/SCRAM authentication. Typed negative controls establish
 that `verify-full` rejects an untrusted certificate and a wrong hostname. A
-private test CA is confined to this disposable fixture; the production selector
-continues to require a publicly trusted endpoint.
+private test CA is confined to this disposable fixture.
 
 To reproduce that test, run as an unprivileged user from `rust/`, with an absolute
 directory containing local `initdb`, `postgres` and `pg_ctl` executables:

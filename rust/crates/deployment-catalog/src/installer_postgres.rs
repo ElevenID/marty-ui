@@ -8,6 +8,7 @@ use crate::{
     installer_host_fs as fs,
     installer_state::{InstallerState, Journal, LockedInspection, Phase},
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -17,8 +18,7 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, String>;
-const REFUSED: &str =
-    "external PostgreSQL selection is absent, changed or unsupported; preserve installation evidence";
+const REFUSED: &str = "external PostgreSQL selection is absent, changed or unsupported; preserve installation evidence";
 const SCHEMA: &str = "elevenid.installer-external-postgres/v1";
 const SELECTION_SCHEMA: &str = "elevenid.installer-external-postgres-selection/v1";
 pub(crate) const RECORD: &str = "external-postgres-selection.json";
@@ -26,6 +26,7 @@ pub(crate) const LAYER: &str =
     "deploy-config/compose/selfhost-installer/compose.external-postgres.yml";
 pub(crate) const SECRET: &str = "external_postgres_password";
 const PASSWORD_MOUNT: &str = "/run/secrets/marty_db_password";
+const ROOT_CERT_ENV: &str = "PGSSLROOTCERT";
 const DATABASE_SERVICES: &[&str] = &[
     "revocation-profile-migrate",
     "db-migrate",
@@ -131,13 +132,49 @@ pub(crate) struct ExternalPostgres {
     pub username: String,
     pub database: String,
     pub password_file: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_certificate_pem: Option<String>,
 }
 impl ExternalPostgres {
     pub(crate) fn validate(&self) -> Result<()> {
         hostname(&self.host)?;
         identifier(&self.username)?;
         identifier(&self.database)?;
-        require(self.port != 0 && self.password_file.is_absolute())
+        require(self.port != 0 && self.password_file.is_absolute())?;
+        self.root_certificate()?;
+        Ok(())
+    }
+
+    fn root_certificate(&self) -> Result<Option<String>> {
+        let Some(pem) = self.root_certificate_pem.as_deref() else {
+            return Ok(None);
+        };
+        require(pem.len() <= 16 * 1024)?;
+        let lines: Vec<_> = pem.lines().collect();
+        let [begin, body @ .., end] = lines.as_slice() else {
+            return Err(REFUSED.into());
+        };
+        require(
+            *begin == "-----BEGIN CERTIFICATE-----"
+                && *end == "-----END CERTIFICATE-----"
+                && !body.is_empty()
+                && body.iter().all(|line| !line.is_empty()),
+        )?;
+        let der = STANDARD.decode(body.concat()).map_err(|_| REFUSED)?;
+        require(der.first() == Some(&0x30))?;
+        Ok(Some(lines.join("\n")))
+    }
+
+    pub(crate) fn append_root_certificate(&self, env: &mut Vec<u8>) -> Result<()> {
+        if let Some(pem) = self.root_certificate()? {
+            // Compose's dotenv parser preserves newlines in single-quoted
+            // values, and SQLx accepts an inline PEM through PGSSLROOTCERT.
+            // The framing and base64 checks above exclude dotenv delimiters.
+            let text = std::str::from_utf8(env).map_err(|_| REFUSED)?;
+            require(!text.lines().any(|line| line.starts_with("PGSSLROOTCERT=")))?;
+            env.extend_from_slice(format!("{ROOT_CERT_ENV}='{pem}'\n").as_bytes());
+        }
+        Ok(())
     }
 
     fn url_template(&self) -> Result<String> {
@@ -420,6 +457,7 @@ impl Selection {
             .external_postgres
             .url_template()?
             .replace('$', "$$");
+        let root_certificate = self.configuration.external_postgres.root_certificate()?;
         let mut database_present = false;
         for name in DATABASE_SERVICES {
             let Some(service) = services.get(*name) else {
@@ -433,6 +471,10 @@ impl Selection {
             require(
                 env.get("MARTY_DB_PASSWORD_FILE").and_then(Value::as_str) == Some(PASSWORD_MOUNT),
             )?;
+            require(match root_certificate.as_deref() {
+                Some(pem) => env.get(ROOT_CERT_ENV).and_then(Value::as_str) == Some(pem),
+                None => env.get(ROOT_CERT_ENV).is_none_or(Value::is_null),
+            })?;
             for raw in ["DATABASE_URL", "DATABASE_URL_FILE", "MARTY_DB_PASSWORD"] {
                 require(
                     env.get(raw)

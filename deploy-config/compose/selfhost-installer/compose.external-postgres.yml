@@ -8,6 +8,7 @@
 # (30 recommended). Supabase Free's default pool size of 15 must be increased.
 x-external-postgres-environment: &external-postgres-environment
   DATABASE_URL_TEMPLATE: ${MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE:?external PostgreSQL selection required}
+  PGSSLROOTCERT:
 
 services:
   postgres: !reset null

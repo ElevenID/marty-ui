@@ -417,6 +417,58 @@ fn model(selection: &Selection) -> Value {
 }
 
 #[test]
+fn selected_root_certificate_is_retained_and_required_for_each_database_consumer() {
+    let (parent, path, mut state) = installation();
+    choose_oidc(parent.path(), &mut state);
+    let input = parent.path().join("postgres.json");
+    let mut config = configuration(parent.path());
+    let pem = "-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----";
+    config["external_postgres"]["root_certificate_pem"] =
+        json!(format!("{}\r\n", pem.replace('\n', "\r\n")));
+    private_file(&input, &serde_json::to_vec(&config).unwrap());
+    select(prepare(Some(&input), true, false).unwrap(), &mut state).unwrap();
+    std::fs::remove_file(input).unwrap();
+
+    let (_, selection) = record(&path, state.journal().installation_id())
+        .unwrap()
+        .unwrap();
+    let mut env = b"SELFHOST_SECRET_DIR='/installation/secrets'\n".to_vec();
+    selection
+        .configuration
+        .external_postgres
+        .append_root_certificate(&mut env)
+        .unwrap();
+    let retained =
+        crate::installer_application_env::select_generation(&env, Path::new("/installation"))
+            .unwrap();
+    assert!(std::str::from_utf8(&retained)
+        .unwrap()
+        .contains(&format!("PGSSLROOTCERT='{pem}'\n")));
+
+    let mut compose = model(&selection);
+    assert!(selection.validate_model(&compose).is_err());
+    for service in DATABASE_SERVICES {
+        compose["services"][*service]["environment"][ROOT_CERT_ENV] = json!(pem);
+    }
+    selection.validate_model(&compose).unwrap();
+    for service in DATABASE_SERVICES {
+        let mut changed = compose.clone();
+        changed["services"][*service]["environment"][ROOT_CERT_ENV] = json!(null);
+        assert!(selection.validate_model(&changed).is_err(), "{service}");
+    }
+    let mut postgres = selection.configuration.external_postgres;
+    for invalid in [
+        "",
+        "/var/ca.pem",
+        "-----BEGIN PRIVATE KEY-----\nMAMCAQE=\n-----END PRIVATE KEY-----",
+        "-----BEGIN CERTIFICATE-----\nMAMCAQE='\n-----END CERTIFICATE-----",
+    ] {
+        postgres.root_certificate_pem = Some(invalid.into());
+        assert!(postgres.validate().is_err());
+    }
+}
+
+#[test]
 fn composed_runtime_cannot_restore_local_database_downgrade_tls_or_change_pool_limits() {
     let (parent, _, mut state) = installation();
     let selection = choose(parent.path(), &mut state);
