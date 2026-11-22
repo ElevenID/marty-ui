@@ -70,16 +70,18 @@ def _record_action(plan, status, name, value, attempt, held):
                         event=name, evidence_sha256=hashes)
 
 
-def _compensate(plan, status, context, command, candidate, attempt, held):
-    docker, project = context.docker, context.project
+def _removal_intent(candidate, project, command):
     container = _compose_candidate(candidate, project, command)
     initial = renewal.context_snapshot([candidate])[container]
     require(initial['status'] in STOPPED | {'running', 'restarting'})
-    custody = {'candidate_id': container, 'observed_candidate': initial,
-               'remove_command': ['container', 'rm', container]}
-    authorized = _record_action(plan, status, 'compensation-authorized', custody, attempt, held)
+    return {'candidate_id': container, 'observed_candidate': initial, 'remove_command': ['container', 'rm', container]}
+
+
+def _remove_candidate(context, custody):
+    docker, project = context.docker, context.project
+    container = custody['candidate_id']
     observed = _candidate_items(context.check(), project, container)
-    require(renewal.context_snapshot([observed])[container] == initial)
+    require(renewal.context_snapshot([observed])[container] == custody['observed_candidate'])
     stopping = observed['State']['Status'] in {'running', 'restarting'}
     if stopping:
         stopped = renewal.run_owned_mutation([*docker.prefix, 'container', 'stop', '--time', '10', container], timeout=30)
@@ -90,8 +92,14 @@ def _compensate(plan, status, context, command, candidate, attempt, held):
     if result.returncode != 0:
         raise renewal.UncertainComposeMutation('Website candidate removal requires operator reconciliation')
     _candidate_items(context.check(), project, None)
-    returned = {'candidate_id': container, 'stop_completed': stopping, 'remove_returncode': 0,
-                'completed_cli_job': True, 'candidate_absent': True}
+    return {'candidate_id': container, 'stop_completed': stopping, 'remove_returncode': 0,
+            'completed_cli_job': True, 'candidate_absent': True}
+
+
+def _compensate(plan, status, context, command, candidate, attempt, held):
+    custody = _removal_intent(candidate, context.project, command)
+    authorized = _record_action(plan, status, 'compensation-authorized', custody, attempt, held)
+    returned = _remove_candidate(context, custody)
     status = _record_action(plan, authorized, 'compensation-returned', returned, attempt, held)
     return status, {'intent': custody, 'result': returned}
 

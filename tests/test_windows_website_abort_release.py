@@ -20,7 +20,7 @@ contract = release.contract
 
 
 @contextmanager
-def closed_abort(monkeypatch, planned, *, compensated=False):
+def closed_abort(monkeypatch, planned, *, compensated=False, backout=False):
     with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
         config['tls_init_receipt'] = {'id': '1'*64, 'image': 'sha256:'+'2'*64, 'config_hash': '3'*64}
         path.write_bytes(selection.packed(config))
@@ -72,7 +72,7 @@ def closed_abort(monkeypatch, planned, *, compensated=False):
             initial = lease.begin_website_transition(root, expected_plan_sha256=initial_plan['plan_sha256'],
                 plan_attempt_directory=attempt, gh=None, cosign=None, registry_config=None)
         plan = plans[-1]
-        _attempt, active, archive = release._paths(config, plan)
+        _attempt, active, archive = release._paths(config, plan, 'backout' if backout else 'abort')
         original_bytes = active.read_bytes()
         original_identity = release._path_identities(active)
         owner = plan['owner']
@@ -98,15 +98,51 @@ def closed_abort(monkeypatch, planned, *, compensated=False):
                 for action, value in zip(release.journal.STAGE_ACTION_ORDER, ({}, {}, intent, result), strict=True):
                     status = release.reconcile._record_action(plan, status, action, value, attempt, held)
                 evidence['candidate_compensation'] = {'intent': intent, 'result': result}
-            observations = {name: contract.digest(value) for name, value in evidence.items()}
-            evidence_path = store.abort_observations_path(attempt, observations)
-            stage._evidence(evidence_path, evidence, held)
-            receipt = {'schema': release.journal.ABORT_SCHEMA, 'plan_sha256': plan['plan_sha256'],
-                       'started_record_sha256': started['tail_sha256'], 'owner_binding_sha256': owner['binding_sha256'],
-                       'selected_sha256': owner['selected_sha256'], 'state': plan['states']['combined'],
-                       'candidate_outcome': 'created-then-compensated' if compensated else 'never-created',
-                       'observations_sha256': observations}
-            terminal = store.reconciled_abort(plan, expected_anchor_sha256=status['anchor_sha256'], receipt=receipt)
+            if backout:
+                import selfhost_windows_website_backout as retirement
+
+                def publish(phase, event, name, value):
+                    nonlocal status
+                    status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase, event=event,
+                        evidence_sha256=stage._evidence(attempt / name, value, held))
+
+                stage_id = 'a'*64
+                stage_row = {'project': project, 'service': contract.SLOT, 'image': 'sha256:'+'a'*64,
+                             'mounts': [], 'status': 'running'}
+                staged = {**runtime, stage_id: stage_row}
+                publish('stage-candidate', 'completed', 'stage-after.json', {'runtime_after': staged,
+                    'image_metadata': {}, 'candidate_health': {'container_id': stage_id}})
+                for phase_name, fields in (('restore-combined', {'mounted_template': plan['edge_template'],
+                                                            'edge_configuration': edge_configuration}),
+                                      ('verify-combined', {'public_routes': {}, 'application_handoffs': {}})):
+                    publish(phase_name, 'started', phase_name+'-before.json', {key: {} for key in release.journal.START_EVIDENCE})
+                    publish(phase_name, 'completed', phase_name+'-after.json', {'runtime_after': staged, **fields})
+                result = {'candidate_id': stage_id, 'stop_completed': True, 'remove_returncode': 0,
+                          'completed_cli_job': True, 'candidate_absent': True}
+                qualifications = {'runtime_sha256': contract.digest(runtime), 'edge_sha256': contract.digest(edge_configuration),
+                    'public_routes_sha256': '3'*64, 'application_handoffs_sha256': '4'*64,
+                    'native_sha256': owner['native_sha256'], 'foreign_storage_sha256': None, 'foreign_storage_changes': 0}
+                retained = {'runtime_after': runtime, 'normalized_model': evidence['normalized_model'],
+                            'edge_configuration': edge_configuration, 'retained_route_directory': False}
+                publish(retirement.PHASE, 'started', retirement.BEFORE, {
+                    'owner_lease': owner_lease, 'native_custody': {}, 'foreign_storage': {},
+                    'runtime_before': {'containers': staged, 'edge_configuration': edge_configuration,
+                        'normalized_model': evidence['normalized_model'], 'candidate_retirement': {
+                            'candidate_id': stage_id, 'observed_candidate': stage_row, 'remove_command': ['container','rm',stage_id]}}})
+                publish(retirement.PHASE, release.journal.RETIRE_RETURNED, retirement.RETURNED, {'candidate_retirement': result})
+                publish(retirement.PHASE, 'completed', retirement.AFTER,
+                        retirement._completion(plan, retained, result, qualifications))
+                terminal, evidence_path = status, attempt / retirement.AFTER
+            else:
+                observations = {name: contract.digest(value) for name, value in evidence.items()}
+                evidence_path = store.abort_observations_path(attempt, observations)
+                stage._evidence(evidence_path, evidence, held)
+                receipt = {'schema': release.journal.ABORT_SCHEMA, 'plan_sha256': plan['plan_sha256'],
+                           'started_record_sha256': started['tail_sha256'], 'owner_binding_sha256': owner['binding_sha256'],
+                           'selected_sha256': owner['selected_sha256'], 'state': plan['states']['combined'],
+                           'candidate_outcome': 'created-then-compensated' if compensated else 'never-created',
+                           'observations_sha256': observations}
+                terminal = store.reconciled_abort(plan, expected_anchor_sha256=status['anchor_sha256'], receipt=receipt)
 
         def inspect(_config, _choice, _values, _held, *, expected_data):
             assert expected_data == phase['data'] and active.exists()
@@ -260,3 +296,28 @@ def test_abort_release_cli_outputs_result_after_private_handles_close(monkeypatc
         assert release.website.main(args) == 0
         captured = capsys.readouterr()
         assert not captured.err and selection.decode(captured.out.encode())['guard_archived']
+
+
+@pytest.mark.parametrize('drift', [False, True])
+def test_backout_release_reopens_original_generation_with_exact_terminal_records(monkeypatch, planned, drift):
+    with closed_abort(monkeypatch, planned, backout=True) as run:
+        # An abort release cannot substitute for a completed backout.
+        with pytest.raises(ValueError):
+            selection.release_website_abort(run.path, run.plan, **run.kwargs)
+        assert run.active.exists() and not run.archive.exists()
+        if drift:
+            run.evidence.write_bytes(b'{}')
+            with pytest.raises(ValueError):
+                selection.release_website_backout(run.path, run.plan, **run.kwargs)
+            assert run.active.read_bytes() == run.original_bytes and not run.archive.exists()
+            return
+        plan_file = store.namespace_paths(run.plan)[0] / store.PLAN
+        result = selection.release_website_backout(run.path, run.plan, **run.kwargs)
+        assert result['guard_archived'] and result['result'] == 'website-backout-guard-archived'
+        assert result['candidate_outcome'] == 'removed-after-combined-rollback' and contract.sha(result['retirement_sha256'])
+        assert not run.active.exists() and run.archive.read_bytes() == run.original_bytes
+        assert release._path_identities(run.archive) == run.original_identity
+        assert selection.release_website_backout(run.path, run.plan, **run.kwargs) == result
+        assert (run.attempt / release.BACKOUT_RELEASE).is_file() and plan_file.is_file()
+        with selection.selected_inputs(run.path) as lease:
+            assert lease.generation_sequence == run.generation

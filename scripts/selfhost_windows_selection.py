@@ -1208,7 +1208,9 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                     from selfhost_windows_website_verify import run
                 elif phase == 'reconcile-stage':
                     from selfhost_windows_website_reconcile import run
-                elif phase == 'release-abort':
+                elif phase == 'retire-candidate':
+                    from selfhost_windows_website_backout import run
+                elif phase in {'release-abort', 'release-backout'}:
                     from selfhost_windows_website_abort_release import prepare as run
                 else:
                     from selfhost_windows_website_edge import run
@@ -1418,6 +1420,24 @@ def release_website_abort(config_path, plan, *, guard_sha256, expected_anchor_sh
     from selfhost_windows_website_abort_release import finalize
     return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
                     assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file)
+
+
+def retire_website_backout(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                           assets, gh, cosign, registry_config, authority_file=None):
+    """Remove the exact staged candidate after the restored combined routes qualify."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=('retire-candidate', assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def release_website_backout(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, authority_file=None):
+    """Archive the terminal backout guard after refreshing the combined owner."""
+    from selfhost_windows_website_abort_release import finalize
+    return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
+                    assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
+                    mode='backout')
 
 
 def reconcile_existing(config_path, *, authority_file=None):

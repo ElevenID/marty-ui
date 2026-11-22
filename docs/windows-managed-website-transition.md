@@ -269,6 +269,26 @@ Ordinary renewal can then enter the combined selection and must perform its own
 current checks. Repeating the command with the same pins reads the historical
 release if the archive is already present.
 
+### Complete a verified combined backout
+
+After `restore-combined` and `verify-combined` are anchored, use the same private
+plan, composition and guard inputs with `--retire-candidate` in place of
+`--release-abort`. Use the tail anchor for `verify-combined` on the first call.
+The owner requalifies the combined runtime and removes only the candidate whose
+ID and Compose inputs match the staged and verification records. The guard and
+any retained, unmounted route files stay available for evidence.
+
+After the removal result is anchored, combined public routing and application
+handoff are qualified again. If qualification fails, the `retirement-returned`
+tail can resume verification with the same operation. An authorized removal
+without a recorded CLI return requires reconciliation before proceeding.
+
+Use `--release-backout` with the `retire-candidate.completed` tail to archive
+the exact guard and return to the original combined generation. This path
+refreshes the same combined custody and ingress proof and keeps the backout
+history. An already archived guard supports historical readback with the same
+pins.
+
 `forward-evidence-complete`, `combined-backout-evidence-complete`, and
 `abort-evidence-complete` describe the terminal record structure. A stage abort
 returns to the original combined selection through the separate archive step.

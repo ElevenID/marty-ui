@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Inspect a managed Windows website composition or release a verified abort.
+"""Inspect a managed Windows website composition or finish a combined rollback.
 
 The check-only path reads selected identities and authenticates the composition.
-The abort-release path requalifies the combined owner before archiving its guard.
+The terminal release paths requalify the combined owner before archiving its guard.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ SCHEMA = "marty.windows-website-preflight/v1"
 WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
 RELEASE_ERROR = "Managed website abort release did not complete verification. Inspect the original guard and archive using the same pins."
+BACKOUT_ERROR = "Managed website backout did not complete verification. Preserve the guard and inspect the retained journal before continuing."
 
 ROUTE_TARGET = '/etc/nginx/marty-website'
 TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
@@ -336,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--check-only", action="store_true")
     modes.add_argument("--release-abort", action="store_true")
+    modes.add_argument("--retire-candidate", action="store_true")
+    modes.add_argument("--release-backout", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -345,14 +348,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-anchor-sha256")
     parser.add_argument("--authority-file")
     args = parser.parse_args(argv)
+    operation, error = None, ERROR
+    if args.release_abort:
+        operation, error = selection.release_website_abort, RELEASE_ERROR
+    elif args.retire_candidate:
+        operation, error = selection.retire_website_backout, BACKOUT_ERROR
+    elif args.release_backout:
+        operation, error = selection.release_website_backout, BACKOUT_ERROR
     try:
         release_inputs = (args.plan_file, args.guard_sha256, args.expected_anchor_sha256)
-        if args.release_abort:
+        if operation is not None:
             selection.require(all(release_inputs) and args.plan_attempt_directory is None)
             with renewal.hold_private_input(args.plan_file.absolute(), max_bytes=2*1024*1024) as raw:
                 plan = selection.decode(raw)
                 selection.require(raw == selection.packed(plan))
-                result = selection.release_website_abort(args.selection_file.absolute(), plan,
+                result = operation(args.selection_file.absolute(), plan,
                     guard_sha256=args.guard_sha256, expected_anchor_sha256=args.expected_anchor_sha256,
                     assets=args.composition_dir, gh=args.gh, cosign=args.cosign, registry_config=args.registry_config,
                     authority_file=args.authority_file)
@@ -361,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
             result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
                            registry_config=args.registry_config, plan_attempt_directory=args.plan_attempt_directory)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, RuntimeError, subprocess.SubprocessError):
-        sys.stderr.write((RELEASE_ERROR if args.release_abort else ERROR) + "\n")
+        sys.stderr.write(error + "\n")
         return 2
     sys.stdout.write(selection.packed(result).decode())
     return 0

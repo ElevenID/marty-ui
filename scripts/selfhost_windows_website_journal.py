@@ -24,9 +24,10 @@ BACKOUT = ('restore-combined', 'verify-combined', 'retire-candidate')
 STAGE_ACTIONS = {'dispatch-authorized': 'stage_command', 'dispatch-returned': 'stage_result',
                  'compensation-authorized': 'candidate_compensation', 'compensation-returned': 'compensation_result'}
 STAGE_ACTION_ORDER = tuple(STAGE_ACTIONS)
-MAX_RECORDS = 1 + 2*(len(FORWARD)-1+len(BACKOUT)) + 2
+RETIRE_RETURNED = 'retirement-returned'
+MAX_RECORDS = 1 + 2*(len(FORWARD)-1+len(BACKOUT)) + 3
 RECORD_NAME = re.compile(r'[0-9]{6}\.[a-z-]+\.(recorded|started|completed|reconciled-abort|'
-                         + '|'.join(STAGE_ACTIONS) + r')\.json')
+                         + '|'.join((*STAGE_ACTIONS, RETIRE_RETURNED)) + r')\.json')
 FIELDS = {'schema', 'sequence', 'plan_sha256', 'parent_sha256', 'phase', 'event', 'state', 'evidence_sha256'}
 START_EVIDENCE = {'owner_lease', 'native_custody', 'foreign_storage', 'runtime_before'}
 COMPLETION_EVIDENCE = {
@@ -100,6 +101,7 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
     prior = None;pending = None;completed = [];state = 'combined';aborted = False
     started_stage = None
     stage_actions = []
+    retirement_returned = False
     for index, name in enumerate(ordered, 1):
         body = entries[name]
         require(not aborted and isinstance(name, str) and RECORD_NAME.fullmatch(name)
@@ -126,6 +128,10 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
                     and len(stage_actions) < len(STAGE_ACTION_ORDER) and event == STAGE_ACTION_ORDER[len(stage_actions)]
                     and record['state'] == plan['states']['combined'] and set(evidence) == {STAGE_ACTIONS[event]})
             stage_actions.append(event)
+        elif event == RETIRE_RETURNED:
+            require(phase == pending == 'retire-candidate' and not retirement_returned
+                    and record['state'] == plan['states']['staged'] and set(evidence) == {'candidate_retirement'})
+            retirement_returned = True
         elif event == 'completed':
             require(pending == phase and phase in COMPLETION_EVIDENCE
                     and set(evidence) == COMPLETION_EVIDENCE[phase]
@@ -151,6 +157,7 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
     return {'schema': SCHEMA, 'plan_sha256': plan['plan_sha256'], 'tail_sha256': prior,
         'record_count': len(entries), 'classification': classification, 'pending_phase': pending,
         'stage_actions': stage_actions, 'started_stage_sha256': started_stage,
+        'retirement_returned': retirement_returned,
         'completed_phases': completed, 'aborted_phase': 'stage-candidate' if aborted else None, 'model_state': state,
         'permitted_record_phases': [] if pending or terminal or aborted else list(_next(completed)),
         'receipt_contents_verified': False, 'automatic_replay_allowed': False,
@@ -176,7 +183,7 @@ def append(entries, plan, *, expected_tail_sha256, phase, event, evidence_sha256
     """
     status = inspect(entries, plan, expected_tail_sha256=expected_tail_sha256)
     require(isinstance(phase, str) and isinstance(event, str)
-            and phase in COMPLETION_EVIDENCE and event in {'started', 'completed', *STAGE_ACTIONS})
+            and phase in COMPLETION_EVIDENCE and event in {'started', 'completed', *STAGE_ACTIONS, RETIRE_RETURNED})
     state = AFTER[phase] if event == 'completed' else status['model_state']
     record = {'schema': SCHEMA, 'sequence': len(entries)+1, 'plan_sha256': plan['plan_sha256'],
         'parent_sha256': expected_tail_sha256, 'phase': phase, 'event': event,

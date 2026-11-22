@@ -119,25 +119,40 @@ def inspect(plan, *, expected_anchor_sha256):
     return {**status, 'anchor_sha256': expected_anchor_sha256}
 
 
+def _read_evidence(records, entries, references, held):
+    expectations = {}
+    for name, (phase, event) in references.items():
+        path = records.parent / name
+        require(path.name == name and path.parent == records.parent)
+        matches = [body for filename, body in entries.items() if filename[7:] == f'{phase}.{event}.json']
+        require(len(matches) == 1)
+        expectations[name] = selection.decode(matches[0])['evidence_sha256']
+    observed = {}
+    for name, expected in expectations.items():
+        raw = _hold_bytes(records.parent / name, held)
+        value = selection.decode(raw)
+        require(type(value) is dict and raw == selection.packed(value)
+                and {key: plan_contract.digest(item) for key, item in value.items()} == expected)
+        observed[name] = value
+    return observed
+
+
 def read_evidence(plan, *, expected_anchor_sha256, references, held):
     """Hold private evidence authenticated by an independently pinned journal."""
     with _directories(plan) as (records, anchors, journal_inputs):
         entries, _status, _names, _tails = _read(plan, records, anchors, journal_inputs, expected_anchor_sha256)
-        expectations = {}
-        for name, (phase, event) in references.items():
-            path = records.parent / name
-            require(path.name == name and path.parent == records.parent)
-            matches = [body for filename, body in entries.items() if filename[7:] == f'{phase}.{event}.json']
-            require(len(matches) == 1)
-            expectations[name] = selection.decode(matches[0])['evidence_sha256']
-        observed = {}
-        for name, expected in expectations.items():
-            raw = _hold_bytes(records.parent / name, held)
-            value = selection.decode(raw)
-            require(type(value) is dict and raw == selection.packed(value)
-                    and {key: plan_contract.digest(item) for key, item in value.items()} == expected)
-            observed[name] = value
-        return observed
+        return _read_evidence(records, entries, references, held)
+
+
+def hold_terminal_evidence(plan, *, expected_anchor_sha256, classification, references, held):
+    """Hold the exact terminal journal, anchors and evidence until owner exit."""
+    records, anchors = namespace_paths(plan)
+    for path in (records, anchors):
+        held.enter_context(renewal.hold_storage_namespace(path))
+        held.enter_context(_held_private_input(path, directory=True))
+    entries, status, _names, _tails = _read(plan, records, anchors, held, expected_anchor_sha256)
+    require(status['classification'] == classification)
+    return status, _read_evidence(records, entries, references, held)
 
 
 def hold_terminal_abort(plan, *, expected_anchor_sha256, held):

@@ -1,4 +1,4 @@
-"""Return the selected combined owner to service after a verified stage abort."""
+"""Return the selected combined owner to service after a verified abort or rollback."""
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -17,19 +17,22 @@ import selfhost_windows_website_verify as verify
 
 SCHEMA = 'marty.windows-website-abort-release/v1'
 RELEASE = 'abort-release.json'
+BACKOUT_RELEASE = 'backout-release.json'
+MODES = {'abort': (SCHEMA, RELEASE), 'backout': ('marty.windows-website-backout-release/v1', BACKOUT_RELEASE)}
 require = selection.require
 renewal = selection.renewal
 
 
-def _paths(config, plan):
+def _paths(config, plan, mode='abort'):
     records, _anchors = store.namespace_paths(plan)
     attempt = records.parent
     owner = plan['owner']
     active = renewal.product_transition_guard(config)
     require(attempt.parent == active.parent == Path(owner['root']) and config['project'] == owner['project'])
     require(config['engine_id'] == owner['engine_id'] and config['docker_host'] == owner['docker_host'])
+    require(mode in MODES)
     cycle = attempt.name.removeprefix('windows-website-')
-    archive = active.parent / ('.' + owner['project'] + '.website-abort-retired-' + cycle + '.json')
+    archive = active.parent / ('.' + owner['project'] + '.website-' + mode + '-retired-' + cycle + '.json')
     return attempt, active, archive
 
 
@@ -65,8 +68,10 @@ def _abort_inputs(plan, status, attempt, held):
 
 
 def _refresh(config, choice, values, record, plan, retained, attempt, *, assets, gh, cosign, registry_config,
-             authority_file, held):
-    require(not renewal.namespace_entry_exists(Path(plan['route_directory'])))
+             authority_file, held, proposal=None):
+    route_directory = Path(plan['route_directory'])
+    keep_routes = retained.get('retained_route_directory', False)
+    require(renewal.namespace_entry_exists(route_directory) == keep_routes)
     inspected = selection._inspect(config, choice, values, held, expected_data=record['data_sha256'])
     docker, model, context = inspected['docker'], inspected['model'], inspected['context']
     require(not website.WEBSITE_ROLES.intersection(inspected['services'])
@@ -74,11 +79,13 @@ def _refresh(config, choice, values, record, plan, retained, attempt, *, assets,
     require(renewal.context_snapshot(inspected['owned']) == retained['runtime_after'])
     data = renewal.data_mounts(inspected['owned'])
     require(contract.digest(data) == plan['states']['combined']['data_sha256'] == record['data_sha256'])
-    rebuilt, proposal = website.inspect_composition(config, choice, values, record, assets, gh=gh, cosign=cosign,
-        registry_config=registry_config, owner_root=attempt.parent, held=held, plan_owner=plan['owner'],
-        plan_attempt_directory=attempt, held_plan_only=True, guarded_attempt=True,
-        retained_edge_inputs=(docker, model, data), include_http=True)
-    require(rebuilt == plan)
+    if proposal is None:
+        rebuilt, proposal = website.inspect_composition(config, choice, values, record, assets, gh=gh, cosign=cosign,
+            registry_config=registry_config, owner_root=attempt.parent, held=held, plan_owner=plan['owner'],
+            plan_attempt_directory=attempt, held_plan_only=True, guarded_attempt=True,
+            retained_edge_inputs=(docker, model, data), include_http=True)
+        require(rebuilt == plan)
+    check_routes = edge._held_routes(route_directory, proposal['routes']['split'], held, create=False) if keep_routes else None
     selection._native_current(config, choice, values, docker, authority_file)
     first = edge._edge(edge._owned(context.check(before_intent=True), config['project']))
     observed = edge._probe(docker, first, proposal, 'combined')
@@ -87,29 +94,44 @@ def _refresh(config, choice, values, record, plan, retained, attempt, *, assets,
     last = edge._edge(edge._owned(context.check(before_intent=True), config['project']))
     require(verify._installed_ingress(first, model) == verify._installed_ingress(last, model)
             and edge._probe(docker, last, proposal, 'combined') == observed
-            and not renewal.namespace_entry_exists(Path(plan['route_directory'])))
+            and renewal.namespace_entry_exists(route_directory) == keep_routes)
+    if check_routes is not None:
+        check_routes()
     return {'runtime_sha256': contract.digest(retained['runtime_after']), 'edge_sha256': contract.digest(observed),
             'public_routes_sha256': contract.digest(public), 'application_handoffs_sha256': contract.digest(application),
             'native_sha256': plan['owner']['native_sha256'], 'foreign_storage_sha256': context.proof_sha256,
             'foreign_storage_changes': context.proof_count}
 
 
-def _release_checkpoints(plan, status, receipt):
-    return {'schema': SCHEMA, 'plan_sha256': plan['plan_sha256'], 'guard_sha256': status['guard_sha256'],
+def _terminal_inputs(plan, status, attempt, held, mode):
+    if mode == 'abort':
+        return _abort_inputs(plan, status, attempt, held)
+    from selfhost_windows_website_backout import hold_retirement
+    return hold_retirement(plan, status, held)
+
+
+def _release_checkpoints(plan, status, receipt, mode):
+    evidence = 'abort_receipt_sha256' if mode == 'abort' else 'retirement_sha256'
+    return {'schema': MODES[mode][0], 'plan_sha256': plan['plan_sha256'], 'guard_sha256': status['guard_sha256'],
             'anchor_sha256': status['anchor_sha256'], 'terminal_record_sha256': status['tail_sha256'],
-            'abort_receipt_sha256': contract.digest(receipt), 'candidate_outcome': receipt['candidate_outcome'],
+            evidence: contract.digest(receipt), 'candidate_outcome': receipt['candidate_outcome'],
             'selected_sha256': plan['owner']['selected_sha256'], 'generation_sequence': plan['owner']['generation_sequence']}
 
 
-def _read_release(attempt, expected, retained, owner, held):
-    raw = held.enter_context(renewal.hold_private_input(attempt / RELEASE))
+def _read_release(attempt, expected, retained, owner, held, mode):
+    raw = held.enter_context(renewal.hold_private_input(attempt / MODES[mode][1]))
     record = selection.decode(raw)
     require(record == {**expected, 'qualification_sha256': record['qualification_sha256']}
             and contract.sha(record['qualification_sha256']) and raw == selection.packed(record))
-    proof = held.enter_context(renewal.hold_private_input(attempt / ('abort-release-proof-' + record['qualification_sha256'] + '.json')))
+    proof = held.enter_context(renewal.hold_private_input(attempt / (mode + '-release-proof-' + record['qualification_sha256'] + '.json')))
     observed = selection.decode(proof)
-    require(selection.digest(proof) == record['qualification_sha256'] and proof == selection.packed(observed)
-            and set(observed) == {'runtime_sha256', 'edge_sha256', 'public_routes_sha256', 'application_handoffs_sha256',
+    require(selection.digest(proof) == record['qualification_sha256'] and proof == selection.packed(observed))
+    _verify_qualification(observed, retained, owner)
+    return record
+
+
+def _verify_qualification(observed, retained, owner):
+    require(set(observed) == {'runtime_sha256', 'edge_sha256', 'public_routes_sha256', 'application_handoffs_sha256',
                                   'native_sha256', 'foreign_storage_sha256', 'foreign_storage_changes'}
             and observed['runtime_sha256'] == contract.digest(retained['runtime_after'])
             and observed['edge_sha256'] == contract.digest(retained['edge_configuration'])
@@ -118,43 +140,44 @@ def _read_release(attempt, expected, retained, owner, held):
     count = observed['foreign_storage_changes']
     foreign = observed['foreign_storage_sha256']
     require(type(count) is int and ((count == 0 and foreign is None) or (count > 0 and contract.sha(foreign))))
-    return record
 
 
 def prepare(config, choice, values, record, plan, status, phase, *, assets, gh, cosign, registry_config,
             authority_file, held):
-    """Qualify the final abort while the selection input handles remain open."""
-    require(phase == 'release-abort' and status['classification'] == 'abort-evidence-complete')
-    attempt, active, archive = _paths(config, plan)
+    """Qualify a terminal combined layout under the selection input handles."""
+    require(phase in {'release-abort', 'release-backout'})
+    mode = phase.removeprefix('release-')
+    attempt, active, archive = _paths(config, plan, mode)
     require(not renewal.namespace_entry_exists(archive))
     identities = _path_identities(active)
     held.enter_context(renewal.hold_storage_namespace(attempt))
     held.enter_context(_held_private_input(attempt, directory=True, mutable_directory=True))
-    retained, receipt = _abort_inputs(plan, status, attempt, held)
+    retained, receipt = _terminal_inputs(plan, status, attempt, held, mode)
     qualification = _refresh(config, choice, values, record, plan, retained, attempt, assets=assets, gh=gh,
                              cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=held)
-    expected = _release_checkpoints(plan, status, receipt)
-    if not renewal.namespace_entry_exists(attempt / RELEASE):
+    expected = _release_checkpoints(plan, status, receipt, mode)
+    release_path = attempt / MODES[mode][1]
+    if not renewal.namespace_entry_exists(release_path):
         pin = contract.digest(qualification)
-        stage._material(attempt / ('abort-release-proof-' + pin + '.json'), qualification, held)
-        stage._material(attempt / RELEASE, {**expected, 'qualification_sha256': pin}, held)
-    release = _read_release(attempt, expected, retained, plan['owner'], held)
+        stage._material(attempt / (mode + '-release-proof-' + pin + '.json'), qualification, held)
+        stage._material(release_path, {**expected, 'qualification_sha256': pin}, held)
+    release = _read_release(attempt, expected, retained, plan['owner'], held, mode)
     return release, identities
 
 
 def finalize(config_path, plan, *, guard_sha256, expected_anchor_sha256, assets, gh, cosign, registry_config,
-             authority_file=None):
+             authority_file=None, mode='abort'):
     """Close the verification handles before archiving, with coordination still held."""
     config = selection.decode(renewal.read_private_bytes(Path(config_path)))
     selection.binding(config)
-    attempt, active, archive = _paths(config, plan)
+    attempt, active, archive = _paths(config, plan, mode)
     original = selection.packed(guard.marker(plan))
     require(selection.digest(original) == guard_sha256 and contract.sha(expected_anchor_sha256))
     with ExitStack() as coordination:
         if renewal.namespace_entry_exists(active):
             with selection._selected_inputs(config_path, _coordination=coordination,
                     _pending_website=(plan, guard_sha256, expected_anchor_sha256),
-                    _website_edge=('release-abort', assets, gh, cosign, registry_config, authority_file)) as decision:
+                    _website_edge=('release-' + mode, assets, gh, cosign, registry_config, authority_file)) as decision:
                 release, identities = decision
                 coordination.enter_context(renewal.hold_storage_namespace(attempt))
             # Keep the project lock through the exact, no-overwrite rename.
@@ -175,7 +198,7 @@ def finalize(config_path, plan, *, guard_sha256, expected_anchor_sha256, assets,
                 require(coordination.enter_context(renewal.hold_private_input(archive)) == original)
                 status = store.inspect(plan, expected_anchor_sha256=expected_anchor_sha256)
                 status = {**status, 'anchor_sha256': expected_anchor_sha256, 'guard_sha256': guard_sha256}
-                retained, receipt = _abort_inputs(plan, status, attempt, coordination)
-                release = _read_release(attempt, _release_checkpoints(plan, status, receipt), retained, owner, coordination)
+                retained, receipt = _terminal_inputs(plan, status, attempt, coordination, mode)
+                release = _read_release(attempt, _release_checkpoints(plan, status, receipt, mode), retained, owner, coordination, mode)
         require(not renewal.namespace_entry_exists(active))
-    return {**release, 'result': 'website-abort-guard-archived', 'guard_archived': True}
+    return {**release, 'result': 'website-' + mode + '-guard-archived', 'guard_archived': True}
