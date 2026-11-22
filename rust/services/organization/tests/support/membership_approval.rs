@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::{TimeDelta, Timelike, Utc};
 use marty_organization::{
+    application::ORGANIZATION_OUTBOX_PARTITIONS,
     migration::migrate_organization_schema,
     organization_core_router,
     postgres::{PostgresOrganizationStore, RepositoryError},
@@ -168,7 +169,7 @@ async fn pending_approval_is_tenant_scoped_atomic_and_single_winner_when_configu
         .await
         .expect("organization approval PostgreSQL contract database must connect");
     migrate_organization_schema(&pool).await.unwrap();
-    let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16).unwrap();
+    let outbox = PostgresOutboxStore::new(pool.clone(), "organization", ORGANIZATION_OUTBOX_PARTITIONS).unwrap();
     outbox.migrate().await.unwrap();
     drop(outbox);
     let memberships = Arc::new(MemoryCache::default());
