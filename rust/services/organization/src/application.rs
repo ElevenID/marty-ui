@@ -395,6 +395,7 @@ impl OrganizationApplication {
         // Schema and durable-outbox provisioning are explicit operator work.
         // Runtime initialization only validates the organization schema.
         validate_organization_schema(self.store.pool()).await?;
+        self.outbox.health().await?;
         Ok(())
     }
 
