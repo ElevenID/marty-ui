@@ -169,7 +169,12 @@ async fn pending_approval_is_tenant_scoped_atomic_and_single_winner_when_configu
         .await
         .expect("organization approval PostgreSQL contract database must connect");
     migrate_organization_schema(&pool).await.unwrap();
-    let outbox = PostgresOutboxStore::new(pool.clone(), "organization", ORGANIZATION_OUTBOX_PARTITIONS).unwrap();
+    let outbox = PostgresOutboxStore::new(
+        pool.clone(),
+        "organization",
+        ORGANIZATION_OUTBOX_PARTITIONS,
+    )
+    .unwrap();
     outbox.migrate().await.unwrap();
     drop(outbox);
     let memberships = Arc::new(MemoryCache::default());
