@@ -42,12 +42,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
             if command == "migrate" {
                 migrate_organization_schema(&pool).await?;
-                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", ORGANIZATION_OUTBOX_PARTITIONS)?;
+                let outbox = PostgresOutboxStore::new(
+                    pool.clone(),
+                    "organization",
+                    ORGANIZATION_OUTBOX_PARTITIONS,
+                )?;
                 outbox.migrate().await?;
                 drop(outbox);
             } else {
                 validate_organization_schema(&pool).await?;
-                let outbox = PostgresOutboxStore::new(pool.clone(), "organization", 16)?;
+                let outbox = PostgresOutboxStore::new(
+                    pool.clone(),
+                    "organization",
+                    ORGANIZATION_OUTBOX_PARTITIONS,
+                )?;
                 outbox.health().await?;
                 drop(outbox);
             }
