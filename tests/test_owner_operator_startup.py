@@ -19,8 +19,18 @@ def test_organization_schema_and_catalog_writes_are_operator_only() -> None:
     assert 'command == "bootstrap"' in operator
     assert "migrate_organization_schema(&pool)" in operator
     assert "reconcile_organization_startup(" in operator
+    assert "PostgresOutboxStore::new(pool.clone(), \"organization\", 16)" in operator
+    assert "outbox.migrate().await?" in operator
+    assert "outbox.health().await?" in operator
     assert "migrate_organization_schema(" not in runtime
     assert "reconcile_organization_startup(" not in runtime
+    assert "outbox.migrate()" not in runtime
+
+    application = read("rust/services/organization/src/application.rs")
+    initialize = application[application.index("pub async fn initialize"):application.index("pub async fn create_organization")]
+    assert "validate_organization_schema(self.store.pool())" in initialize
+    assert "migrate_organization_schema(" not in initialize
+    assert "self.outbox.migrate()" not in initialize
 
 
 def test_credential_template_schema_and_catalog_writes_are_operator_only() -> None:
