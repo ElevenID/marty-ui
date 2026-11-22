@@ -330,8 +330,6 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
-      organization:
-        condition: service_healthy
     healthcheck:
       disable: true
     restart: "no"
