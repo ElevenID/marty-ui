@@ -3,7 +3,10 @@ use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_organization::{
     application::ORGANIZATION_OUTBOX_PARTITIONS,
-    migration::{migrate_organization_schema, validate_organization_schema},
+    migration::{
+        migrate_organization_schema, validate_organization_outbox_schema,
+        validate_organization_schema,
+    },
     organization_core_router,
     organization_proto::organization_service_server::OrganizationServiceServer,
     postgres::PostgresOrganizationStore,
@@ -49,8 +52,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )?;
                 outbox.migrate().await?;
                 drop(outbox);
+                validate_organization_outbox_schema(&pool).await?;
             } else {
                 validate_organization_schema(&pool).await?;
+                validate_organization_outbox_schema(&pool).await?;
                 let outbox = PostgresOutboxStore::new(
                     pool.clone(),
                     "organization",
@@ -80,6 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .connect(&database_url)
                 .await?;
             validate_organization_schema(&pool).await?;
+            validate_organization_outbox_schema(&pool).await?;
             let store = PostgresOrganizationStore::new(pool.clone());
             let startup = reconcile_organization_startup(
                 &store,
