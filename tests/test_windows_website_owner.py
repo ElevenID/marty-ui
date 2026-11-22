@@ -14,7 +14,7 @@ selection, store, forward, renewal = owner.selection, owner.store, owner.forward
 digest = forward.contract.digest
 
 
-def prepare(planned, root, original, config):
+def prepare(planned, root, original, config, *, combined_runtime=None):
     config['tls_init_receipt'] = {'synthetic': 'historical-tls'}
     original.write_bytes(selection.packed(config))
     selection.adopt(original)
@@ -49,7 +49,11 @@ def prepare(planned, root, original, config):
     split = root / ('website-' + 'a'*32 + '.compose.json')
     split.write_bytes(selection.packed(selection.decode(model_bytes)))
     model = {'compose_file': str(split), 'compose_sha256': selection.digest(split.read_bytes())}
-    runtime = [{'synthetic': 'runtime'}]
+    candidate_id = 'a'*64
+    candidate_row = {'project': config['project'], 'service': forward.contract.SLOT, 'image': 'sha256:' + 'a'*64,
+                     'mounts': [], 'status': 'running'}
+    runtime = ([{'synthetic': 'runtime'}] if combined_runtime is None
+               else {**combined_runtime, candidate_id: candidate_row})
     routing = {'synthetic': 'edge-configuration'}
     with ExitStack() as held:
         status = owner.guard.initialize(config, plan, held)
@@ -58,9 +62,12 @@ def prepare(planned, root, original, config):
             status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase, event='started',
                 evidence_sha256={key: 'a'*64 for key in store.journal.START_EVIDENCE})
             after = ({key: {} for key in store.journal.COMPLETION_EVIDENCE[phase]} | {'runtime_after': runtime})
+            if phase == 'stage-candidate' and combined_runtime is not None:
+                after['candidate_health'] = {'container_id': candidate_id}
             if phase == 'route-website':
                 after.update(mounted_template=plan['edge_template'], edge_configuration=routing)
-            evidence = forward.stage._evidence(attempt / (phase + '-after.json'), after, held)
+            filename = 'stage-after.json' if phase == 'stage-candidate' else phase + '-after.json'
+            evidence = forward.stage._evidence(attempt / filename, after, held)
             status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase,
                                   event='completed', evidence_sha256=evidence)
         _, _, retained = forward._retain_successor(config, model, attempt, assets, plan,
@@ -282,3 +289,155 @@ def test_published_backout_binds_actual_selected_split(monkeypatch, planned, cap
         with pytest.raises(ValueError):
             with selection._session(path, _pending_website_sha256=guard_pin):
                 pytest.fail('Backout cannot disguise damage to the committed forward seal')
+
+
+def _retire_published(plan, published, guard_pin, anchor, combined_runtime):
+    import selfhost_windows_website_backout as retirement
+
+    attempt = Path(plan['attempt_directory'])
+    with ExitStack() as held:
+        routed = store.read_evidence(plan, expected_anchor_sha256=anchor, held=held,
+            references={'stage-after.json': ('stage-candidate', 'completed')})['stage-after.json']
+        candidate_id = routed['candidate_health']['container_id']
+        staged = routed['runtime_after']
+        status = store.inspect(plan, expected_anchor_sha256=anchor)
+
+        def append(phase, event, name, observations):
+            nonlocal status
+            evidence = forward.stage._evidence(attempt / name, observations, held)
+            status = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase,
+                                  event=event, evidence_sha256=evidence)
+
+        lease = {'owner': plan['owner'], 'guard_sha256': guard_pin}
+        start = {'owner_lease': lease, 'native_custody': {}, 'foreign_storage': {}, 'runtime_before': {}}
+        routes = {'synthetic': 'combined-overlay'}
+        append('restore-combined', 'started', 'restore-combined-before.json',
+               {**start, 'owner_lease': {**lease, 'published_selection': published}})
+        append('restore-combined', 'completed', 'restore-combined-after.json',
+               {'runtime_after': staged, 'mounted_template': plan['edge_template'], 'edge_configuration': routes})
+        append('verify-combined', 'started', 'verify-combined-before.json', start)
+        append('verify-combined', 'completed', 'verify-combined-after.json',
+               {'runtime_after': staged, 'public_routes': {}, 'application_handoffs': {}})
+        normalized_model = {'sha256': plan['owner']['model_sha256']}
+        custody = {'candidate_id': candidate_id, 'observed_candidate': staged[candidate_id],
+                   'remove_command': ['container', 'rm', candidate_id]}
+        append(retirement.PHASE, 'started', retirement.BEFORE,
+               {**start, 'runtime_before': {'containers': staged, 'edge_configuration': routes,
+                  'retained_route_directory': 'materialized', 'normalized_model': normalized_model,
+                  'candidate_retirement': custody}})
+        result = {'candidate_id': candidate_id, 'stop_completed': True, 'remove_returncode': 0,
+                  'completed_cli_job': True, 'candidate_absent': True}
+        append(retirement.PHASE, store.journal.RETIRE_RETURNED, retirement.RETURNED, {'candidate_retirement': result})
+        retained = {'runtime_after': combined_runtime, 'edge_configuration': routes, 'normalized_model': normalized_model,
+                    'retained_route_directory': 'materialized'}
+        qualification = {'runtime_sha256': digest(combined_runtime), 'edge_sha256': digest(routes),
+            'public_routes_sha256': 'b'*64, 'application_handoffs_sha256': 'c'*64,
+            'native_sha256': plan['owner']['native_sha256'], 'foreign_storage_sha256': None, 'foreign_storage_changes': 0}
+        append(retirement.PHASE, 'completed', retirement.AFTER, retirement._completion(plan, retained, result, qualification))
+    return status
+
+
+@pytest.mark.parametrize('fault', [None, 'retirement-tamper', 'live-refused', 'interrupted'])
+def test_reverse_publication_selects_exact_combined_owner(monkeypatch, planned, capsys, fault):
+    import selfhost_windows_website_abort_release as release
+
+    with fixture(monkeypatch) as (root, phase, _tx, _outcome, path, config):
+        runtime = {'b'*64: {'project': config['project'], 'service': 'edge', 'image': 'sha256:'+'b'*64,
+                            'mounts': [], 'status': 'running'}}
+        phase['data'] = digest(forward.edge._retained_data(runtime))
+        source, starting, plan, guard_pin, pins, split, _ = prepare(planned, root, path, config, combined_runtime=runtime)
+        phase['data'] = plan['states']['split']['data_sha256']
+        committed = owner.finish(path, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        split_source = Path(committed['journal'])
+        split_raw = {entry.name: entry.read_bytes() for entry in split_source.iterdir()}
+        original_raw = {entry.name: entry.read_bytes() for entry in source.iterdir()}
+        proof = owner._published_binding(original_raw, selection.decode(original_raw[owner.INTENT]), split_raw)
+        terminal = _retire_published(plan, proof, guard_pin, pins['terminal_sha256'], runtime)
+        attempt = Path(plan['attempt_directory'])
+        calls = []
+
+        def refresh(combined, choice, _values, record, planned, retained, owner_attempt, **kwargs):
+            calls.append('combined-proof')
+            assert choice == record['choice'] == 'new' and record['data_sha256'] == plan['owner']['data_sha256']
+            assert combined['compose_file'] == config['compose_file'] and owner_attempt == attempt and plan == planned
+            assert retained['runtime_after'] == runtime
+            if fault == 'live-refused':
+                raise ValueError('Fixture rejected live combined qualification')
+
+        monkeypatch.setattr(release, '_refresh', refresh)
+        options = {'guard_sha256': guard_pin, 'expected_anchor_sha256': terminal['anchor_sha256'],
+                   'forward_intent_sha256': committed['intent_sha256'],
+                   'assets': root/'assets', 'gh': None, 'cosign': None, 'registry_config': None}
+        with pytest.raises(ValueError):
+            selection.select_combined_website(path, plan, **dict(options, expected_anchor_sha256=pins['terminal_sha256']))
+        if fault == 'retirement-tamper':
+            (attempt / 'retire-candidate-after.json').write_bytes(b'{}')
+        if fault in {'retirement-tamper', 'live-refused'}:
+            with pytest.raises(ValueError):
+                selection.select_combined_website(path, plan, **options)
+            assert not (split_source / owner.COMBINED_INTENT).exists()
+            assert calls == (['combined-proof'] if fault == 'live-refused' else [])
+            return
+        if fault == 'interrupted':
+            hold = owner._held_private_input
+
+            @contextmanager
+            def interrupt(candidate_path, **kwargs):
+                if kwargs.get('_rename_to') == split_source / owner.COMBINED_DECISION:
+                    raise RuntimeError('Stopped before selecting combined')
+                with hold(candidate_path, **kwargs) as value:
+                    yield value
+
+            with monkeypatch.context() as injected:
+                injected.setattr(owner, '_held_private_input', interrupt)
+                with pytest.raises(RuntimeError, match='before selecting combined'):
+                    selection.select_combined_website(path, plan, **options)
+            assert (split_source / owner.COMBINED_PENDING).is_file()
+            assert not (split_source / owner.COMBINED_DECISION).exists()
+            with pytest.raises(ValueError):
+                with selection._session(path, _pending_website_sha256=guard_pin):
+                    pytest.fail('Pending reversal cannot fall back to split')
+            pin = selection.digest((split_source / owner.COMBINED_INTENT).read_bytes())
+            with pytest.raises(ValueError):
+                selection.select_combined_website(path, plan, **dict(options, intent_sha256='0'*64))
+            options['intent_sha256'] = pin
+
+        args = ['--select-combined', '--selection-file', str(path), '--composition-dir', str(root/'assets'),
+                '--gh', str(root/'gh'), '--cosign', str(root/'cosign'), '--plan-file', str(attempt/'journal'/store.PLAN),
+                '--guard-sha256', guard_pin, '--expected-anchor-sha256', terminal['anchor_sha256'],
+                '--forward-intent-sha256', committed['intent_sha256']]
+        if fault == 'interrupted':
+            args.extend(['--intent-sha256', options['intent_sha256']])
+        assert website.main(args) == 0
+        output = capsys.readouterr()
+        assert not output.err
+        result = selection.decode(output.out.encode())
+        assert result['result'] == 'website-combined-selected-guarded'
+        assert result['generation_sequence'] == committed['generation_sequence']
+        assert result['selected_sha256'] == committed['selected_sha256'] and result['guards_retained']
+        assert {name: (source/name).read_bytes() for name in starting} == starting
+        assert {name: (split_source/name).read_bytes() for name in split_raw} == split_raw
+        assert renewal.product_transition_guard(config).is_file()
+        target = Path(result['journal'])
+        with selection._session(path, _pending_website_sha256=guard_pin) as (_, _, expected, active, raw, _stack):
+            assert active == target and expected['compose_file'] == config['compose_file']
+            first, selected, _generation = owner.product.anchor(raw, expected)
+            assert selected['decision'] == 'website-combined-new'
+            assert selected['data_sha256'] == plan['owner']['data_sha256']
+            selected_config = selection.decode(Path(first['config_path']).read_bytes())
+            assert selected_config['compose_file'] != str(split)
+            assert Path(selected_config['intent']).read_bytes() == Path(selected_config['result']).read_bytes() == b''
+        repeated = selection.select_combined_website(path, plan, **dict(options, intent_sha256=result['intent_sha256']))
+        assert repeated == result
+        assert calls == ['combined-proof'] * (3 if fault == 'interrupted' else 2)
+        with pytest.raises(ValueError):
+            selection.status(path)
+        # Model a separately qualified guard release on the synthetic tree,
+        # then enter the ordinary renewal reader through the original caller.
+        renewal.product_transition_guard(config).rename(attempt / 'fixture-archived-guard.json')
+        phase['data'] = plan['owner']['data_sha256']
+        with selection.selected_inputs(path) as lease:
+            assert lease.compose_file == Path(config['compose_file']) and lease.journal_path == target
+            assert lease.generation_sequence == committed['generation_sequence']
+            assert lease.selected_sha256 == committed['selected_sha256']
+            assert lease.check_current() == phase['data']

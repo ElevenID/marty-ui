@@ -134,7 +134,7 @@ def _parse(raw, expected, *, allow_pending_model=False):
     from selfhost_windows_continuation import FILES, checkpoint
     from selfhost_windows_product_journal import FILES as product_files, SCHEMA as product_schema
     from selfhost_windows_recovery_journal import FILES as recovery_files, SCHEMA as recovery_schema
-    from selfhost_windows_website_owner import FILES as website_files, SCHEMA as website_schema
+    from selfhost_windows_website_owner import COMBINED_SCHEMA, FILES as website_files, SCHEMA as website_schema
     from selfhost_windows_model import ENTRY as model_entry, history
     require('owner.json' in raw)
     require(decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
@@ -155,7 +155,8 @@ def _parse(raw, expected, *, allow_pending_model=False):
                                'config_sha256', 'inputs', 'operation', 'result_before_sha256'})
         require(intent['schema'] == SCHEMA and intent['sequence'] == number and intent['parent'] == previous)
         require(type(intent['sequence']) is int)
-        first_operation = ({product_schema:'product-successor',recovery_schema:'recovery-successor',website_schema:'website-successor'}.get(carry['schema'],'continuation')) if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
+        first_operation = ({product_schema:'product-successor',recovery_schema:'recovery-successor',website_schema:'website-successor',
+                            COMBINED_SCHEMA:'website-combined-successor'}.get(carry['schema'],'continuation')) if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
         require(intent['operation'] == (first_operation if number == 1 else 'activation'))
         require(isinstance(intent['inputs'], dict) and set(intent['inputs']) == {'old', 'new'})
         for snapshot in intent['inputs'].values():
@@ -183,7 +184,8 @@ def _parse(raw, expected, *, allow_pending_model=False):
             require(record['intent_sha256'] == digest(raw[f'{number:06}.intent.json']))
             require(isinstance(record['choice'], str) and record['choice'] in {'old', 'new'} and record['selected'] == intent['inputs'][record['choice']])
             if number == 1 and carry:
-                prefix = {product_schema:'product-selected-',recovery_schema:'recovered-',website_schema:'website-selected-'}.get(carry['schema'],'continued-')
+                prefix = {product_schema:'product-selected-',recovery_schema:'recovered-',website_schema:'website-selected-',
+                          COMBINED_SCHEMA:'website-combined-'}.get(carry['schema'],'continued-')
                 require(record['decision'] == prefix+record['choice'])
             else:
                 decisions = {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'}
@@ -1182,7 +1184,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
         def website_owner():
             journal_hashes = {name: digest(body) for name, body in raw.items()}
             if _published_backout_intent is not None:
-                from selfhost_windows_website_owner import FILES as website_files
+                from selfhost_windows_website_owner import FORWARD_FILES as website_files
                 journal_hashes = {name: sha for name, sha in journal_hashes.items() if name not in website_files}
             return {
                 'project': cfg['project'], 'engine_id': cfg['engine_id'],
@@ -1514,6 +1516,13 @@ def publish_website_forward(config_path, plan, *, guard_sha256, expected_anchor_
     return finish(config_path, plan, guard_sha256=guard_sha256, terminal_sha256=expected_anchor_sha256,
                   candidate_sha256=candidate_sha256, qualification_sha256=qualification_sha256,
                   check_live=check_live, authority_file=authority_file, intent_sha256=intent_sha256)
+
+
+def select_combined_website(config_path, plan, *, guard_sha256, expected_anchor_sha256, forward_intent_sha256, **options):
+    """Return the restored combined configuration to the credential owner."""
+    from selfhost_windows_website_owner import finish_combined
+    return finish_combined(config_path, plan, guard_sha256=guard_sha256, terminal_sha256=expected_anchor_sha256,
+                           forward_intent_sha256=forward_intent_sha256, **options)
 
 
 def reconcile_existing(config_path, *, authority_file=None):

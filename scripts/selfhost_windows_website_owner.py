@@ -14,7 +14,13 @@ SCHEMA = 'marty.windows-website-owner-selection/v1'
 INTENT = 'website-forward.intent.json'
 DECISION = 'website-forward.selection.json'
 PENDING = 'website-forward.selection.pending.json'
-FILES = {INTENT, DECISION, PENDING}
+FORWARD_FILES = INTENT, DECISION, PENDING
+COMBINED_SCHEMA = 'marty.windows-website-combined-selection/v1'
+COMBINED_INTENT = 'website-combined.intent.json'
+COMBINED_DECISION = 'website-combined.selection.json'
+COMBINED_PENDING = 'website-combined.selection.pending.json'
+COMBINED_FILES = COMBINED_INTENT, COMBINED_DECISION, COMBINED_PENDING
+FILES = {*FORWARD_FILES, *COMBINED_FILES}
 require = selection.require
 renewal = selection.renewal
 
@@ -28,7 +34,7 @@ def marker(raw, expected, source, attempt, *, terminal_sha256, candidate_sha256,
     return {
         'schema': SCHEMA, 'source_dir': str(source), 'attempt_dir': str(attempt),
         'target_dir': str(attempt.with_name('.' + expected['project'] + '.generation-website-' + cycle)),
-        'source_sha256': {name: selection.digest(body) for name, body in raw.items() if name not in FILES},
+        'source_sha256': {name: selection.digest(body) for name, body in raw.items() if name not in FORWARD_FILES},
         'terminal_sha256': terminal_sha256, 'candidate_sha256': candidate_sha256,
         'qualification_sha256': qualification_sha256,
     }
@@ -90,7 +96,10 @@ def _hold_successor(raw, expected, current_model, link, stack, *, admission, his
     attempt = Path(link['attempt_dir'])
     for path in (attempt, attempt / 'successor', attempt / 'successor' / 'proofs'):
         stack.enter_context(renewal.hold_storage_namespace(path))
-        stack.enter_context(_held_private_input(path, directory=True))
+        # A historical forward proof keeps its files immutable while the
+        # existing attempt directory receives the separate reverse owner.
+        stack.enter_context(_held_private_input(path, directory=True,
+                                               mutable_directory=historical_forward and path == attempt))
     _plan_raw, plan = _held_json(attempt / 'journal' / store.PLAN, stack, maximum=2*1024*1024)
     root = attempt / 'successor'
     _candidate_raw, candidate = _held_json(root / 'candidate.json', stack)
@@ -173,20 +182,26 @@ def _hold_successor(raw, expected, current_model, link, stack, *, admission, his
 
 def seed(raw, expected, current_model, source, link, stack, *, admission=False, historical_forward=False):
     """Keep the exact credential selection and generation at the new Compose owner."""
-    from selfhost_windows_continuation import CHECKPOINT
-
     require(validate_marker(raw, expected, source) == link)
     configuration, config_raw, config, model, data, first, prior, generation = _hold_successor(
         raw, expected, current_model, link, stack, admission=admission, historical_forward=historical_forward)
+    return _owner_seed(expected, link, configuration, config_raw, config, model, data, first, prior, generation,
+                       operation='website-successor', choice_prefix='website-selected-')
+
+
+def _owner_seed(expected, link, configuration, config_raw, config, model, data, first, prior, generation, *,
+                operation, choice_prefix):
+    from selfhost_windows_continuation import CHECKPOINT
+
     empty = selection.digest(b'')
     first = deepcopy(first)
-    first.update(sequence=1, parent=None, operation='website-successor', config_path=str(configuration),
+    first.update(sequence=1, parent=None, operation=operation, config_path=str(configuration),
                  config_file_sha256=selection.digest(config_raw), config_sha256=selection.config_digest(config),
                  result_before_sha256=empty)
     selected = dict(prior, sequence=1, parent=None, intent_sha256=forward.contract.digest(first),
-                    decision='website-selected-' + prior['choice'], data_sha256=data,
+                    decision=choice_prefix + prior['choice'], data_sha256=data,
                     result_sha256=empty, transition_intent_sha256=empty)
-    checkpoint = {'schema': SCHEMA, 'source_dir': link['source_dir'], 'intent_sha256': forward.contract.digest(link),
+    checkpoint = {'schema': link['schema'], 'source_dir': link['source_dir'], 'intent_sha256': forward.contract.digest(link),
                   'sequence_offset': generation - 1, 'generation_model': model,
                   'first_intent': first, 'first_selection': selected}
     return {
@@ -197,7 +212,7 @@ def seed(raw, expected, current_model, source, link, stack, *, admission=False, 
 
 
 def decision(link, initial):
-    return {'schema': SCHEMA, 'intent_sha256': forward.contract.digest(link),
+    return {'schema': link['schema'], 'intent_sha256': forward.contract.digest(link),
             'target_entries_sha256': {name: selection.digest(body) for name, body in initial.items()}}
 
 
@@ -216,9 +231,14 @@ def hold_published_split(raw, expected, current_model, source, plan, intent_sha2
     held.enter_context(renewal.hold_storage_namespace(target))
     held.enter_context(_held_private_input(target, directory=True))
     require(selection._read(target, held) == initial)
-    return {'intent_sha256': intent_sha256, 'selection_sha256': selection.digest(raw[DECISION]),
-            'sealed_anchor_sha256': link['terminal_sha256'],
-            'split_selection_sha256': selection.digest(initial['000001.selection.json'])}
+    return _published_binding(raw, link, initial)
+
+
+def _published_binding(original_raw, forward_link, split_raw):
+    return {'intent_sha256': selection.digest(original_raw[INTENT]),
+            'selection_sha256': selection.digest(original_raw[DECISION]),
+            'sealed_anchor_sha256': forward_link['terminal_sha256'],
+            'split_selection_sha256': selection.digest(split_raw['000001.selection.json'])}
 
 
 def verify_backout_binding(plan, status, published, held):
@@ -282,44 +302,197 @@ def finish(config_path, plan, *, guard_sha256, terminal_sha256, candidate_sha256
             check_live(effective_config(original, current_model), selected['choice'], values,
                        selections[len(selections)], link, stack)
 
-            if INTENT not in raw:
-                selection._append(source, raw, INTENT, link, stack)
-            target = Path(link['target_dir'])
-            if not renewal.namespace_entry_exists(target):
-                target.mkdir()
-            coordination.enter_context(renewal.hold_storage_namespace(target))
-            with _held_private_input(target, directory=True):
-                require({path.name for path in target.iterdir()} <= set(initial))
-            for name, body in initial.items():
-                path = target / name
-                if not renewal.namespace_entry_exists(path):
-                    selection._new_private(path, body)
-                elif renewal.read_private_bytes(path) == b'':
-                    renewal.write_empty_private_file(path, body.decode())
-                require(coordination.enter_context(renewal.hold_private_input(path)) == body)
-            coordination.enter_context(_held_private_input(target, directory=True))
-            require({path.name for path in target.iterdir()} == set(initial))
+            pending = _stage_selection(source, raw, link, initial, stack, coordination, FORWARD_FILES)
+        _commit_selection(source, pending, FORWARD_FILES)
 
-            publication = decision(link, initial)
-            publication_raw = selection.packed(publication)
-            if DECISION in raw:
-                require(raw[DECISION] == publication_raw)
-            else:
-                if PENDING not in raw:
-                    selection._append(source, raw, PENDING, publication, stack)
-                require(raw[PENDING] == publication_raw)
-                pending_identity = _path_identities(source / PENDING)
-        # Complete every held proof before the same-handle publication. The
-        # pre-existing shared renewal lock remains held across this boundary.
-        if DECISION not in raw:
-            with _held_private_input(source / PENDING, _rename_to=source / DECISION,
-                                     _expected_identities=pending_identity) as body:
-                require(body == publication_raw)
-            require(_path_identities(source / DECISION) == pending_identity)
-
+    target = Path(link['target_dir'])
     with selection._session(config_path, _pending_website_sha256=guard_sha256) as (_, _, _, active, entries, _stack):
         require(active == target and all(entries.get(name) == body for name, body in initial.items()))
     return {'schema': SCHEMA, 'result': 'website-selected-guarded', 'guard_sha256': guard_sha256,
             'intent_sha256': link_sha256, 'journal': str(target), 'guards_retained': True,
             'generation_sequence': plan['owner']['generation_sequence'],
             'selected_sha256': forward.contract.digest(selected['selected'])}
+
+
+def _stage_selection(source, raw, link, initial, stack, coordination, names):
+    """Hold the complete prepared target across the decision rename."""
+    intent_name, decision_name, pending_name = names
+    if intent_name not in raw:
+        selection._append(source, raw, intent_name, link, stack)
+    target = Path(link['target_dir'])
+    if not renewal.namespace_entry_exists(target):
+        target.mkdir()
+    coordination.enter_context(renewal.hold_storage_namespace(target))
+    with _held_private_input(target, directory=True):
+        require({path.name for path in target.iterdir()} <= set(initial))
+    for name, body in initial.items():
+        path = target / name
+        if not renewal.namespace_entry_exists(path):
+            selection._new_private(path, body)
+        elif renewal.read_private_bytes(path) == b'':
+            renewal.write_empty_private_file(path, body.decode())
+        require(coordination.enter_context(renewal.hold_private_input(path)) == body)
+    coordination.enter_context(_held_private_input(target, directory=True))
+    require({path.name for path in target.iterdir()} == set(initial))
+
+    publication = decision(link, initial)
+    publication_raw = selection.packed(publication)
+    if decision_name in raw:
+        require(raw[decision_name] == publication_raw)
+        return None
+    if pending_name not in raw:
+        selection._append(source, raw, pending_name, publication, stack)
+    require(raw[pending_name] == publication_raw)
+    return publication_raw, _path_identities(source / pending_name)
+
+
+def _commit_selection(source, pending, names):
+    # All admission/input handles have exited. The common project lock and
+    # prepared target remain held across the exact no-overwrite rename.
+    if pending is not None:
+        raw, identity = pending
+        _, decision_name, pending_name = names
+        with _held_private_input(source / pending_name, _rename_to=source / decision_name,
+                                 _expected_identities=identity) as body:
+            require(body == raw)
+        require(_path_identities(source / decision_name) == identity)
+
+
+def combined_marker(raw, expected, source, origin, *, forward_intent_sha256, guard_sha256, terminal_sha256):
+    from selfhost_windows_continuation import CHECKPOINT, checkpoint
+
+    require(set(raw) - set(COMBINED_FILES) == {
+        'owner.json', CHECKPOINT, '000001.intent.json', '000001.selection.json'})
+    carry = checkpoint(raw)
+    require(carry['schema'] == SCHEMA and carry['intent_sha256'] == forward_intent_sha256
+            and carry['source_dir'] == str(origin[0]))
+    original_source, original_raw = origin
+    original_owner = selection.decode(original_raw['owner.json'])['binding']
+    forward_link = validate_marker(original_raw, original_owner, original_source)
+    require(selection.digest(original_raw[INTENT]) == forward_intent_sha256 and DECISION in original_raw
+            and Path(forward_link['target_dir']) == source
+            and source.parent == original_source.parent == Path(expected['root']))
+    attempt = Path(forward_link['attempt_dir'])
+    cycle = attempt.name.removeprefix('windows-website-')
+    return {'schema': COMBINED_SCHEMA, 'source_dir': str(source), 'attempt_dir': str(attempt),
+            'target_dir': str(attempt.with_name('.' + expected['project'] + '.generation-website-combined-' + cycle)),
+            'source_sha256': {name: selection.digest(body) for name, body in raw.items() if name not in COMBINED_FILES},
+            'forward_intent_sha256': forward_intent_sha256, 'guard_sha256': guard_sha256,
+            'terminal_sha256': terminal_sha256}
+
+
+def validate_combined_marker(raw, expected, source, origin):
+    link = selection.decode(raw[COMBINED_INTENT])
+    require(type(link) is dict and raw[COMBINED_INTENT] == selection.packed(link))
+    pins = {key: link[key] for key in ('forward_intent_sha256', 'guard_sha256', 'terminal_sha256')}
+    require(all(product.sha(pin) for pin in pins.values())
+            and link == combined_marker(raw, expected, source, origin, **pins))
+    return link
+
+
+def combined_seed(raw, expected, source, origin, link, stack, *, prepare=False):
+    """Derive the reverse owner from the original configuration and terminal backout."""
+    from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
+    from selfhost_windows_website_backout import CLASSIFICATION, hold_retirement
+
+    require(validate_combined_marker(raw, expected, source, origin) == link)
+    original_source, original_raw = origin
+    original_owner = selection.decode(original_raw['owner.json'])['binding']
+    forward_link = validate_marker(original_raw, original_owner, original_source)
+    original_intent, original_record, generation = product.anchor(original_raw, original_owner)
+    original_records = selection._parse(original_raw, original_owner)[1]
+    combined_model = history(original_raw, original_owner, original_records)[1]
+    original_bytes, original = _held_json(Path(original_intent['config_path']), stack, canonical=False)
+    require(selection.digest(original_bytes) == original_intent['config_file_sha256']
+            and selection.config_digest(original) == original_intent['config_sha256'])
+    config = effective_config(original, combined_model)
+    split_intent, split_record, split_generation = product.anchor(raw, expected)
+    require(split_intent['inputs'] == original_intent['inputs'] and split_generation == generation
+            and split_record['choice'] == original_record['choice']
+            and split_record['selected'] == original_record['selected']
+            and immutable_binding(expected) == immutable_binding(original_owner))
+
+    attempt = Path(link['attempt_dir'])
+    _, plan = _held_json(attempt / 'journal' / store.PLAN, stack, maximum=2*1024*1024)
+    require(plan['attempt_directory'] == str(attempt) and link['guard_sha256'] == forward.contract.digest(guard.marker(plan))
+            and plan['owner']['data_sha256'] == original_record['data_sha256']
+            and plan['owner']['selected_sha256'] == forward.contract.digest(original_record['selected']))
+    status = store.inspect(plan, expected_anchor_sha256=link['terminal_sha256'])
+    require(status['classification'] == CLASSIFICATION)
+    status['guard_sha256'] = link['guard_sha256']
+    verify_backout_binding(plan, status, _published_binding(original_raw, forward_link, raw), stack)
+    retained, _receipt = hold_retirement(plan, status, stack)
+
+    root = attempt / 'combined-successor'
+    configuration = root / 'config.private.json'
+    combined = product.successor_configuration(config, combined_model, root)
+    paths = [Path(combined[key]) for key in ('intent', 'result', 'new_log', 'rollback_log')]
+    paths += [Path(path) for step in combined['step_receipts'] for path in step.values()]
+    require(len(set(paths)) == len(paths) and all(path.parent == root / 'activation' for path in paths))
+    if prepare:
+        for directory in (root, root / 'activation'):
+            forward._directory(directory, stack)
+        for path in paths:
+            if not renewal.namespace_entry_exists(path):
+                selection._new_private(path, b'')
+            require(stack.enter_context(renewal.hold_private_input(path)) == b'')
+        forward._inventory(root / 'activation', {path.name for path in paths}, stack)
+        forward.stage._material(configuration, combined, stack)
+    else:
+        stack.enter_context(renewal.hold_storage_namespace(root))
+        stack.enter_context(_held_private_input(root, directory=True))
+    config_raw, checked = _held_json(configuration, stack)
+    require(checked == combined and model_binding(checked) == combined_model
+            and immutable_binding(selection.binding(checked)) == immutable_binding(expected))
+    forward._inventory(root, {'activation', 'config.private.json'}, stack)
+    initial = _owner_seed(expected, link, configuration, config_raw, combined, combined_model,
+        original_record['data_sha256'], split_intent, split_record, generation,
+        operation='website-combined-successor', choice_prefix='website-combined-')
+    return initial, plan, retained, config, original_record
+
+
+def finish_combined(config_path, plan, *, guard_sha256, terminal_sha256, forward_intent_sha256, assets, gh, cosign,
+                    registry_config, authority_file=None, intent_sha256=None):
+    """Select the restored combined configuration while retaining the website guard."""
+    from selfhost_windows_website_abort_release import _refresh
+
+    require(all(product.sha(pin) for pin in (guard_sha256, terminal_sha256, forward_intent_sha256)))
+    ancestry = []
+
+    with ExitStack() as coordination:
+        with selection._session(config_path, _coordination=coordination, _pending_website_sha256=guard_sha256,
+                _pending_website_selection_sha256=intent_sha256,
+                _preserve_history=ancestry.extend) as (base, _, expected, source, raw, stack):
+            require(ancestry)
+            active_guard = stack.enter_context(renewal.hold_private_input(renewal.product_transition_guard(base)))
+            require(active_guard == selection.packed(guard.marker(plan)))
+            origin = ancestry[-1]
+            link = combined_marker(raw, expected, source, origin, forward_intent_sha256=forward_intent_sha256,
+                                   guard_sha256=guard_sha256, terminal_sha256=terminal_sha256)
+            link_raw = selection.packed(link)
+            link_pin = selection.digest(link_raw)
+            if COMBINED_INTENT in raw:
+                require(raw[COMBINED_INTENT] == link_raw and intent_sha256 == link_pin)
+            else:
+                require(intent_sha256 is None)
+            prospective = dict(raw, **{COMBINED_INTENT: link_raw})
+            initial, retained_plan, retained, original_cfg, record = combined_seed(
+                prospective, expected, source, origin, link, stack, prepare=True)
+            require(plan == retained_plan)
+            first = selection.decode(initial['000001.intent.json'])
+            config = selection.decode(stack.enter_context(renewal.hold_private_input(Path(first['config_path']))))
+            values, snapshots = selection._inputs(config, stack)
+            require(snapshots == first['inputs'])
+            _refresh(original_cfg, record['choice'], values, record, plan, retained, Path(link['attempt_dir']),
+                assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
+                held=stack)
+            pending = _stage_selection(source, raw, link, initial, stack, coordination, COMBINED_FILES)
+        _commit_selection(source, pending, COMBINED_FILES)
+
+    target = Path(link['target_dir'])
+    with selection._session(config_path, _pending_website_sha256=guard_sha256) as (_, _, _, active, entries, _stack):
+        require(active == target and all(entries.get(name) == body for name, body in initial.items()))
+    return {'schema': COMBINED_SCHEMA, 'result': 'website-combined-selected-guarded', 'guard_sha256': guard_sha256,
+            'forward_intent_sha256': forward_intent_sha256, 'intent_sha256': link_pin, 'journal': str(target),
+            'guards_retained': True, 'generation_sequence': plan['owner']['generation_sequence'],
+            'selected_sha256': plan['owner']['selected_sha256']}

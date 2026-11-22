@@ -29,8 +29,8 @@ def checkpoint(raw):
                                                   'first_intent', 'first_selection'})
     from selfhost_windows_product_journal import SCHEMA as product_schema
     from selfhost_windows_recovery_journal import SCHEMA as recovery_schema
-    from selfhost_windows_website_owner import SCHEMA as website_schema
-    require(value['schema'] in {SCHEMA, product_schema, recovery_schema, website_schema} and Path(value['source_dir']).is_absolute()
+    from selfhost_windows_website_owner import COMBINED_SCHEMA, SCHEMA as website_schema
+    require(value['schema'] in {SCHEMA, product_schema, recovery_schema, website_schema, COMBINED_SCHEMA} and Path(value['source_dir']).is_absolute()
             and re.fullmatch(r'[0-9a-f]{64}', value['intent_sha256'])
             and type(value['sequence_offset']) is int and value['sequence_offset'] >= 0)
     require(value['first_intent'] == selection.decode(raw['000001.intent.json'])
@@ -147,12 +147,15 @@ def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_con
         has_product = product.INTENT in raw
         has_recovery = recovery.INTENT in raw
         has_website = website.INTENT in raw
-        sealed = has_link or has_product or has_recovery or has_website
-        require(sum((has_link, has_product, has_recovery, has_website)) <= 1
+        has_combined = website.COMBINED_INTENT in raw
+        sealed = has_link or has_product or has_recovery or has_website or has_combined
+        require(sum((has_link, has_product, has_recovery, has_website, has_combined)) <= 1
                 and (product.DECISION not in raw or has_product)
                 and (recovery.DECISION not in raw or has_recovery)
                 and (website.DECISION not in raw or has_website)
-                and (website.PENDING not in raw or (has_website and website.DECISION not in raw)))
+                and (website.PENDING not in raw or (has_website and website.DECISION not in raw))
+                and (website.COMBINED_DECISION not in raw or has_combined)
+                and (website.COMBINED_PENDING not in raw or (has_combined and website.COMBINED_DECISION not in raw)))
         require(recovery.PENDING not in raw or (has_recovery and recovery.DECISION not in raw))
         require(DECISION not in raw or has_link)
         intents, records = selection._parse(raw, expected, allow_pending_model=pending_model and not sealed)
@@ -165,16 +168,26 @@ def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_con
             require(model_binding(config) in accepted)
             return expected, root, raw, accepted
         require(len(intents) == len(records))
-        if has_website:
-            link = website.validate_marker(raw, expected, root)
-            if pending_website_selection_sha256 == selection.digest(raw[website.INTENT]):
+        if has_website or has_combined:
+            if has_combined:
+                require(ancestry)
+                origin = ancestry[-1]
+                link = website.validate_combined_marker(raw, expected, root, origin)
+                intent_name, decision_name, _ = website.COMBINED_FILES
+            else:
+                link = website.validate_marker(raw, expected, root)
+                intent_name, decision_name, _ = website.FORWARD_FILES
+            if pending_website_selection_sha256 == selection.digest(raw[intent_name]):
                 require(not any((pending_model, pending_continuation_sha256, pending_product_sha256,
                                  pending_recovery_sha256, discover_pending))
                         and model_binding(config) in accepted)
                 return expected, root, raw, accepted
-            require(website.DECISION in raw)
-            initial = website.seed(raw, expected, current_model, root, link, stack, historical_forward=True)
-            require(raw[website.DECISION] == selection.packed(website.decision(link, initial)))
+            require(decision_name in raw)
+            if has_combined:
+                initial = website.combined_seed(raw, expected, root, origin, link, stack)[0]
+            else:
+                initial = website.seed(raw, expected, current_model, root, link, stack, historical_forward=True)
+            require(raw[decision_name] == selection.packed(website.decision(link, initial)))
             if ancestry is not None:
                 ancestry.append((root, dict(raw)))
             stack.enter_context(_held_private_input(root, directory=True))

@@ -345,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--seal-forward", action="store_true")
     modes.add_argument("--publish-forward", action="store_true")
     modes.add_argument("--backout-published", action="store_true")
+    modes.add_argument("--select-combined", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
@@ -359,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--qualification-sha256")
     parser.add_argument("--intent-sha256")
+    parser.add_argument("--forward-intent-sha256")
     parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate"))
     args = parser.parse_args(argv)
     operation, error = None, ERROR
@@ -376,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
         operation, error = selection.publish_website_forward, FORWARD_ERROR
     elif args.backout_published:
         operation, error = selection.backout_published_website, BACKOUT_ERROR
+    elif args.select_combined:
+        operation, error = selection.select_combined_website, BACKOUT_ERROR
     try:
         forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
                    'expected_organization_sha256': args.expected_organization_sha256}
@@ -387,10 +391,16 @@ def main(argv: list[str] | None = None) -> int:
             forward.update(pins)
         else:
             selection.require(not any(pins.values()))
-        if args.backout_published:
-            selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256))
+        if args.select_combined:
+            selection.require(product_journal.sha(args.forward_intent_sha256) and args.backout_phase is None
+                              and (args.intent_sha256 is None or product_journal.sha(args.intent_sha256)))
+            extra = {'forward_intent_sha256': args.forward_intent_sha256, 'intent_sha256': args.intent_sha256}
+        elif args.backout_published:
+            selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256)
+                              and args.forward_intent_sha256 is None)
             extra = {'backout_phase': args.backout_phase, 'intent_sha256': args.intent_sha256}
         else:
+            selection.require(args.forward_intent_sha256 is None)
             selection.require(args.backout_phase is None)
             if args.intent_sha256 is not None:
                 selection.require(args.publish_forward and product_journal.sha(args.intent_sha256))

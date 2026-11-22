@@ -360,9 +360,17 @@ candidate removal have their own observations. The reverse records retain the
 original published selection and forward seal. The guard continues to fence
 scheduled renewal and reboot throughout.
 
-Production cutover requires the combined owner to be selectable after
-postpublication restoration, followed by guarded release and scheduled
-renewal and reboot qualification.
+After retirement, run `--select-combined` with the original selection
+file, plan, guard, and signed composition. Supply the retirement anchor as
+`--expected-anchor-sha256` and the original split publication intent as
+`--forward-intent-sha256`. The owner refreshes the combined runtime, native
+custody and ingress before selecting the original Compose model in a new
+journal segment. The selected credential generation and both prior segments
+stay intact. An interrupted selection resumes with the new combined
+`--intent-sha256`. The existing guard remains active after selection.
+
+Guard release and scheduled renewal and reboot qualification are required
+before production cutover.
 
 ## Required integration before activation
 
