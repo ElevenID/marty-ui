@@ -79,7 +79,7 @@ def installed_files(options, receipt, bodies):
 
 def broaden_read_acl(path):
     quoted = str(path).replace("'", "''")
-    powershell("$p='" + quoted + "';$a=Get-Acl -LiteralPath $p;"
+    powershell("$p='" + quoted + "';$a=[IO.File]::GetAccessControl($p);"
                "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
                "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
                "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
@@ -213,7 +213,7 @@ def changed_after_replay(root,files,windows,**kwargs):
   yield
   source=root/'source/scripts/selfhost_windows_selection.py'
   quoted=str(source).replace("'","''")
-  command=("$ErrorActionPreference='Stop';$p='"+quoted+"';$a=Get-Acl -LiteralPath $p;"
+  command=("$ErrorActionPreference='Stop';$p='"+quoted+"';$a=[IO.File]::GetAccessControl($p);"
    "$s=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-545');"
    "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
    "$s,'Read','Allow'));[IO.File]::SetAccessControl($p,$a)")
