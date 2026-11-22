@@ -118,8 +118,13 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                              "target": "/run/secrets/marty_db_password"}],
                 "environment": {
                     "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                    "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                    "MARTY_ORG_SLUG": "marty",
+                    "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                    "PUBLIC_DOMAIN": "migration.invalid",
+                    "PUBLIC_API_URL": "https://migration.invalid",
                     "DATABASE_URL_TEMPLATE":
-                        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+                        "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
                 },
             },
         },
