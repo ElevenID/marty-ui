@@ -22,7 +22,7 @@ use crate::domain::{
     OrganizationType, Permission, Role,
 };
 use crate::events::{OrganizationEvent, OrganizationEventError, OrganizationEventKind};
-use crate::migration::{migrate_organization_schema, OrganizationMigrationError};
+use crate::migration::{validate_organization_schema, OrganizationMigrationError};
 use crate::postgres::{PostgresOrganizationStore, RepositoryError};
 
 const OUTBOX_SOURCE: &str = "organization";
@@ -392,8 +392,9 @@ impl OrganizationApplication {
     }
 
     pub async fn initialize(&self) -> Result<(), OrganizationApplicationError> {
-        migrate_organization_schema(self.store.pool()).await?;
-        self.outbox.migrate().await?;
+        // Schema and durable-outbox provisioning are explicit operator work.
+        // Runtime initialization only validates the organization schema.
+        validate_organization_schema(self.store.pool()).await?;
         Ok(())
     }
 
