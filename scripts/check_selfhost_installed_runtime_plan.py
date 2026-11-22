@@ -63,7 +63,7 @@ EXPECTED_DEPENDENCIES = {
     "kms-initialize": {"db-migrate": C},
     "owner-migrations": {"db-migrate": C},
     "notification": {"db-migrate": C},
-    "organization": {"db-migrate": C, "redis": H},
+    "organization": {"owner-migrations": C, "redis": H},
     "presentation-policy": {"owner-migrations": C},
     "revocation-profile": {"db-migrate": C, "redis": H},
     "revocation-profile-migrate": {"postgres": H},
