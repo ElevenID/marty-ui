@@ -171,6 +171,11 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
             service["environment"] = environment
         else:
             service["image"] = f"elevenid-local/{name}:{RELEASE}"
+    owner_migrations = expected["services"]["owner-migrations"]
+    owner_migrations["image"] = expected["services"]["credential-template"]["image"]
+    if mode == "official":
+        owner_migrations.pop("build", None)
+
     if "issuance" in names:
         alias = expected["services"]["issuance"]
         alias["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
