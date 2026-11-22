@@ -355,6 +355,56 @@ def assert_models(
         configurator_environment[key] = value if interpolated else "${" + key + ":-}"
 
 
+    # Admit the explicit catalog/policy operator job. It receives only the
+    # application database credential and a closed set of bootstrap settings;
+    # the service binaries and command order are pinned below.
+    owner = actual["services"].get("owner-migrations")
+    assert owner is not None
+    assert owner["entrypoint"] == ["/bin/sh", "-ec"]
+    assert owner["command"] == [
+        ". /app/load-secrets-env.sh\n"
+        "/usr/local/bin/marty-credential-template bootstrap\n"
+        "/usr/local/bin/marty-presentation-policy migrate\n"
+        "exec /usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
+    ]
+    assert owner["build"] == {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "credential-template"},
+    }
+    assert owner["environment"] == {
+        "DATABASE_URL_TEMPLATE": "postgresql://marty:$\${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        "MARTY_ORG_ID": "${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}",
+        "MARTY_ORG_SLUG": "${MARTY_ORG_SLUG:-marty}",
+        "MARTY_ISSUER_DID": "${MARTY_ISSUER_DID:-}",
+        "MARTY_MIGRATION_PROFILE": "${MARTY_MIGRATION_PROFILE:-selfhost-production}",
+        "PUBLIC_DOMAIN": "${PUBLIC_DOMAIN:-localhost}",
+        "PUBLIC_API_URL": "${PUBLIC_API_URL:-https://localhost}",
+    }
+    assert owner["secrets"] == [{
+        "source": "marty_db_password", "target": "/run/secrets/marty_db_password",
+    }]
+    assert owner["depends_on"] == {
+        "db-migrate": {"condition": "service_completed_successfully", "required": True},
+    }
+    assert owner["restart"] == "no"
+    expected["services"]["owner-migrations"] = deepcopy(owner)
+    for service in ("credential-template", "presentation-policy"):
+        assert actual["services"][service]["depends_on"] == {
+            "owner-migrations": {"condition": "service_completed_successfully", "required": True},
+        }
+        expected["services"][service]["depends_on"] = deepcopy(
+            actual["services"][service]["depends_on"]
+        )
+    assert actual["services"]["issuance-migrations"]["depends_on"] == {
+        "credential-template": {"condition": "service_healthy", "required": True},
+        "owner-migrations": {"condition": "service_completed_successfully", "required": True},
+        "organization": {"condition": "service_healthy", "required": True},
+    }
+    expected["services"]["issuance-migrations"]["depends_on"] = deepcopy(
+        actual["services"]["issuance-migrations"]["depends_on"]
+    )
+
     # Keep the frozen historical model; admit this exact policy change only.
     # Redis holds persistent identity records and replay markers, so cache-style
     # eviction is not an acceptable response to a full bounded shared store.
