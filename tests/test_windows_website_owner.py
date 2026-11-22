@@ -847,5 +847,6 @@ def test_rollback_plan_follows_selected_renewal_and_refuses_unreleased_history(m
         assert renewal.product_transition_guard(config).is_file()
         if retirement_fault is None:
             returned = backout._evidence_path(plan, continued['plan_sha256'], 'retire-returned')
-            returned.write_bytes(selection.packed({'completed_cli_job': False}))
+            invalid = dict(selection.decode(returned.read_bytes()), remove_returncode=False)
+            returned.write_bytes(selection.packed(invalid))
             assert website.main(retire) == 2 and removals == ['1'*64]

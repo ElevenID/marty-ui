@@ -356,7 +356,7 @@ def _accept_combined(plan, historical, context, routes, proposal, state, config,
             stage._material(_evidence_path(historical, qualified_pin, 'verified'), proof, held)
             return {'result': 'current-generation-combined-verified', 'qualification_sha256': qualified_pin,
                     'current_plan_sha256': pin, 'guard_retained': True}
-        require(qualified == {**assertions, 'http': qualified['http']})
+        require(selection.packed(qualified) == selection.packed({**assertions, 'http': qualified['http']}))
         require(not renewal.namespace_entry_exists(path('retire-intent'))
                 and not renewal.namespace_entry_exists(path('retire-returned')))
         intent = {'qualification_sha256': qualification_sha256, 'candidate_id': candidate_id}
@@ -369,9 +369,9 @@ def _accept_combined(plan, historical, context, routes, proposal, state, config,
     expected_return = {'candidate_id': custody['candidate_id'], 'remove_returncode': 0,
                        'stop_completed': custody['observed_candidate']['status'] in {'running', 'restarting'},
                        'completed_cli_job': True, 'candidate_absent': True}
-    require(_read_evidence(path('retire-intent'), held) == {
-        'qualification_sha256': qualification_sha256, 'candidate_id': custody['candidate_id']})
-    require(_read_evidence(path('retire-returned'), held) == expected_return)
+    intent = {'qualification_sha256': qualification_sha256, 'candidate_id': custody['candidate_id']}
+    require(held.enter_context(renewal.hold_private_input(path('retire-intent'))) == selection.packed(intent))
+    require(held.enter_context(renewal.hold_private_input(path('retire-returned'))) == selection.packed(expected_return))
     _, runtime, observed, http = _http_acceptance(context, routes, proposal, 'combined', held, session_file, identity)
     require(custody['candidate_id'] not in runtime and not any(row['service'] == contract.SLOT for row in runtime.values())
             and observed['runtime_sha256'] == qualified['retained_runtime_sha256']

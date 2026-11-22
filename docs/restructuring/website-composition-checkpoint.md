@@ -16,6 +16,14 @@ digests. Hold final composition selection for release-owner disposition.
 The private producer owner still needs to qualify the signed full-audience
 standalone website. [Installed release inventory](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.274)
 
+At 22:34 UTC, the original installed recovery caller still selected generation
+33, local sequence 9. A read-only check found the same 31 container IDs in two
+snapshots. Seven services changed runtime state. The installed expired-origin
+predicate rejected the change before any credential operation was attempted.
+Both public and loopback ingress served the signed application marker and
+returned HTTP 502 on `/ready` and `/v1/auth/me`. The next production step
+requires a stable runtime under the existing recovery owner.
+
 The first-cutover planner landed through [#2042](https://github.com/ElevenID/marty-ui/pull/2042).
 The durable journal and dependent transition work start at
 [#2043](https://github.com/ElevenID/marty-ui/pull/2043). The Windows caller
