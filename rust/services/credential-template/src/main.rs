@@ -62,29 +62,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     if matches!(arguments.as_slice(), [command] if command == "bootstrap") {
-        let config = CredentialTemplateServiceConfig::from_env().map_err(|error| {
-            error!(%error, "invalid Credential Template bootstrap configuration");
-            error
-        })?;
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&config.database_url)
-            .await?;
-        migrate_credential_template_schema(&pool).await?;
-        validate_credential_template_schema(&pool).await?;
-        let public_hostname = config
-            .public_api_origin
+        // Bootstrap needs only the catalog/migration inputs. Do not require
+        // runtime workload TLS certificates or serving credentials in this
+        // short-lived operator process.
+        let database_url = std::env::var("DATABASE_URL")?;
+        let organization_id = std::env::var("MARTY_ORG_ID")
+            .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+            .parse::<uuid::Uuid>()?;
+        let public_api_origin = url::Url::parse(
+            &std::env::var("PUBLIC_API_URL").unwrap_or_else(|_| "http://localhost".into()),
+        )?;
+        if !matches!(public_api_origin.scheme(), "http" | "https")
+            || public_api_origin.host_str().is_none()
+            || !public_api_origin.username().is_empty()
+            || public_api_origin.password().is_some()
+            || public_api_origin.query().is_some()
+            || public_api_origin.fragment().is_some()
+        {
+            return Err("invalid PUBLIC_API_URL for Credential Template bootstrap".into());
+        }
+        let public_hostname = public_api_origin
             .host_str()
             .ok_or("PUBLIC_API_URL must include a hostname")?
             .to_owned();
+        let authority = match public_api_origin.port() {
+            Some(port) => format!("{public_hostname}:{port}"),
+            None => public_hostname.clone(),
+        };
+        let authority = marty_service_runtime::config::configured_authority(
+            std::env::var("PUBLIC_DOMAIN").ok().as_deref(),
+            &[],
+            &authority,
+        );
+        let slug = marty_service_runtime::config::canonical_slug(
+            &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
+            "marty",
+        );
+        let issuer_did = marty_service_runtime::config::configured_did_web(
+            std::env::var("MARTY_ISSUER_DID").ok().as_deref(),
+            &authority,
+            &["orgs", &slug],
+        );
+        let migration_profile = std::env::var("MARTY_MIGRATION_PROFILE")
+            .unwrap_or_else(|_| "dev".into())
+            .to_ascii_lowercase();
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await?;
+        migrate_credential_template_schema(&pool).await?;
+        validate_credential_template_schema(&pool).await?;
         reconcile_credential_template_data(
             &pool,
             &CredentialTemplateDataReconciliationConfig {
-                marty_organization_id: config.marty_organization_id.to_string(),
-                marty_issuer_did: config.marty_issuer_did.clone(),
-                public_api_origin: config.public_api_origin.to_string(),
+                marty_organization_id: organization_id.to_string(),
+                marty_issuer_did: issuer_did.clone(),
+                public_api_origin: public_api_origin.to_string(),
                 public_hostname,
-                selfhost_production: config.migration_profile == "selfhost-production",
+                selfhost_production: migration_profile == "selfhost-production",
             },
         )
         .await?;
@@ -92,9 +127,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         seed_system_catalog(
             &store,
             chrono::Utc::now(),
-            &config.marty_organization_id.to_string(),
-            config.public_api_origin.as_str(),
-            &config.marty_issuer_did,
+            &organization_id.to_string(),
+            public_api_origin.as_str(),
+            &issuer_did,
         )
         .await?;
         drop(store);
