@@ -1218,16 +1218,32 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None):
                         gh=gh,cosign=cosign,registry_config=registry_config,stack=proof_stack)
                 product_completion.append(pending)
                 return decode(packed(pending['result']))
-        def check_website_composition(assets, *, gh, cosign, registry_config):
+        def check_website_composition(assets, *, gh, cosign, registry_config, plan_attempt_directory=None):
             with lease_lock:
                 require(active and not completion and not staging and not model_completion
                         and not continuation_started and not product_started and not expired_started and terminal_guard_sha256 is None)
                 from selfhost_windows_website import inspect_composition
                 # Inspection uses only config/inspect reads. In particular it
                 # must not call the kernel-witness or native custody producers.
+                plan_owner = None
+                if plan_attempt_directory is not None:
+                    plan_owner = {
+                        'project': cfg['project'], 'engine_id': cfg['engine_id'],
+                        'docker_host': cfg['docker_host'], 'root': str(_root.parent),
+                        'selection_sequence': sequence, 'generation_sequence': generation_sequence,
+                        'binding_sha256': digest(packed(expected)),
+                        'journal_sha256': digest(packed({name: digest(body) for name, body in raw.items()})),
+                        'configuration_sha256': digest(cfg_raw),
+                        'selection_sha256': digest(raw[f'{sequence:06}.selection.json']),
+                        'selected_sha256': digest(packed(selected)),
+                        'native_sha256': digest(packed(expected['native'])),
+                        'historical_tls_sha256': digest(packed(cfg['tls_init_receipt'])),
+                        'data_sha256': record['data_sha256'],
+                    }
                 return inspect_composition(cfg, choice, values, record, assets,
                     gh=gh, cosign=cosign, registry_config=registry_config,
-                    owner_root=_root.parent, held=stack)
+                    owner_root=_root.parent, held=stack, plan_owner=plan_owner,
+                    plan_attempt_directory=plan_attempt_directory)
         def prepare_expired_current(output_dir,logical_project):
             nonlocal expired_started
             with lease_lock:

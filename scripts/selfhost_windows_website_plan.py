@@ -6,10 +6,10 @@ The future owner must derive every input while holding its existing lease and
 must separately qualify mounted bytes, native custody, storage and live traffic.
 """
 from copy import deepcopy
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
-import deploy_website as routing
+import website_deployment_model as routing
 import package_web_composition as composition
 import selfhost_windows_product as product
 import selfhost_windows_product_journal as product_journal
@@ -49,6 +49,67 @@ def sha(value):
 
 def digest(value):
     return selection.digest(selection.packed(value))
+
+
+def cached_website_image(docker, release):
+    """Resolve the original signed OCI coordinate to a local image configuration."""
+    image = release['image']
+    reference = image['uri'] + '@' + image['digest']
+    rows = docker.json(['image', 'inspect', reference])
+    require(type(rows) is list and len(rows) == 1)
+    row = rows[0]
+    require(row['Os'] == 'linux' and row['Architecture'] == 'amd64'
+            and isinstance(row['Id'], str) and re.fullmatch(r'sha256:[0-9a-f]{64}', row['Id'])
+            and type(row['RepoDigests']) is list and reference in row['RepoDigests'])
+    config = row['Config']
+    require(isinstance(config, dict) and config.get('Volumes') in (None, {})
+            and set(config.get('ExposedPorts') or {}) == {'80/tcp'})
+    metadata = release['image_metadata']
+    commerce = metadata['commerce_extension']['source_sha']
+    expected = {
+        'org.opencontainers.image.source': 'https://github.com/' + release['producer']['repository'],
+        'org.opencontainers.image.revision': commerce,
+        'org.opencontainers.image.version': metadata['revision'],
+        'com.elevenid.website.repository': metadata['repository'],
+        'com.elevenid.website.source-sha': metadata['source_sha'],
+        'com.elevenid.website.commerce-source-sha': commerce,
+        'com.elevenid.website.audience': metadata['audience'],
+        'com.elevenid.website.pages': metadata['production_pages'],
+        'com.elevenid.website.route-contract-sha256': metadata['route_contract']['sha256'],
+    }
+    labels = config.get('Labels')
+    require(isinstance(labels, dict) and all(labels.get(name) == value for name, value in expected.items()))
+    return row['Id']
+
+
+def route_mount_proposal(template_mount, route_directory):
+    """Use the installed engine's drive spelling for the proposed route bind."""
+    source = template_mount['Source']
+    template = runtime_bind_source(source)
+    require(template.drive == route_directory.drive
+            and template_mount['Mode'] == 'ro' and template_mount['Propagation'] == 'rprivate')
+    if source.startswith('/'):
+        suffix = template.as_posix()[3:]
+        require(source.endswith('/' + suffix))
+        route_source = source[:-len(suffix)] + route_directory.as_posix()[3:]
+    else:
+        route_source = route_directory.as_posix() if '/' in source else str(route_directory)
+    return {'Type': 'bind', 'Source': route_source, 'Destination': ROUTE_TARGET,
+            'Mode': 'ro', 'RW': False, 'Propagation': 'rprivate'}
+
+
+def from_observation(before, manifest, website_release, routes, anchor, *, docker,
+                     proof_sha256, attempt_directory, edge_template, data_before):
+    """Derive application-preserving declarations from inputs held by the owner."""
+    root = windows_path(anchor['root'])
+    attempt = path_under_owner(root, str(attempt_directory))
+    require(attempt.parent == root and re.fullmatch(r'windows-website-[0-9a-f]{32}', attempt.name))
+    require(not product.renewal.namespace_entry_exists(Path(attempt)))
+    template = next(mount for mount in data_before['edge']['mounts'] if mount['Destination'] == TEMPLATE_TARGET)
+    return plan(before, manifest, website_release, routes, {**anchor, 'model_sha256': digest(before)},
+        proof_sha256=proof_sha256, attempt_directory=str(attempt), edge_template=edge_template,
+        data_before=data_before, website_image_id=cached_website_image(docker, website_release),
+        route_runtime_mount=route_mount_proposal(template, attempt / 'routes'))
 
 
 def validate_anchor(value):
