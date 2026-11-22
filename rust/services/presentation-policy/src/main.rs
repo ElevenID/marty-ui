@@ -4,9 +4,9 @@ use marty_service_runtime::{
 use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_presentation_policy::{
+    migrate_presentation_policy_schema,
     presentation_policy_proto::presentation_policy_service_server::PresentationPolicyServiceServer,
-    presentation_policy_router, reconcile_builtin_policies, migrate_presentation_policy_schema,
-    validate_presentation_policy_schema,
+    presentation_policy_router, reconcile_builtin_policies, validate_presentation_policy_schema,
     CredentialStatusResolver, CredentialVerificationKernel, NativePresentationControlPlane,
     PolicyApplication, PolicyAuthorization, PolicyRepository, PostgresPolicyStore,
     PresentationGrpcSecurity, PresentationPolicyDependency, PresentationPolicyGrpcService,
@@ -28,7 +28,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if let [command] = arguments.as_slice() {
         let database_url = std::env::var("DATABASE_URL")?;
-        let pool = PgPoolOptions::new().max_connections(1).connect(&database_url).await?;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await?;
         match command.as_str() {
             "migrate" => migrate_presentation_policy_schema(&pool).await?,
             "verify-owned-schema" => validate_presentation_policy_schema(&pool).await?,
@@ -40,7 +43,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let store = PostgresPolicyStore::new(pool.clone());
                 reconcile_builtin_policies(&store, organization_id).await?;
             }
-            _ => return Err("supported commands: migrate, verify-owned-schema, bootstrap-builtins".into()),
+            _ => {
+                return Err(
+                    "supported commands: migrate, verify-owned-schema, bootstrap-builtins".into(),
+                )
+            }
         }
         pool.close().await;
         return Ok(());
