@@ -72,6 +72,7 @@ def native_command(operation: str) -> str:
             ("marty-credential-template", "bootstrap"),
             ("marty-presentation-policy", "migrate"),
             ("marty-presentation-policy", "bootstrap-builtins"),
+            ("marty-flow", "migrate"),
             ("marty-device-registration", "migrate"),
             ("marty-issuance-service", "migrate"),
         )
