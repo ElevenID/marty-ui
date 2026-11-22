@@ -1,7 +1,7 @@
 {
   "schema": "marty.pr1994-ci-rust-reconciliation/v1",
   "assembled_at_utc": "2026-11-22T09:23:37.910274+00:00",
-  "state": "LOCAL_CORRECTIONS_AND_MAIN_INTEGRATION_VERIFIED_REQUIRED_CI_PENDING",
+  "state": "LOCAL_ORGANIZATION_FIXTURE_CORRECTION_VERIFIED_REQUIRED_CI_PENDING",
   "repository": "ElevenID/marty-ui",
   "pull_request": 1994,
   "intended_repository_path": "docs/agent-trust-ci-rust-reconciliation-2026-11-22.json",
@@ -19,8 +19,10 @@
     "combined_source_normal_host_build": "PASSED",
     "required_ci_and_queue_on_next_published_candidate": "PENDING",
     "aws_qualification": "Historical pass on exact 3c8 only; qualification instance stopped.",
-    "codeql_alerts": "138, 324 and 326 remain OPEN; no dismissal, suppression or policy change.",
-    "correction_commit_object": "CREATED_AND_READ_BACK_BRANCH_REF_UNCHANGED"
+    "codeql_alerts": "Earlier assessed alerts138,324,326 were left OPEN. Current4d1 advisory severity counts match; current alert-ID identity was not reverified. No dismissals, suppression or policy changes.",
+    "correction_commit_object": "PUBLISHED_IN_4D1_ANCESTRY",
+    "hosted_ci_on_4d1": "COMPLETED_FAILURE_ONE_STALE_FIXTURE_COUNT",
+    "local_organization_fixture_consumer_tests": "4_PASSED_AFTER_SCALAR_CORRECTION"
   },
   "terminal_ci": {
     "representation": "Derived concise projection of the immutable original export; this section is not its byte-identical content.",
@@ -5631,9 +5633,9 @@
     "previous_runtime_merge_draft_unchanged": true
   },
   "root_finalization_required": [
-    "Copy the completed report to docs/agent-trust-ci-rust-reconciliation-2026-11-22.json and update evidence cross-references and the PR description with these actual source-bound results.",
-    "Publish the exact final source/report tree using the remote content-identical correction checkpoint d4935ba9 and accepted main 79df as parents, preserving both histories.",
-    "Observe ordinary final-head required checks and the mandatory merge queue. Keep all failed hosted and local attempts, the three OPEN CodeQL alerts, and the distinct Rust 509b/Rust 0c8ca/AWS3c8 execution boundaries; do not create approvals or bypass policy."
+    "Publish the one shared fixture scalar correction and these cross-referenced evidence updates as an ordinary child of4d1, preserving accepted main79df and the qualified correction checkpoint in ancestry.",
+    "Observe fresh required checks on the new candidate and follow the mandatory normal merge queue to its actual outcome. Do not infer a later contracts stage passed from its earlier skipped state.",
+    "Retain all first failures and separate AWS3c8, local257/Rust509b, merged build-only/Rust0c8 and four fixture-consumer test scopes. Do not create approvals, bypass policy, alter alert state or restart AWS."
   ],
   "supersedes_scratch_draft": {
     "original_export": {
@@ -5682,5 +5684,1623 @@
     "branch_ref_updated_by_checkpoint_creation": false,
     "final_published_head_and_required_ci": "Not claimed by this pre-publication evidence record. Root will publish the exact final tree with the stated parents and observe normal required CI and queue.",
     "source_identity_limit": "Tree equality provides content identity across local/remote correction commits. It does not assert a test was run on the remote commit object or on a later merged/publication tree."
+  },
+  "updated_at_utc": "2026-11-22T10:08:13.631162+00:00",
+  "post_publication_organization_fixture_followup": {
+    "recorded_at_utc": "2026-11-22T10:08:13.631162+00:00",
+    "previous_report_sha256": "2cab17d798be564d82f1821db1794824d1302d51dc0481946deb2cd7d3dac072",
+    "historical_report_state": "LOCAL_CORRECTIONS_AND_MAIN_INTEGRATION_VERIFIED_REQUIRED_CI_PENDING",
+    "historical_root_finalization_plan": [
+      "Copy the completed report to docs/agent-trust-ci-rust-reconciliation-2026-11-22.json and update evidence cross-references and the PR description with these actual source-bound results.",
+      "Publish the exact final source/report tree using the remote content-identical correction checkpoint d4935ba9 and accepted main 79df as parents, preserving both histories.",
+      "Observe ordinary final-head required checks and the mandatory merge queue. Keep all failed hosted and local attempts, the three OPEN CodeQL alerts, and the distinct Rust 509b/Rust 0c8ca/AWS3c8 execution boundaries; do not create approvals or bypass policy."
+    ],
+    "published_candidate": {
+      "head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+      "whole_tree": "624296b11f4bf52a4131c504a8c5f8df6ecc10ca",
+      "rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+      "parents": [
+        "d4935ba9adf8bf4c178262df66427ad1fd06497d",
+        "79df832ed1a232cd73d769c18f3bc459f6477c1a"
+      ],
+      "actual_ci_checkout": "40daec045387bb9d718066782e3d5df4562b0c83",
+      "actual_ci_checkout_tree_equals_published_tree": true
+    },
+    "hosted_ci": {
+      "run": 45007827191,
+      "conclusion": "failure",
+      "jobs": {
+        "success": 26,
+        "failure": 2,
+        "skipped": 1,
+        "cancelled": 0,
+        "total": 29
+      },
+      "failed_lanes": [
+        "contracts",
+        "CI Gate"
+      ],
+      "authority_library": {
+        "passed": 212,
+        "failed": 0,
+        "existing_ignored": 28
+      },
+      "all_23_formerly_failed_postgresql_cases_have_actual_ok_lines": true,
+      "required_workspace_clippy": "PASSED",
+      "frozen_feature_probe": "PASSED",
+      "organization_application_behavior": {
+        "passed": 3,
+        "failed": 1
+      },
+      "only_emitted_new_failed_test": "creation_defaults_owner_and_catalog_match_the_language_neutral_contract",
+      "later_contract_steps_skipped": "Preserved explicitly in the terminal CI export; not represented as passed.",
+      "separate_codeql_advisory": "Failed with two critical and one high reported finding. Severity counts match the earlier assessment; current alert IDs were not reverified. Required Analyze Rust passed. No alert or policy mutation."
+    },
+    "correction": {
+      "path": "contracts/organization-application-behavior.json",
+      "json_pointer": "/create/expected/permission_count",
+      "old_value": 127,
+      "new_value": 148,
+      "original_sha256": "44fd7cd83cf3f1f67b1d913740aea73771efe6eb8875e303b2fe227e563d22f6",
+      "corrected_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+      "every_other_fixture_byte_preserved": true,
+      "catalog_and_rust_assertions_unchanged": true,
+      "sole_existing_consumer": "rust/services/organization/tests/application_behavior.rs",
+      "canonical_permissions": 148,
+      "canonical_unique_permissions": 148,
+      "canonical_resources": 36,
+      "later_additions_since_fixture127": 21,
+      "total_additions_since_accepted_main113": 35,
+      "removed_or_duplicate_keys": 0,
+      "modified_existing_catalog_rows": 0,
+      "required_fixture_keys_preserved_and_present": 10,
+      "independent_related_count_scan": "No additional stale catalog cardinality found in the active consumers reviewed."
+    },
+    "actual_local_verification": {
+      "execution_source": "Published head4d1 plus only the fixture scalar correction; the reports were assembled afterward.",
+      "rust_tree_before_and_after": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+      "production_cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+      "toolchain": {
+        "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+        "rustc": "rustc 1.95.0 (59807616e 2026-04-14)"
+      },
+      "locked_offline_rebuild": true,
+      "rebuilt_harness_fresh": false,
+      "tests": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "first_failure": null,
+      "all_owned_commands_exited_zero_and_cleaned": true,
+      "normal_host_rebuilt_or_executed": false,
+      "normal_host_artifact_hash_unchanged": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989",
+      "aws_action": false,
+      "scope_limit": "Four existing Organization fixture-consumer tests only. These do not replace final required CI or add an AWS run, normal-host execution, or repeat of the earlier257-test qualification."
+    },
+    "evidence_reconstruction": "Serialize each data object with Python json.dumps(data, indent=2), default ensure_ascii=True and insertion order preserved; append one LF and encode UTF-8. Each reproduces its original size and SHA-256. Earlier ten embedded exports and all three original AWS data objects remain unchanged.",
+    "embedded_exact_json_exports": {
+      "terminal-ci-summary.json": {
+        "original_export": {
+          "path": "$QUALIFICATION_ROOT/ci-45007827191/terminal-ci-summary.json",
+          "bytes": 23085,
+          "sha256": "962bb4e127e09868f5813182095ed1b9d08d4e9f5314248e1d600ae464d33a83"
+        },
+        "data": {
+          "schema": "marty.pr1994-terminal-ci/v1",
+          "recorded_at_utc": "2026-11-22T10:01:49.809Z",
+          "repository": "ElevenID/marty-ui",
+          "pull_request": 1994,
+          "run": {
+            "id": 45007827191,
+            "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "event": "pull_request",
+            "attempt": 1,
+            "status": "completed",
+            "conclusion": "failure",
+            "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191",
+            "updated_at": "2026-11-22T09:58:59Z"
+          },
+          "execution_source": {
+            "workflow_head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "published_tree": "624296b11f4bf52a4131c504a8c5f8df6ecc10ca",
+            "rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+            "pull_request_checkout": "40daec045387bb9d718066782e3d5df4562b0c83",
+            "checkout_parents": [
+              "79df832ed1a232cd73d769c18f3bc459f6477c1a",
+              "4d1baa92933a626fc9393d6ac2cf89f85cf09888"
+            ],
+            "checkout_tree": "624296b11f4bf52a4131c504a8c5f8df6ecc10ca",
+            "checkout_tree_equals_published_tree": true,
+            "verification_basis": "Root independently fetched the GitHub commit and tree identities; recorded for the final CI/queue evidence.",
+            "commit_url": "https://github.com/ElevenID/marty-ui/commit/40daec045387bb9d718066782e3d5df4562b0c83"
+          },
+          "ci_job_counts": {
+            "success": 26,
+            "failure": 2,
+            "skipped": 1,
+            "cancelled": 0,
+            "total": 29
+          },
+          "jobs": [
+            {
+              "id": 137163290953,
+              "name": "Lint Python",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163290953",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:04Z",
+              "completed_at": "2026-11-22T09:30:17Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163291167,
+              "name": "Windows owner source / Synthetic source custody on NTFS",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163291167",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:03Z",
+              "completed_at": "2026-11-22T09:34:29Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163291184,
+              "name": "Release Source Preflight",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163291184",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:03Z",
+              "completed_at": "2026-11-22T09:30:14Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163291268,
+              "name": "Classify Changes",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163291268",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:03Z",
+              "completed_at": "2026-11-22T09:30:13Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163291755,
+              "name": "Installer trial image (nonpublishing)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163291755",
+              "status": "completed",
+              "conclusion": "skipped",
+              "started_at": "2026-11-22T09:30:02Z",
+              "completed_at": "2026-11-22T09:30:01Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349630,
+              "name": "Fast Feedback",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349630",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:30:48Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349638,
+              "name": "Test OpenBao DIDComm plugin image",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349638",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:55:19Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349666,
+              "name": "Service Tests",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349666",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:30:27Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349672,
+              "name": "Rust Service Images",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349672",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:49:59Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349677,
+              "name": "Rust Feature Regression Probe",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349677",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:17Z",
+              "completed_at": "2026-11-22T09:35:32Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349684,
+              "name": "Native KMS Operator (amd64)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349684",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:39:40Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349696,
+              "name": "Website Surface",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349696",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:27Z",
+              "completed_at": "2026-11-22T09:41:28Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349700,
+              "name": "UI Crawler Build Artifacts",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349700",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:33:56Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349703,
+              "name": "Release Contract Tests",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349703",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:52:39Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349706,
+              "name": "Native KMS Operator (arm64)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349706",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:18Z",
+              "completed_at": "2026-11-22T09:41:06Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349711,
+              "name": "Rust Lint and Packaging",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349711",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:48:45Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349726,
+              "name": "UI Crawler Nginx Integration",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349726",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:31:32Z",
+              "completed_at": "2026-11-22T09:31:56Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349737,
+              "name": "Rust Supply Chain",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349737",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:31:58Z",
+              "completed_at": "2026-11-22T09:32:32Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349746,
+              "name": "Security Scanning",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349746",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:19Z",
+              "completed_at": "2026-11-22T09:30:56Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349754,
+              "name": "UI Tests (2/4)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349754",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:17Z",
+              "completed_at": "2026-11-22T09:32:17Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349762,
+              "name": "MIP 0.5 Credential Lifecycle Browser Gate",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349762",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:17Z",
+              "completed_at": "2026-11-22T09:34:29Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349770,
+              "name": "Rust Service Tests (contracts)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349770",
+              "status": "completed",
+              "conclusion": "failure",
+              "started_at": "2026-11-22T09:30:16Z",
+              "completed_at": "2026-11-22T09:58:52Z",
+              "failed_steps": [
+                {
+                  "number": 39,
+                  "name": "Run safe Rust contract groups concurrently"
+                }
+              ]
+            },
+            {
+              "id": 137163349771,
+              "name": "UI Tests (1/4)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349771",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:49Z",
+              "completed_at": "2026-11-22T09:33:01Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349774,
+              "name": "UI Tests (3/4)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349774",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:28Z",
+              "completed_at": "2026-11-22T09:32:13Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349788,
+              "name": "Rust Service Tests (selfhost)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349788",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:57Z",
+              "completed_at": "2026-11-22T09:58:54Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349798,
+              "name": "Rust Service Tests (flow)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349798",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:31:03Z",
+              "completed_at": "2026-11-22T09:38:16Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349800,
+              "name": "UI Tests (4/4)",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349800",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:30:32Z",
+              "completed_at": "2026-11-22T09:32:49Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137163349837,
+              "name": "Public Protocol Contract",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349837",
+              "status": "completed",
+              "conclusion": "success",
+              "started_at": "2026-11-22T09:32:15Z",
+              "completed_at": "2026-11-22T09:33:17Z",
+              "failed_steps": []
+            },
+            {
+              "id": 137170473053,
+              "name": "CI Gate",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137170473053",
+              "status": "completed",
+              "conclusion": "failure",
+              "started_at": "2026-11-22T09:58:56Z",
+              "completed_at": "2026-11-22T09:58:58Z",
+              "failed_steps": [
+                {
+                  "number": 2,
+                  "name": "Require every CI lane"
+                }
+              ]
+            }
+          ],
+          "required_statuses": [
+            {
+              "name": "policy",
+              "id": 137163290665,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "success",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827167/job/137163290665"
+            },
+            {
+              "name": "workflow-quality / Workflow Quality",
+              "id": 137163292075,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "success",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827759/job/137163292075"
+            },
+            {
+              "name": "dependency-review / Dependency Review",
+              "id": 137163291923,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "success",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827759/job/137163291923"
+            },
+            {
+              "name": "CI Gate",
+              "id": 137170473053,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "failure",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137170473053"
+            },
+            {
+              "name": "Analyze Actions",
+              "id": 137163290551,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "success",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827223/job/137163290551"
+            },
+            {
+              "name": "Analyze Rust",
+              "id": 137163291259,
+              "head_sha": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+              "status": "completed",
+              "conclusion": "success",
+              "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827225/job/137163291259"
+            }
+          ],
+          "aggregate_failure": {
+            "job_id": 137170473053,
+            "step": 2,
+            "name": "Require every CI lane",
+            "diagnostic_lines": [
+              "RUST_SERVICES_RESULT: failure",
+              "RUST_LINT_RESULT: success",
+              "Unexpected test-rust-services result: failure (expected success)",
+              "##[error]Process completed with exit code 1."
+            ],
+            "raw_log": {
+              "name": "ci-gate-137170473053.log",
+              "bytes": 14278,
+              "sha256": "d6c8bc33d1eea108efb4734959e8614a80c0dd379ca502536322462071bd019a",
+              "handling": "Original decoded UTF-8 log retained privately; no normalization or filtering."
+            },
+            "triage": "Aggregate job fails because the contracts lane failed; the original log is preserved below."
+          },
+          "contracts_failure": {
+            "job_id": 137163349770,
+            "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349770",
+            "failed_step": {
+              "number": 39,
+              "name": "Run safe Rust contract groups concurrently"
+            },
+            "triage_owner": "Rust lane reviewer",
+            "peer_verified_findings": {
+              "authority_library": {
+                "passed": 212,
+                "failed": 0,
+                "ignored": 28
+              },
+              "all_23_previous_failure_names_have_actual_ok_lines": true,
+              "new_failure": "The Organization application_behavior test compares the shared fixture count127 with the actual catalog count148; the fixture scalar is stale.",
+              "organization_integration_harness": {
+                "passed": 3,
+                "failed": 1
+              }
+            },
+            "source_edit_or_rerun_claimed": false,
+            "original_log": {
+              "bytes": 964345,
+              "encoding": "exact decoded connector content saved as UTF-8 without normalization",
+              "file": "contracts-137163349770-first-failure.log",
+              "private_original": true,
+              "sha256": "b1a505393760700b9044a21aaaeaf022cb52f4f41742e95915af1fbe42da7277"
+            },
+            "assessment": {
+              "name": "contracts-first-failure.json",
+              "bytes": 12505,
+              "sha256": "cdbd22365aab2b7adaae980db5b3791f64450b1837de8cea145a7a2954545163"
+            },
+            "triage_status": "COMPLETED_READ_ONLY_DIAGNOSIS",
+            "exact_new_failure": {
+              "actual": 148,
+              "assertion": "assert_eq!(plan.permissions.len(), case.expected.permission_count);",
+              "emitted_failed_test_ids": [
+                "creation_defaults_owner_and_catalog_match_the_language_neutral_contract"
+              ],
+              "expected": 127,
+              "fixture": "contracts/organization-application-behavior.json",
+              "fixture_line": 20,
+              "fixture_pointer": "/create/expected/permission_count",
+              "package": "marty-organization",
+              "panic_log_line": 8778,
+              "source": "rust/services/organization/tests/application_behavior.rs",
+              "source_line": 145,
+              "target": "application_behavior",
+              "target_summary": {
+                "conclusion": "FAILED",
+                "elapsed_seconds": 0.0,
+                "failed": 1,
+                "filtered_out": 0,
+                "ignored": 0,
+                "measured": 0,
+                "passed": 3
+              },
+              "test": "creation_defaults_owner_and_catalog_match_the_language_neutral_contract"
+            },
+            "parallel_contract_groups": {
+              "gateway": {
+                "conclusion": "ok",
+                "elapsed_seconds": 0.03,
+                "failed": 0,
+                "filtered_out": 0,
+                "ignored": 0,
+                "measured": 0,
+                "original_log_line": 8806,
+                "passed": 1
+              },
+              "verification": {
+                "conclusion": "ok",
+                "elapsed_seconds": 0.54,
+                "failed": 0,
+                "filtered_out": 0,
+                "ignored": 0,
+                "measured": 0,
+                "original_log_line": 8797,
+                "passed": 1
+              }
+            },
+            "late_contract_steps_actually_skipped": [
+              {
+                "name": "Test public verification finalization and retention on fresh PostgreSQL",
+                "number": 40
+              },
+              {
+                "name": "Test public HTTP retry quota and cancellation races on fresh PostgreSQL",
+                "number": 41
+              },
+              {
+                "name": "Require public protocol vector test execution",
+                "number": 42
+              },
+              {
+                "name": "Require platform lifecycle unit execution",
+                "number": 43
+              },
+              {
+                "name": "Require all Gateway Signing acceptance cases",
+                "number": 44
+              },
+              {
+                "name": "Exercise authenticated Signing Keys Gateway to Rust routes",
+                "number": 45
+              },
+              {
+                "name": "Exercise OIDF keyless HTTPS edge against disposable OpenBao",
+                "number": 46
+              },
+              {
+                "name": "Exercise self-host workload TLS bootstrap against disposable OpenBao",
+                "number": 47
+              },
+              {
+                "name": "Exercise Flow-to-Issuance mutual TLS with remote keys",
+                "number": 48
+              },
+              {
+                "name": "Exercise live Signing Keys public contracts on disposable Redis",
+                "number": 49
+              },
+              {
+                "name": "Qualify paired verifier scope and fixed-owner TLS transport",
+                "number": 50
+              },
+              {
+                "name": "Qualify canonical Flow request and managed verifier authority",
+                "number": 51
+              },
+              {
+                "name": "Qualify scoped provider callback verification against disposable OpenBao",
+                "number": 52
+              },
+              {
+                "name": "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
+                "number": 53
+              },
+              {
+                "name": "Check capacity and Docker context before public browser qualification",
+                "number": 54
+              },
+              {
+                "name": "Run actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+                "number": 55
+              },
+              {
+                "name": "Install locked public browser dependencies",
+                "number": 56
+              },
+              {
+                "name": "Qualify production-built public UI against isolated Gateway and managed KMS",
+                "number": 57
+              },
+              {
+                "name": "Run Flow database contract after workspace suite",
+                "number": 58
+              },
+              {
+                "name": "Exercise issuance prerequisite owner and database fences",
+                "number": 59
+              },
+              {
+                "name": "Exercise managed Policy evidence through Flow PostgreSQL commit",
+                "number": 60
+              },
+              {
+                "name": "Run isolated database contract suites concurrently",
+                "number": 61
+              },
+              {
+                "name": "Test beta passport reconciliation and native batch on PostgreSQL",
+                "number": 62
+              },
+              {
+                "name": "Test native outbound HTTP timeout TLS parity",
+                "number": 63
+              }
+            ]
+          },
+          "codeql_advisory": {
+            "id": 137163515040,
+            "status": "completed",
+            "conclusion": "failure",
+            "url": "https://github.com/ElevenID/marty-ui/runs/137163515040",
+            "title": "3 new alerts including 2 critical severity security vulnerabilities",
+            "summary": "### New alerts in code changed by this pull request\n\nSecurity Alerts:\n * 2 critical\n * 1 high\n\n\n_Alerts not introduced by this pull request might have been detected because the code changes were too large._\n\nSee annotations below for details.\n\n[View all branch alerts](/ElevenID/marty-ui/security/code-scanning?query=pr%3A1994+tool%3ACodeQL+is%3Aopen).",
+            "annotations_count": 3,
+            "reported_critical_alerts": 2,
+            "reported_high_alerts": 1,
+            "current_alert_ids_reverified": false,
+            "interpretation": "The severity counts match the prior documented counts; count equality is not proof of alert-ID identity. No new alert re-triage, dismissal, suppression or policy change was performed.",
+            "distinct_from_required_analyze_rust": true
+          },
+          "related_lane_evidence": {
+            "path": "$QUALIFICATION_ROOT/ci-45007827191/website-windows-external-terminal-summary.json",
+            "bytes": 15279,
+            "sha256": "8849663b2be31d74c54af1eecb67aa09a3a143f52d3bb162b8999cfe77f20ed8",
+            "all_assigned_jobs_success": true,
+            "windows_native_cases": 49,
+            "external_policy_tests": 17,
+            "external_postgres_journal_tests": 162,
+            "execution_checkout": "40daec045387bb9d718066782e3d5df4562b0c83"
+          },
+          "normal_merge_state": {
+            "observed_at_utc": "2026-11-22T09:59:14.046Z",
+            "head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "base": "79df832ed1a232cd73d769c18f3bc459f6477c1a",
+            "draft": false,
+            "state": "open",
+            "merged": false,
+            "auto_merge_method": "squash",
+            "mergeable": true,
+            "mergeable_state": "blocked",
+            "queue_rule_id": 20775473,
+            "queue_rule_url": "https://github.com/ElevenID/marty-ui/rules/20775473",
+            "queue_events_observed": [],
+            "required_ci_gate": "failure",
+            "concrete_blocker": "Required CI Gate failed on the contracts lane. No queue admission or merge success is claimed.",
+            "review_requirement": "No concrete review blocker established from accessible metadata; full legacy review settings are not exposed by this connector."
+          },
+          "limits": [
+            "This record reports actual terminal results for exact4d1 and its byte-identical synthetic PR merge checkout40daec. It does not qualify a future corrective commit.",
+            "The earlier AWS live qualification remains attached to exact3c8; this CI record does not claim a new AWS replay.",
+            "The contracts diagnosis and its original full log are preserved separately by exact hashes. The diagnosed fixture correction is not represented as a source edit, local pass or hosted rerun in this terminal record."
+          ],
+          "actions": {
+            "source_edits": false,
+            "tests_or_builds_invoked": false,
+            "workflow_reruns": false,
+            "workflow_cancellations": false,
+            "status_mutations": false,
+            "approvals_created": false,
+            "queue_or_rule_mutations": false,
+            "alerts_dismissed_or_suppressed": false,
+            "aws_actions": false
+          }
+        }
+      },
+      "contracts-first-failure.json": {
+        "original_export": {
+          "path": "$QUALIFICATION_ROOT/ci-45007827191/contracts-first-failure.json",
+          "bytes": 12505,
+          "sha256": "cdbd22365aab2b7adaae980db5b3791f64450b1837de8cea145a7a2954545163"
+        },
+        "data": {
+          "catalog_inventory": {
+            "accepted_main_count": 113,
+            "added_by_resource": {
+              "agent-identity": [
+                "create",
+                "enroll",
+                "retire",
+                "revoke",
+                "rotate-key",
+                "suspend",
+                "update",
+                "view"
+              ],
+              "delegation-grant": [
+                "approve",
+                "create",
+                "reinstate",
+                "revoke",
+                "suspend",
+                "view"
+              ],
+              "delegation-use-policy": [
+                "activate",
+                "archive",
+                "create",
+                "update",
+                "view"
+              ],
+              "machine-authentication-policy": [
+                "assign"
+              ],
+              "machine-authorization-policy": [
+                "activate",
+                "archive",
+                "create",
+                "update",
+                "view"
+              ],
+              "machine-identity": [
+                "create",
+                "retire",
+                "revoke",
+                "suspend",
+                "update",
+                "view"
+              ],
+              "machine-use-access": [
+                "create",
+                "revoke",
+                "update",
+                "view"
+              ]
+            },
+            "added_count": 35,
+            "added_resource_count": 7,
+            "candidate_count": 148,
+            "changed_existing_rows": [],
+            "path": "contracts/organization-permission-catalog.json",
+            "removed_keys": [],
+            "sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab",
+            "unique_candidate_keys": 148
+          },
+          "delegated_authority_lib": {
+            "conclusion": "ok",
+            "elapsed_seconds": 48.5,
+            "failed": 0,
+            "filtered_out": 0,
+            "harness": "target/debug/deps/marty_delegated_authority-2d7b11e97268e60f",
+            "ignored": 28,
+            "measured": 0,
+            "passed": 212,
+            "prior_failure_count": 23,
+            "prior_failures": [
+              {
+                "original_log_line": 4934,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_other_admin_cannot_reinstate_after_grantor_revoked_during_lock"
+              },
+              {
+                "original_log_line": 4933,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_lifecycle_uses_original_confirmation_and_never_writes_sources"
+              },
+              {
+                "original_log_line": 4935,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_readiness_rejects_producer_privileges_and_unsafe_role_paths"
+              },
+              {
+                "original_log_line": 4932,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_create_and_recovery_require_current_independent_permissions"
+              },
+              {
+                "original_log_line": 4936,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_rechecks_membership_after_actual_grant_lock_wait"
+              },
+              {
+                "original_log_line": 4937,
+                "result": "ok",
+                "test": "approval_postgres::tests::command_host::real_command_host_rejects_wrong_session_pin_and_withdrawn_confirmation"
+              },
+              {
+                "original_log_line": 4938,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_authority_expiry_during_confirmation_rolls_back_consent_and_index_together"
+              },
+              {
+                "original_log_line": 4939,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_concurrent_confirmation_replay_preserves_original_and_rejects_substitutions"
+              },
+              {
+                "original_log_line": 4940,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_current_authority_revocation_and_withdrawal_are_independent_of_historical_consent"
+              },
+              {
+                "original_log_line": 4941,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_expired_review_and_consent_cannot_be_renewed_by_retry"
+              },
+              {
+                "original_log_line": 4942,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_expired_source_is_not_renewed_by_reads_and_source_outage_denies"
+              },
+              {
+                "original_log_line": 4987,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_explicit_key_consent_is_durable_and_activates_only_through_existing_verifier"
+              },
+              {
+                "original_log_line": 4988,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_role_separation_and_append_only_confirmation_guards_are_enforced"
+              },
+              {
+                "original_log_line": 4989,
+                "result": "ok",
+                "test": "approval_postgres::tests::postgres_wrong_approver_digest_session_binding_and_missing_permission_do_not_record_consent"
+              },
+              {
+                "original_log_line": 5025,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_audit_role_and_all_guards_are_required_for_readiness"
+              },
+              {
+                "original_log_line": 5026,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_deadline_is_checked_after_insert_and_after_committed_io"
+              },
+              {
+                "original_log_line": 5027,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_expired_history_does_not_recreate_or_refresh_authentication"
+              },
+              {
+                "original_log_line": 5028,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_final_use_requires_retained_machine_scope_and_original_deadline"
+              },
+              {
+                "original_log_line": 5035,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_retains_exact_crypto_evidence_and_recovers_original_immutable_bytes"
+              },
+              {
+                "original_log_line": 5037,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_service_account_cannot_claim_machine_authentication_reference"
+              },
+              {
+                "original_log_line": 5042,
+                "result": "ok",
+                "test": "machine_auth::tests::evidence_tests::postgres_storage_failure_and_unverified_proof_never_return_qualified_result"
+              },
+              {
+                "original_log_line": 5062,
+                "result": "ok",
+                "test": "organization_use_access::tests::organization_use_access_adapter_checks_typed_scope_and_separate_current_rights"
+              },
+              {
+                "original_log_line": 5063,
+                "result": "ok",
+                "test": "organization_use_access::tests::organization_use_access_recovery_survives_old_grant_revocation_but_requires_current_owner_state"
+              }
+            ],
+            "prior_failures_all_explicit_ok": true,
+            "summary_log_line": 5164
+          },
+          "job": {
+            "conclusion": "failure",
+            "failed_step": {
+              "conclusion": "failure",
+              "name": "Run safe Rust contract groups concurrently",
+              "number": 39,
+              "status": "completed"
+            },
+            "id": 137163349770,
+            "status": "completed",
+            "url": "https://github.com/ElevenID/marty-ui/actions/runs/45007827191/job/137163349770"
+          },
+          "late_contract_steps_actually_skipped": [
+            {
+              "name": "Test public verification finalization and retention on fresh PostgreSQL",
+              "number": 40
+            },
+            {
+              "name": "Test public HTTP retry quota and cancellation races on fresh PostgreSQL",
+              "number": 41
+            },
+            {
+              "name": "Require public protocol vector test execution",
+              "number": 42
+            },
+            {
+              "name": "Require platform lifecycle unit execution",
+              "number": 43
+            },
+            {
+              "name": "Require all Gateway Signing acceptance cases",
+              "number": 44
+            },
+            {
+              "name": "Exercise authenticated Signing Keys Gateway to Rust routes",
+              "number": 45
+            },
+            {
+              "name": "Exercise OIDF keyless HTTPS edge against disposable OpenBao",
+              "number": 46
+            },
+            {
+              "name": "Exercise self-host workload TLS bootstrap against disposable OpenBao",
+              "number": 47
+            },
+            {
+              "name": "Exercise Flow-to-Issuance mutual TLS with remote keys",
+              "number": 48
+            },
+            {
+              "name": "Exercise live Signing Keys public contracts on disposable Redis",
+              "number": 49
+            },
+            {
+              "name": "Qualify paired verifier scope and fixed-owner TLS transport",
+              "number": 50
+            },
+            {
+              "name": "Qualify canonical Flow request and managed verifier authority",
+              "number": 51
+            },
+            {
+              "name": "Qualify scoped provider callback verification against disposable OpenBao",
+              "number": 52
+            },
+            {
+              "name": "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
+              "number": 53
+            },
+            {
+              "name": "Check capacity and Docker context before public browser qualification",
+              "number": 54
+            },
+            {
+              "name": "Run actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+              "number": 55
+            },
+            {
+              "name": "Install locked public browser dependencies",
+              "number": 56
+            },
+            {
+              "name": "Qualify production-built public UI against isolated Gateway and managed KMS",
+              "number": 57
+            },
+            {
+              "name": "Run Flow database contract after workspace suite",
+              "number": 58
+            },
+            {
+              "name": "Exercise issuance prerequisite owner and database fences",
+              "number": 59
+            },
+            {
+              "name": "Exercise managed Policy evidence through Flow PostgreSQL commit",
+              "number": 60
+            },
+            {
+              "name": "Run isolated database contract suites concurrently",
+              "number": 61
+            },
+            {
+              "name": "Test beta passport reconciliation and native batch on PostgreSQL",
+              "number": 62
+            },
+            {
+              "name": "Test native outbound HTTP timeout TLS parity",
+              "number": 63
+            }
+          ],
+          "limits": [
+            "The concurrent workspace command aborted on this one emitted Organization integration-test failure. Later workspace targets and later CI contract steps are not claimed passed.",
+            "Hosted authority 212/0/28 and all 23 prior cases are directly observed, separately from the failing whole contracts job.",
+            "This record does not extend the earlier AWS-qualified source identity."
+          ],
+          "new_failure": {
+            "actual": 148,
+            "assertion": "assert_eq!(plan.permissions.len(), case.expected.permission_count);",
+            "emitted_failed_test_ids": [
+              "creation_defaults_owner_and_catalog_match_the_language_neutral_contract"
+            ],
+            "expected": 127,
+            "fixture": "contracts/organization-application-behavior.json",
+            "fixture_line": 20,
+            "fixture_pointer": "/create/expected/permission_count",
+            "package": "marty-organization",
+            "panic_log_line": 8778,
+            "source": "rust/services/organization/tests/application_behavior.rs",
+            "source_line": 145,
+            "target": "application_behavior",
+            "target_summary": {
+              "conclusion": "FAILED",
+              "elapsed_seconds": 0.0,
+              "failed": 1,
+              "filtered_out": 0,
+              "ignored": 0,
+              "measured": 0,
+              "passed": 3
+            },
+            "test": "creation_defaults_owner_and_catalog_match_the_language_neutral_contract"
+          },
+          "observed_at_utc": "2026-11-22T10:01:58.622701+00:00",
+          "original_log": {
+            "bytes": 964345,
+            "encoding": "exact decoded connector content saved as UTF-8 without normalization",
+            "file": "contracts-137163349770-first-failure.log",
+            "private_original": true,
+            "sha256": "b1a505393760700b9044a21aaaeaf022cb52f4f41742e95915af1fbe42da7277"
+          },
+          "parallel_contract_groups": {
+            "gateway": {
+              "conclusion": "ok",
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered_out": 0,
+              "ignored": 0,
+              "measured": 0,
+              "original_log_line": 8806,
+              "passed": 1
+            },
+            "verification": {
+              "conclusion": "ok",
+              "elapsed_seconds": 0.54,
+              "failed": 0,
+              "filtered_out": 0,
+              "ignored": 0,
+              "measured": 0,
+              "original_log_line": 8797,
+              "passed": 1
+            }
+          },
+          "proposed_correction": {
+            "fixture_consumers": [
+              "rust/services/organization/tests/application_behavior.rs"
+            ],
+            "only_change": "permission_count: 127 -> 148",
+            "path": "contracts/organization-application-behavior.json",
+            "preserve": "All required permission keys, Rust assertions, creation/owner/default behavior, catalog, runtime code, policies and permissions.",
+            "scope_status": "Read-only diagnosis; no source changes or local tests performed."
+          },
+          "pull_request": 1994,
+          "repository": "ElevenID/marty-ui",
+          "run_id": 45007827191,
+          "schema_version": 1,
+          "source": {
+            "actual_github_checkout": "40daec045387bb9d718066782e3d5df4562b0c83",
+            "candidate_head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "checkout_evidence_line": 157,
+            "synthetic_merge_base": "79df832ed1a232cd73d769c18f3bc459f6477c1a"
+          },
+          "state": "DIAGNOSED_FIXTURE_COUNT_DRIFT_NO_EDIT"
+        }
+      },
+      "organization-fixture-verification/result.public.json": {
+        "original_export": {
+          "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/result.public.json",
+          "bytes": 8077,
+          "sha256": "906fa31f9cb78ac5215b2e4a4df3d9e7e62c76e8f920a1b481ff198006110813"
+        },
+        "data": {
+          "commands": [
+            {
+              "argv": [
+                "cargo",
+                "test",
+                "--locked",
+                "--offline",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                "marty-organization",
+                "--test",
+                "application_behavior",
+                "--no-run",
+                "--message-format=json"
+              ],
+              "cleanup": {
+                "all_owned_processes_stopped": true,
+                "forced_kill": false
+              },
+              "elapsed_seconds": 4.509,
+              "exit_code": 0,
+              "finished_at_utc": "2026-11-22T10:03:50.167217+00:00",
+              "label": "target-build",
+              "started_at_utc": "2026-11-22T10:03:45.656992+00:00",
+              "stderr": {
+                "bytes": 2143,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-build.stderr",
+                "sha256": "b025f27b033a1e2a9574e335ecc03bfccc2b108341cf9d4a54c0916db2103b79"
+              },
+              "stdout": {
+                "bytes": 399301,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-build.stdout",
+                "sha256": "e58eb9e1d0b9dd5016b1916634d2a8465c9f279cb2a60a2d25b2408fafc69dcd"
+              }
+            },
+            {
+              "argv": [
+                "$TASK_TOOLING_ROOT/target/debug/deps/application_behavior-3935accd9a25542b",
+                "--list"
+              ],
+              "cleanup": {
+                "all_owned_processes_stopped": true,
+                "forced_kill": false
+              },
+              "elapsed_seconds": 0.502,
+              "exit_code": 0,
+              "finished_at_utc": "2026-11-22T10:03:50.705618+00:00",
+              "label": "target-inventory",
+              "started_at_utc": "2026-11-22T10:03:50.202548+00:00",
+              "stderr": {
+                "bytes": 0,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-inventory.stderr",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "stdout": {
+                "bytes": 320,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-inventory.stdout",
+                "sha256": "4dfff4a52f208ba6028a9776dc6dda25092d578258dc66d4d0a303189ef564d4"
+              }
+            },
+            {
+              "argv": [
+                "$TASK_TOOLING_ROOT/target/debug/deps/application_behavior-3935accd9a25542b",
+                "--nocapture"
+              ],
+              "cleanup": {
+                "all_owned_processes_stopped": true,
+                "forced_kill": false
+              },
+              "elapsed_seconds": 0.502,
+              "exit_code": 0,
+              "finished_at_utc": "2026-11-22T10:03:51.209674+00:00",
+              "label": "target-tests",
+              "started_at_utc": "2026-11-22T10:03:50.706726+00:00",
+              "stderr": {
+                "bytes": 0,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-tests.stderr",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "stdout": {
+                "bytes": 434,
+                "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/target-tests.stdout",
+                "sha256": "2e36a14114890475b2a56f9b2bd492647f6b6c8b51f87c34dee60b5f4358bb47"
+              }
+            }
+          ],
+          "driver": {
+            "bytes": 11972,
+            "path": "$QUALIFICATION_ROOT/ci-45007827191/verify-organization-fixture.py",
+            "sha256": "ce268fef5ba698de821ff7cf0583fd0db76effa2b01944f27d8127e9b803de6c"
+          },
+          "elapsed_seconds": 6.384,
+          "execution": {
+            "environment": {
+              "CARGO_BUILD_JOBS": "2",
+              "CARGO_HOME": "$TASK_TOOLING_ROOT/cargo",
+              "CARGO_INCREMENTAL": "0",
+              "CARGO_NET_OFFLINE": "true",
+              "CARGO_PROFILE_DEV_DEBUG": "0",
+              "CARGO_PROFILE_TEST_DEBUG": "0",
+              "CARGO_TARGET_DIR": "$TASK_TOOLING_ROOT/target",
+              "CARGO_TERM_COLOR": "never",
+              "RUSTUP_AUTO_INSTALL": "0",
+              "RUSTUP_HOME": "$TASK_TOOLING_ROOT/rustup",
+              "RUSTUP_TOOLCHAIN": "1.95.0"
+            },
+            "gid": 1000,
+            "uid": 1000
+          },
+          "finished_at_utc": "2026-11-22T10:03:51.348377+00:00",
+          "first_failure": null,
+          "harness": {
+            "bytes": 13391160,
+            "features": [],
+            "fresh": false,
+            "manifest_path": "$MARTY_SOURCE_ROOT/rust/services/organization/Cargo.toml",
+            "package_id": "path+file://$MARTY_SOURCE_ROOT/rust/services/organization#marty-organization@0.1.0",
+            "path": "$TASK_TOOLING_ROOT/target/debug/deps/application_behavior-3935accd9a25542b",
+            "profile": {
+              "debug_assertions": true,
+              "debuginfo": 0,
+              "opt_level": "0",
+              "overflow_checks": true,
+              "test": true
+            },
+            "sha256": "6258a9d08d952543986a69de94d4fc9477a3051fe14d3e9e916ce2d6e5dd35b9",
+            "target": {
+              "crate_types": [
+                "bin"
+              ],
+              "doc": false,
+              "doctest": false,
+              "edition": "2021",
+              "kind": [
+                "test"
+              ],
+              "name": "application_behavior",
+              "src_path": "$MARTY_SOURCE_ROOT/rust/services/organization/tests/application_behavior.rs",
+              "test": true
+            }
+          },
+          "normal_host_unchanged_reference": {
+            "after": {
+              "bytes": 94983880,
+              "path": "$TASK_TOOLING_ROOT/target/debug/marty-delegated-use",
+              "sha256": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989"
+            },
+            "before": {
+              "bytes": 94983880,
+              "path": "$TASK_TOOLING_ROOT/target/debug/marty-delegated-use",
+              "sha256": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989"
+            },
+            "scope": "Existing artifact hashed only; no normal-host build or execution in this verification."
+          },
+          "schema_version": 1,
+          "scope": "Single shared test-fixture scalar correction; rebuild and run the four existing Organization application_behavior integration tests. No serving executable build or execution, no database, no AWS action.",
+          "source_after": {
+            "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+            "catalog_count": 148,
+            "catalog_sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab",
+            "changed_paths": [
+              "contracts/organization-application-behavior.json"
+            ],
+            "diff_sha256": "4f532e95eb09601c8f5619dfdd0daaf5863c249d104d9d84a1af75fa7f50394f",
+            "fixture_corrected_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+            "fixture_only_scalar_change": true,
+            "fixture_original_sha256": "44fd7cd83cf3f1f67b1d913740aea73771efe6eb8875e303b2fe227e563d22f6",
+            "head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c"
+          },
+          "source_before": {
+            "cargo_lock_sha256": "f90369380b3e487ba05b51441a1e5b43988895680692f389f3d4f90dd27c9f83",
+            "catalog_count": 148,
+            "catalog_sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab",
+            "changed_paths": [
+              "contracts/organization-application-behavior.json"
+            ],
+            "diff_sha256": "4f532e95eb09601c8f5619dfdd0daaf5863c249d104d9d84a1af75fa7f50394f",
+            "fixture_corrected_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+            "fixture_only_scalar_change": true,
+            "fixture_original_sha256": "44fd7cd83cf3f1f67b1d913740aea73771efe6eb8875e303b2fe227e563d22f6",
+            "head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+            "rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c"
+          },
+          "started_at_utc": "2026-11-22T10:03:44.963976+00:00",
+          "status": "FIXTURE_ONLY_CORRECTION_VERIFIED",
+          "test_inventory": [
+            "creation_defaults_owner_and_catalog_match_the_language_neutral_contract",
+            "empty_updates_and_private_open_admission_fail_closed",
+            "partial_updates_clear_nullable_fields_merge_settings_and_report_exact_changes",
+            "settings_patch_rejects_private_material_without_changing_organization"
+          ],
+          "tests": {
+            "actual_ok_test_ids": [
+              "creation_defaults_owner_and_catalog_match_the_language_neutral_contract",
+              "empty_updates_and_private_open_admission_fail_closed",
+              "partial_updates_clear_nullable_fields_merge_settings_and_report_exact_changes",
+              "settings_patch_rejects_private_material_without_changing_organization"
+            ],
+            "failed": 0,
+            "filtered_out": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 4
+          },
+          "versions": {
+            "cargo": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+            "rustc": "rustc 1.95.0 (59807616e 2026-04-14)"
+          }
+        }
+      },
+      "organization-catalog-fixture-review.json": {
+        "original_export": {
+          "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-catalog-fixture-review.json",
+          "bytes": 8996,
+          "sha256": "6ce4c816375840d0edb45447e25fe33ce225d97313315dd6b4ae901fee300386"
+        },
+        "data": {
+          "schema_version": 1,
+          "recorded_at_utc": "2026-11-22 10:07:22 UTC",
+          "status": "READ_ONLY_CATALOG_FIXTURE_REVIEW_COMPLETE",
+          "repository": "ElevenID/marty-ui",
+          "pull_request": 1994,
+          "candidate_head": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+          "scope": "Independent read-only review of the Organization application fixture cardinality, canonical permission identities, catalog history and active consumers. This record is source evidence, not a test execution or hosted CI pass.",
+          "first_failure": {
+            "run_id": 45007827191,
+            "job_id": 137163349770,
+            "original_private_log": {
+              "path": "$QUALIFICATION_ROOT/ci-45007827191/contracts-137163349770-first-failure.log",
+              "bytes": 964345,
+              "sha256": "b1a505393760700b9044a21aaaeaf022cb52f4f41742e95915af1fbe42da7277"
+            },
+            "fixture_expected": 127,
+            "actual_materialized_permissions": 148
+          },
+          "canonical_catalog": {
+            "path": "contracts/organization-permission-catalog.json",
+            "bytes": 20134,
+            "sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab",
+            "count": 148,
+            "unique_resource_action_keys": 148,
+            "resource_groups": 36,
+            "history": [
+              {
+                "commit": "79df832ed1a232cd73d769c18f3bc459f6477c1a",
+                "role": "accepted main baseline",
+                "permissions": 113,
+                "unique_keys": 113,
+                "resource_groups": 29,
+                "sha256": "aed03a8fb985ea7690ec078151d2733a3fb540c62be1b192f0e0618431c4284c"
+              },
+              {
+                "commit": "0404d1100f34f1423c80c432c0cd63df60908f48",
+                "role": "managed enrollment and human delegation; fixture last updated to127",
+                "permissions": 127,
+                "unique_keys": 127,
+                "resource_groups": 31,
+                "sha256": "072c9dde5d0019736f2f3ee20944319f88dfa415ff2c6271bae3892537ea05bf"
+              },
+              {
+                "commit": "c44579ab81b46c4b5a55be1fd0308f0464824045",
+                "role": "full-machine identity, authentication and authorization-policy owners",
+                "permissions": 139,
+                "unique_keys": 139,
+                "resource_groups": 34,
+                "sha256": "089fa64fff5158246e85510227fde24bf233f3f4cc6f4d965272b2cc6527d184"
+              },
+              {
+                "commit": "1063f32b5f65094ca3f98351804ff4b5994fc87b",
+                "role": "delegated-use access and policy owners; catalog remains byte-identical at candidate",
+                "permissions": 148,
+                "unique_keys": 148,
+                "resource_groups": 36,
+                "sha256": "30072cd86016fb6be54d916db7beea0831b4acd230d372fd823154a1c72048ab"
+              }
+            ]
+          },
+          "additions": {
+            "from_main113": {
+              "added": 35,
+              "resources": 7,
+              "removed": 0,
+              "modified_existing_rows": 0,
+              "duplicate_keys": 0,
+              "by_resource": {
+                "agent-identity": [
+                  "create",
+                  "enroll",
+                  "retire",
+                  "revoke",
+                  "rotate-key",
+                  "suspend",
+                  "update",
+                  "view"
+                ],
+                "delegation-grant": [
+                  "approve",
+                  "create",
+                  "reinstate",
+                  "revoke",
+                  "suspend",
+                  "view"
+                ],
+                "delegation-use-policy": [
+                  "activate",
+                  "archive",
+                  "create",
+                  "update",
+                  "view"
+                ],
+                "machine-authentication-policy": [
+                  "assign"
+                ],
+                "machine-authorization-policy": [
+                  "activate",
+                  "archive",
+                  "create",
+                  "update",
+                  "view"
+                ],
+                "machine-identity": [
+                  "create",
+                  "retire",
+                  "revoke",
+                  "suspend",
+                  "update",
+                  "view"
+                ],
+                "machine-use-access": [
+                  "create",
+                  "revoke",
+                  "update",
+                  "view"
+                ]
+              }
+            },
+            "since_fixture127": {
+              "added": 21,
+              "resources": 5,
+              "removed": 0,
+              "modified_existing_rows": 0,
+              "duplicate_keys": 0,
+              "by_resource": {
+                "delegation-use-policy": [
+                  "activate",
+                  "archive",
+                  "create",
+                  "update",
+                  "view"
+                ],
+                "machine-authentication-policy": [
+                  "assign"
+                ],
+                "machine-authorization-policy": [
+                  "activate",
+                  "archive",
+                  "create",
+                  "update",
+                  "view"
+                ],
+                "machine-identity": [
+                  "create",
+                  "retire",
+                  "revoke",
+                  "suspend",
+                  "update",
+                  "view"
+                ],
+                "machine-use-access": [
+                  "create",
+                  "revoke",
+                  "update",
+                  "view"
+                ]
+              },
+              "sequence": [
+                {
+                  "commit": "c44579ab81b46c4b5a55be1fd0308f0464824045",
+                  "added": 12
+                },
+                {
+                  "commit": "1063f32b5f65094ca3f98351804ff4b5994fc87b",
+                  "added": 9
+                }
+              ]
+            }
+          },
+          "fixture_review": {
+            "path": "contracts/organization-application-behavior.json",
+            "observed_correction": {
+              "json_pointer": "/create/expected/permission_count",
+              "from": 127,
+              "to": 148,
+              "bytes": 1668,
+              "sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102"
+            },
+            "only_scalar_changed": true,
+            "every_other_field_equal_to_0404_checkpoint": true,
+            "required_key_count": 10,
+            "all_required_keys_present": true,
+            "all_required_keys_unique": true,
+            "required_keys_unchanged": true,
+            "required_permission_keys": [
+              "application:manage-ownership",
+              "external-observation:manage",
+              "audit:ingest",
+              "mdoc-certificate:issue-iaca",
+              "mdoc-certificate:issue",
+              "agent-identity:enroll",
+              "delegation-grant:create",
+              "delegation-grant:suspend",
+              "delegation-grant:reinstate",
+              "delegation-grant:revoke"
+            ]
+          },
+          "consumer_review": {
+            "sole_fixture_consumer": "rust/services/organization/tests/application_behavior.rs",
+            "consumer_sha256": "2a9aa7268c8d2e756c6b3a8b56f7b44fe7470288dc0f9afb6ffc2571fa9545b7",
+            "count_assertion": "assert_eq!(plan.permissions.len(), case.expected.permission_count)",
+            "strict_equality_and_following_required_key_assertions_unchanged": true,
+            "production_path": "plan_organization_creation calls materialize_permission_catalog; the canonical parser rejects duplicate resource/action keys, and materialization retains each key and its deterministic UUIDv5 identity.",
+            "other_active_exact_counts": [
+              {
+                "path": "rust/services/organization/tests/permission_catalog.rs",
+                "sha256": "7208ac3ff9ac162863a6a5fde194edd9fb24538a381fbe6a15dc5d53cc78aa1e",
+                "expected_permissions": 148
+              },
+              {
+                "path": "ui/src/services/__tests__/rbacApi.test.ts",
+                "sha256": "b9a4d273bb867011c24c4f8d5780df39dc617ad7a7a5527645ded609ee27d9da",
+                "expected_permissions": 148,
+                "expected_resource_groups": 36
+              }
+            ],
+            "search_scope": "Fixture filename and permission_count references across the repository; related 113/127/148 permission/catalog/RBAC cardinality assertions across active Rust, UI, contracts, scripts and tests. Historical evidence documents and unrelated loopback/control-character numeric literals are not treated as stale catalog expectations.",
+            "further_concrete_stale_catalog_cardinalities_found": false,
+            "necessary_verification": "Rebuild and run the four existing application_behavior integration tests, the sole changed fixture consumer. No broader suite or production change is required by this scalar correction.",
+            "test_names": [
+              "creation_defaults_owner_and_catalog_match_the_language_neutral_contract",
+              "partial_updates_clear_nullable_fields_merge_settings_and_report_exact_changes",
+              "settings_patch_rejects_private_material_without_changing_organization",
+              "empty_updates_and_private_open_admission_fail_closed"
+            ]
+          },
+          "supporting_source_hashes": {
+            "rust/services/organization/src/catalog.rs": "4339d567bbc2fa9ca9b650bedeca551506f24ee59576061f236e286b947b39a6",
+            "rust/services/organization/src/application.rs": "4f8fc0a35179f85c5a66de64568d4e4ec8a7d4b0618612376241a1a9aaf16620"
+          },
+          "separate_execution_reference": {
+            "path": "$QUALIFICATION_ROOT/ci-45007827191/organization-fixture-verification/result.public.json",
+            "sha256": "906fa31f9cb78ac5215b2e4a4df3d9e7e62c76e8f920a1b481ff198006110813",
+            "basis": "The coordinating worker separately reports all four existing consumer tests passed with pinned Rust1.95, locked/offline compilation. That execution result is a separate record, not performed or newly verified by this source audit."
+          },
+          "limits": [
+            "No tests, Cargo builds, source edits, workflow reruns, AWS actions or GitHub mutations were performed by this audit.",
+            "The fixture correction does not change catalog contents, permission identities, production authorization, role entitlements, equality checks or refusal assertions.",
+            "No passing final-head hosted CI, merged-head runtime qualification, new AWS replay or merge-policy eligibility is inferred."
+          ]
+        }
+      }
+    },
+    "next_candidate": {
+      "parent": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+      "rust_tree": "0c8ca6490b1a920e05f542e85da1ad0f5e402a0c",
+      "ordinary_required_ci": "PENDING",
+      "normal_merge_queue": "PENDING"
+    }
   }
 }

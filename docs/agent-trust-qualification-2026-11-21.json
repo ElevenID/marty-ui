@@ -1377,7 +1377,7 @@
   },
   "aws_qualification_reference": {
     "repository_path": "docs/agent-trust-aws-qualification-2026-11-22.json",
-    "sha256": "9f280c83f461a100c98a384d27ea4318657ca454c25521a81cef30b8728ef20d",
+    "sha256": "b2c4eca56e365080c0b9cd40fd2d0c110d8b5c1b319930481869ca946d9bc851",
     "qualified_commit": "3c8a9386da87a18d8b3c1855614b7e7c18841c09",
     "aws_rust_tests_passed": 210,
     "aws_gate_count": 14,
@@ -1415,7 +1415,7 @@
     },
     "post_aws_ci_rust_reconciliation": {
       "repository_path": "docs/agent-trust-ci-rust-reconciliation-2026-11-22.json",
-      "sha256": "2cab17d798be564d82f1821db1794824d1302d51dc0481946deb2cd7d3dac072",
+      "sha256": "5dff31dc3397ec13f6c434a8ffc4792d74c6f4f196d22df3ea71f184b691c5d2",
       "qualified_correction_rust_tree": "509b793829358ebd1b1c4606fe3e3f03cc5427db",
       "content_equivalent_public_correction_commit": "d4935ba9adf8bf4c178262df66427ad1fd06497d",
       "distinct_local_library_database_tests": 257,
@@ -1425,7 +1425,30 @@
       "combined_normal_host_build": "PASSED_BUILD_ONLY",
       "normal_host_sha256": "1fe6ca4a0cceec8dedc6260d6127b2387277c4a948af06de92fa5c6f7bc98989",
       "normal_host_executed_by_this_followup": false,
-      "aws_restarted": false
+      "aws_restarted": false,
+      "organization_fixture_followup": {
+        "failed_published_candidate": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+        "failed_ci_run": 45007827191,
+        "prior_23_postgresql_failures_now_passed_hosted": true,
+        "hosted_authority_library": {
+          "passed": 212,
+          "failed": 0,
+          "existing_ignored": 28
+        },
+        "remaining_failure": "Organization shared fixture expected127 permissions; canonical catalog has148.",
+        "corrected_fixture": "contracts/organization-application-behavior.json",
+        "corrected_fixture_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+        "correction": "One scalar127 to148; every other fixture byte, all Rust source and production lock unchanged.",
+        "rebuilt_existing_consumer_tests": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 0
+        },
+        "normal_host_rebuilt_or_executed": false,
+        "aws_restarted": false,
+        "final_required_ci_and_queue": "PENDING_ON_NEXT_CANDIDATE"
+      }
     }
   }
 }

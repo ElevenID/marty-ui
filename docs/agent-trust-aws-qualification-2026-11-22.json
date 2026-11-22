@@ -16,7 +16,7 @@
     "core_pin": "bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0",
     "protocol_pin": "6126da7619e057be2ff58dd38a5d50f49891d1b3",
     "runtime_source_changed_after_qualification": true,
-    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted-main integrations, their focused local verification, earlier CI/exporter/profile fixes and the read-only security review retain their separate original checkpoints. The later full Rust lint and fixture reconciliation passed exact Rust 1.95 workspace/all-targets Clippy and 257 distinct direct library/database tests on Rust tree 509b793829358ebd1b1c4606fe3e3f03cc5427db, preserved in the content-equivalent public correction checkpoint d4935ba9adf8bf4c178262df66427ad1fd06497d. Accepted main79df832 then merged without conflicts; its shared Issuance projections preserve the original SQL. The combined Rust tree 0c8ca6490b1a920e05f542e85da1ad0f5e402a0c received a normal serving rebuild that produced the byte-identical local binary. Those later checks and builds did not execute the normal host; no later AWS replay is claimed. Final protected CI and the normal merge queue remain independent."
+    "publication_note": "AWS qualification remains tied to exact commit 3c8a9386da87a18d8b3c1855614b7e7c18841c09. Accepted-main integrations, their focused local verification, earlier CI/exporter/profile fixes and the read-only security review retain their separate original checkpoints. The later full Rust lint and fixture reconciliation passed exact Rust 1.95 workspace/all-targets Clippy and 257 distinct direct library/database tests on Rust tree 509b793829358ebd1b1c4606fe3e3f03cc5427db, preserved in the content-equivalent public correction checkpoint d4935ba9adf8bf4c178262df66427ad1fd06497d. Accepted main79df832 then merged without conflicts; its shared Issuance projections preserve the original SQL. The combined Rust tree 0c8ca6490b1a920e05f542e85da1ad0f5e402a0c received a normal serving rebuild that produced the byte-identical local binary. Those later checks and builds did not execute the normal host; no later AWS replay is claimed. Final protected CI and the normal merge queue remain independent. The published4d1 CI subsequently passed all23 formerly failing PostgreSQL cases and the212-test authority library, but exposed one stale Organization shared-fixture count127 versus148. Its single scalar correction rebuilt and passed all four existing consumer tests locally, with the Rust tree and production lock unchanged. This fixture followup did not rebuild or execute the normal host and did not restart AWS; the next candidate still requires normal CI and queue."
   },
   "operator_environment": {
     "existing_aws_instance_used": true,
@@ -2964,7 +2964,7 @@
     "Current branch protection, required GitHub Actions checks, human review requirements and the normal squash merge queue remain independent gates. No GitHub status or approval is created by this evidence.",
     "The screenshot is private user-facing console evidence and is not included in this public repository report. Raw provider logs, database state, account/resource identifiers, balances and access configuration are not published."
   ],
-  "updated_at_utc": "2026-11-22T09:26:06.711967+00:00",
+  "updated_at_utc": "2026-11-22T10:08:13.631162+00:00",
   "post_aws_main_reconciliation": {
     "status": "ACCEPTED_MAIN_INTEGRATED_AND_SCOPED_LOCAL_VERIFICATION_PASSED",
     "accepted_main_commit": "284ca81ca901ad532b581d5286ad955afced6dfd",
@@ -4295,7 +4295,7 @@
   },
   "post_aws_ci_rust_reconciliation_reference": {
     "repository_path": "docs/agent-trust-ci-rust-reconciliation-2026-11-22.json",
-    "sha256": "2cab17d798be564d82f1821db1794824d1302d51dc0481946deb2cd7d3dac072",
+    "sha256": "5dff31dc3397ec13f6c434a8ffc4792d74c6f4f196d22df3ea71f184b691c5d2",
     "actual_test_execution_base": "5d50b1ad3a8be6362ca958b504bf52002e6dad75",
     "qualified_correction_rust_tree": "509b793829358ebd1b1c4606fe3e3f03cc5427db",
     "content_equivalent_public_correction_commit": "d4935ba9adf8bf4c178262df66427ad1fd06497d",
@@ -4312,6 +4312,29 @@
     "normal_host_byte_identical_before_and_after_main_integration": true,
     "normal_host_executed_by_this_followup": false,
     "aws_restarted": false,
-    "final_required_ci_and_queue_remain_independent": true
+    "final_required_ci_and_queue_remain_independent": true,
+    "organization_fixture_followup": {
+      "failed_published_candidate": "4d1baa92933a626fc9393d6ac2cf89f85cf09888",
+      "failed_ci_run": 45007827191,
+      "prior_23_postgresql_failures_now_passed_hosted": true,
+      "hosted_authority_library": {
+        "passed": 212,
+        "failed": 0,
+        "existing_ignored": 28
+      },
+      "remaining_failure": "Organization shared fixture expected127 permissions; canonical catalog has148.",
+      "corrected_fixture": "contracts/organization-application-behavior.json",
+      "corrected_fixture_sha256": "8363c55d9f69e7d549cb03f6e30dc7f0a1972bdc30a7f0aaf9129408d0793102",
+      "correction": "One scalar127 to148; every other fixture byte, all Rust source and production lock unchanged.",
+      "rebuilt_existing_consumer_tests": {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "normal_host_rebuilt_or_executed": false,
+      "aws_restarted": false,
+      "final_required_ci_and_queue": "PENDING_ON_NEXT_CANDIDATE"
+    }
   }
 }
