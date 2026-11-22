@@ -10,6 +10,7 @@ import selfhost_windows_website_store as store
 renewal = selection.renewal
 require = selection.require
 PHASE = 'stage-candidate'
+DISPATCH_SCHEMA = 'marty.windows-website-stage-dispatch/v1'
 
 
 def _candidate_rows(items, project):
@@ -82,6 +83,11 @@ def _stage_model(docker, base_command, base_model, proposal, attempt, held):
     return command, model, hashes
 
 
+def _command(command):
+    return [*command, 'up', '--no-deps', '--no-build', '--pull', 'never',
+            '--no-recreate', '--wait', '--wait-timeout', '90', plan_contract.SLOT]
+
+
 def _evidence(path, observations, held):
     _material(path, observations, held)
     return {name: plan_contract.digest(value) for name, value in observations.items()}
@@ -107,7 +113,7 @@ def run(config, choice, values, record, plan, proposal, status, *, authority_fil
     selection._native_current(config, choice, values, inspected['docker'], authority_file)
     before = context.check(before_intent=True)
     started_evidence = _evidence(attempt / 'stage-before.json', {
-        'owner_lease': {'guard_sha256': status['guard_sha256'], 'owner': plan['owner']},
+        'owner_lease': {'guard_sha256': status['guard_sha256'], 'owner': plan['owner'], 'dispatch_schema': DISPATCH_SCHEMA},
         'native_custody': {'selected_sha256': plan['owner']['selected_sha256'],
                            'native_sha256': plan['owner']['native_sha256']},
         'foreign_storage': {'engine_id': plan['owner']['engine_id'],
@@ -118,8 +124,16 @@ def run(config, choice, values, record, plan, proposal, status, *, authority_fil
     started = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=PHASE,
                            event='started', evidence_sha256=started_evidence)
     context.check(before_intent=True)
-    result = renewal.run_owned_mutation([*command, 'up', '--no-deps', '--no-build', '--pull', 'never',
-        '--no-recreate', '--wait', '--wait-timeout', '90', plan_contract.SLOT], timeout=120)
+    arguments = _command(command)
+    authorized = store.append(plan, expected_anchor_sha256=started['anchor_sha256'], phase=PHASE,
+        event='dispatch-authorized', evidence_sha256=_evidence(attempt / 'stage-dispatch.json', {
+            'stage_command': {'arguments_sha256': plan_contract.digest(arguments), 'timeout_seconds': 120},
+        }, held))
+    result = renewal.run_owned_mutation(arguments, timeout=120)
+    returned = store.append(plan, expected_anchor_sha256=authorized['anchor_sha256'], phase=PHASE,
+        event='dispatch-returned', evidence_sha256=_evidence(attempt / 'stage-result.json', {
+            'stage_result': {'returncode': result.returncode, 'completed_cli_job': True},
+        }, held))
     if result.returncode != 0:
         raise renewal.UncertainComposeMutation('Website stage requires operator reconciliation')
     after = context.check()
@@ -131,6 +145,6 @@ def run(config, choice, values, record, plan, proposal, status, *, authority_fil
         'image_metadata': {'image_id': candidate['Image'], 'release': plan['website']['release_sha256']},
         'candidate_health': {'container_id': candidate['Id'], 'status': 'healthy', 'restart_count': 0},
     }, held)
-    completed = store.append(plan, expected_anchor_sha256=started['anchor_sha256'], phase=PHASE,
+    completed = store.append(plan, expected_anchor_sha256=returned['anchor_sha256'], phase=PHASE,
                              event='completed', evidence_sha256=completed_evidence)
     return {**completed, 'guard_sha256': status['guard_sha256']}

@@ -1205,6 +1205,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 phase, assets, gh, cosign, registry_config, authority_file = _website_edge
                 if phase in {'verify-website', 'verify-combined'}:
                     from selfhost_windows_website_verify import run
+                elif phase == 'reconcile-stage':
+                    from selfhost_windows_website_reconcile import run
                 else:
                     from selfhost_windows_website_edge import run
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
@@ -1394,6 +1396,15 @@ def verify_website_routes(config_path, plan, phase, *, guard_sha256, expected_an
     require(phase in {'verify-website', 'verify-combined'})
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
                           _website_edge=(phase, assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def reconcile_website_stage(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, authority_file=None):
+    """Qualify a failed initial stage under the exact guard and journal pin."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=('reconcile-stage', assets, gh, cosign, registry_config, authority_file)) as status:
         result = status
     return result
 

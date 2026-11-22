@@ -12,7 +12,6 @@ import selfhost_windows_website_plan as plan_contract
 TAIL_SCHEMA = 'marty.windows-website-journal-tail/v1'
 PLAN = 'plan.json'
 ABORT = 'stage-abort.json'
-RECORD_NAME = re.compile(r'[0-9]{6}\.[a-z-]+\.(recorded|started|completed|reconciled-abort)\.json')
 require = journal.require
 renewal = selection.renewal
 
@@ -77,7 +76,7 @@ def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next
     names = _inventory(records)
     ordered = sorted(names - {PLAN, ABORT})
     require(PLAN in names and 1 <= len(ordered) <= journal.MAX_RECORDS
-            and all(RECORD_NAME.fullmatch(name) for name in ordered))
+            and all(journal.RECORD_NAME.fullmatch(name) for name in ordered))
     expected_count = len(ordered) - int(pending)
     require((expected_count == 0) == (expected_anchor_sha256 is None))
     expected_tails = {_tail_name(index) for index in range(1, len(ordered) + 1)}
@@ -102,8 +101,12 @@ def _read(plan, records, anchors, held, expected_anchor_sha256, *, verified_next
             previous_anchor = selection.digest(raw)
         if index == expected_count:
             require(previous_anchor == expected_anchor_sha256)
+    prepared = receipt is not None and not ordered[-1].endswith('.reconciled-abort.json')
     status = journal.inspect(entries, plan, expected_tail_sha256=selection.digest(entries[ordered[-1]]),
-                             held_abort_receipt=receipt)
+                             held_abort_receipt=None if prepared else receipt)
+    if prepared:
+        journal.reconciled_abort(entries, plan, expected_tail_sha256=status['tail_sha256'], held_abort_receipt=receipt)
+        status['prepared_abort_sha256'] = plan_contract.digest(receipt)
     held.callback(_hold_inventory, anchors, tails)
     held.callback(_hold_inventory, records, names)
     return entries, status, names, tails
@@ -137,6 +140,16 @@ def read_evidence(plan, *, expected_anchor_sha256, references, held):
         return observed
 
 
+def read_prepared_abort(plan, *, expected_anchor_sha256, held):
+    """Hold the exact receipt left before a terminal record was written."""
+    with _directories(plan) as (records, anchors, journal_inputs):
+        _entries, status, _names, _tails = _read(plan, records, anchors, journal_inputs, expected_anchor_sha256)
+        require('prepared_abort_sha256' in status)
+        receipt = selection.decode(_hold_bytes(records / ABORT, held))
+        require(plan_contract.digest(receipt) == status['prepared_abort_sha256'])
+    return receipt
+
+
 def _publish(plan, records, anchors, held, entries, proposed, names, tails, prior, receipt=None):
     require(len(proposed) == len(entries) + 1 and set(entries) < set(proposed))
     name, = set(proposed) - set(entries)
@@ -146,8 +159,11 @@ def _publish(plan, records, anchors, held, entries, proposed, names, tails, prio
     _hold_inventory(records, names)
     _hold_inventory(anchors, tails)
     if receipt is not None:
-        selection._append(records, {}, ABORT, receipt, held)
-        names.add(ABORT)
+        if ABORT in names:
+            require(_hold_bytes(records / ABORT, held) == selection.packed(receipt))
+        else:
+            selection._append(records, {}, ABORT, receipt, held)
+            names.add(ABORT)
     selection._append(records, entries, name, selection.decode(body), held)
     require(entries == proposed)
     names.add(name)
@@ -178,6 +194,7 @@ def append(plan, *, expected_anchor_sha256, phase, event, evidence_sha256):
     """Persist a phase boundary before its owner proceeds to the next action."""
     with _directories(plan) as (records, anchors, held):
         entries, status, names, tails = _read(plan, records, anchors, held, expected_anchor_sha256)
+        require('prepared_abort_sha256' not in status)
         proposed = journal.append(entries, plan, expected_tail_sha256=status['tail_sha256'],
                                   phase=phase, event=event, evidence_sha256=evidence_sha256)
         result = _publish(plan, records, anchors, held, entries, proposed, names, tails, expected_anchor_sha256)

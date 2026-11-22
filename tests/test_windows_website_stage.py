@@ -47,7 +47,7 @@ def test_real_compose_normalizes_staged_overlay_without_product_changes(paths, p
     assert set(normalized['services']) - set(combined['services']) == {plan_contract.SLOT}
 
 
-@pytest.mark.parametrize('fault', [None, 'changed-model', 'nonzero', 'unhealthy', 'protected-restart', 'unexpected-port'])
+@pytest.mark.parametrize('fault', [None, 'changed-model', 'nonzero', 'uncertain-dispatch', 'unhealthy', 'protected-restart', 'unexpected-port'])
 def test_stage_records_boundaries_and_changes_only_website(paths, planned, monkeypatch, fault):
     plan, records, anchors = paths
     expected = plan_contract.proposal(**{key: value for key, value in planned.items() if key != 'proof_sha256'})
@@ -117,11 +117,15 @@ def test_stage_records_boundaries_and_changes_only_website(paths, planned, monke
     def execute(arguments, *, timeout):
         assert (records / '000002.stage-candidate.started.json').is_file()
         assert (anchors / '000002.tail.json').is_file()
-        assert not (records / '000003.stage-candidate.completed.json').exists()
+        assert (records / '000003.stage-candidate.dispatch-authorized.json').is_file()
+        assert (anchors / '000003.tail.json').is_file()
+        assert not (records / '000004.stage-candidate.dispatch-returned.json').exists()
         assert arguments[-10:] == ['up', '--no-deps', '--no-build', '--pull', 'never',
                                   '--no-recreate', '--wait', '--wait-timeout', '90', plan_contract.SLOT]
         assert timeout == 120
         calls.append('mutate')
+        if fault == 'uncertain-dispatch':
+            raise stage.renewal.UncertainComposeMutation('synthetic lost daemon outcome')
         statuses['moved'] = True
         return SimpleNamespace(returncode=int(fault == 'nonzero'))
 
@@ -137,7 +141,8 @@ def test_stage_records_boundaries_and_changes_only_website(paths, planned, monke
         assert calls == [] and not (records / '000002.stage-candidate.started.json').exists()
     else:
         assert calls == ['native', 'mutate']
-        assert (records / '000003.stage-candidate.completed.json').is_file() == (fault is None)
+        assert (records / '000004.stage-candidate.dispatch-returned.json').is_file() == (fault != 'uncertain-dispatch')
+        assert (records / '000005.stage-candidate.completed.json').is_file() == (fault is None)
     if fault is None:
         assert result['model_state'] == 'staged' and result['permitted_record_phases'] == ['route-website', 'restore-combined']
         assert not result['activation_supported']
