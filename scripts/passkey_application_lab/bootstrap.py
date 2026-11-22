@@ -245,6 +245,8 @@ class ApplicationLab:
             self.run_binary("marty-notification", env, files, ["--migrate"])
             self.run_binary("marty-organization", env, files, ["migrate"])
             self.run_binary("marty-credential-template", env, files, ["bootstrap"])
+            self.run_binary("marty-presentation-policy", env, files, ["migrate"])
+            self.run_binary("marty-presentation-policy", env, files, ["bootstrap-builtins"])
             self.run_binary("marty-device-registration", env, files, ["migrate"])
             self.run_binary("marty-issuance-service", env, files, ["migrate"])
             self.run_binary("marty-verification-service", env, files, ["migrate"])
