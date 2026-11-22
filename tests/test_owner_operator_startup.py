@@ -1,6 +1,7 @@
 """Regression contracts for operator-owned catalog/schema provisioning."""
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,10 +68,12 @@ def test_compose_and_helm_operator_order_matches_rust_commands() -> None:
         positions = [block.index(command) for command in commands]
         assert positions == sorted(positions)
         for service in ("organization", "credential-template", "presentation-policy"):
-            service_start = source.index(f"  {service}:")
-            service_end = source.find("\n  ", service_start + 5)
-            service_block = source[service_start:service_end]
-            assert "owner-migrations:" in service_block
+            match = re.search(
+                rf"(?ms)^  {re.escape(service)}:\\n(.*?)(?=^  [a-zA-Z0-9_-]+:\\n|\\Z)",
+                source,
+            )
+            assert match is not None
+            assert "owner-migrations:" in match.group(1)
 
     helm = read("deploy/helm/marty/templates/migrations.yaml")
     ordered = [
