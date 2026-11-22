@@ -7,14 +7,21 @@ inferred from publisher success.
 
 ## Managed full-audience cutover, November 22
 
-The accepted private application image matches the installed v1.1.274
-application. A read-only comparison of the 30 installed backend and provider
-containers found that all 30 configured image references match the signed
-v1.1.274 inventory. Only edge, PostgreSQL and Redis match the v1.1.273
-inventory. The requested backend tag conflicts with preserving the installed
-digests. Hold final composition selection for release-owner disposition.
-The private producer owner still needs to qualify the signed full-audience
-standalone website. [Installed release inventory](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.274)
+The release owner selected v1.1.292 for both the backend and the full
+application. All five backend release subjects passed provenance verification
+at source `ab8c96626100418f8a88a883380e807a575fbe16`. The producer candidate
+accepted the matching full application plan and passed 44 Linux producer tests.
+The application image, standalone full-audience website and signed composition
+still need their original producers. Retain the installed v1.1.274 combined
+package for rollback. [Stable backend release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.292)
+
+An isolated database rehearsal used the released v1.1.274 migration and service
+images to establish the baseline and create a synthetic organization. The
+v1.1.292 images upgraded that same database twice. Both passes verified all
+ten new migration records across Credential Template, Device Registration,
+Flow, Issuance and Trust Profile. The organization survived. The release
+owner still needs to qualify production data recovery and the application
+journeys on the signed full composition.
 
 At 22:34 UTC, the original installed recovery caller still selected generation
 33, local sequence 9. A read-only check found the same 31 container IDs in two
@@ -25,7 +32,7 @@ returned HTTP 502 on `/ready` and `/v1/auth/me`. The next production step
 requires a stable runtime under the existing recovery owner.
 
 The first-cutover planner landed through [#2042](https://github.com/ElevenID/marty-ui/pull/2042).
-The durable journal and dependent transition work start at
+The durable journal merged through
 [#2043](https://github.com/ElevenID/marty-ui/pull/2043). The Windows caller
 rehearsal in [#2058](https://github.com/ElevenID/marty-ui/pull/2058) exercised
 guarded and released selections with a synthetic runtime.
