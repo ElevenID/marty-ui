@@ -11,7 +11,7 @@
         "validate"
       ],
       "exit_code": 0,
-      "stdout": "Deployment catalog validation passed.\nstacks=6 services=28 secrets=88 bundles=1\n",
+      "stdout": "Deployment catalog validation passed.\nstacks=6 services=28 secrets=89 bundles=1\n",
       "stderr": ""
     },
     {
