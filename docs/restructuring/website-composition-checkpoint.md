@@ -5,6 +5,21 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Local producer testing and release approval, November 23
+
+The private website and application producer changes merged. The producer
+contract suite passed on the exact integration tree with 80 Python tests
+and 11 Node tests. The local runner also checks the GitHub Actions workflow
+syntax. A genuine historical private release signature verified locally
+with the GitHub CLI.
+
+The release owner approved keeping GitHub's workflow identity and running
+each approved job in a fresh local virtual machine. An opaque SHA-256
+digest on protected public main binds approval to the private invocation.
+GitHub accepted the first qualification job after the workflow syntax fix.
+The private hosted jobs were skipped. Independent verification of a new
+signature and the signed website, application and composition remain open.
+
 ## Approved full-release database rollback, November 23
 
 If the full v1.1.292 upgrade must return to v1.1.274, the deployment owner
@@ -108,8 +123,11 @@ that case from the combined manifest retained all queued entries in order
 and added the edge module, then the verifier (233 and 234 assets).
 The catalog-output and bundled-import tests passed on both projected
 trees. Routing now includes the qualified resolution on its actual base.
-Acceptance still needs reconciliation and the Windows tests on its
-integrated routing base.
+Acceptance then reconciled its stacked branch at
+`497b3fc604c8b86946b16301e4170a420b9fcd1f`. The bundle contains 234 assets.
+All 518 applicable Windows tests passed, with two symlink cases skipped.
+The Linux browser contract suite passed all 58 cases. Retarget the draft
+after routing reaches protected main.
 [Resources queue run](https://github.com/ElevenID/marty-ui/actions/runs/45111440032)
 
 ## Full website and application qualification, November 23
@@ -128,7 +146,7 @@ archive scanner checked all 13 layers and 2,988 entries. The final image
 contained 454 static files. The three withheld pricing routes returned 404.
 Both release-plan consumers accepted the v4 plan. The local qualification
 SHA-256 is `cb34e4e7f2b821bf34df7d7d156d031d45bc82334bcb020df27bb831406301fe`.
-The draft PR records the plan and original evidence.
+The merged PR records the plan and original evidence.
 [Standalone producer #113](https://github.com/ElevenID/marty-subscriptions/pull/113)
 
 The managed acceptance verifier previously expected a pricing page. The
