@@ -8,7 +8,7 @@ inferred from publisher success.
 ## Local producer testing and release approval, November 23
 
 The private website and application producer changes merged. The producer
-contract suite passed on the exact integration tree with 80 Python tests
+contract suite passed on the exact integration tree with 82 Python tests
 and 11 Node tests. The local runner also checks the GitHub Actions workflow
 syntax. A genuine historical private release signature verified locally
 with the GitHub CLI.
@@ -29,7 +29,36 @@ and the production library build after correcting discovery of a Node-only
 signing suite. A separate rootless Docker VM built an image and served its
 expected content over loopback. The selected production host still serves
 the combined release. Its midnight renewal returned an operator
-reconciliation error and 15 of 31 containers were restarting.
+reconciliation error. Later samples found 16 of 31 containers restarting.
+A fresh comparison found ten containers changing restart or process state.
+The installed expired-origin preparation requires stable runtime identities.
+Its inspection phase also requires an existing renewal-staging journal,
+which is absent. Preserve the original selected generation and recovery
+evidence while resolving these prerequisites.
+
+## Routing integration and acceptance qualification, November 23
+
+Managed routing [#2046](https://github.com/ElevenID/marty-ui/pull/2046)
+merged through the protected queue at
+`9c2d7b4ee6b19a437bd56c2bf1aa1baada1ad1e9`. Every original merge-group
+workflow passed, including its service and browser qualification.
+
+Acceptance [#2047](https://github.com/ElevenID/marty-ui/pull/2047) now targets
+main at `63de4eb7dc8558f815e9dcc47ff86d95e219aca9`. Its nine-file delta
+was replayed from the exact integrated routing feature head onto protected
+main, preserving the upstream content and both branch histories.
+The candidate passed 519 Windows tests with two symlink skips and 72 browser
+contract tests in Linux. The Windows TLS test passed after setting the
+installed OpenSSL configuration. Native Windows browser-contract execution
+requires Unix filesystem semantics and was qualified in Linux.
+Required GitHub checks are running and normal protected-queue automatic
+merge is enabled. The clean acceptance checkout was parked after publication
+and the full lifecycle audit. Its branch and exact checkpoint remain retained.
+
+Live routing, sign-in and application acceptance still require healthy
+production services and authenticated website, application and composition
+release artifacts. The local signing qualification proves the approved
+workflow mechanism. Each production release still needs its own evidence.
 
 ## Approved full-release database rollback, November 23
 
