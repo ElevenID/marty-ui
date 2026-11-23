@@ -5,6 +5,21 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Managed Windows staging and routing, November 23
+
+Website staging merged through the protected queue at
+`86812db416a64e35bb8c045afc3a02ce379d7ab5`. Routing PR #2046 now
+targets main at `f78dddc86be6c27cda73a480090cec4e589cba8b`. Its
+11-file patch against protected main matched the reviewed patch on the
+staging branch byte for byte. All 462 applicable Windows tests passed
+with two symbolic-link cases skipped, and the organization policy audit
+passed. The routing checkout was parked after publication and both refs
+were verified. Required hosted checks are running. The managed acceptance
+PR follows routing. Production still serves the combined release.
+[Staging #2045](https://github.com/ElevenID/marty-ui/pull/2045) ?
+[Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) ?
+[Acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
 ## Full website and application qualification, November 23
 
 The full v1.1.292 application built from the verified backend source and
