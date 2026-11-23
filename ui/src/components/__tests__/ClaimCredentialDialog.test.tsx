@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@test/utils';
+import { flushSync } from 'react-dom';
 import ClaimCredentialDialog from '../console/applicant/ClaimCredentialDialog';
 
 const {
@@ -306,6 +307,23 @@ describe('ClaimCredentialDialog', () => {
     await act(async () => pending.resolve(offer));
     expect(await screen.findByTestId('claim-invite-url')).toHaveTextContent(offer.offer_url);
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a settling claim shared when the parent closes and reopens before delivery', async () => {
+    const pending = deferred<typeof offer>();
+    mockGenerateIssuanceOffer.mockReturnValue(pending.promise);
+    const view = render(<ClaimCredentialDialog {...props} />);
+    await waitFor(() => expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      pending.resolve(offer);
+      await new Promise<void>((resolve) => queueMicrotask(() => {
+        flushSync(() => view.rerender(<ClaimCredentialDialog {...props} open={false} />));
+        flushSync(() => view.rerender(<ClaimCredentialDialog {...props} />));
+        resolve();
+      }));
+    });
+    expect(await screen.findByTestId('claim-invite-url')).toHaveTextContent(offer.offer_url);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
   });
 
   it('retains a pending claim result that arrives before reopened wallet discovery completes', async () => {

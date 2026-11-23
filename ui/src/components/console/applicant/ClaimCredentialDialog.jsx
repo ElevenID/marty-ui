@@ -164,6 +164,8 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const error = currentOffer?.error || null;
   const handleRegenerate = useCallback(() => setOfferAttempt((attempt) => attempt + 1), []);
 
+  useEffect(() => { pendingOffers.current.clear(); }, [scopeKey]);
+
   // The Rust claim endpoint owns offer reuse and renewal. Wallet selection only
   // chooses a link/transport; the endpoint owns delivery behavior.
   // Reopening this dialog shares an in-flight request for
@@ -173,7 +175,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       setOfferRequest(null);
       return;
     }
-    if (!applicationId || currentOffer?.status === 'ready' || currentOffer?.status === 'error') return;
+    if (!applicationId) return;
+    if (currentOffer?.status === 'ready' || currentOffer?.status === 'error') {
+      pendingOffers.current.delete(scopeKey);
+      return;
+    }
     let request = pendingOffers.current.get(scopeKey);
     // A reopened dialog must subscribe to its existing request even while
     // the wallet catalogue reloads. Otherwise a fast response can be missed
@@ -182,9 +188,9 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     let active = true;
     if (currentOffer?.status !== 'loading') setOfferRequest({ key: offerKey, status: 'loading' });
     if (!request) {
-      request = generateOffer(applicationId).finally(() => {
-        if (pendingOffers.current.get(scopeKey) === request) pendingOffers.current.delete(scopeKey);
-      });
+      // Keep the shared promise until its result is committed. Settlement
+      // alone can precede a parent close/reopen or wallet catalogue update.
+      request = generateOffer(applicationId);
       pendingOffers.current.set(scopeKey, request);
     }
     request.then((data) => {
