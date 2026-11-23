@@ -198,6 +198,23 @@ that owner before opening the journal. This read returns phase status. The
 runtime executor must reconcile the actual workload and provide its evidence
 before advancing a pending phase or retiring the guard.
 
+### First workload phase
+
+The selection owner can stage the website from the initial guard and tail.
+It re-authenticates the original composition, reconstructs the sealed plan,
+and renders a one-service Compose overlay against the retained source.
+The entire normalized combined model must survive unchanged once the new slot
+is subtracted. Fresh current readiness, native custody and storage checks
+precede the durable `stage-candidate.started` boundary.
+
+Only the new `website-a` service is started, with the cached image, no
+dependencies and no published ports. The foreign-storage observer also
+compares protected existing containers, checks the selected secret mounts and
+verifies the new image, networks and declared data snapshot. Completion
+requires a healthy candidate with zero restarts. A failed command or
+postcheck leaves the guard and started record for reconciliation, and the
+combined edge stays on its retained routing.
+
 ### Failed initial-stage reconciliation
 
 An initial candidate may never be created, or may be created but fail startup or

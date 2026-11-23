@@ -32,7 +32,7 @@ def test_website_guard_uses_existing_selection_fence_and_pinned_pending_reader(m
             return original_prove(*args, **kwargs)
 
         def preflight(config, _choice, _values, _record, _assets, *, plan_owner,
-                      plan_attempt_directory, held_plan_only=False, **_kwargs):
+                      plan_attempt_directory, held_plan_only=False, guarded_attempt=False, **_kwargs):
             plan = plan_contract.plan(**planned)
             body = Path(config['compose_file']).read_bytes()
             model_hash = selection.digest(selection.packed(selection.decode(body)))
@@ -44,6 +44,8 @@ def test_website_guard_uses_existing_selection_fence_and_pinned_pending_reader(m
             plan['route_directory'] = str(plan_attempt_directory / 'routes')
             rehash(plan)
             plans.append(plan)
+            if guarded_attempt:
+                return plan, {'observed': 'synthetic proposal'}
             return plan if held_plan_only else {'plan_sha256': plan['plan_sha256']}
 
         monkeypatch.setattr(selection, '_prove', prove)
@@ -92,6 +94,18 @@ def test_website_guard_uses_existing_selection_fence_and_pinned_pending_reader(m
             return
         assert admitted == selection.inspect_website_transition(path, plan, guard_sha256=guard_pin,
                                                                expected_anchor_sha256=anchor_pin)
+        from selfhost_windows_website_stage import PHASE
+        import selfhost_windows_website_stage as stage
+
+        def run(_config, _choice, _values, _record, input_plan, proposal, status, **_kwargs):
+            assert input_plan == plan and proposal == {'observed': 'synthetic proposal'}
+            assert status == admitted and status['permitted_record_phases'] == [PHASE]
+            return {**status, 'owner_execute_dispatched': True}
+
+        monkeypatch.setattr(stage, 'run', run)
+        assert selection.stage_website_candidate(path, plan, guard_sha256=guard_pin,
+            expected_anchor_sha256=anchor_pin, assets=root, gh=None, cosign=None,
+            registry_config=None)['owner_execute_dispatched']
         for bad_guard, bad_anchor in (('1'*64, anchor_pin), (guard_pin, '1'*64)):
             with pytest.raises(ValueError):
                 selection.inspect_website_transition(path, plan, guard_sha256=bad_guard,
