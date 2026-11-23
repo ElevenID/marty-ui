@@ -730,6 +730,20 @@ impl Selection {
         }
         Ok(())
     }
+    pub(crate) fn verify_imported_connector(
+        &self,
+        values: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        if let Some(expected) = &self.connector_token_sha256 {
+            require(
+                values
+                    .get(CONNECTOR_TOKEN)
+                    .is_some_and(|value| digest(value) == *expected),
+            )
+        } else {
+            require(!values.contains_key(CONNECTOR_TOKEN))
+        }
+    }
     pub(crate) fn bind_connector(&self, inputs: &mut ComposeInputs) -> Result<()> {
         if let Some(expected) = &self.connector_token_sha256 {
             inputs.bound_inputs.push(BoundFile {

@@ -68,8 +68,8 @@ pub(crate) fn require_binding(state: &InstallerState, bao: &OpenBaoInventory) ->
 }
 
 /// Check the exact fresh credential set before creating any OpenBao state or
-/// contacting Docker. External login changes only the local-auth scalars and
-/// adds its already imported, selection-bound client-secret file.
+/// contacting Docker. Admit only the imported credentials selected by the
+/// locked journal, with their original custody and fingerprint checks.
 fn validate_initial_credentials(installation: &Path, state: &InstallerState) -> Result<()> {
     const REFUSED: &str = "fresh OpenBao credential custody differs";
     const OIDC_SECRET: &str = "external_oidc_client_secret";
@@ -80,14 +80,27 @@ fn validate_initial_credentials(installation: &Path, state: &InstallerState) -> 
         view.require_path_binding(installation)?;
         require(crate::installer_foundation::load(view)?.is_none(), REFUSED)?;
         let selected = crate::installer_oidc::load(view)?;
+        let postgres = crate::installer_postgres::load(view)?;
+        let hosting = crate::installer_hosting::load(view)?;
         let scalars: BTreeSet<_> = SCALAR_SECRETS
             .into_iter()
             .filter(|name| selected.is_none() || !LOCAL_AUTH_SCALAR_SECRETS.contains(name))
             .collect();
         let mut expected: BTreeSet<String> = scalars.iter().map(|name| (*name).into()).collect();
+        let mut imported = BTreeSet::new();
         if selected.is_some() {
-            expected.insert(OIDC_SECRET.into());
+            imported.insert(OIDC_SECRET);
         }
+        if postgres.is_some() {
+            imported.insert(crate::installer_postgres::SECRET);
+        }
+        if hosting
+            .as_ref()
+            .is_some_and(|value| value.connector().is_some())
+        {
+            imported.insert(crate::installer_hosting::CONNECTOR_TOKEN);
+        }
+        expected.extend(imported.iter().map(|name| (*name).to_owned()));
         let path = installation.join("secrets");
         let secrets = host_fs::directory(&path, REFUSED)?;
         require(
@@ -106,13 +119,10 @@ fn validate_initial_credentials(installation: &Path, state: &InstallerState) -> 
                 "scalar credential custody differs",
             )?;
         }
-        if let Some(selected) = selected {
-            let file = host_fs::open_child(
-                &secrets,
-                OIDC_SECRET,
-                libc::O_RDONLY | libc::O_NONBLOCK,
-                REFUSED,
-            )?;
+        let mut values = BTreeMap::new();
+        for name in imported {
+            let file =
+                host_fs::open_child(&secrets, name, libc::O_RDONLY | libc::O_NONBLOCK, REFUSED)?;
             let before = file.metadata().map_err(|_| REFUSED)?;
             require(
                 before.is_file()
@@ -142,7 +152,16 @@ fn validate_initial_credentials(installation: &Path, state: &InstallerState) -> 
                     && before.ctime_nsec() == after.ctime_nsec(),
                 REFUSED,
             )?;
-            selected.verify_imported(&BTreeMap::from([(OIDC_SECRET.into(), bytes)]))?;
+            values.insert(name.to_owned(), bytes);
+        }
+        if let Some(selected) = selected {
+            selected.verify_imported(&values)?;
+        }
+        if let Some(postgres) = postgres {
+            postgres.verify_imported(&values)?;
+        }
+        if let Some(hosting) = hosting {
+            hosting.verify_imported_connector(&values)?;
         }
         host_fs::require_directory_binding(&path, &secrets, REFUSED)?;
         view.require_path_binding(installation)
@@ -304,6 +323,14 @@ mod tests {
     }
 
     fn fixture(external_secret: Option<&[u8]>) -> (tempfile::TempDir, PathBuf, InstallerState) {
+        selected_fixture(external_secret, false, false)
+    }
+
+    fn selected_fixture(
+        external_secret: Option<&[u8]>,
+        postgres: bool,
+        connector: bool,
+    ) -> (tempfile::TempDir, PathBuf, InstallerState) {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let path = temp.path().join("installation");
@@ -341,6 +368,48 @@ mod tests {
             )
             .unwrap();
         }
+        if postgres {
+            let password = temp.path().join("database-password");
+            private_file(&password, b"synthetic:database/password", 0o600);
+            let input = temp.path().join("postgres.json");
+            private_file(
+                &input,
+                &serde_json::to_vec(&json!({
+                    "schema": "elevenid.installer-external-postgres/v1",
+                    "external_postgres": {
+                        "host": "aws-0-us-west-1.pooler.supabase.com", "port": 5432,
+                        "username": "elevenid.projectref", "database": "postgres",
+                        "password_file": password
+                    }
+                }))
+                .unwrap(),
+                0o600,
+            );
+            crate::installer_postgres::select(
+                crate::installer_postgres::prepare(Some(&input), true, false).unwrap(),
+                &mut state,
+            )
+            .unwrap();
+        }
+        if connector {
+            let token = temp.path().join("tunnel-token");
+            private_file(&token, b"synthetic-cloudflare-token-1234567890", 0o600);
+            let input = temp.path().join("hosting.json");
+            private_file(
+                &input,
+                &serde_json::to_vec(&json!({
+                    "schema": "elevenid.installation-hosting/v1", "mode": "external-proxy",
+                    "public_origin": "https://marty.example.test",
+                    "listener": {"bind_address": "127.0.0.1", "port": 18443},
+                    "tls": {"termination": "marty-keyless", "certificate_source": "managed-ca"},
+                    "connector": {"kind": "cloudflare-tunnel", "token_file": token}
+                }))
+                .unwrap(),
+                0o600,
+            );
+            let prepared = crate::installer_hosting::prepare(Some(&input), None).unwrap();
+            crate::installer_hosting::select(prepared, &mut state).unwrap();
+        }
         state.advance(Phase::Provisioning).unwrap();
         if external_secret.is_some() {
             state.generate_external_auth_credentials().unwrap();
@@ -355,7 +424,112 @@ mod tests {
                 .generate_local_credentials(&json!({"passwordPolicy": PASSWORD_POLICY}))
                 .unwrap();
         }
+        if postgres {
+            state
+                .with_inspection(crate::installer_postgres::load)
+                .unwrap()
+                .unwrap()
+                .import_inputs(&mut state)
+                .unwrap();
+        }
+        if connector {
+            state
+                .with_inspection(crate::installer_hosting::load)
+                .unwrap()
+                .unwrap()
+                .import_connector(&mut state)
+                .unwrap();
+        }
         (temp, path, state)
+    }
+
+    #[test]
+    fn fresh_preflight_accepts_exact_selected_database_and_connector_without_mutation() {
+        for secret in [b"".as_slice(), b"synthetic-confidential-client-secret"] {
+            for (postgres, connector) in [(true, false), (false, true), (true, true)] {
+                let (_temp, path, state) = selected_fixture(Some(secret), postgres, connector);
+                let journal = fs::read(path.join("installation.json")).unwrap();
+                let before: BTreeMap<_, _> = fs::read_dir(path.join("secrets"))
+                    .unwrap()
+                    .map(|entry| {
+                        let entry = entry.unwrap();
+                        (entry.file_name(), fs::read(entry.path()).unwrap())
+                    })
+                    .collect();
+                validate_initial_credentials(&path, &state).unwrap();
+                assert_eq!(fs::read(path.join("installation.json")).unwrap(), journal);
+                for (name, value) in before {
+                    assert_eq!(fs::read(path.join("secrets").join(name)).unwrap(), value);
+                }
+                assert!(!path.join("openbao-state").exists());
+            }
+        }
+        let (_temp, path, state) = selected_fixture(None, false, true);
+        validate_initial_credentials(&path, &state).unwrap();
+        assert!(!path.join("openbao-state").exists());
+    }
+
+    #[test]
+    fn fresh_preflight_refuses_changed_selected_inputs_before_docker_or_kms_state() {
+        for name in [
+            crate::installer_postgres::SECRET,
+            crate::installer_hosting::CONNECTOR_TOKEN,
+        ] {
+            for mutation in ["missing", "changed", "mode", "symlink", "hardlink"] {
+                let (temp, path, state) = selected_fixture(Some(b"client-secret"), true, true);
+                let target = path.join("secrets").join(name);
+                match mutation {
+                    "missing" => fs::remove_file(&target).unwrap(),
+                    "changed" => {
+                        fs::remove_file(&target).unwrap();
+                        private_file(&target, b"changed-selected-input", 0o444);
+                    }
+                    "mode" => {
+                        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap()
+                    }
+                    "symlink" => {
+                        let outside = temp.path().join("substitute");
+                        private_file(&outside, &fs::read(&target).unwrap(), 0o444);
+                        fs::remove_file(&target).unwrap();
+                        symlink(outside, &target).unwrap();
+                    }
+                    "hardlink" => fs::hard_link(&target, temp.path().join("extra-link")).unwrap(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    validate_initial_credentials(&path, &state).is_err(),
+                    "{name}/{mutation}"
+                );
+                assert!(!path.join("openbao-state").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_preflight_refuses_unselected_imports_and_missing_selection_records() {
+        for (postgres, connector, extra) in [
+            (false, true, crate::installer_postgres::SECRET),
+            (true, false, crate::installer_hosting::CONNECTOR_TOKEN),
+        ] {
+            let (_temp, path, state) =
+                selected_fixture(Some(b"client-secret"), postgres, connector);
+            private_file(
+                &path.join("secrets").join(extra),
+                b"unselected-import",
+                0o444,
+            );
+            assert!(validate_initial_credentials(&path, &state).is_err());
+            assert!(!path.join("openbao-state").exists());
+        }
+        for record in [
+            crate::installer_postgres::RECORD,
+            crate::installer_hosting::RECORD,
+        ] {
+            let (_temp, path, state) = selected_fixture(Some(b"client-secret"), true, true);
+            fs::remove_file(path.join("evidence").join(record)).unwrap();
+            assert!(validate_initial_credentials(&path, &state).is_err());
+            assert!(!path.join("openbao-state").exists());
+        }
     }
 
     #[test]
