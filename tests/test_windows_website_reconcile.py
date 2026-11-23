@@ -1,10 +1,13 @@
 """Durable initial-stage aborts with NTFS evidence and controlled engine calls."""
 from contextlib import ExitStack
 from copy import deepcopy
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows private stage recovery evidence')
 
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_windows_website_plan import planned, propose
