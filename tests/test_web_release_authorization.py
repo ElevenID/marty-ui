@@ -38,7 +38,7 @@ def candidate():
                 'source_sha': a['source'], 'ref': a['ref'], 'run_id': '123', 'run_attempt': '2'}
     definition = {'buildType': 'https://actions.github.io/buildtypes/workflow/v1',
         'externalParameters': {'elevenidReleaseAuthorization': raw.decode(),
-            'workflow': {'ref': a['ref'], 'repository': 'https://github.com/ElevenID/marty-subscriptions',
+            'workflow': {'ref': a['ref'], 'repository': f"https://github.com/{producer['repository']}",
                          'path': approval.WORKFLOW}},
         'internalParameters': {'github': {'runner_environment': 'self-hosted',
                                           'repository_id': str(approval.PRIVATE_ID)}}}
