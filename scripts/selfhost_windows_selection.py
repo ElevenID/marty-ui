@@ -1202,8 +1202,11 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 require(rebuilt == plan)
                 status = run(cfg, choice, values, record, plan, proposal, status, authority_file=authority_file, held=stack)
             if _website_edge is not None:
-                from selfhost_windows_website_edge import run
                 phase, assets, gh, cosign, registry_config, authority_file = _website_edge
+                if phase in {'verify-website', 'verify-combined'}:
+                    from selfhost_windows_website_verify import run
+                else:
+                    from selfhost_windows_website_edge import run
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
                     gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=stack)
             yield status
@@ -1378,6 +1381,17 @@ def stage_website_candidate(config_path, plan, *, guard_sha256, expected_anchor_
 def change_website_edge(config_path, plan, phase, *, guard_sha256, expected_anchor_sha256,
                         assets, gh, cosign, registry_config, authority_file=None):
     """Apply a forward or combined-route edge phase under the selected owner."""
+    require(phase in {'route-website', 'restore-combined'})
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=(phase, assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def verify_website_routes(config_path, plan, phase, *, guard_sha256, expected_anchor_sha256,
+                          assets, gh, cosign, registry_config, authority_file=None):
+    """Qualify public ingress and application handoff using the exact guarded owner."""
+    require(phase in {'verify-website', 'verify-combined'})
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
                           _website_edge=(phase, assets, gh, cosign, registry_config, authority_file)) as status:
         result = status

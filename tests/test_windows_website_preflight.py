@@ -236,7 +236,7 @@ def test_combined_edge_preflight_withholds_result_on_late_input_failure(runtime)
         run(runtime)
 
 
-@pytest.mark.parametrize("mode", ["initial", "anchored-stage", "anchored-mismatch"])
+@pytest.mark.parametrize("mode", ["initial", "anchored-stage", "anchored-mismatch", "signed-http", "changed-application"])
 def test_plan_request_holds_original_proof_files_and_uses_observed_template(runtime, monkeypatch, mode):
     from contextlib import nullcontext
     import selfhost_windows_website_plan as plan
@@ -253,6 +253,17 @@ def test_plan_request_holds_original_proof_files_and_uses_observed_template(runt
         proofs[name] = website.selection.digest(raw)
     routes = runtime.proof.with_name("web-surface-routes.json")
     routes.write_text('{"synthetic":"routes"}', encoding="utf-8")
+    application_metadata = {"release_version": "1.1.274"}
+    website_metadata = {"revision": "a"*40 + "-" + "b"*40}
+    if mode in {"signed-http", "changed-application"}:
+        application = runtime.proof.parents[1] / "application" / "production-web-release.json"
+        application.parent.mkdir()
+        application.write_bytes(website.selection.packed({"image_metadata": application_metadata}))
+        runtime.manifest["application"] = {"release_sha256": website.ui.digest(application.read_bytes())}
+        if mode == "changed-application":
+            application.write_bytes(b'{}')
+        runtime.proof.write_bytes(website.selection.packed({"schema": website.web.STANDALONE_FULL_RELEASE_SCHEMA,
+                                                            "image_metadata": website_metadata}))
     runtime.live["plan_owner"] = {"identity": "owner-derived"}
     monkeypatch.setattr(website.renewal, "hold_storage_namespace", lambda _path: nullcontext())
     monkeypatch.setattr(website, "_held_private_input", lambda _path, **_kwargs: nullcontext())
@@ -289,13 +300,18 @@ def test_plan_request_holds_original_proof_files_and_uses_observed_template(runt
             normalized["services"]["edge"]["volumes"][0]["read_only"] = False
         with website.selection.selected_inputs(runtime.root / "selection.json") as lease:
             options = {**runtime.kwargs, "plan_attempt_directory": attempt, "held_plan_only": True,
-                       "guarded_attempt": True, "retained_edge_inputs": (held_engine, normalized, retained)}
-            if mode == "anchored-mismatch":
+                       "guarded_attempt": True, "retained_edge_inputs": (held_engine, normalized, retained),
+                       "include_http": mode in {"signed-http", "changed-application"}}
+            if mode in {"anchored-mismatch", "changed-application"}:
                 with pytest.raises(ValueError):
                     lease.check_website_composition(assets, **options)
                 return
             declared, proposal = lease.check_website_composition(assets, **options)
-            assert declared["proof_sha256"] == proofs and proposal == {"retained": True}
+            expected = {"retained": True}
+            if mode == "signed-http":
+                expected["http"] = {"application": application_metadata, "website": website_metadata,
+                                    "routes": {"synthetic": "routes"}}
+            assert declared["proof_sha256"] == proofs and proposal == expected
     assert all(runtime.events.index("proof-exit") < runtime.events.index(("release-input", assets / name))
                for name in proofs)
 
