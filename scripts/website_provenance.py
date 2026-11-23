@@ -15,6 +15,7 @@ from pathlib import Path
 import ui_release as ui
 import verify_installer_provenance as verifier
 import web_auth as auth
+import web_release_authorization as local_approval
 import website_release as web
 import website_producer_policy as policy
 
@@ -47,18 +48,22 @@ def parse_verified_json(output: str) -> object:
     return json.loads(output, object_pairs_hook=pairs)
 
 
-def verified_certificate(output: str, producer: dict, *, role: str | None = None) -> None:
+def verified_certificate(output: str, producer: dict, *, role: str | None = None) -> dict | None:
     validate_producer(producer, role=role)
     try:
         result = parse_verified_json(output)
         ui.require(isinstance(result, list) and len(result) == 1, "one original attestation is required")
         ui.require(isinstance(result[0]["attestation"], dict), "verified attestation missing")
         certificate = result[0]["verificationResult"]["signature"]["certificate"]
+        ui.require(isinstance(certificate, dict), "original web producer certificate missing")
+        authorization = None
+        if certificate.get("runnerEnvironment") == "self-hosted":
+            authorization = local_approval.verified_authorization(result[0], producer, role)
         repository, source_sha = producer["repository"], producer["source_sha"]
         expected = {
             "issuer": verifier.ISSUER,
             "runInvocationURI": f"https://github.com/{repository}/actions/runs/{producer['run_id']}/attempts/{producer['run_attempt']}",
-            "runnerEnvironment": "github-hosted",
+            "runnerEnvironment": "self-hosted" if authorization is not None else "github-hosted",
             "sourceRepositoryURI": f"https://github.com/{repository}",
             "sourceRepositoryDigest": source_sha, "sourceRepositoryRef": web.REF,
             "sourceRepositoryIdentifier": policy.producer_policy(repository, role="composition" if role is None else role)["repository_id"],
@@ -69,6 +74,7 @@ def verified_certificate(output: str, producer: dict, *, role: str | None = None
         for key, value in {"githubWorkflowRepository": repository, "githubWorkflowSHA": source_sha,
                            "githubWorkflowRef": web.REF}.items():
             ui.require(key not in certificate or certificate[key] == value, "legacy producer certificate differs")
+        return authorization
     except (KeyError, TypeError, IndexError, json.JSONDecodeError):
         raise ValueError("web producer attestation is invalid") from None
 
@@ -77,8 +83,10 @@ def attestation_arguments(producer: dict, *, role: str | None = None) -> list[st
     validate_producer(producer, role=role)
     repository = producer["repository"]
     arguments = ["--repo", repository, "--signer-workflow", repository + "/" + producer["workflow"],
-                 "--source-ref", web.REF, "--source-digest", producer["source_sha"], "--deny-self-hosted-runners",
+                 "--source-ref", web.REF, "--source-digest", producer["source_sha"],
                  "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"]
+    if repository != ui.COMMERCE_REPOSITORY or role is None:
+        arguments.append("--deny-self-hosted-runners")
     if repository == ui.COMMERCE_REPOSITORY:
         # Private producers retain local bundles from GitHub's private Sigstore
         # even when their plan does not provide GitHub attestation storage.
@@ -93,7 +101,7 @@ def signature_arguments(producer: dict, *, role: str | None = None) -> list[str]
 
 
 def verify_subject(subject: Path, *, producer: dict, gh: Path, cosign: Path,
-                   runner: verifier.Run = verifier.command, role: str | None = None) -> None:
+                   runner: verifier.Run = verifier.command, role: str | None = None) -> dict | None:
     validate_producer(producer, role=role)
     if role is not None:
         allowed = {
@@ -112,15 +120,16 @@ def verify_subject(subject: Path, *, producer: dict, gh: Path, cosign: Path,
     before = {path: file_digest(path) for path in (subject, provenance, signature)}
     output = runner([str(gh), "attestation", "verify", str(subject), "--bundle", str(provenance),
                      *attestation_arguments(producer, role=role)])
-    verified_certificate(output, producer, role=role)
+    authorization = verified_certificate(output, producer, role=role)
     runner([str(cosign), "verify-blob", str(subject), "--bundle", str(signature), *signature_arguments(producer, role=role)])
     ui.require(all(file_digest(path) == digest for path, digest in before.items()),
                "web evidence changed during verification")
+    return authorization
 
 
 def verify_image(image: dict, provenance: Path, *, producer: dict, gh: Path, cosign: Path,
                  runner: verifier.Run = verifier.command, registry_config: Path | None = None,
-                 role: str | None = None) -> None:
+                 role: str | None = None) -> dict | None:
     validate_producer(producer, role=role)
     web.object_keys(image, {"uri", "digest", "platform"}, "web image")
     # Omitted roles keep the historical image API, after legacy-only producer
@@ -144,7 +153,7 @@ def verify_image(image: dict, provenance: Path, *, producer: dict, gh: Path, cos
     reference = image["uri"] + "@" + image["digest"]
     output = image_runner([str(gh), "attestation", "verify", "oci://" + reference, "--bundle", str(provenance),
                            *attestation_arguments(producer, role=role)])
-    verified_certificate(output, producer, role=role)
+    authorization = verified_certificate(output, producer, role=role)
     verified = parse_verified_json(image_runner([str(cosign), "verify", reference, *signature_arguments(producer, role=role)]))
     try:
         ui.require(isinstance(verified, list) and len(verified) > 0
@@ -153,6 +162,7 @@ def verify_image(image: dict, provenance: Path, *, producer: dict, gh: Path, cos
     except (TypeError, KeyError):
         raise ValueError("image signature result is invalid") from None
     ui.require(ui.digest(provenance.read_bytes()) == before, "image provenance changed during verification")
+    return authorization
 
 
 def read_metadata(path: Path) -> dict:
@@ -162,21 +172,28 @@ def read_metadata(path: Path) -> dict:
 
 def verify_website(directory: Path, *, gh: Path, cosign: Path, source_sha: str | None = None,
                    commerce_source_sha: str | None = None, runner: verifier.Run = verifier.command,
-                   registry_config: Path | None = None) -> dict:
+                   registry_config: Path | None = None, assignment_reader: auth.GitHubReader | None = None) -> dict:
     path = directory / "website-release.json"
     release = web.validate_release(read_metadata(path), source_sha=source_sha, commerce_source_sha=commerce_source_sha)
     routes = read_metadata(directory / "web-surface-routes.json")
     ui.require(web.route_identity(routes) == release["image_metadata"]["route_contract"], "website route contract differs")
-    verify_subject(path, producer=release["producer"], gh=gh, cosign=cosign, runner=runner, role="website")
-    verify_image(release["image"], directory / "image.provenance.jsonl", producer=release["producer"],
+    authorization = verify_subject(path, producer=release["producer"], gh=gh, cosign=cosign, runner=runner, role="website")
+    image_authorization = verify_image(release["image"], directory / "image.provenance.jsonl", producer=release["producer"],
                  gh=gh, cosign=cosign, runner=runner, registry_config=registry_config, role="website")
+    ui.require(authorization == image_authorization, "website and image signing approvals differ")
+    if authorization is not None:
+        ui.require(authorization["inputs"]["website_source_sha"] == release["source_sha"],
+                   "approved independent website source differs")
+        if assignment_reader is not None:
+            local_approval.check_assignment(authorization, parse_verified_json(assignment_reader.jobs()), completed=True)
     ui.require(read_metadata(path) == release, "website metadata changed after verification")
     return release
 
 
 def verify_application(directory: Path, *, gh: Path, cosign: Path,
                        runner: verifier.Run = verifier.command,
-                       registry_config: Path | None = None) -> tuple[dict, dict]:
+                       registry_config: Path | None = None,
+                       assignment_reader: auth.GitHubReader | None = None) -> tuple[dict, dict]:
     path = directory / "production-web-release.json"
     release = web.validate_combined_release(read_metadata(path))
     compatibility_path = directory / "application-web-compatibility.json"
@@ -184,10 +201,18 @@ def verify_application(directory: Path, *, gh: Path, cosign: Path,
     expected = web.compatibility_record(release, compatibility.get("marker"), path.read_bytes())
     ui.require(compatibility == expected, "application compatibility differs from original release")
     producer = compatibility["producer"]
+    approvals = []
     for subject in (path, compatibility_path):
-        verify_subject(subject, producer=producer, gh=gh, cosign=cosign, runner=runner, role="application")
-    verify_image(release["image"], directory / "image.provenance.jsonl", producer=producer,
-                 gh=gh, cosign=cosign, runner=runner, registry_config=registry_config, role="application")
+        approvals.append(verify_subject(subject, producer=producer, gh=gh, cosign=cosign, runner=runner, role="application"))
+    approvals.append(verify_image(release["image"], directory / "image.provenance.jsonl", producer=producer,
+                 gh=gh, cosign=cosign, runner=runner, registry_config=registry_config, role="application"))
+    ui.require(all(a == approvals[0] for a in approvals), "application signing approvals differ")
+    if approvals[0] is not None:
+        ui.require(approvals[0]["inputs"]["ui_source_sha"] == release["source_sha"]
+                   and approvals[0]["inputs"]["stack_release_tag"] == "v" + release["version"],
+                   "approved application source or backend release differs")
+        if assignment_reader is not None:
+            local_approval.check_assignment(approvals[0], parse_verified_json(assignment_reader.jobs()), completed=True)
     ui.require(read_metadata(path) == release and read_metadata(compatibility_path) == compatibility,
                "application metadata changed after verification")
     return release, compatibility

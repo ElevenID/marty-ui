@@ -113,10 +113,12 @@ def fetch(kind: str, *, repository: str, run_id: str, attempt: str, destination:
         held = Path(temporary) / "receipt"
         extract_receipt(raw, kind=kind, destination=held)
         if kind == "website":
-            release = proof.verify_website(held, gh=gh, cosign=cosign, registry_config=registry_config)
+            release = proof.verify_website(held, gh=gh, cosign=cosign, registry_config=registry_config,
+                                           assignment_reader=reader)
             actual = release["producer"]
         else:
-            release, compatibility = proof.verify_application(held, gh=gh, cosign=cosign, registry_config=registry_config)
+            release, compatibility = proof.verify_application(held, gh=gh, cosign=cosign, registry_config=registry_config,
+                                                               assignment_reader=reader)
             actual = compatibility["producer"]
         ui.require(actual == producer, "original evidence does not belong to the selected producer attempt")
         files = composition.WEBSITE_FILES if kind == "website" else composition.APPLICATION_FILES

@@ -206,6 +206,23 @@ def test_default_api_token_is_only_gh_token_and_alternate_requires_selection(tmp
     assert calls[-1]["GH_TOKEN"] == other
 
 
+def test_job_census_is_limited_to_the_selected_original_attempt(tmp_path, monkeypatch):
+    selected = reader(tmp_path, monkeypatch)
+    calls = []
+    def execute(args, **kwargs):
+        calls.append(args[-1])
+        return b'{"total_count":0,"jobs":[]}'
+    monkeypatch.setattr(auth, "command", execute)
+    assert json.loads(selected.jobs()) == {"total_count": 0, "jobs": []}
+    assert calls == ['repos/ElevenID/marty-ui/actions/runs/21/attempts/2/jobs?per_page=100']
+    for endpoint in ('repos/ElevenID/marty-ui/actions/runs/21/attempts/3/jobs?per_page=100',
+                     'repos/ElevenID/marty-ui/actions/runs/21/attempts/2/jobs?per_page=100&page=2',
+                     'repos/ElevenID/marty-ui/actions/jobs/123'):
+        with pytest.raises(ValueError):
+            selected._read(endpoint, maximum=auth.verifier.MAX_OUTPUT)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("changes", [
     {"token_env": None}, {"token_env": "AWS_SECRET_ACCESS_KEY"}, {"repository": "Elsewhere/repo"},
     {"run_id": "0"}, {"run_id": "21/../../secrets"}, {"attempt": "main"}, {"kind": "backend"},
