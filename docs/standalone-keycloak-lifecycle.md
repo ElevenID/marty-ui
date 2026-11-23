@@ -141,7 +141,7 @@ one-shot command does not prove an enabled scheduler. Qualify startup under
 the host's existing service/WSL lifecycle without stopping unrelated workloads.
 
 This driver does not renew the HTTPS origin/listener certificates or rotate
-the PKI CA. Give those their own qualified maintenance and recovery paths
+the PKI CA. Qualify their separate [TLS maintenance and recovery paths](standalone-keycloak-tls.md)
 before production cutover. Keep expiry deadlines in the deployment record.
 
 ## Interrupted operations and offline recovery
