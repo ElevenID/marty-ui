@@ -46,6 +46,16 @@ PR follows routing. Production still serves the combined release.
 [Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) ?
 [Acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
+The draft acceptance verifier at `329b4011b8993fa0fb5d68f29d10a0a74ab98758`
+now checks the OpenID scope, nonce, state and 43-character S256 challenge
+that both release versions send on login. It checks field multiplicity
+and rejects error or token parameters before recording the handoff.
+The exact commit passed 518 Windows tests with two symlink skips and
+14 related browser-runner contract tests. Signed-in acceptance on the
+selected deployment still requires a healthy gateway. The local test
+report SHA-256 is `05890bdb31ca4100ae71d19bbd4a4ce7a977517ebcee4e3c74444ffafa1c70a0`.
+[Acceptance qualification #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
 ## Full website and application qualification, November 23
 
 The full v1.1.292 application built from the verified backend source and
