@@ -23,6 +23,15 @@ The separate upgraded database still contained its later records. The
 Keycloak and Applicant databases used synthetic markers in this rehearsal.
 Receipt SHA-256 `de5c749ed7701f9de0b7cef8605b1f2423dd74104f1c5d1030c4a9c385422d77`.
 
+The selected project's 31 containers include 19 roles with database
+connection settings. One read-only sample found six sessions from Keycloak,
+issuance, device registration and trust profile. PostgreSQL has no published
+host port. Two Cloudflare connectors share its network, including a connector
+attached to three project networks. Coordinate shared ingress separately
+from application and identity writers. The production writer boundary still
+requires a fresh census and an agreed switch. Receipt SHA-256
+`aef6314d307804ff3cc571204235b638e720d5541e732877ccba5ba7851c39ce`.
+
 The production owner still needs a consistent recovery point, retained
 backup and WAL, a verified restore, and a coordinated writer switch on the
 selected host. Reconcile the separate Applicant file, Redis sessions and
@@ -56,18 +65,28 @@ evidence handling in the release workflow and verifier as well.
 
 ## Managed Windows staging and routing, November 23
 
-Website staging merged through the protected queue at
-`86812db416a64e35bb8c045afc3a02ce379d7ab5`. Routing PR #2046 now
-targets main at `f78dddc86be6c27cda73a480090cec4e589cba8b`. Its
-11-file patch against protected main matched the reviewed patch on the
-staging branch byte for byte. All 462 applicable Windows tests passed
-with two symbolic-link cases skipped, and the organization policy audit
-passed. The routing checkout was parked after publication and both refs
-were verified. [Hosted routing CI](https://github.com/ElevenID/marty-ui/actions/runs/45108269826)
-passed and the protected queue admitted the change. The managed acceptance
-PR follows routing. Production still serves the combined release.
-[Staging #2045](https://github.com/ElevenID/marty-ui/pull/2045) ?
-[Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) ?
+Staging merged at `86812db416a64e35bb8c045afc3a02ce379d7ab5`. The
+prior routing candidate passed [hosted CI](https://github.com/ElevenID/marty-ui/actions/runs/45108269826).
+The separate deployment then merged into protected main at
+`50b5bfacfc23359ce31d783fb137c60642142cf6`. Routing reconciled the one
+conflict in the frozen bundle listing against that commit. Its new head
+`22d55484990f0adc6859463a963ee1d973faa83e` preserves all upstream bundle
+assets in order and adds the edge module, for 233 entries. The other 33
+frozen catalog cases and nine routing source and test files retain their
+original content. All 462 applicable Windows tests passed. Two symlink
+cases skipped because the test account could not create symlinks. The
+organization audit passed at the revision selected by the new base,
+`4fe2d2d7a30b5a72195ec1192ad22db43c298e7d`.
+JUnit SHA-256 `5e898217bdfd71477571e81812723624b94a9988d73f213487f3a883e4fc6237`.
+
+Both remote routing refs matched the tested commit. The checkout was
+parked after the data, activity and recovery checks. Protected auto-merge
+is enabled for routing and its [new hosted CI](https://github.com/ElevenID/marty-ui/actions/runs/45116428187)
+is pending. Reconcile the parked acceptance branch against the integrated
+routing commit once it reaches main. Production still serves the combined
+release.
+[Staging #2045](https://github.com/ElevenID/marty-ui/pull/2045) /
+[Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) /
 [Acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
 The draft acceptance verifier at `329b4011b8993fa0fb5d68f29d10a0a74ab98758`
@@ -80,16 +99,17 @@ selected deployment still requires a healthy gateway. The local test
 report SHA-256 is `05890bdb31ca4100ae71d19bbd4a4ce7a977517ebcee4e3c74444ffafa1c70a0`.
 [Acceptance qualification #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
-The queued Resources fix at `5a48f2638f57d76a9b38eff40b445d5c9a6aa9cf`
-and the routing and acceptance branches add files to the same selfhost
-bundle inventory. A local integration rehearsal found one conflict at
+The protected deployment change and the routing and acceptance branches
+add files to the same selfhost bundle inventory. The earlier local
+projection used the queued Resources tree at
+`5a48f2638f57d76a9b38eff40b445d5c9a6aa9cf`, which includes that deployment change. A local integration rehearsal found one conflict at
 each step, in the frozen CLI output for `bundle-assets selfhost`. Deriving
 that case from the combined manifest retained all queued entries in order
 and added the edge module, then the verifier (233 and 234 assets).
 The catalog-output and bundled-import tests passed on both projected
-trees. Codex will apply the resolution to the actual protected base and
-run the full Windows suites before each merge. The projections have no
-effect on production or either PR branch.
+trees. Routing now includes the qualified resolution on its actual base.
+Acceptance still needs reconciliation and the Windows tests on its
+integrated routing base.
 [Resources queue run](https://github.com/ElevenID/marty-ui/actions/runs/45111440032)
 
 ## Full website and application qualification, November 23
