@@ -2,6 +2,7 @@
 from contextlib import ExitStack
 from email.message import Message
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -220,6 +221,7 @@ def test_transport_validates_real_tls_server_name(tmp_path):
         worker.join(timeout=2)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Native NTFS fixture requires Windows PowerShell')
 @pytest.mark.parametrize('phase,fault', [('verify-website', None), ('verify-combined', None),
     ('verify-website', 'gateway'), ('verify-website', 'edge-drift')])
 def test_failed_public_probe_leaves_backout_eligible_and_success_anchors_receipts(paths, transport, monkeypatch, phase, fault):
