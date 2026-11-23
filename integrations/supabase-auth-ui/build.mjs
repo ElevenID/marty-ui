@@ -66,6 +66,6 @@ await Promise.all([
   writeFile(resolve(output, "app.css"), `${sharedCss}\n${formCss}`),
   writeFile(resolve(output, "config.json"), `${JSON.stringify(config, null, 2)}\n`),
   writeFile(resolve(output, "_headers"), headers),
-  writeFile(resolve(output, "_redirects"), "/oauth/consent /index.html 200\n/oauth/consent/ /index.html 200\n"),
+  writeFile(resolve(output, "_redirects"), "/oauth/consent / 200\n/oauth/consent/ / 200\n"),
 ]);
 console.log("Built static authorization UI in dist/ with exact-origin CSP. No provider requests were made.");
