@@ -7,7 +7,7 @@
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">
-                <p class="elevenid-login-title">${msg("loginAccountTitle")}</p>
+                <h1 class="elevenid-login-title">${msg("loginAccountTitle")}</h1>
                 <p class="elevenid-context-hint">${msg("contextHint")}</p>
                 <#if realm.password>
                     <form id="kc-form-login" onsubmit="login.disabled = true; return true;" action="${url.loginAction}" method="post">

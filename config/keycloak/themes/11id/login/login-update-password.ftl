@@ -6,7 +6,7 @@
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">
-                <p class="elevenid-login-title">${msg("updatePasswordTitle")}</p>
+                <h1 class="elevenid-login-title">${msg("updatePasswordTitle")}</h1>
                 <p class="elevenid-context-hint">${msg("updatePasswordBody")}</p>
 
                 <form id="kc-passwd-update-form" class="${properties.kcFormClass!}" action="${url.loginAction}" method="post">
