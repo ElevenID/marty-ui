@@ -485,9 +485,9 @@ impl Selection {
             require(mounts.iter().any(|value| {
                 value == "marty_db_password"
                     || (value["source"] == "marty_db_password"
-                        && value
-                            .get("target")
-                            .is_none_or(|target| target == "marty_db_password"))
+                        && value.get("target").is_none_or(|target| {
+                            target == "marty_db_password" || target == PASSWORD_MOUNT
+                        }))
             }))?;
             if let Some((key, cap)) = pool_limit(name) {
                 require(env.get(key).and_then(Value::as_str) == Some(cap))?;
