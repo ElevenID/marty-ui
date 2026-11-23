@@ -6,6 +6,8 @@ database schema, OpenBao state, private input root and ingress. This driver
 does not enroll an application installation or change its existing full
 workload renewal contract. Qualify provider login and application acceptance
 separately using [OIDC provider qualification](oidc-provider-qualification.md).
+Qualify [verification-email delivery and administrator enrollment](standalone-keycloak-email.md)
+before activating a real administrator.
 
 ## Preconditions
 
