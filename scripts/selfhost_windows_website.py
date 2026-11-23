@@ -113,6 +113,16 @@ def edge_template_identity(binding, template):
     return {**binding, 'bytes': len(template), 'sha256': selection.digest(template)}
 
 
+def _held_edge_template(config, model, installed, owner_root, held):
+    source = held.enter_context(renewal.hold_private_input(Path(config['compose_file']), max_bytes=2*1024*1024))
+    selection.require(selection.digest(source) == config['compose_sha256'])
+    original = selection.decode(source)
+    binding = combined_edge_binding(original, installed, str(owner_root))
+    selection.require(combined_edge_binding(model, installed, str(owner_root)) == binding)
+    template = held.enter_context(renewal.hold_private_input(Path(binding['source']), max_bytes=MAX_TEMPLATE_BYTES))
+    return original, binding, template
+
+
 def _identity(items: list[dict], project: str) -> dict:
     """Compare configuration and mounts privately, without requiring readiness."""
     result = {}
@@ -178,14 +188,7 @@ def _observe(config: dict, choice: str, values: dict, record: dict, manifest: di
     if planning is not None:
         selection.require(full_standalone and comparison["composition_matches_selected_product"])
     if full_standalone and comparison["composition_matches_selected_product"]:
-        source = held.enter_context(renewal.hold_private_input(Path(config["compose_file"]), max_bytes=2*1024*1024))
-        selection.require(selection.digest(source) == config["compose_sha256"])
-        installed = data["edge"]["mounts"]
-        before_model = selection.decode(source)
-        binding = combined_edge_binding(before_model, installed, str(owner_root))
-        selection.require(combined_edge_binding(model, installed, str(owner_root)) == binding)
-        template = held.enter_context(renewal.hold_private_input(
-            Path(binding["source"]), max_bytes=MAX_TEMPLATE_BYTES))
+        before_model, binding, template = _held_edge_template(config, model, data['edge']['mounts'], owner_root, held)
         edge = edge_template_identity(binding, template)
         if planning is not None:
             from selfhost_windows_website_plan import from_observation
@@ -256,7 +259,7 @@ def _hold_plan_proofs(assets, held):
 def inspect_composition(config: dict, choice: str, values: dict, record: dict, assets: Path, *,
                         gh: Path, cosign: Path, registry_config: Path | None,
                         owner_root: Path, held, plan_owner=None, plan_attempt_directory=None,
-                        held_plan_only=False, guarded_attempt=False) -> dict | tuple:
+                        held_plan_only=False, guarded_attempt=False, retained_edge_inputs=None) -> dict | tuple:
     """Called only by the active selected-input callback under its project lock."""
     assets = Path(assets).absolute()
     selection.require((plan_owner is None) == (plan_attempt_directory is None))
@@ -274,6 +277,15 @@ def inspect_composition(config: dict, choice: str, values: dict, record: dict, a
             if guarded_attempt:
                 selection.require(held_plan_only)
                 planning["guarded_attempt"] = True
+        if retained_edge_inputs is not None:
+            selection.require(guarded_attempt and planning is not None)
+            from selfhost_windows_website_plan import from_observation
+            docker, normalized, retained_data = retained_edge_inputs
+            selection.require(compatibility(normalized, manifest)['composition_matches_selected_product'])
+            original, _binding, template = _held_edge_template(
+                config, normalized, retained_data['edge']['mounts'], owner_root, held)
+            return from_observation(original, manifest, docker=docker, edge_template=template,
+                                    data_before=retained_data, **planning)
         model, observed, edge, plan = _observe(config, choice, values, record, manifest,
             full_standalone=full_standalone, owner_root=owner_root, held=held, planning=planning)
         if held_plan_only:

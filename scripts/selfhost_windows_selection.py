@@ -315,10 +315,7 @@ def _inputs(config, stack, *, initial_current=False):
     return values, snapshots
 
 
-def _inspect(config, choice, values, stack, *, expected_data=None, require_ready=True,
-             retained_ca_readers=None):
-    """Local/runtime identity and isolation only; never native admission."""
-    prefix = 'renewed' if choice == 'new' else 'current'
+def _compose_models(config, values):
     docker = renewal.Docker(config['docker_host'], config['engine_id'])
     commands = {c: docker.compose(config['project'], Path(config[p+'_env']), Path(config['compose_file']))
                 for c, p in [('old', 'current'), ('new', 'renewed')]}
@@ -326,6 +323,14 @@ def _inspect(config, choice, values, stack, *, expected_data=None, require_ready
               for c, command in commands.items()}
     renewal.checked_models(models['old'], models['new'], Path(config['current_secrets']),
                            Path(config['renewed_secrets']), sorted(values['old']))
+    return docker, commands, models
+
+
+def _inspect(config, choice, values, stack, *, expected_data=None, require_ready=True,
+             retained_ca_readers=None):
+    """Local/runtime identity and isolation only; never native admission."""
+    prefix = 'renewed' if choice == 'new' else 'current'
+    docker, commands, models = _compose_models(config, values)
     baseline = docker.containers();owned = [x for x in baseline if renewal._project(x) == config['project']]
     services = {renewal._service(x) for x in owned};require(len(services) == len(owned))
     changing = renewal.owned_roles(models[choice], services)
@@ -1114,7 +1119,7 @@ def renew_once(config_path,logical_project):
 
 
 @contextmanager
-def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None, _website_edge=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1123,7 +1128,8 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
     expired_completion=[];expired_started=False
-    require(_website_stage is None or _pending_website is not None)
+    require((_website_stage is None and _website_edge is None) or _pending_website is not None)
+    require(_website_edge is None or _website_stage is None)
     options = {}
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
@@ -1195,6 +1201,11 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                     plan_attempt_directory=Path(plan['attempt_directory']), held_plan_only=True, guarded_attempt=True)
                 require(rebuilt == plan)
                 status = run(cfg, choice, values, record, plan, proposal, status, authority_file=authority_file, held=stack)
+            if _website_edge is not None:
+                from selfhost_windows_website_edge import run
+                phase, assets, gh, cosign, registry_config, authority_file = _website_edge
+                status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
+                    gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=stack)
             yield status
             return
 
@@ -1360,6 +1371,15 @@ def stage_website_candidate(config_path, plan, *, guard_sha256, expected_anchor_
     """Stage only the first website slot under a verified guard and initial tail."""
     with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
                           _website_stage=(assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def change_website_edge(config_path, plan, phase, *, guard_sha256, expected_anchor_sha256,
+                        assets, gh, cosign, registry_config, authority_file=None):
+    """Apply a forward or combined-route edge phase under the selected owner."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=(phase, assets, gh, cosign, registry_config, authority_file)) as status:
         result = status
     return result
 

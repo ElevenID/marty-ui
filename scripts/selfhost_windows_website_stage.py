@@ -3,7 +3,6 @@ from pathlib import Path
 
 from selfhost_windows_inputs import _held_private_input
 import selfhost_windows_selection as selection
-import selfhost_windows_website_journal as journal
 import selfhost_windows_website_plan as plan_contract
 import selfhost_windows_website_store as store
 
@@ -59,16 +58,15 @@ def _material(path, value, held):
     require(held.enter_context(renewal.hold_private_input(path)) == body)
 
 
-def _stage_model(inspected, proposal, attempt, tls_init_receipt, held):
-    docker = inspected['docker']
+def _stage_model(docker, base_command, base_model, proposal, attempt, held):
     source = proposal['models']['staged']['services'][plan_contract.SLOT]
     overlay = attempt / 'stage.compose.json'
     _material(overlay, {'services': {plan_contract.SLOT: source}}, held)
-    command = [*inspected['command'], '-f', str(overlay)]
+    command = [*base_command, '-f', str(overlay)]
     model = docker.json(command[len(docker.prefix):] + ['--profile', '*', 'config', '--format', 'json'])
     services = dict(model['services'])
     website = services.pop(plan_contract.SLOT)
-    require({**model, 'services': services} == inspected['model'])
+    require({**model, 'services': services} == base_model)
     require(website['image'] == source['image']
             and set(website) <= {'image', 'restart', 'mem_limit', 'environment', 'secrets', 'healthcheck', 'networks',
                                  'command', 'entrypoint'}
@@ -81,12 +79,11 @@ def _stage_model(inspected, proposal, attempt, tls_init_receipt, held):
     require(website.get('environment', {}) == {key: combined_env[key] for key in source['environment']})
     hashes = docker.hashes(command)
     require(plan_contract.sha(hashes.get(plan_contract.SLOT)))
-    renewal.checked_live_configuration(inspected['owned'], hashes, tls_init_receipt)
     return command, model, hashes
 
 
-def _evidence(attempt, event, observations, held):
-    _material(attempt / ('stage-' + event + '.json'), observations, held)
+def _evidence(path, observations, held):
+    _material(path, observations, held)
     return {name: plan_contract.digest(value) for name, value in observations.items()}
 
 
@@ -102,12 +99,14 @@ def run(config, choice, values, record, plan, proposal, status, *, authority_fil
     held.enter_context(_held_private_input(attempt, directory=True, mutable_directory=True))
     require(not renewal.namespace_entry_exists(Path(plan['route_directory'])))
     inspected = selection._inspect(config, choice, values, held, expected_data=record['data_sha256'])
-    command, model, hashes = _stage_model(inspected, proposal, attempt, config['tls_init_receipt'], held)
+    command, model, hashes = _stage_model(inspected['docker'], inspected['command'], inspected['model'],
+                                          proposal, attempt, held)
+    renewal.checked_live_configuration(inspected['owned'], hashes, config['tls_init_receipt'])
     secret_root = Path(record['selected']['secrets_dir'])
     context = StageContext(inspected, config, model, hashes, proposal['data']['staged'], secret_root)
     selection._native_current(config, choice, values, inspected['docker'], authority_file)
     before = context.check(before_intent=True)
-    started_evidence = _evidence(attempt, 'before', {
+    started_evidence = _evidence(attempt / 'stage-before.json', {
         'owner_lease': {'guard_sha256': status['guard_sha256'], 'owner': plan['owner']},
         'native_custody': {'selected_sha256': plan['owner']['selected_sha256'],
                            'native_sha256': plan['owner']['native_sha256']},
@@ -127,7 +126,7 @@ def run(config, choice, values, record, plan, proposal, status, *, authority_fil
     candidate, = _candidate_rows(after, config['project'])
     require(candidate['State']['Status'] == 'running' and candidate['RestartCount'] == 0
             and candidate['State']['Health']['Status'] == 'healthy')
-    completed_evidence = _evidence(attempt, 'after', {
+    completed_evidence = _evidence(attempt / 'stage-after.json', {
         'runtime_after': renewal.context_snapshot([item for item in after if renewal._project(item) == config['project']]),
         'image_metadata': {'image_id': candidate['Image'], 'release': plan['website']['release_sha256']},
         'candidate_health': {'container_id': candidate['Id'], 'status': 'healthy', 'restart_count': 0},
