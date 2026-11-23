@@ -21,6 +21,11 @@ Treat each result as a separate gate:
 A metadata-only receipt intentionally does not mark the installation ready or
 the browser login qualified.
 
+For a separately operated OpenBao-backed Keycloak provider, qualify its
+[independent credential renewal and recovery](standalone-keycloak-lifecycle.md)
+as well as the browser journey. Its lifecycle is separate from the application's
+full workload renewal enrollment.
+
 ## Cloudflare Access candidate
 
 Cloudflare documents its **SaaS application → OpenID Connect** integration as
