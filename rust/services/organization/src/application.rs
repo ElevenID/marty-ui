@@ -360,8 +360,11 @@ impl OrganizationApplication {
         store: PostgresOrganizationStore,
         cache: OrganizationCache,
     ) -> Result<Self, OrganizationApplicationError> {
-        let outbox =
-            PostgresOutboxStore::new(store.pool().clone(), OUTBOX_SOURCE, ORGANIZATION_OUTBOX_PARTITIONS)?;
+        let outbox = PostgresOutboxStore::new(
+            store.pool().clone(),
+            OUTBOX_SOURCE,
+            ORGANIZATION_OUTBOX_PARTITIONS,
+        )?;
         Ok(Self {
             store,
             outbox,

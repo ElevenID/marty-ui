@@ -434,7 +434,9 @@ def assert_models(
     }
     assert owner["restart"] == "no"
     assert owner["healthcheck"] == {"disable": True}
-    assert owner["mem_limit"] == "${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}"
+    assert owner["mem_limit"] == (
+        "1073741824" if interpolated else "${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}"
+    )
     assert set(owner) == {
         "build", "command", "depends_on", "entrypoint", "environment",
         "healthcheck", "mem_limit", "networks", "restart", "secrets", "volumes",
@@ -465,6 +467,9 @@ def assert_models(
     flow_environment = expected["services"]["flow"]["environment"]
     assert "MARTY_SCHEMA_STARTUP_MODE" not in flow_environment
     flow_environment["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
+    expected["services"]["flow"]["depends_on"]["owner-migrations"] = {
+        "condition": "service_completed_successfully", "required": True,
+    }
     assert actual["services"]["issuance-migrations"]["depends_on"] == {
         "credential-template": {"condition": "service_healthy", "required": True},
         "owner-migrations": {"condition": "service_completed_successfully", "required": True},

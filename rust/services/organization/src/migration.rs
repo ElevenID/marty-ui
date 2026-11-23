@@ -95,15 +95,16 @@ pub async fn validate_organization_outbox_schema(
             row.get::<String, _>("table_name") == table
                 && row.get::<String, _>("column_name") == column
         }) {
-            return Err(incompatible(&format!("mmf_messaging.{table}.{column} is missing")));
+            return Err(incompatible(&format!(
+                "mmf_messaging.{table}.{column} is missing"
+            )));
         }
     }
 
-    let indexes: Vec<String> = sqlx::query_scalar(
-        "SELECT indexname FROM pg_indexes WHERE schemaname='mmf_messaging'",
-    )
-    .fetch_all(pool)
-    .await?;
+    let indexes: Vec<String> =
+        sqlx::query_scalar("SELECT indexname FROM pg_indexes WHERE schemaname='mmf_messaging'")
+            .fetch_all(pool)
+            .await?;
     for required in [
         "ix_mmf_outbox_due",
         "ix_mmf_outbox_lease",

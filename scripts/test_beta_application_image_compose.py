@@ -429,11 +429,12 @@ def run(compose_command=None, powershell=None):
                     for name in names
                 }
             }
-            synthetic["services"]["issuance-migrations"] = {
-                "image": ISSUANCE_IMAGE,
-                "command": ["synthetic-never-run"],
-                "environment": {"UNCHANGED": "preserve"},
-            }
+            for name in ("issuance-migrations", "owner-migrations"):
+                synthetic["services"][name] = {
+                    "image": ISSUANCE_IMAGE,
+                    "command": ["synthetic-never-run"],
+                    "environment": {"UNCHANGED": "preserve"},
+                }
             synthetic_path = directory / "synthetic.json"
             synthetic_path.write_text(json.dumps(synthetic), encoding="utf-8")
             synthetic_base = render_binding(directory, compose_command, synthetic_path)
