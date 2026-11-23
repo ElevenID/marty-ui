@@ -107,6 +107,7 @@ def qualify_passkeys(context):
         print("Expired-tab recovery retained client/state/PKCE and existing login options with passkeys on/off", flush=True)
         native.test_native_assertion_rejects_tampering_replay_and_deleted_credentials(fixture)
         native.test_explicit_required_otp_remains_required_after_passkey_and_password_login(fixture)
+        print("Password reset returned automatically, rejected the old password and retained required OTP", flush=True)
         print("Explicit required OTP and wrong-code denial passed for passkey/password with feature on/off", flush=True)
         assert native.request(admin, token=admin_token)["webAuthnPolicyPasswordlessPasskeysEnabled"] is True
         # Model a human window outliving the parent probe's original sessions

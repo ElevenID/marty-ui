@@ -281,14 +281,11 @@ def test_native_email_action_enrolls_a_verified_existing_account_without_passwor
             assert page.locator("#password").count() == 0
             confirm = page.locator("a[href*='/login-actions/action-token']")
             if confirm.count():
+                assert page.locator("body").get_attribute("data-elevenid-return-url") is None
                 confirm.click()
             page.once("dialog", lambda dialog: dialog.accept("Synthetic badge account passkey"))
             page.locator("#registerWebAuthn").click(timeout=30000)
-            page.wait_for_function("""base => location.pathname === '/callback' ||
-                [...document.querySelectorAll('a')].some(link => link.href.startsWith(base + '/callback'))""",
-                arg=keycloak["base"], timeout=30000)
-            if urllib.parse.urlparse(page.url).path != "/callback":
-                page.locator('a[href^="' + keycloak["base"] + '/callback"]').click()
+            page.wait_for_url(keycloak["base"] + "/callback**", timeout=30000)
             assert urllib.parse.urlparse(page.url).path == "/callback"
             stored = request(credentials_url, token=keycloak["token"])
             assert len(stored) == 1 and stored[0]["type"] == "webauthn-passwordless"
@@ -357,12 +354,11 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
     page.goto(link)
     confirm = page.locator("a[href*='/login-actions/action-token']")
     if confirm.count():
+        assert page.locator("body").get_attribute("data-elevenid-return-url") is None
         confirm.click()
     page.once("dialog", lambda dialog: dialog.accept("Second device"))
     page.locator("#registerWebAuthn").click(timeout=30000)
-    page.wait_for_function("""base => location.pathname === '/callback' ||
-        [...document.querySelectorAll('a')].some(link => link.href.startsWith(base + '/callback'))""",
-        arg=keycloak["base"], timeout=30000)
+    page.wait_for_url(keycloak["base"] + "/callback**", timeout=30000)
     stored = request(credentials_url, token=keycloak["token"])
     assert len(stored) == 2 and all(item["type"] == "webauthn-passwordless" for item in stored)
     token = account_token()
@@ -400,9 +396,7 @@ def qualify_native_lifecycle(keycloak, page, cdp, device, subject, credentials_u
                       "kc_action": "delete_credential:" + remaining[0]["id"]}
         page.goto(issuer + "/auth?" + urllib.parse.urlencode(parameters))
         page.locator("#kc-accept").click(timeout=30000)
-        page.wait_for_function("""base => location.pathname === '/callback' ||
-            [...document.querySelectorAll('a')].some(link => link.href.startsWith(base + '/callback'))""",
-            arg=keycloak["base"], timeout=30000)
+        page.wait_for_url(keycloak["base"] + "/callback**", timeout=30000)
         assert request(credentials_url, token=keycloak["token"]) == []
     finally:
         fresh.close()
@@ -682,6 +676,51 @@ def test_explicit_required_otp_remains_required_after_passkey_and_password_login
                 page.locator("#kc-login").click()
                 complete(page, verifier)
                 context.close()
+            # A completed email password update returns without an extra click.
+            # Its first confirmation stays explicit, and existing factors survive.
+            otp_ids = {item["id"] for item in request(credentials_url, token=keycloak["token"])
+                       if item["type"] == "otp"}
+            assert len(otp_ids) == 1
+            action_query = urllib.parse.urlencode({"client_id": "passkey-test-ui", "lifespan": 300,
+                                                   "redirect_uri": keycloak["base"] + "/callback"})
+            request(keycloak["admin"] + "/users/" + subject + "/execute-actions-email?" + action_query,
+                    token=keycloak["token"], method="PUT", body=["UPDATE_PASSWORD"])
+            message = docker("exec", keycloak["smtp"], "cat", "/tmp/messages.jsonl").splitlines()[-1]
+            mail = BytesParser(policy=email.policy.default).parsebytes(base64.b64decode(json.loads(message)))
+            links = re.findall(r'https?://[^\s"<>]+', mail.get_body(preferencelist=("html", "plain")).get_content())
+            action_link = next(html.unescape(value) for value in links if "/login-actions/action-token?" in value)
+            new_password = "Reset!Fixture-" + secrets.token_hex(8) + "42"
+            context = browser.new_context()
+            page = context.new_page()
+            page.goto(action_link)
+            confirm = page.locator("a[href*='/login-actions/action-token']")
+            if confirm.count():
+                assert page.locator("body").get_attribute("data-elevenid-return-url") is None
+                confirm.click()
+            page.locator("#password-new").fill(new_password)
+            page.locator("#password-confirm").fill(new_password)
+            page.locator("#kc-passwd-update-form input[type=submit]").click()
+            page.wait_for_url(keycloak["base"] + "/callback**", timeout=30000)
+            assert {item["id"] for item in request(credentials_url, token=keycloak["token"])
+                    if item["type"] == "otp"} == otp_ids
+            context.close()
+
+            context = browser.new_context()
+            page = context.new_page()
+            verifier = begin(page)
+            page.locator("#username").fill(address)
+            page.locator("#password").fill(password)
+            page.locator("#kc-login").click()
+            page.locator("#input-error").wait_for(timeout=10000)
+            assert page.locator("#otp").count() == 0
+            page.locator("#password").fill(new_password)
+            page.locator("#kc-login").click()
+            page.locator("#otp").wait_for(timeout=30000)
+            assert urllib.parse.urlparse(page.url).path != "/callback"
+            page.locator("#otp").fill(fresh_code(secret))
+            page.locator("#kc-login").click()
+            complete(page, verifier)
+            context.close()
             assert {item["type"] for item in request(credentials_url, token=keycloak["token"])} == {
                 "password", "otp", "webauthn-passwordless"}
         finally:

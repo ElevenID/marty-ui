@@ -238,3 +238,112 @@ def test_bundled_helm_login_theme_matches_the_source():
     expected = {path.relative_to(THEME): path.read_bytes() for path in THEME.rglob("*") if path.is_file()}
     actual = {path.relative_to(bundled): path.read_bytes() for path in bundled.rglob("*") if path.is_file()}
     assert actual == expected
+
+
+def test_configured_identity_navigation_uses_the_application_and_website_origins(load_page):
+    page = load_page("login-external")
+    assert page.locator(".elevenid-home-btn").get_attribute("href") == "https://website.example.invalid/"
+    assert page.locator("#credential-login").get_attribute("href") == "https://console.example.invalid/v1/auth/credential-login"
+
+
+def test_same_origin_navigation_keeps_its_existing_defaults(load_page):
+    page = load_page("login")
+    assert page.locator(".elevenid-home-btn").get_attribute("href") == "/"
+    assert page.locator("#credential-login").get_attribute("href") == "/v1/auth/credential-login"
+
+
+@pytest.mark.parametrize("scenario", ["login-no-credential", "login-empty-credential"])
+def test_unavailable_credential_login_does_not_leave_an_empty_alternative_section(load_page, scenario):
+    page = load_page(scenario)
+    assert page.locator("#credential-login").count() == 0
+    assert page.locator("#kc-social-providers").count() == 0
+    assert page.locator("#kc-form-login").is_visible()
+
+
+def test_disabling_credential_login_preserves_the_configured_social_provider(load_page):
+    page = load_page("login-google-no-credential")
+    assert page.locator("#credential-login").count() == 0
+    assert page.locator("#social-google").get_attribute("href") == "/realms/fixture/broker/google/login"
+
+
+@pytest.mark.parametrize("scenario,target", [
+    ("info-success", "https://console.example.invalid/v1/auth/callback?code=synthetic-code&state=synthetic-state"),
+    ("info-local", "http://127.0.0.1:9999/callback"),
+])
+def test_completed_native_action_returns_to_its_explicit_web_destination(browser, render, scenario, target):
+    context = browser.new_context()
+    navigations = []
+
+    def route_request(route):
+        if route.request.is_navigation_request():
+            assert route.request.url == target
+            navigations.append(route.request.url)
+            route.fulfill(status=200, content_type="text/html", body="<main>Application return observed</main>")
+        else:
+            route.abort()
+
+    context.route("**/*", route_request)
+    try:
+        page = context.new_page()
+        page.set_content(render(scenario), wait_until="domcontentloaded")
+        page.wait_for_url(target)
+        assert page.locator("main").inner_text() == "Application return observed"
+        assert navigations == [target]
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("scenario", [
+    "info-action", "info-action-with-destination", "info-pending", "info-hidden",
+    "info-error", "info-no-destination", "info-native", "info-remote-http",
+])
+def test_native_action_confirmation_pending_factors_errors_and_nonweb_returns_stay_explicit(load_page, scenario):
+    page = load_page(scenario)
+    assert page.url == "about:blank"
+    assert page.locator(".elevenid-inherited-card").count() == 1
+    assert page.locator("h1#kc-page-title").count() == 1
+    if scenario == "info-hidden":
+        assert page.locator("#kc-info-message a").count() == 0
+    else:
+        assert page.locator("#kc-info-message a").is_visible()
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_native_completion_retains_a_styled_accessible_return_without_javascript(browser, render, width):
+    context = browser.new_context(java_script_enabled=False, viewport={"width": width, "height": 900})
+    context.route("**/*", lambda route: route.abort())
+    try:
+        page = context.new_page()
+        css = "\n".join((THEME / "resources/css" / name).read_text(encoding="utf-8")
+                        for name in ("auth-layout.css", "marty.css"))
+        page.set_content(render("info-success").replace("</head>", "<style>" + css + "</style></head>"),
+                         wait_until="domcontentloaded")
+        assert page.locator("h1#kc-page-title").is_visible()
+        assert page.locator("#kc-info-message a").get_attribute("href") == (
+            "https://console.example.invalid/v1/auth/callback?code=synthetic-code&state=synthetic-state")
+        assert page.locator(".elevenid-inherited-card").evaluate(
+            "node => getComputedStyle(node).borderTopWidth") == "1px"
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+@pytest.mark.parametrize("scenario", ["otp", "otp-error", "otp-multiple"])
+def test_native_otp_has_one_card_a_clear_heading_and_intact_code_input(load_page, width, scenario):
+    page = load_page(scenario)
+    page.set_viewport_size({"width": width, "height": 900})
+    assert page.locator("h1#kc-page-title").inner_text() == "Verify it's you"
+    assert page.locator(".elevenid-inherited-card").count() == 1
+    assert page.locator("#otp").get_attribute("autocomplete") == "one-time-code"
+    assert page.locator("#kc-login").is_enabled()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    if scenario == "otp-error":
+        assert page.locator("#input-error-otp-code").inner_text() == "Invalid authenticator code"
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "nl", "ja", "es", "fr"])
+def test_native_otp_heading_and_hint_resolve_for_each_supported_locale(load_page, locale):
+    page = load_page("otp", locale)
+    assert "mfaVerificationTitle" not in page.locator("h1#kc-page-title").inner_text()
+    assert "mfaAuthenticatorHint" not in page.locator(".elevenid-context-hint").inner_text()
