@@ -179,7 +179,8 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
     env = migration.get("environment", {})
     require(set(env) == {
                 "ENVIRONMENT", "MARTY_DB_PASSWORD_FILE", "DATABASE_URL_TEMPLATE",
-                "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_SLUG",
+                "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_NAME",
+                "MARTY_ORG_REVIEWER_EMAIL", "MARTY_ORG_SLUG",
                 "MARTY_MIGRATION_PROFILE", "MARTY_KMS_BOOTSTRAP_ENABLED",
                 "REDIS_URL", "REDIS_DB_GATEWAY", "BAO_ADDR", "BAO_TOKEN_FILE",
                 "BAO_CACERT", "NOTIFICATION_OPENBAO_TOKEN_FILE",
@@ -201,7 +202,9 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
             and env.get("REDIS_URL") == "redis://redis:6379"
             and env.get("MARTY_ORG_ID") == ORG_ID
+            and env.get("MARTY_ORG_NAME") == "Marty"
             and env.get("MARTY_ORG_ADMIN_EMAIL") == "probe@migration.invalid"
+            and env.get("MARTY_ORG_REVIEWER_EMAIL") == "reviewer@migration.invalid"
             and env.get("MARTY_ORG_SLUG") == "marty"
             and env.get("PUBLIC_DOMAIN") == "migration.invalid"
             and env.get("PUBLIC_API_URL") == "https://migration.invalid"
@@ -238,7 +241,7 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                 "PUBLIC_DOMAIN": "migration.invalid",
                 "PUBLIC_API_URL": "https://migration.invalid",
                 "DATABASE_URL_TEMPLATE":
-                    "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"}
+                    "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"}
             and native["secrets"] == [{
                 "source": "marty_db_password",
                 "target": "/run/secrets/marty_db_password"}]
