@@ -79,6 +79,36 @@ fn executable_rejects_migration_and_other_arguments_without_echoing_them() {
 }
 
 #[test]
+fn migration_tool_requires_one_scope_and_its_own_file_inputs() {
+    let invoke = |arguments: &[&str], variables: &[(&str, &str)]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_marty-delegated-use-migrate"))
+            .args(arguments)
+            .env_clear()
+            .envs(variables.iter().copied())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let message = String::from_utf8(output.stderr).unwrap();
+        assert!(!message.contains("never-log"));
+        message
+    };
+    assert!(invoke(&["never-log"], &[]).contains("select delegated-authority"));
+    for schema in ["delegated-authority", "machine-credential-source"] {
+        assert!(invoke(
+            &[schema],
+            &[("DELEGATED_USE_MIGRATION_DATABASE_URL", "never-log")]
+        )
+        .contains("DELEGATED_USE_MIGRATION_DATABASE_URL_FILE is required"));
+        assert!(invoke(
+            &[schema],
+            &[("DELEGATED_USE_MIGRATION_DATABASE_URL_FILE", "never-log")],
+        )
+        .contains("DELEGATED_USE_MIGRATION_DATABASE_CA_FILE is required"));
+    }
+}
+
+#[test]
 fn executable_rejects_unknown_options_and_sanitizes_secret_file_errors() {
     let output = run(
         &[],

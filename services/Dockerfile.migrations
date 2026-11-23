@@ -12,10 +12,7 @@ COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
-COPY contracts/python-text-semantics.json /build/contracts/python-text-semantics.json
-COPY contracts/demo-seed-reference-v1.json /build/contracts/demo-seed-reference-v1.json
-COPY contracts/issuer-identity-capabilities-response.json /build/contracts/issuer-identity-capabilities-response.json
-COPY contracts/issuer-identity-inspection-response.json /build/contracts/issuer-identity-inspection-response.json
+COPY contracts /build/contracts
 # Keep source authentication separate from every Rust compilation step.
 RUN --mount=type=secret,id=private_forks_read_token \
     if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
@@ -28,7 +25,8 @@ RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
     fi; \
     cargo build --locked --release -p marty-notification --bin marty-notification \
     && cargo build --locked --release -p marty-signing-keys --bin marty-migration-bootstrap \
-    && cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed
+    && cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed \
+    && cargo build --locked --release -p marty-delegated-use --bin marty-delegated-use-migrate
 
 FROM docker:29-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00 AS docker-cli
 
@@ -52,6 +50,7 @@ COPY scripts/run-migrations-with-secrets.sh /app/run-migrations-with-secrets.sh
 COPY --from=rust-migration-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
 COPY --from=rust-migration-builder /build/rust/target/release/marty-migration-bootstrap /usr/local/bin/marty-migration-bootstrap
 COPY --from=rust-migration-builder /build/rust/target/release/marty-demo-vendor-seed /usr/local/bin/marty-demo-vendor-seed
+COPY --from=rust-migration-builder /build/rust/target/release/marty-delegated-use-migrate /usr/local/bin/marty-delegated-use-migrate
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN chmod +x /app/load-secrets-env.sh /app/run-migrations-with-secrets.sh \
     && useradd --create-home --shell /usr/sbin/nologin appuser
