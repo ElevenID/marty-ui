@@ -37,7 +37,7 @@ EXPECTED_DEPENDENCIES = {
              "keycloak-configurator": C, "redis": H},
 
     "compliance-profile": {"db-migrate": C},
-    "credential-template": {"owner-migrations": C, "revocation-profile": H},
+    "credential-template": {"owner-migrations": C},
     "db-migrate": {"postgres": H, "redis": H, "revocation-profile-migrate": C},
     "deployment-profile": {"db-migrate": C},
     "device-registration": {"db-migrate": C, "redis": H},
@@ -64,7 +64,7 @@ EXPECTED_DEPENDENCIES = {
     "owner-migrations": {"db-migrate": C},
     "notification": {"db-migrate": C},
     "organization": {"owner-migrations": C, "redis": H},
-    "presentation-policy": {"owner-migrations": C, "issuance-native": H},
+    "presentation-policy": {"owner-migrations": C},
     "revocation-profile": {"db-migrate": C, "redis": H},
     "revocation-profile-migrate": {"postgres": H},
     "signing-keys": {"db-migrate": C, "redis": H},

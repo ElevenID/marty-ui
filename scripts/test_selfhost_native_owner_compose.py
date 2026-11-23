@@ -447,23 +447,11 @@ def assert_models(
     assert mount["target"] == "/app/load-secrets-env.sh" and mount["read_only"] is True
     assert mount["source"].endswith("/scripts/load-secrets-env.sh")
     expected["services"]["owner-migrations"] = deepcopy(owner)
-    assert actual["services"]["organization"]["depends_on"] == {
-        "owner-migrations": {"condition": "service_completed_successfully", "required": True},
-        "redis": {"condition": "service_healthy", "required": True},
-    }
-    expected["services"]["organization"]["depends_on"] = deepcopy(
-        actual["services"]["organization"]["depends_on"]
-    )
-    for service in ("credential-template", "presentation-policy"):
-        assert actual["services"][service]["depends_on"]["owner-migrations"] == {
-            "condition": "service_completed_successfully", "required": True,
-        }
-        # Preserve the pre-existing owner-service dependencies (for example
-        # Revocation Profile and native Issuance) while adding the operator
-        # provisioning barrier.
-        expected["services"][service]["depends_on"] = deepcopy(
-            actual["services"][service]["depends_on"]
-        )
+    owner_ready = {"condition": "service_completed_successfully", "required": True}
+    for service in ("organization", "credential-template", "presentation-policy"):
+        dependencies = expected["services"][service]["depends_on"]
+        assert dependencies.pop("db-migrate") == owner_ready
+        dependencies["owner-migrations"] = owner_ready
     flow_environment = expected["services"]["flow"]["environment"]
     assert "MARTY_SCHEMA_STARTUP_MODE" not in flow_environment
     flow_environment["MARTY_SCHEMA_STARTUP_MODE"] = "validate"

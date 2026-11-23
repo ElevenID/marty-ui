@@ -203,9 +203,14 @@ def test_source_compose_has_reviewed_full_dag() -> None:
     rendered = json.loads(completed.stdout)
     assert "depends_on" not in rendered["services"]["edge"]
     result = plan(rendered, PREFLIGHT, SECRET_ROOT)
-    assert result["service_count"] == 28
+    assert result["service_count"] == 29
     assert result["dependency_count"] > 30
-    assert "edge" in result["startup_layers"][0]
+    layers = result["startup_layers"]
+    assert "edge" in layers[0]
+    layer_index = {service: index for index, layer in enumerate(layers) for service in layer}
+    assert layer_index["db-migrate"] < layer_index["owner-migrations"]
+    for service in ("organization", "credential-template", "presentation-policy"):
+        assert layer_index["owner-migrations"] < layer_index[service]
     from run_selfhost_business_journey import disabled_optional_secrets
     assert {"passport_tenant_api_keys",
             "personalization_bureau_api_key"} <= disabled_optional_secrets(rendered)
