@@ -1,5 +1,11 @@
 # Delegated-use serving candidate
 
+The shared services image packages the host as `/usr/local/bin/marty-delegated-use`.
+Set `SERVICE_NAME=delegated-use` to select it through the image entrypoint.
+The host also requires `MARTY_DELEGATED_USE_ENABLED=true` and the configuration
+below. Deploy it on the private service network after provisioning its database
+roles, trust bindings and signing services.
+
 `marty-delegated-use` is the explicit serving composition for the implemented
 managed organization, full-machine, KEY and EXACT_OPERATION profile. It joins
 the concrete access, consent, machine, credential, policy, audit, Flow and

@@ -28,6 +28,7 @@ RUST_SERVICES = {
     "passport_callback_signer_supported": "marty-passport-callback-signer-supported",
     "presentation_policy": "marty-presentation-policy",
     "revocation_profile": "marty-revocation-profile",
+    "delegated_use": "marty-delegated-use",
     "signing_keys": "marty-signing-keys",
     "trust_profile": "marty-trust-profile",
     "verification": "marty-verification-service",
