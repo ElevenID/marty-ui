@@ -356,6 +356,12 @@ uncertain outcome leaves the guard and receipts; never retry the deployment to
 repair it. A returned callback result is provisional until the entire selected
 lease exits and the new product selection is published.
 
+For the signed v1.1.292 backend at `ab8c96626100418f8a88a883380e807a575fbe16`,
+the owner checks ten migration records across five services in one read-only
+query before writing an intent or recreating services. A missing record requires
+a separately qualified schema upgrade. A complete ledger allows the remaining
+image, native custody, storage and schema checks to proceed.
+
 If execution completed but metadata publication was interrupted, an operator may
 use `--config ... --reconcile --authority-file /control/recovery-session-<uuid>/token`
 with existing valid scoped authority. This validates every retained phase and

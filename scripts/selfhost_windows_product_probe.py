@@ -68,6 +68,18 @@ ORDER BY oid) FROM pg_trigger WHERE tgrelid IN (SELECT oid FROM c) AND NOT tgisi
 SCHEMA = 'marty.windows-postgres-schema/v2'
 PROBE = 'catalog-and-source-ledger-profile/v2'
 PROFILE_ID = 'marty-selfhost-ledgers/v1'
+V292_RELEASE = ('v1.1.292', 'ab8c96626100418f8a88a883380e807a575fbe16')
+V292_MIGRATIONS_SQL = """SELECT to_json(
+    (SELECT count(DISTINCT version) = 2 FROM credential_template_service.rust_schema_versions
+     WHERE version IN ('rust_credential_template_0003', 'rust_credential_template_0004'))
+    AND EXISTS (SELECT 1 FROM device_registration_service.alembic_version WHERE version_num = '20261116_0002')
+    AND EXISTS (SELECT 1 FROM flow_service.rust_schema_versions WHERE version = 'rust_flow_public_retention_0001')
+    AND (SELECT count(DISTINCT version) = 4 FROM issuance_service.rust_schema_migrations
+         WHERE version IN ('0012_membership_achievement_criteria', '0013_explicit_jwt_vc_profile',
+                           '0014_external_observation_authority', '0015_external_observation_runtime_locks'))
+    AND (SELECT count(DISTINCT version) = 2 FROM trust_profile_service.native_migrations
+         WHERE version IN ('trust-profile-credential-authority-v1', 'trust-profile-wallet-issuer-authority-v2'))
+)"""
 CONSISTENCY = 'per-database-repeatable-read;two-equal-observations'
 APPLICATION_LEDGERS = frozenset({
     ('auth_service', 'rust_schema_versions'), ('compliance_profile_service', 'native_migrations'),
@@ -156,6 +168,28 @@ def _database_snapshot(docker, base, database, expected):
     return {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
 
 
+def _postgres_base(items, project):
+    postgres = owned_role(items, project, 'postgres')
+    environment = postgres['Config'].get('Env', [])
+    require(type(environment) is list and all(isinstance(row, str) for row in environment))
+    users = [row[len('POSTGRES_USER='):] for row in environment if row.startswith('POSTGRES_USER=')]
+    require(len(users) == 1 and NAME.fullmatch(users[0]))
+    return ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
+            '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
+
+
+def require_image_only_schema(docker, items, project, backend, *, profile=LedgerProfile()):
+    """Refuse the v1.1.292 image switch while any of its ten migrations are pending."""
+    tag, source = backend['release_tag'], backend['source_sha']
+    if tag != V292_RELEASE[0] and source != V292_RELEASE[1]:
+        return
+    require((tag, source) == V292_RELEASE, 'v1.1.292 backend release and source disagree')
+    require(type(profile) is LedgerProfile)
+    base = _postgres_base(items, project)
+    ready = docker.json([*base, '--dbname', profile.application, '--command', V292_MIGRATIONS_SQL])
+    require(ready is True, 'v1.1.292 requires a schema-changing product upgrade before image recreation')
+
+
 def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
     """Coherent per-DB transactions, bracketed by equal full observations.
 
@@ -165,13 +199,7 @@ def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
     """
     require(type(profile) is LedgerProfile)
     deadline = time.monotonic()+60
-    postgres = owned_role(items, project, 'postgres')
-    environment = postgres['Config'].get('Env', [])
-    require(type(environment) is list and all(isinstance(row, str) for row in environment))
-    users = [row[len('POSTGRES_USER='):] for row in environment if row.startswith('POSTGRES_USER=')]
-    require(len(users) == 1 and NAME.fullmatch(users[0]))
-    base = ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
-            '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
+    base = _postgres_base(items, project)
     def observe():
         require(time.monotonic() < deadline)
         databases = docker.json([*base, '--dbname', 'postgres', '--command', DATABASES_SQL])
