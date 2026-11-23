@@ -174,8 +174,6 @@ class GitHubReader:
         role = "application" if kind == "package-application" else kind
         if kind == "package-application":
             ui.require(repository == ui.REPOSITORY, "package application requires its original public producer")
-        if kind == "composition":
-            ui.require(repository == ui.COMMERCE_REPOSITORY, "local composition requires its original private producer")
         policy.producer_policy(repository, role=role)
         verifier.local_file(gh)
         ui.require(token_env in {"GH_TOKEN", "GITHUB_TOKEN"},

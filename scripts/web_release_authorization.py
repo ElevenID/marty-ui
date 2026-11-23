@@ -8,7 +8,7 @@ import re
 import sys
 import ssl
 import urllib.request
-import ui_release as ui
+import website_producer_policy as policy
 
 PUBLIC = "ElevenID/marty-ui"
 PUBLIC_ID = 1140864197
@@ -150,9 +150,10 @@ def verified_authorization(result, producer, role, *, read=public_json):
     The caller still verifies the original certificate identity and Cosign proof.
     Approval expiry applies at authenticated signing time, never runtime replay.
     """
-    require(role in {"website", "application", "composition"}
-            and producer["repository"] == ui.COMMERCE_REPOSITORY,
+    require(role in {"website", "application", "composition"},
             "local signing is limited to the explicit private release roles")
+    selected = policy.producer_policy(producer["repository"], role=role)
+    require(selected["repository_id"] == str(PRIVATE_ID), "local signing requires the original private repository ID")
     try:
         signed = result["verificationResult"]
         statement = signed["statement"]
@@ -178,7 +179,7 @@ def verified_authorization(result, producer, role, *, read=public_json):
                 and definition["internalParameters"]["github"]["runner_environment"] == "self-hosted"
                 and str(definition["internalParameters"]["github"]["repository_id"]) == str(PRIVATE_ID)
                 and definition["externalParameters"]["workflow"] == {
-                    "ref": a["ref"], "repository": f"https://github.com/{ui.COMMERCE_REPOSITORY}",
+                    "ref": a["ref"], "repository": f"https://github.com/{producer['repository']}",
                     "path": WORKFLOW}, "original GitHub build claims differ")
         verify_approval(raw, read, at=int(at.timestamp()), before=at)
         return a

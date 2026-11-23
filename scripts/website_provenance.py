@@ -85,7 +85,8 @@ def attestation_arguments(producer: dict, *, role: str | None = None) -> list[st
     arguments = ["--repo", repository, "--signer-workflow", repository + "/" + producer["workflow"],
                  "--source-ref", web.REF, "--source-digest", producer["source_sha"],
                  "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"]
-    if repository != ui.COMMERCE_REPOSITORY or role is None:
+    selected = policy.producer_policy(repository, role="composition" if role is None else role)
+    if role is None or selected["repository_id"] != str(local_approval.PRIVATE_ID):
         arguments.append("--deny-self-hosted-runners")
     if repository == ui.COMMERCE_REPOSITORY:
         # Private producers retain local bundles from GitHub's private Sigstore
