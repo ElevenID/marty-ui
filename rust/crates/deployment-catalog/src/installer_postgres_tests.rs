@@ -474,6 +474,21 @@ fn composed_runtime_cannot_restore_local_database_downgrade_tls_or_change_pool_l
     let selection = choose(parent.path(), &mut state);
     let valid = model(&selection);
     selection.validate_model(&valid).unwrap();
+    let mut absolute_targets = valid.clone();
+    for service in DATABASE_SERVICES {
+        absolute_targets["services"][*service]["secrets"][0]["target"] = json!(PASSWORD_MOUNT);
+    }
+    selection.validate_model(&absolute_targets).unwrap();
+    for target in [
+        "/run/secrets/foreign_password",
+        "/run/secrets/../marty_db_password",
+        "run/secrets/marty_db_password",
+        "/tmp/marty_db_password",
+    ] {
+        let mut changed = absolute_targets.clone();
+        changed["services"]["auth"]["secrets"][0]["target"] = json!(target);
+        assert!(selection.validate_model(&changed).is_err(), "{target}");
+    }
     selection
         .validate_model(&json!({"services":{"openbao":{"environment":{}}}}))
         .unwrap();
