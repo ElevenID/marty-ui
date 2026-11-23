@@ -133,7 +133,7 @@ it does not test credential contents, external OpenBao availability, container
 readiness or any business operation. The deployment owner still prepares those
 inputs and the qualification runner must exercise the exact candidate images.
 
-The server bundle includes an explicit allowlist of 36 container runtime
+The server bundle includes an explicit allowlist of 38 container runtime
 files under `runtime/`: edge configuration, database initialization, container
 entrypoints and Keycloak realm/theme assets, including the complete ElevenID
 native account theme. Error pages are inherited from the installed Keycloak
