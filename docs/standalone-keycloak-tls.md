@@ -59,6 +59,28 @@ replacement owner and qualify rotation before selecting that arrangement for
 production. An expiring SecretID requires an independently qualified rotation
 schedule. Do not reuse the signing-renewal AppRole.
 
+Rotate an existing agent SecretID using temporary owner authority in this order:
+
+1. Preserve a private pending journal with the current role, accessor and old
+   credential before requesting a replacement at
+   `auth/identity-origin/role/keycloak-origin/secret-id`. Persist the returned
+   replacement privately before the next operation. A lost creation response
+   requires owner inspection, not an automatic second creation.
+2. Log in with the replacement and verify the actual token has only
+   `identity-origin-certificate` and an eight-hour explicit maximum. Revoke
+   that probe token.
+3. Atomically publish the replacement `secret-id` file with owner-private mode,
+   flush it and its parent directory, then restart only the agent. Verify it
+   renders a fresh retained-key certificate under the existing CA.
+4. Destroy the old accessor at
+   `auth/identity-origin/role/keycloak-origin/secret-id-accessor/destroy` and
+   verify the old credential can no longer log in. Keep the exact policy and
+   role scope unchanged. Destroying a SecretID does not revoke its previously
+   issued tokens; those remain bounded by their existing eight-hour cap.
+5. Preserve the replacement authority and a new Raft snapshot in encrypted
+   custody, then prove the replacement works in an isolated restore. Retain
+   interrupted/completed journals privately; never print their credentials.
+
 Example agent configuration, with deployment-specific paths and address:
 
 ```hcl
@@ -153,6 +175,51 @@ successful authenticated signing/renewal after the signal. A successful helper
 exit alone proves neither reload nor usable service. Ordinary scheduled checks
 should use the non-forced helper and a cadence well inside the 30-day window.
 Qualify and record the actual installed scheduler separately.
+
+A user timer can run this non-forced check daily. Inspect existing units first,
+and use the host's already qualified rootless Docker user service. Example
+service, substituting the verified image, volume, container and CA path:
+
+```ini
+[Unit]
+Description=Maintain independent identity OpenBao listener TLS
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=5min
+ExecStart=/usr/bin/docker run --rm --network none --user 0:0 --security-opt no-new-privileges --memory 128m -v PROVIDER_OPENBAO_VOLUME:/bao/data --entrypoint /usr/local/bin/selfhost-tls-init ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:VERIFIED_DIGEST
+ExecStartPost=/usr/bin/docker kill --signal HUP PROVIDER_OPENBAO_CONTAINER
+ExecStartPost=/usr/bin/python3 -c "import socket, ssl; context=ssl.create_default_context(cafile='/home/operator/login-identity/openbao-ca.crt'); connection=context.wrap_socket(socket.create_connection(('127.0.0.1',18210),timeout=10),server_hostname='localhost'); connection.getpeercert(); connection.close()"
+```
+
+Example `elevenid-identity-listener-tls.timer`:
+
+```ini
+[Unit]
+Description=Check independent identity listener TLS daily
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1d
+RandomizedDelaySec=10min
+Persistent=true
+Unit=elevenid-identity-listener-tls.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Validate the exact files with `systemd-analyze --user verify`, run the service,
+then enable its timer. Verify successful service status, normal TLS validation
+and an actual future entry in `systemctl --user list-timers`. An initially
+active timer can briefly report no next deadline while its first activation
+is running; inspect it again after completion. A user service test does not
+prove whole-host boot or user-manager startup. Preserve the installed units
+with the encrypted recovery configuration.
 
 ## Recovery and retirement gates
 
