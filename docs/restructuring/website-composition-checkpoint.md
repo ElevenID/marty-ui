@@ -63,7 +63,8 @@ targets main at `f78dddc86be6c27cda73a480090cec4e589cba8b`. Its
 staging branch byte for byte. All 462 applicable Windows tests passed
 with two symbolic-link cases skipped, and the organization policy audit
 passed. The routing checkout was parked after publication and both refs
-were verified. Required hosted checks are running. The managed acceptance
+were verified. [Hosted routing CI](https://github.com/ElevenID/marty-ui/actions/runs/45108269826)
+passed and the protected queue admitted the change. The managed acceptance
 PR follows routing. Production still serves the combined release.
 [Staging #2045](https://github.com/ElevenID/marty-ui/pull/2045) ?
 [Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) ?
@@ -177,6 +178,18 @@ presence and content. The v1.1.292 bundle changes 28, including the shared
 secret-loading script and the PostgreSQL initialization script. Preserve
 the established database when selecting the new files. The signed base
 Compose model also changes environment bindings and the Redis command.
+
+Docker Compose resolved the signed v1.1.292 environment expressions against
+the selected Windows environment file with shell overrides excluded. Across
+the 22 installed roles that use the organization name, the one existing
+explicit value matched and 21 roles gain that same configured name. The
+auth service resolves passkey login to false. The Keycloak configurator
+receives an empty management setting and RP ID, preserving the existing
+realm passkey policy. The optional kms-initialize role was absent from the
+31 installed containers. This read-only comparison covers three settings.
+Verify the resulting values again in the fully assembled release before
+activation. Receipt SHA-256
+`ce64146904b2f3c36667286524ba6db3043c508387ce5c2677b5e09ba4aa66d6`.
 
 Both releases pin the same Redis image. They select different memory
 policies, `allkeys-lru` in v1.1.274 and `noeviction` in v1.1.292. A
