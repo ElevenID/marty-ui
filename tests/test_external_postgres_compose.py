@@ -47,7 +47,7 @@ class ExternalPostgresComposeTests(unittest.TestCase):
             and "DATABASE_URL_TEMPLATE" in service.get("environment", {})
         }
         self.assertEqual(selected, consumers)
-        self.assertEqual(len(consumers), 18)
+        self.assertEqual(len(consumers), 19)
         for name in consumers:
             self.assertEqual(
                 self.external["services"][name]["environment"]["DATABASE_URL_TEMPLATE"],
@@ -106,6 +106,9 @@ class ExternalPostgresComposeTests(unittest.TestCase):
             ]
             if name in setup:
                 self.assertEqual(limits, [1], name)
+            elif name == "owner-migrations":
+                # The operator commands run serially with one database connection each.
+                self.assertEqual(limits, [], name)
             elif name != "applicant":
                 self.assertEqual(limits, [2], name)
                 runtime_limits.extend(limits)

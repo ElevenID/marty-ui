@@ -58,6 +58,14 @@ services:
     <<: *installer-setup
   db-migrate:
     <<: *installer-setup
+  owner-migrations:
+    <<: *installer-setup
+    volumes:
+      - type: bind
+        source: ./scripts/load-secrets-env.sh
+        target: /app/load-secrets-env.sh
+        read_only: true
+        bind: *no-host-create
   kms-initialize:
     <<: *installer-setup
   keycloak:

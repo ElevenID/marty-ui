@@ -15,7 +15,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const CORE_BUNDLE_SERVICES: [&str; 28] = [
+const CORE_BUNDLE_SERVICES: [&str; 29] = [
     "applicant",
     "auth",
     "compliance-profile",
@@ -35,6 +35,7 @@ const CORE_BUNDLE_SERVICES: [&str; 28] = [
     "kms-initialize",
     "notification",
     "organization",
+    "owner-migrations",
     "postgres",
     "presentation-policy",
     "redis",
@@ -415,7 +416,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         .keys()
         .map(|name| (name.clone(), image.clone()))
         .collect();
-    // The core bundle has 28 named owners after optional tunnel hosting moved
+    // The core bundle has 29 named owners after optional tunnel hosting moved
     // into its selected add-on. Compare the complete inventory rather than a
     // stale lower bound that could hide an added or missing application owner.
     assert_eq!(
@@ -1468,6 +1469,7 @@ fn assert_actual_installer_layers(
     for job in [
         "revocation-profile-migrate",
         "db-migrate",
+        "owner-migrations",
         "kms-initialize",
         "keycloak-configurator",
         "issuance-migrations",
@@ -1483,6 +1485,18 @@ fn assert_actual_installer_layers(
         "service_completed_successfully",
         "the authenticated native issuance fixture must exercise its setup dependency"
     );
+    for role in [
+        "organization",
+        "credential-template",
+        "presentation-policy",
+        "flow",
+        "issuance-migrations",
+    ] {
+        assert_eq!(
+            services[role]["depends_on"]["owner-migrations"]["condition"],
+            "service_completed_successfully",
+        );
+    }
     for optional in ["cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"] {
         assert!(!services.contains_key(optional));
     }
@@ -2032,7 +2046,7 @@ fn assert_native_external_postgres_models(
                 assert_ne!(service["labels"]["com.elevenid.installer.phase"], "setup");
             }
         }
-        assert_eq!(consumers, if maintenance { 14 } else { 18 });
+        assert_eq!(consumers, if maintenance { 14 } else { 19 });
         assert!(model["secrets"].get("postgres_password").is_none());
         let secret = model["secrets"]["marty_db_password"]["file"]
             .as_str()
