@@ -26,7 +26,7 @@ REVISION = SOURCE + '-' + COMMERCE
 PREFIX = '/_website/' + REVISION + '/'
 SIGNED = {'website': {'revision': REVISION, 'source_sha': SOURCE, 'commerce_extension': {'source_sha': COMMERCE}},
           'application': {'release_version': '1.1.274', 'marty_ui_sha': 'c'*40},
-          'routes': {'website': {'exact_paths': ['/', '/product', '/pricing', '/pricing/', verify.WEBSITE_MARKER],
+          'routes': {'website': {'exact_paths': ['/', '/product', '/resources', '/pricing', '/pricing/', verify.WEBSITE_MARKER],
                                  'path_prefixes': ['/_website/']}}}
 EDGE = {'Config': {'Env': ['PUBLIC_DOMAIN=' + HOST]}, 'NetworkSettings': {
     'Ports': {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29382'}]}}}
@@ -108,6 +108,14 @@ def transport(monkeypatch):
                     entry = response(body=SIGNED['website'], revision=REVISION)
             elif path == verify.WEBSITE_MARKER:
                 entry = response(body=SIGNED['website'], revision=REVISION if fault != 'revision' else 'wrong')
+            elif path == '/resources':
+                canonical = '/' if fault == 'resources-homepage' else path
+                markup = f'<link rel="canonical" href="{ORIGIN}{canonical}"><script src="{PREFIX}resources.js"></script>'
+                entry = response(body=markup.encode(), content='text/html', revision=REVISION)
+                if port == 443 and fault == 'resources-redirect':
+                    entry = response(308, location='/resources/')
+                if port != 443 and fault == 'resources-owner':
+                    entry = response(body=markup.encode(), content='text/html')
             elif path in ('/pricing', '/pricing/'):
                 entry = response(404, revision=REVISION)
                 if path == '/pricing' and port == 443 and fault == 'pricing-published':
@@ -148,13 +156,15 @@ def test_public_acceptance_binds_assets_to_local_and_application_to_original(tra
     if state == 'split':
         assert (HOST, PREFIX+'home.js', 443) in calls and (HOST, PREFIX+'home.js', 29382) in calls
         for origin in ('public', 'loopback'):
+            assert routes['routes'][origin]['/resources']['status'] == 200
             for path in ('/pricing', '/pricing/'):
                 assert routes['routes'][origin][path]['status'] == 404
 
 
 @pytest.mark.parametrize('fault', ['apex', 'application-marker', 'gateway', 'issuer', 'login', 'anonymous-session',
     'console', 'asset', 'unknown-revision', 'revision', 'dns-changed', 'lingering-website',
-    'pricing-published', 'pricing-redirect', 'pricing-owner'])
+    'pricing-published', 'pricing-redirect', 'pricing-owner',
+    'resources-homepage', 'resources-redirect', 'resources-owner'])
 def test_public_acceptance_fails_closed_on_wrong_route_or_application(transport, fault):
     state = 'staged' if fault == 'lingering-website' else 'split'
     transport(state, fault)
