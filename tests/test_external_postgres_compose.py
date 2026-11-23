@@ -91,6 +91,24 @@ class ExternalPostgresComposeTests(unittest.TestCase):
             if isinstance(service, dict):
                 self.assertNotIn("secrets", service)
 
+    def test_hosted_runtime_health_checks_allow_cold_schema_initialization(self):
+        runtime = {
+            name for name, service in self.external["services"].items()
+            if isinstance(service, dict) and any(
+                key.endswith("DATABASE_MAX_CONNECTIONS") and value == "2"
+                for key, value in service.get("environment", {}).items()
+            )
+        }
+        self.assertEqual(len(runtime), 13)
+        for name in runtime:
+            # A partial healthcheck mapping merges into the inherited check;
+            # it must never replace the probe, disable health or change retries.
+            self.assertEqual(self.external["services"][name]["healthcheck"],
+                             {"start_period": "120s"}, name)
+        for name, service in self.external["services"].items():
+            if isinstance(service, dict) and name not in runtime:
+                self.assertNotIn("healthcheck", service, name)
+
     def test_primary_runtime_pool_budget_and_setup_pools_are_separate(self):
         setup = {
             "revocation-profile-migrate", "db-migrate", "kms-initialize", "issuance-migrations"

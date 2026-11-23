@@ -10,6 +10,12 @@ x-external-postgres-environment: &external-postgres-environment
   DATABASE_URL_TEMPLATE: ${MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE:?external PostgreSQL selection required}
   PGSSLROOTCERT:
 
+# Hosted PostgreSQL schema initialization can exceed the ordinary 30-second
+# failure window. Probe immediately, but allow up to two minutes for cold
+# migrations before failures count; readiness and retry limits remain required.
+x-external-postgres-healthcheck: &external-postgres-healthcheck
+  start_period: 120s
+
 services:
   postgres: !reset null
   revocation-profile-migrate:
@@ -33,26 +39,32 @@ services:
       <<: *external-postgres-environment
       ISSUANCE_DATABASE_MAX_CONNECTIONS: "1"
   auth:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       AUTH_DATABASE_MAX_CONNECTIONS: "2"
   organization:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       ORGANIZATION_DATABASE_MAX_CONNECTIONS: "2"
   credential-template:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       CREDENTIAL_TEMPLATE_DATABASE_MAX_CONNECTIONS: "2"
   trust-profile:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       TRUST_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
   issuance:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
   issuance-native:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
@@ -63,32 +75,39 @@ services:
   applicant:
     environment: *external-postgres-environment
   notification:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       NOTIFICATION_DATABASE_MAX_CONNECTIONS: "2"
     depends_on:
       postgres: !reset null
   compliance-profile:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       COMPLIANCE_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
   presentation-policy:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       PRESENTATION_POLICY_DATABASE_MAX_CONNECTIONS: "2"
   deployment-profile:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       DEPLOYMENT_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
   flow:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       FLOW_DATABASE_MAX_CONNECTIONS: "2"
   revocation-profile:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       RP_DATABASE_MAX_CONNECTIONS: "2"
   device-registration:
+    healthcheck: *external-postgres-healthcheck
     environment:
       <<: *external-postgres-environment
       DATABASE_MAX_CONNECTIONS: "2"

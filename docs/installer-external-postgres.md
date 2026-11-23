@@ -273,3 +273,18 @@ optional add-ons can change; see [Supabase pricing](https://supabase.com/pricing
 The self-hosted machine, persistent disks, domain renewal and any email-provider
 overages remain separate costs. No cloud plan, resource, email or deployment is
 created by selecting or rendering this profile.
+
+
+## Cold schema initialization and readiness
+
+External-database runtime services retain their existing health probes, intervals,
+timeouts and retry limits. Their health-check start period is two minutes: probes
+run during that period and successful services can proceed immediately, while
+initial migration failures do not prematurely fail the dependent Compose graph.
+This accommodates hosted session-pooler round trips during a cold schema setup;
+it does not grant readiness to a service whose health endpoint never succeeds.
+
+If initial application startup returns a failure, preserve its operation and
+resource observations. A service becoming healthy later does not authorize
+replaying initialization, editing its bound Compose files or replacing the signed
+operator. Qualify a fresh signed installation with the corrected startup window.
