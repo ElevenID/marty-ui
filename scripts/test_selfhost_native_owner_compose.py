@@ -93,6 +93,10 @@ PREREQUISITE_OPT_IN_ONLY = {
     "FLOW_PREREQUISITE_OWNER_URL",
 }
 CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
+# Only the authenticated external PostgreSQL profile binds this pool ceiling.
+# Baseline self-hosting keeps the executable's existing five-connection default.
+# See docs/installer-external-postgres.md and test_external_postgres_compose.py.
+EXTERNAL_POSTGRES_ONLY = {"ISSUANCE_DATABASE_MAX_CONNECTIONS"}
 ALTERNATE_TLS_PROVIDER_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_REGION",
@@ -178,10 +182,12 @@ def assert_input_inventory():
         | PASSPORT_BETA_OVERLAY_ONLY
         | PREREQUISITE_OPT_IN_ONLY
         | CONFIG_META
+        | EXTERNAL_POSTGRES_ONLY
         | ALTERNATE_TLS_PROVIDER_INPUTS
         | UNFORWARDED
     )
     actual_omitted = inputs - set(native)
+    assert EXTERNAL_POSTGRES_ONLY.isdisjoint(set(native) | set(legacy))
     assert actual_omitted == expected_omitted, (
         "Update the exhaustive self-host native configuration inventory: "
         f"unexpected={sorted(actual_omitted - expected_omitted)!r}, "
@@ -588,6 +594,24 @@ def assert_models(
     expected["services"]["issuance-native"]["environment"]["PERSONALIZATION_BUREAU_API_KEY_FILE"] = (
         bureau_api_key_file if interpolated else "${PERSONALIZATION_BUREAU_API_KEY_FILE:-}"
     )
+    # Application email is explicitly disabled by default. Its file-only key
+    # belongs only to Notification; managed/external login mail stays separate.
+    email_secret = "notification_resend_api_key"
+    assert email_secret not in expected["secrets"]
+    expected["secrets"][email_secret] = {
+        "file": f"{secret_root}/{email_secret}", "name": f"{expected['name']}_{email_secret}",
+    }
+    notification = expected["services"]["notification"]
+    notification["environment"].update({
+        "NOTIFICATION_EMAIL_PROVIDER": "disabled" if interpolated else "${NOTIFICATION_EMAIL_PROVIDER:-disabled}",
+        "NOTIFICATION_EMAIL_FROM": "" if interpolated else "${NOTIFICATION_EMAIL_FROM:-}",
+        "NOTIFICATION_RESEND_API_KEY_FILE": f"/run/secrets/{email_secret}",
+    })
+    position = next(index for index, item in enumerate(notification["secrets"])
+                    if item["source"] == "notification_webhook_secret") + 1
+    notification["secrets"].insert(position, {
+        "source": email_secret, "target": f"/run/secrets/{email_secret}",
+    })
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"

@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172c37;
+  background: var(--elevenid-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; }
+button, input, select { font: inherit; }
+button, input, select { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; }
+button:focus-visible, input:focus-visible, select:focus-visible, h1:focus-visible {
+  outline: 3px solid #0e8b76;
+  outline-offset: 4px;
+}
+.card { padding: 36px; border: 1px solid #dce3df; border-radius: 18px; background: #fff; box-shadow: 0 12px 38px #173f3909; overflow-wrap: anywhere; }
+.eyebrow { margin: 0 0 14px; font-size: 10px; color: #526e63; font-weight: 750; letter-spacing: 1.8px; }
+h1 { font-size: 28px; font-weight: 700; line-height: 1.2; letter-spacing: -.85px; margin: 0 0 13px; }
+.intro { margin: 0 0 26px; color: #586872; font-size: 14px; line-height: 1.65; }
+.field { margin: 0 0 18px; }
+label { display: block; font-size: 13px; font-weight: 650; margin-bottom: 8px; }
+input, select { display: block; width: 100%; min-height: 46px; border-radius: 8px; border: 1px solid #becdc5; background: #fff; color: #172c37; padding: 11px 13px; }
+input::placeholder { color: #84918a; }
+.code-input { letter-spacing: 9px; text-align: center; font-size: 24px; font-variant-numeric: tabular-nums; padding-left: 22px; }
+.primary, .secondary { min-height: 46px; width: 100%; padding: 11px 16px; border-radius: 8px; font-size: 14px; font-weight: 650; line-height: 1.5; }
+.primary { border: 1px solid var(--elevenid-primary); background: var(--elevenid-primary); color: white; }
+.primary:hover:enabled { background: #145da7; }
+.secondary { border: 1px solid #cad6ce; background: white; color: #334c41; }
+.secondary:hover:enabled { background: #f2f6f3; }
+.actions { display: grid; gap: 10px; margin-top: 24px; }
+.text-button { padding: 5px 0; border: 0; background: none; color: #245948; font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
+.switch { text-align: center; margin: 22px 0 0; }
+.help { border-top: 1px solid #e8ece9; padding-top: 20px; margin: 24px 0 0; color: #69766f; font-size: 12px; line-height: 1.65; }
+.notice { border: 1px solid #efcfc4; background: #fff6f2; color: #7a3f2c; padding: 13px 15px; margin: 0 0 22px; border-radius: 8px; font-size: 13px; line-height: 1.6; }
+.account { padding: 12px 14px; background: #f2f6f3; border: 1px solid #e2ebe4; border-radius: 8px; margin: 0 0 22px; }
+.account-caption { display: block; color: #627169; font-size: 11px; margin-bottom: 4px; }
+.account-email { font-size: 13px; font-weight: 650; }
+.section-label { margin: 22px 0 12px; color: #4f655a; font-size: 12px; font-weight: 650; }
+.permissions { padding: 0; margin: 0; list-style: none; }
+.permission { display: grid; grid-template-columns: 26px 1fr; gap: 8px; padding: 12px 0; border-bottom: 1px solid #edf0ed; }
+.permission-symbol { color: #3f8064; padding-top: 2px; font-size: 15px; }
+.permission-title { display: block; font-size: 13px; font-weight: 650; }
+.permission-description { margin: 4px 0 0; font-size: 12px; line-height: 1.6; color: #65746c; }
+.scope-name { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; color: #64766a; }
+.destination { border-top: 1px solid #e8ece9; margin: 24px 0 0; padding-top: 18px; font-size: 12px; line-height: 1.65; color: #64756b; }
+.destination strong { color: #365144; font-weight: 600; }
+.provider-name { margin: -13px 0 20px; font-size: 12px; color: #637469; }
+.progress { display: flex; align-items: center; gap: 12px; color: #5b6e63; font-size: 13px; line-height: 1.6; margin: 26px 0; }
+.spinner { flex: 0 0 20px; width: 20px; height: 20px; border: 2px solid #d6e3da; border-top-color: #28694d; border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: #28694d; } }
+@media (max-width: 480px) {
+  .card { padding: 27px 23px; border-radius: 14px; }
+  h1 { font-size: 26px; }
+}

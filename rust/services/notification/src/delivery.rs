@@ -167,6 +167,10 @@ pub async fn deliver_notification(
     };
     let mut results = Vec::new();
     for channel in &target.channels {
+        if *channel == ChannelType::Email {
+            results.extend(crate::email::deliver(notification, now).await);
+            continue;
+        }
         if *channel == ChannelType::Webhook {
             if target.webhook_endpoints.is_empty() {
                 results.push(result(notification, *channel, now, "NO_WEBHOOK_TARGETS"));
@@ -239,8 +243,7 @@ pub async fn deliver_notification(
             continue;
         }
         let error = match channel {
-            ChannelType::Email if target.email_addresses.is_empty() => "NO_EMAIL_TARGETS",
-            ChannelType::Email => "EMAIL_ADAPTER_UNAVAILABLE",
+            ChannelType::Email => unreachable!(),
             ChannelType::Fcm | ChannelType::Sse | ChannelType::Sms
                 if target.device_tokens.is_empty()
                     && target.user_id.is_none()
