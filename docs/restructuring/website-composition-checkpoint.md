@@ -5,6 +5,34 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Full website and application qualification, November 23
+
+The full v1.1.292 application built from the verified backend source and
+passed local image checks for 414 static files and all 14 image layers.
+The installed v1.1.274 combined release remains the rollback selection.
+[Application producer #116](https://github.com/ElevenID/marty-subscriptions/pull/116)
+
+Website main commit `98beddf93a1422f2da3ba8c3346e8387e4dfc994` and
+standalone producer `92fde38303af240cf336483a4fa144970855fd6b` passed
+local full-audience qualification. The private producer passed 74 offline
+tests. The production image passed 259 route checks, 57 resource checks,
+26 denied or retired route checks and six sandboxed Chromium cases. The
+archive scanner checked all 13 layers and 2,988 entries. The final image
+contained 454 static files. The three withheld pricing routes returned 404.
+Both release-plan consumers accepted the v4 plan. The local qualification
+SHA-256 is `cb34e4e7f2b821bf34df7d7d156d031d45bc82334bcb020df27bb831406301fe`.
+The draft PR records the plan and original evidence.
+[Standalone producer #113](https://github.com/ElevenID/marty-subscriptions/pull/113)
+
+At 00:43 UTC the public and installed loopback endpoints served the combined
+release marker. Both readiness and current-account requests returned 502.
+The production owner must reconcile the selected workload's credential
+through the supported recovery owner and verify live readiness and identity.
+The release owner must obtain the original signed full application, website
+and composition within the existing private Actions budget. The managed
+cutover and source-removal PR remain pending those results.
+[Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017)
+
 ## Managed full-audience cutover, November 22
 
 The release owner selected v1.1.292 for both the backend and the full
