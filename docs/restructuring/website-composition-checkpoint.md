@@ -56,6 +56,18 @@ selected deployment still requires a healthy gateway. The local test
 report SHA-256 is `05890bdb31ca4100ae71d19bbd4a4ce7a977517ebcee4e3c74444ffafa1c70a0`.
 [Acceptance qualification #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
+The queued Resources fix at `5a48f2638f57d76a9b38eff40b445d5c9a6aa9cf`
+and the routing and acceptance branches add files to the same selfhost
+bundle inventory. A local integration rehearsal found one conflict at
+each step, in the frozen CLI output for `bundle-assets selfhost`. Deriving
+that case from the combined manifest retained all queued entries in order
+and added the edge module, then the verifier (233 and 234 assets).
+The catalog-output and bundled-import tests passed on both projected
+trees. Codex will apply the resolution to the actual protected base and
+run the full Windows suites before each merge. The projections have no
+effect on production or either PR branch.
+[Resources queue run](https://github.com/ElevenID/marty-ui/actions/runs/45111440032)
+
 ## Full website and application qualification, November 23
 
 The full v1.1.292 application built from the verified backend source and
@@ -231,8 +243,12 @@ records in the selected production database. An independent Docker Desktop
 rehearsal confirmed that the image-only preflight refuses the released
 v1.1.274 database and accepts both completed v1.1.292 migration passes.
 Omitting each of the ten records individually caused the query to refuse.
-All 167 Windows product tests passed. Hosted checks and protected integration
-are tracked in [PR #2062](https://github.com/ElevenID/marty-ui/pull/2062).
+All 167 Windows product tests passed. PR #2062 merged into protected main
+at `b7587d8f05f98e5d5d491505fa085d9c725244ea` on November 23.
+The five-file change matched the Windows-qualified patch byte for byte.
+The merge-group CI workflow finished with 28 successful jobs and one skip.
+[Database preflight #2062](https://github.com/ElevenID/marty-ui/pull/2062) /
+[Protected queue run](https://github.com/ElevenID/marty-ui/actions/runs/45107017431)
 
 The product owner still needs a schema-changing upgrade and a qualified
 backout that protects writes. Production credential recovery precedes the
