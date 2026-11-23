@@ -303,6 +303,7 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
+    pub database_max_connections: u32,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub external_observations_enabled: bool,
@@ -365,6 +366,7 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
+            .field("database_max_connections", &self.database_max_connections)
             .field("token_hmac_key_configured", &self.token_hmac_key.is_some())
             .field(
                 "issuance_api_key_configured",
@@ -498,6 +500,7 @@ struct DiscoverySettings {
 #[derive(Deserialize)]
 struct DependencySettings {
     database_url: String,
+    database_max_connections: u32,
     signing_keys_internal_url: String,
     revocation_profile_service_url: String,
 }
@@ -592,6 +595,7 @@ impl IssuanceServiceConfig {
                 },
                 "dependencies": {
                     "database_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
+                    "database_max_connections": 5,
                     "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys",
                     "revocation_profile_service_url": "http://revocation-profile:8013"
                 },
@@ -649,6 +653,13 @@ impl IssuanceServiceConfig {
             &settings.authorization.session_ttl_minutes,
         )?;
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
+        let database_max_connections = settings.dependencies.database_max_connections;
+        if !(1..=128).contains(&database_max_connections) {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "ISSUANCE_DATABASE_MAX_CONNECTIONS must be between 1 and 128",
+            ));
+        }
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
         let revocation_profile_service_url =
@@ -916,6 +927,7 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
+            database_max_connections,
             token_hmac_key,
             issuance_api_key,
             external_observations_enabled,
@@ -1014,6 +1026,15 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
     let mut dependencies = Map::new();
     if let Some(database_url) = values.get("DATABASE_URL") {
         dependencies.insert("database_url".to_owned(), json!(database_url));
+    }
+    if let Some(value) = values.get("ISSUANCE_DATABASE_MAX_CONNECTIONS") {
+        dependencies.insert(
+            "database_max_connections".to_owned(),
+            json!(parse_legacy_number::<u32>(
+                "ISSUANCE_DATABASE_MAX_CONNECTIONS",
+                value
+            )?),
+        );
     }
     if let Some(signing_keys_internal_url) = values.get("SIGNING_KEYS_INTERNAL_URL") {
         dependencies.insert(
@@ -1434,6 +1455,43 @@ mod tests {
         validate_grpc_service_token, FlowPrerequisiteOwnerConfig, IssuanceServiceConfig,
         PassportNativeConfig,
     };
+
+    #[test]
+    fn primary_database_pool_is_bounded_and_keeps_the_existing_default() {
+        assert_eq!(
+            IssuanceServiceConfig::from_values(values(&[]))
+                .unwrap()
+                .database_max_connections,
+            5
+        );
+        for maximum in ["1", "2", "128"] {
+            let config = IssuanceServiceConfig::from_values(values(&[(
+                "ISSUANCE_DATABASE_MAX_CONNECTIONS",
+                maximum,
+            )]))
+            .unwrap();
+            assert_eq!(
+                config.database_max_connections,
+                maximum.parse::<u32>().unwrap()
+            );
+        }
+        for maximum in ["0", "129", "-1", "not-a-number"] {
+            assert!(IssuanceServiceConfig::from_values(values(&[(
+                "ISSUANCE_DATABASE_MAX_CONNECTIONS",
+                maximum
+            ),]))
+            .is_err());
+        }
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_DATABASE_MAX_CONNECTIONS", "5"),
+            (
+                "MARTY_ISSUANCE__DEPENDENCIES__DATABASE_MAX_CONNECTIONS",
+                "2",
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(config.database_max_connections, 2);
+    }
 
     #[test]
     fn prerequisite_owner_configuration_is_all_or_none_and_does_not_reuse_service_authority() {

@@ -371,6 +371,46 @@ def test_passport_credentials_cannot_gain_an_unrelated_consumer(rendered_models)
         GATE["assert_models"](approved, current)
 
 
+@pytest.mark.parametrize("external_foundation", [False, True])
+def test_application_email_key_has_only_notification_consumer(rendered_models, external_foundation):
+    _, current = rendered_models
+    if external_foundation:
+        current = GATE["GATE"]["render"](
+            GATE["GATE"]["BASE"],
+            "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",
+        )
+    secret = "notification_resend_api_key"
+    mounted = {name for name, service in current["services"].items()
+               if any(item["source"] == secret for item in service.get("secrets", []))}
+    assert mounted == {"notification"}
+    environment = GATE["GATE"]["environment_mapping"](
+        current["services"]["notification"]["environment"]
+    )
+    assert environment["NOTIFICATION_EMAIL_PROVIDER"] == "${NOTIFICATION_EMAIL_PROVIDER:-disabled}"
+    assert environment["NOTIFICATION_EMAIL_FROM"] == "${NOTIFICATION_EMAIL_FROM:-}"
+    assert environment["NOTIFICATION_RESEND_API_KEY_FILE"] == f"/run/secrets/{secret}"
+    assert "NOTIFICATION_RESEND_API_KEY" not in environment
+
+
+@pytest.mark.parametrize("fault", ["provider", "raw-key", "unrelated-consumer", "secret-path"])
+def test_application_email_gate_rejects_unreviewed_provider_or_key_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    secret = "notification_resend_api_key"
+    environment = current["services"]["notification"]["environment"]
+    if fault == "provider":
+        environment["NOTIFICATION_EMAIL_PROVIDER"] = "resend"
+    elif fault == "raw-key":
+        environment["NOTIFICATION_RESEND_API_KEY"] = "synthetic-private-key"
+    elif fault == "unrelated-consumer":
+        current["services"]["ui"].setdefault("secrets", []).append({
+            "source": secret, "target": f"/run/secrets/{secret}",
+        })
+    else:
+        current["secrets"][secret]["file"] = "/unreviewed/location"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.mark.parametrize("path,replacement", [
     (("environment", "UI_ENABLED_SECTIONS"), None),
     (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS-none}"),

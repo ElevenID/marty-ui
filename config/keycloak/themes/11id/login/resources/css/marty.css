@@ -13,51 +13,11 @@ html, body {
 }
 
 body {
-  background: #f3f4f6;
+  background: var(--elevenid-canvas);
   font-family: "Roboto", "Helvetica", "Arial", sans-serif;
   color: rgba(0, 0, 0, 0.87);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-
-/* ===== MUI AppBar (position: static, elevation 4) ===== */
-.elevenid-appbar {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  background-color: #1976d2;
-  color: #fff;
-  box-shadow:
-    0px 2px 4px -1px rgba(0, 0, 0, 0.2),
-    0px 4px 5px 0px rgba(0, 0, 0, 0.14),
-    0px 1px 10px 0px rgba(0, 0, 0, 0.12);
-  z-index: 1100;
-}
-
-/* ===== MUI Toolbar (desktop: min-height 64px, padding 0 24px) ===== */
-.elevenid-toolbar {
-  display: flex;
-  align-items: center;
-  min-height: 64px;
-  padding: 0 24px;
-  position: relative;
-}
-
-/* ===== Brand - MUI Typography variant="h6", flexGrow: 1 ===== */
-.elevenid-brand {
-  flex-grow: 1;
-  font-size: 1.25rem;
-  font-weight: 500;
-  line-height: 1.6;
-  letter-spacing: 0.0075em;
-  color: #fff;
-}
-
-/* ===== Right-side actions ===== */
-.elevenid-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
 }
 
 /* ===== Language switcher - MUI Select standard variant ===== */
@@ -144,20 +104,6 @@ body {
     0px 2px 4px -1px rgba(0, 0, 0, 0.2),
     0px 4px 5px 0px rgba(0, 0, 0, 0.14),
     0px 1px 10px 0px rgba(0, 0, 0, 0.12);
-}
-
-/* ===== Page content ===== */
-.elevenid-page {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 40px 16px 60px;
-  min-height: calc(100vh - 64px);
-}
-
-.elevenid-content {
-  width: 100%;
-  max-width: 520px;
 }
 
 /* ===== Re-authentication user display ===== */
@@ -604,13 +550,9 @@ a:hover {
 
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
-  .elevenid-toolbar {
-    padding: 0 16px;
-    min-height: 56px;
-  }
-
-  .elevenid-page {
-    padding: 24px 12px 40px;
+  #kc-totp-settings-form .form-group {
+    margin-left: 0;
+    margin-right: 0;
   }
 
   #kc-form-wrapper,

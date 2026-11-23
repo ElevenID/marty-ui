@@ -284,6 +284,8 @@ pub struct Journal {
     application_settings_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external_oidc_selection_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_postgres_selection_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -316,11 +318,28 @@ impl Journal {
     pub(crate) fn external_oidc_selection_sha256(&self) -> Option<&str> {
         self.external_oidc_selection_sha256.as_deref()
     }
+    pub(crate) fn external_postgres_selection_sha256(&self) -> Option<&str> {
+        self.external_postgres_selection_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self
+            .external_postgres_selection_sha256
+            .as_ref()
+            .is_some_and(|value| {
+                self.phase == Phase::Initialized
+                    || self.external_oidc_selection_sha256.is_none()
+                    || value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            })
+        {
+            return Err("invalid external PostgreSQL selection binding".into());
+        }
         if self
             .external_oidc_selection_sha256
             .as_ref()
@@ -2564,6 +2583,7 @@ impl InstallerState {
             hosting_addon_sha256: None,
             application_settings_sha256: None,
             external_oidc_selection_sha256: None,
+            external_postgres_selection_sha256: None,
         };
         let mut state = Self {
             directory,
@@ -2753,6 +2773,26 @@ impl InstallerState {
         }
         let mut journal = self.journal.clone();
         journal.external_oidc_selection_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// External PostgreSQL is a fresh-install selection, paired with an
+    /// independently selected login provider before application policy binds.
+    pub(crate) fn bind_external_postgres_selection(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.external_postgres_selection_sha256.is_some()
+            || self.journal.external_oidc_selection_sha256.is_none()
+            || self.journal.application_settings_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("external PostgreSQL can be selected only once after external OIDC and before application settings".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.external_postgres_selection_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())

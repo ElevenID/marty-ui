@@ -8,7 +8,7 @@ main() (
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
         printf '%s\n' \
-            'Usage: install.sh [--check-host | --check-compatibility] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH | --external-oidc-file PATH] [--hosting-file PATH] [--settings-file PATH] [--acme-staging-roots PATH] [--yes]' \
+            'Usage: install.sh [--check-host | --check-compatibility] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH | --external-oidc-file PATH] [--external-postgres-file PATH] [--hosting-file PATH] [--settings-file PATH] [--acme-staging-roots PATH] [--yes]' \
             'Supported host: Linux amd64, a regular non-root user, no-new-privileges, and an already-running rootless Docker daemon.' \
             'Run a downloaded copy with: /usr/bin/setpriv --no-new-privs -- sh /absolute/install.sh [options]' \
             '--check-host checks bootstrap tools, platform, process privileges, and rootless Docker connectivity, then exits without downloads or installation.' \
@@ -18,6 +18,7 @@ main() (
             '--candidate-test requires an exact published nightly tag and grants no Ready status; --channel and --version require signed installer admission.' \
             'Managed OpenBao is the default; --foundation-file is optional. Host setup is separate: the installer does not use sudo or install OS packages.' \
             '--external-oidc-file selects external login with managed OpenBao using a private JSON file at an absolute path; it cannot be combined with --foundation-file or host/compatibility checks. See docs/installer-external-oidc.md.' \
+            '--external-postgres-file selects a preprovisioned TLS PostgreSQL endpoint and private password file; it requires --external-oidc-file. See docs/installer-external-postgres.md.' \
             '--settings-file accepts a private typed JSON application policy and private optional credential-file references; see docs/installer-application-settings.md.'
     }
     # Candidate rootless entry must not execute even platform probes with
@@ -127,6 +128,7 @@ main() (
     destination=
     foundation_file=
     external_oidc_file=
+    external_postgres_file=
     hosting_file=
     settings_file=
     acme_staging_roots=
@@ -142,7 +144,7 @@ main() (
             --yes) yes=true; shift ;;
             --check-host) check_host=true; shift ;;
             --check-compatibility) [ "$check_compatibility" = false ] || fail 'Repeated compatibility check'; check_compatibility=true; shift ;;
-            --channel|--version|--candidate-test|--install-dir|--foundation-file|--external-oidc-file|--hosting-file|--settings-file|--acme-staging-roots)
+            --channel|--version|--candidate-test|--install-dir|--foundation-file|--external-oidc-file|--external-postgres-file|--hosting-file|--settings-file|--acme-staging-roots)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
                 case "$1" in
@@ -152,6 +154,7 @@ main() (
                     --install-dir) [ -z "$destination" ] || fail 'Repeated installation directory'; destination=$2 ;;
                     --foundation-file) [ -z "$foundation_file" ] || fail 'Repeated foundation input'; foundation_file=$2 ;;
                     --external-oidc-file) [ -z "$external_oidc_file" ] || fail 'Repeated external OIDC input'; external_oidc_file=$2 ;;
+                    --external-postgres-file) [ -z "$external_postgres_file" ] || fail 'Repeated external PostgreSQL input'; external_postgres_file=$2 ;;
                     --hosting-file) [ -z "$hosting_file" ] || fail 'Repeated hosting input'; hosting_file=$2 ;;
                     --settings-file) [ -z "$settings_file" ] || fail 'Repeated application settings input'; settings_file=$2 ;;
                     --acme-staging-roots) [ -z "$acme_staging_roots" ] || fail 'Repeated ACME staging roots input'; acme_staging_roots=$2 ;;
@@ -162,13 +165,16 @@ main() (
     done
     [ "$complete" = true ] || fail 'Incomplete bootstrap download; retry the original command'
     case "$external_oidc_file" in ''|/*) ;; *) fail 'External OIDC input path must be absolute' ;; esac
+    case "$external_postgres_file" in ''|/*) ;; *) fail 'External PostgreSQL input path must be absolute' ;; esac
+    [ -z "$external_postgres_file" ] || [ -n "$external_oidc_file" ] ||
+        fail 'External PostgreSQL input requires --external-oidc-file'
     [ -z "$external_oidc_file" ] || [ -z "$foundation_file" ] ||
         fail 'External OIDC input cannot be combined with --foundation-file'
     [ "$check_host" = false ] || [ -z "$external_oidc_file" ] ||
         fail 'Host checking cannot be combined with external OIDC input'
     if [ "$check_compatibility" = true ]; then
         [ "$check_host" = false ] && [ "$yes" = false ] &&
-            [ -z "$destination$foundation_file$external_oidc_file$hosting_file$settings_file$acme_staging_roots" ] ||
+            [ -z "$destination$foundation_file$external_oidc_file$external_postgres_file$hosting_file$settings_file$acme_staging_roots" ] ||
             fail 'Compatibility checking cannot be combined with --check-host, --yes, or installation input paths'
     fi
     case "$channel" in nightly|stable) ;; *) fail 'Channel must be nightly or stable' ;; esac
@@ -311,6 +317,7 @@ main() (
         [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
         [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
         [ -z "$external_oidc_file" ] || set -- "$@" --external-oidc-file "$external_oidc_file"
+        [ -z "$external_postgres_file" ] || set -- "$@" --external-postgres-file "$external_postgres_file"
         [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
         [ -z "$settings_file" ] || set -- "$@" --settings-file "$settings_file"
         [ -z "$acme_staging_roots" ] || set -- "$@" --acme-staging-roots "$acme_staging_roots"
@@ -389,6 +396,7 @@ main() (
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     [ -z "$foundation_file" ] || set -- "$@" --foundation-file "$foundation_file"
     [ -z "$external_oidc_file" ] || set -- "$@" --external-oidc-file "$external_oidc_file"
+    [ -z "$external_postgres_file" ] || set -- "$@" --external-postgres-file "$external_postgres_file"
     [ -z "$hosting_file" ] || set -- "$@" --hosting-file "$hosting_file"
     [ -z "$settings_file" ] || set -- "$@" --settings-file "$settings_file"
     [ -z "$acme_staging_roots" ] || set -- "$@" --acme-staging-roots "$acme_staging_roots"

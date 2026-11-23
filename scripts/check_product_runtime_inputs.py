@@ -88,6 +88,7 @@ def assess(model: dict, package: dict) -> dict:
             "rendered server model lacks required services")
     require(not set(services) & COMPOSE["REMOVED_SERVICES"],
             "rendered server model retains console or tunnel services")
+    COMPOSE["reject_retired_provider_worker"](services)
     edge = services["edge"]
     require(edge.get("environment", {}).get("SELFHOST_CONSOLE_ENABLED") == "false",
             "server edge has not disabled the console")

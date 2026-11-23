@@ -110,6 +110,27 @@ def metadata(package: dict) -> dict:
     }
 
 
+RETIRED_WORKER = re.compile(
+    r"(?<![\w-])(?:marty[-_])?canvas[-_]sync[-_]worker(?![\w-])", re.IGNORECASE
+)
+
+
+def reject_retired_provider_worker(services: dict) -> None:
+    for name, service in services.items():
+        require(isinstance(service, dict), "server service is invalid")
+        environment = service.get("environment")
+        markers = [name, service.get("container_name")]
+        if isinstance(environment, dict):
+            markers.append(environment.get("SERVICE_NAME"))
+        for field in ("entrypoint", "command"):
+            value = service.get(field)
+            markers.extend(value if isinstance(value, list) else [value])
+        require(
+            not any(isinstance(marker, str) and RETIRED_WORKER.search(marker) for marker in markers),
+            "retired provider worker cannot be composed into the platform product",
+        )
+
+
 def server_composition(base: dict, package: dict, runtime_dir: Path | None = None) -> dict:
     images = package_images(package)
     require(
@@ -119,10 +140,7 @@ def server_composition(base: dict, package: dict, runtime_dir: Path | None = Non
     require("include" not in base, "base must resolve source includes")
     result = deepcopy(base)
     services = result.get("services", {})
-    require(
-        not any(name.replace("_", "-") == "canvas-sync-worker" for name in services),
-        "retired provider worker cannot be composed into the platform product",
-    )
+    reject_retired_provider_worker(services)
     require(
         {"edge", "gateway", "auth", "keycloak", "flow"} <= set(services),
         "server base lacks required backend services",

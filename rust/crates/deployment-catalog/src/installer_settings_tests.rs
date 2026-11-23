@@ -123,7 +123,7 @@ fn legacy_journal_remains_readable_but_a_partial_new_selection_is_not_adopted() 
     for name in ["passport_tenant_api_keys", "personalization_bureau_api_key"] {
         secrets.remove(name);
     }
-    assert_eq!(secrets.len(), 5);
+    assert_eq!(secrets.len(), OPTIONAL_INTEGRATION_SECRETS.len() - 2);
     let record = Selection {
         schema: SELECTION_SCHEMA.into(),
         installation_id: state.journal().installation_id(),
@@ -342,6 +342,106 @@ fn keycloak_mail_requires_complete_transport_and_matching_authentication() {
             .environment(true)
             .is_err());
     }
+}
+
+#[test]
+fn application_email_is_explicit_complete_and_independent_of_oidc_provider() {
+    let root = private_root();
+    let path = root.path().join("notification-resend-key");
+    let key = b"re_synthetic-notification-key-0123456789\n";
+    write(&path, key, 0o600);
+    let config = configuration(
+        json!({"NOTIFICATION_EMAIL_PROVIDER":"resend", "NOTIFICATION_EMAIL_FROM":"notifications@example.test"}),
+        json!({"notification_resend_api_key":path}),
+    );
+    for managed in [false, true] {
+        let prepared = prepare(Some(&source(root.path(), &config)), managed).unwrap();
+        assert_eq!(
+            prepared.secrets["notification_resend_api_key"],
+            fingerprint(key)
+        );
+        let env = prepared.configuration.environment(managed).unwrap();
+        assert_eq!(env["NOTIFICATION_EMAIL_PROVIDER"], "resend");
+        assert!(!serde_json::to_string(&env)
+            .unwrap()
+            .contains("re_synthetic"));
+        assert_eq!(prepared.secrets["smtp_password"], fingerprint(&[]));
+        for mutation in ["provider", "sender", "key", "unsupported", "display-name"] {
+            let mut bad = config.clone();
+            match mutation {
+                "provider" => {
+                    bad.values.remove("NOTIFICATION_EMAIL_PROVIDER");
+                }
+                "sender" => {
+                    bad.values.remove("NOTIFICATION_EMAIL_FROM");
+                }
+                "key" => {
+                    bad.secret_files.remove("notification_resend_api_key");
+                }
+                "unsupported" => {
+                    bad.values
+                        .insert("NOTIFICATION_EMAIL_PROVIDER".into(), json!("smtp"));
+                }
+                _ => {
+                    bad.values.insert(
+                        "NOTIFICATION_EMAIL_FROM".into(),
+                        json!("Name <notifications@example.test>"),
+                    );
+                }
+            }
+            assert!(bad.environment(managed).is_err(), "accepted {mutation}");
+        }
+    }
+    for value in ["raw-key", "re_short", "re_key with whitespace"] {
+        write(&path, value.as_bytes(), 0o600);
+        let error = prepare(Some(&source(root.path(), &config)), false)
+            .err()
+            .unwrap();
+        assert!(!error.contains(value));
+    }
+    assert!(
+        configuration(json!({"NOTIFICATION_RESEND_API_KEY":"raw-key"}), json!({}))
+            .environment(false)
+            .is_err()
+    );
+    assert!(configuration(
+        json!({"NOTIFICATION_RESEND_API_KEY_FILE":"/run/secrets/unbound"}),
+        json!({})
+    )
+    .environment(false)
+    .is_err());
+}
+
+#[test]
+fn historical_settings_keep_their_original_secret_inventory() {
+    let root = private_root();
+    let (installation, mut state) = state(root.path());
+    let prepared = prepare(None, true).unwrap();
+    let mut secrets = prepared.secrets;
+    secrets.remove("notification_resend_api_key");
+    let selection = Selection {
+        schema: LEGACY_SELECTION_SCHEMA.into(),
+        installation_id: state.journal().installation_id(),
+        source_sha256: digest(&prepared.raw),
+        configuration: prepared.configuration,
+        managed_keycloak: true,
+        secrets,
+    };
+    let raw = serde_json::to_vec(&selection).unwrap();
+    state.write_evidence(SOURCE, &prepared.raw).unwrap();
+    state.write_evidence(RECORD, &raw).unwrap();
+    state.bind_application_settings(&digest(&raw)).unwrap();
+    let loaded = state.with_inspection(load).unwrap().unwrap();
+    assert_eq!(loaded.fingerprints().len(), 7);
+    assert!(!loaded
+        .initial_secrets()
+        .unwrap()
+        .contains_key("notification_resend_api_key"));
+    provision(&mut state);
+    assert!(!installation
+        .join("secrets/notification_resend_api_key")
+        .exists());
+    verify_generation(&installation, &BTreeMap::new()).unwrap();
 }
 
 #[test]

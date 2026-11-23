@@ -168,10 +168,13 @@ class GitHubReader:
 
     def __init__(self, *, gh: Path, repository: str, run_id: str, attempt: str,
                  kind: str, token_env: str | None = "GH_TOKEN"):
-        ui.require(kind in {"website", "application"}
+        ui.require(kind in {"website", "application", "package-application"}
                    and all(isinstance(value, str) and ui.RUN.fullmatch(value) for value in (run_id, attempt)),
                    "invalid authenticated Actions intake selection")
-        policy.producer_policy(repository, role=kind)
+        role = "application" if kind == "package-application" else kind
+        if kind == "package-application":
+            ui.require(repository == ui.REPOSITORY, "package application requires its original public producer")
+        policy.producer_policy(repository, role=role)
         verifier.local_file(gh)
         ui.require(token_env in {"GH_TOKEN", "GITHUB_TOKEN"},
                    "Actions intake requires --github-token-env GH_TOKEN or GITHUB_TOKEN")
@@ -181,7 +184,8 @@ class GitHubReader:
         self.gh, self._token = gh, token
         self.prefix = f"repos/{repository}/actions"
         self.attempt_endpoint = f"{self.prefix}/runs/{run_id}/attempts/{attempt}"
-        name = f"web-{kind}-{run_id}-{attempt}"
+        name = (f"application-release-{run_id}-{attempt}" if kind == "package-application"
+                else f"web-{kind}-{run_id}-{attempt}")
         self.artifacts_endpoint = f"{self.prefix}/runs/{run_id}/artifacts?name={name}&per_page=100"
 
     def _read(self, endpoint: str, *, maximum: int) -> bytes:
