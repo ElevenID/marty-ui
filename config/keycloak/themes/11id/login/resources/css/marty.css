@@ -550,6 +550,7 @@ a:hover {
 
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
+  #kc-otp-login-form .form-group,
   #kc-totp-settings-form .form-group {
     margin-left: 0;
     margin-right: 0;
