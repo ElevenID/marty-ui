@@ -1,8 +1,8 @@
 {
   "realm": "11id",
   "enabled": true,
-  "displayName": "11id",
-  "displayNameHtml": "<div class=\"kc-logo-text\"><span>11id</span></div>",
+  "displayName": "ElevenID",
+  "displayNameHtml": "<div class=\"kc-logo-text\"><span>ElevenID</span></div>",
   "loginTheme": "11id",
   "accountTheme": "11id",
   "emailTheme": "11id",

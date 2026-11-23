@@ -6,6 +6,8 @@ database schema, OpenBao state, private input root and ingress. This driver
 does not enroll an application installation or change its existing full
 workload renewal contract. Qualify provider login and application acceptance
 separately using [OIDC provider qualification](oidc-provider-qualification.md).
+Qualify [verification-email delivery and administrator enrollment](standalone-keycloak-email.md)
+before activating a real administrator.
 
 ## Preconditions
 
@@ -141,7 +143,7 @@ one-shot command does not prove an enabled scheduler. Qualify startup under
 the host's existing service/WSL lifecycle without stopping unrelated workloads.
 
 This driver does not renew the HTTPS origin/listener certificates or rotate
-the PKI CA. Give those their own qualified maintenance and recovery paths
+the PKI CA. Qualify their separate [TLS maintenance and recovery paths](standalone-keycloak-tls.md)
 before production cutover. Keep expiry deadlines in the deployment record.
 
 ## Interrupted operations and offline recovery
