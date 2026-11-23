@@ -581,3 +581,27 @@ Composition deliberately records `runtime_tested: false` and
 `billing_journey_tested: false`. Packaging does not establish host or journey
 success. Production traffic changes, source deletion, slim-application
 activation and repository renaming are later gates.
+
+
+## Preparatory tooling reference inventory
+
+The held source-removal candidate remains at
+`b85dfac93f061f97000b7b1014ca7ce9ad95e1af`.
+A read-only inventory examined thirteen website, web-surface and crawler
+scripts and their filename references. The final seven-file orphan audit
+still follows live acceptance and integrated source removal.
+
+The retained release verifier in `scripts/website_release.py` names
+`ui/scripts/render-website-nginx.mjs` in its source inventory. The historical
+v2 and v3 release fixtures also bind that path. The renderer imports
+`website-assets.mjs`, which the current application export contract still
+selects as a build/test input. Its graph and omission map require explicit
+review before retiring those files.
+
+The website distribution assertion, crawler checker and crawler tests have
+references in current and retained export contracts. The affected-component
+tests also exercise some retired names. Preserve the legacy contract bytes
+and signed fixture history while updating the current omission map after
+the final source decision. The current export contract explicitly records
+`source_ownership_audit_complete: false` and
+`package_graph_minimized: false`.
