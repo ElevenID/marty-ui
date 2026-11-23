@@ -9,11 +9,10 @@ validate Python objects and canonical record bytes in memory. They do not create
 files, hold the owner's lease, write guard markers, inspect Docker, change
 containers, publish a successor, or authorize production activation.
 
-The current owner does not consume these records. Do not place them in its active
-selection journal: the owner's closed namespace and ancestry rules remain in
-force. This milestone introduces no second record owner and does not change the
-[renewal activation](windows-renewal-activation.md) or
-[Compose recovery](windows-compose-recovery.md) entry points.
+The managed owner keeps these records in an attempt directory and an independently
+pinned tail namespace. The existing selection journal retains its closed namespace
+and ancestry rules. [Renewal activation](windows-renewal-activation.md) and
+[Compose recovery](windows-compose-recovery.md) still use that selection.
 
 The first operation is deliberately bounded: retain the selected combined
 application and its full audience, add `website-a`, then attach the website route
@@ -240,21 +239,232 @@ receipt as a separate held input; an embedded claim or a receipt supplied withou
 the terminal record cannot close the pending phase. The completed-phase list
 remains empty. No forward phase, ordinary backout, or repeated abort can follow it.
 
-Receipt structure and hashes do not establish freshness, execution order, actual
-absence, or custody. The future owner must verify those observations under its
-held lease, prove that any compensation changed only the declared candidate, and
-confirm that all retained product/provider/data/credential identities still
-match. The constructor executes no compensation and clears no real guard. A
-candidate still present or a changed baseline remains unresolved. Other
-interrupted phases retain `reconciliation-required` until independently qualified
-evidence supports their proper completion; their compensation paths remain future
-integration work.
+The owner verifies the observation preimages, the exact selected runtime and
+candidate absence. A separate dispatch authorization distinguishes a stage that
+never dispatched from one with an uncertain outcome. Completed compensation
+binds the original candidate and the removal result. Unknown command outcomes
+remain `reconciliation-required`.
+
+### Restore the combined owner after a terminal stage abort
+
+Use the selected owner with the private canonical plan, the original composition
+proofs, the original guard digest and the current terminal tail anchor digest.
+
+```powershell
+python -B scripts/selfhost_windows_website.py --release-abort `
+  --selection-file $selectionFile --plan-file $planFile `
+  --composition-dir $compositionDir --gh $pinnedGh --cosign $pinnedCosign `
+  --registry-config $registryConfig --guard-sha256 $guardSha256 `
+  --expected-anchor-sha256 $terminalAnchorSha256
+```
+
+`--authority-file` can select an existing native authority file when the current
+owner requires it. The owner reauthenticates the signed composition and refreshes
+readiness, native and foreign storage custody, combined Nginx configuration,
+public routes and application handoffs. It holds the original selected generation
+and writes the abort release evidence before a no-overwrite same-handle archive
+of the guard. The exclusive project lock stays held across the rename. The
+archived guard, terminal records and all observations remain available for review.
+Ordinary renewal can then enter the combined selection and must perform its own
+current checks. Repeating the command with the same pins reads the historical
+release if the archive is already present.
+
+### Complete a verified combined backout
+
+After `restore-combined` and `verify-combined` are anchored, use the same private
+plan, composition and guard inputs with `--retire-candidate` in place of
+`--release-abort`. Use the tail anchor for `verify-combined` on the first call.
+The owner requalifies the combined runtime and removes only the candidate whose
+ID and Compose inputs match the staged and verification records. The guard and
+any retained, unmounted route files stay available for evidence.
+
+After the removal result is anchored, combined public routing and application
+handoff are qualified again. If qualification fails, the `retirement-returned`
+tail can resume verification with the same operation. An authorized removal
+without a recorded CLI return requires reconciliation before proceeding.
+
+Use `--release-backout` with the `retire-candidate.completed` tail to archive
+the exact guard and return to the original combined generation. This path
+refreshes the same combined custody and ingress proof and keeps the backout
+history. An already archived guard supports historical readback with the same
+pins.
 
 `forward-evidence-complete`, `combined-backout-evidence-complete`, and
-`abort-evidence-complete` describe
-record structure only. They do not mean a durable successor was published.
-`seal-forward` binds a successor candidate receipt; publication, immutability,
-ancestor closure, and selected-owner reseeding remain outside this module.
+`abort-evidence-complete` describe the terminal record structure. A stage abort
+returns to the original combined selection through the separate archive step.
+### Prepare the forward successor
+
+After `verify-website`, run `--prepare-forward` with the original guards and
+composition inputs, the verified split tail, and a private Playwright
+`--session-state-file` from the authorized acceptance browser. Supply the
+independently recorded `--expected-account-sha256` and
+`--expected-organization-sha256`, each computed from the UTF-8 bytes of the
+exact expected identifier. Use the application session export shape with an
+empty `origins` list. Keep the live session file outside Git and the attempt.
+
+The owner repeats the signed split, edge, public and OAuth handoff checks. It
+uses the scoped session cookie over canonical HTTPS for `/v1/auth/me` and
+`/v1/organizations/mine`, and retains the independently supplied identifier digests, confirmed checks,
+and TLS observations. Perform the required interactive sign-in in the acceptance
+browser. Use a session exported from that qualification for this operation.
+
+Preparation also renders one persistent split Compose file with both retained
+credential environments. Its normalized model and configuration hashes must
+match the admitted multi-file layouts. The candidate retains the original
+combined model, selected credential identity, signed proofs and empty future
+activation outputs. Use the returned candidate and qualification digests when
+reviewing the proposed publication. The journal stays at `verify-website` so
+combined rollback remains available during preparation.
+
+### Seal and publish the guarded successor
+
+Run `--seal-forward` with the same plan, guard, signed composition and
+authenticated session inputs. Pass the last verified journal anchor via
+`--expected-anchor-sha256`, and the preparation result via
+`--candidate-sha256` and `--qualification-sha256`. The owner repeats live
+verification, including the account and organization checks, and records the
+unchanged running split in the phase journal. An anchored seal that started
+before an interruption can be completed with its exact started anchor and
+the same qualified candidate. Before publication begins, the original owner
+can still run `restore-combined` from the sealed anchor.
+
+Run `--publish-forward` with the same candidate and qualification digests,
+the sealed anchor via `--expected-anchor-sha256`, and current signed
+composition and authenticated session inputs. The publisher repeats the
+live checks with the same independently pinned identity. The
+publisher checks the retained combined configuration and verification prefix,
+revalidates the native generation, and prepares a successor using the split
+Compose source. Its local sequence starts at one. The overall credential
+generation, selected inputs and native custody stay the same.
+
+The decision becomes visible through an atomic rename under the project lock.
+Reconciliation requires the exact `--intent-sha256` and repeats the proofs
+before continuing. A partial publication fences the predecessor. The existing product
+guard stays active after the rename, including while the original entrypoint
+resolves the successor for inspection.
+
+### Restore combined runtime after publication
+
+While the publication guard is active, use
+`--backout-published --backout-phase restore-combined` with the original
+selection file, plan, signed composition inputs, and guard. Use the
+publication result's `intent_sha256` as `--intent-sha256` and the sealed
+anchor as `--expected-anchor-sha256`. The owner checks that the split decision
+is committed and that its exact selection is still current before changing
+edge routing.
+
+Run the same command with `--backout-phase verify-combined`, then
+`--backout-phase retire-candidate`. Supply the fresh anchor returned by each
+prior step. Restored routing, public and application handoff, and exact
+candidate removal have their own observations. The reverse records retain the
+original published selection and forward seal. The guard continues to fence
+scheduled renewal and reboot throughout.
+
+After retirement, run `--select-combined` with the original selection
+file, plan, guard, and signed composition. Supply the retirement anchor as
+`--expected-anchor-sha256` and the original split publication intent as
+`--forward-intent-sha256`. The owner refreshes the combined runtime, native
+custody and ingress before selecting the original Compose model in a new
+journal segment. The selected credential generation and both prior segments
+stay intact. An interrupted selection resumes with the new combined
+`--intent-sha256`. The existing guard remains active after selection.
+
+### Release the selected owner
+
+After qualifying scheduled renewal and reboot in rehearsal, run
+`--release-forward` for a committed split or `--release-combined` for a
+committed restoration. Use the original selection file, plan, guard, signed
+composition inputs, and the exact `--intent-sha256` from the applicable
+selection result. Use the sealed anchor for forward release and the final
+retirement anchor for combined release. Forward release also requires the
+private browser session and both independently pinned identity digests.
+
+The live operation proves the exact committed selection again, refreshes
+its runtime, native and application checks, then writes a release receipt
+and archives the original guard under the project lock. The receipt pins the
+decision, selected journal and terminal evidence. If the archive already
+exists, the same operation verifies the receipt and ancestry without
+repeating runtime actions.
+
+Complete the scheduled renewal and reboot rehearsal and verify a usable
+combined backout before opening the production cutover. The guarded
+`--backout-published` sequence applies while the website guard is active.
+
+### Readmit rollback after forward guard release
+
+Run `--readmit-backout` with the original selection file, signed composition,
+plan and guard. Supply the committed forward `--intent-sha256`, the sealed
+`--expected-anchor-sha256`, and `--release-sha256` from the forward release
+result. The owner holds the exact split selection, requalifies its live
+configuration and native generation, and records the current runtime and
+mounts. This handles restarted containers when the admitted configuration
+and selected inputs still agree, including an unhealthy website candidate
+with the protected application ready. The existing project lock fences the
+same-handle move of the archived guard back into service.
+
+Use the returned `readmission_sha256` as `--readmission-sha256` for the
+first `--backout-published --backout-phase restore-combined` call. Later
+backout phases use each new terminal anchor and the recorded readmission.
+When an ordinary renewal or model repair has advanced the split owner, a
+new plan against the current selection is required before restoring.
+
+After an ordinary renewal, run `--plan-current-backout` with the same
+selection file, signed composition, forward plan, guard, sealed anchor,
+forward intent and release digests used for readmission. It verifies the
+archived release, traces the selected split through credential renewal and
+ordinary journal continuation, and renders the original combined source
+and retained overlays under both current credential environments. It checks
+the live split's mounts, edge configuration, ingress and native credentials.
+Retain the returned plan and its digest with the observed generation.
+Generate a fresh v2 plan before edge restoration. In rehearsal, supply its
+digest as `--current-plan-sha256` to `--restore-current-edge`, along with the
+same forward evidence and inputs. The owner rechecks the selected generation,
+records the plan and installs the shared guard before recreating only the
+edge with the retained staged overlay and current credentials. A successful
+receipt identifies the replacement edge, restored routing configuration,
+ingress and unchanged protected runtime.
+
+Use `--reconcile-current-edge` with the same inputs after an interrupted
+readback. It requires a durable successful Compose return and freshly verifies
+the running edge. A missing or failed return requires operator reconciliation.
+
+After the restore receipt, run `--backout-published --backout-phase verify-combined`
+with the current plan digest and the same historical evidence. Supply the
+private `--session-state-file`, `--expected-account-sha256` and
+`--expected-organization-sha256`. The owner tests the original application
+marker, console, gateway, OIDC and browser handoff, verifies combined routes
+over public HTTPS and the installed loopback edge, and exercises the account
+and organization endpoints with the scoped session. It binds the result to
+the restored edge, the candidate container ID and the other running services.
+Save the returned `qualification_sha256`.
+
+For `--backout-phase retire-candidate`, keep those inputs and pass that digest
+as `--qualification-sha256`. The owner repeats the live checks before writing
+the retirement intent. It stops and removes the exact candidate, records the
+returned result, and checks the combined runtime and authenticated endpoints
+again. After a recorded successful removal, the same invocation can finish an
+interrupted readback. A retirement intent without a successful return requires
+operator reconciliation even when the container is absent. Keep the returned
+retirement receipt digest. With the same account, organization, session and
+current plan, pass it as `--retired-receipt-sha256` to
+`--backout-phase verify-retirement` in place of the qualification digest.
+This read-only phase checks the completed removal, surviving services and live
+authenticated combined routes while the guard is held.
+
+Use `--select-combined` with the current plan, retirement receipt and original
+forward release pins. Supply the original forward publication as
+`--forward-intent-sha256`. Keep the original guard and sealed anchor pins.
+The owner rechecks the live combined deployment, then publishes the restored
+Compose configuration with the selected renewed credentials. If publication
+was interrupted after its intent was recorded, verify the existing combined
+intent and supply its digest as `--intent-sha256` for reconciliation.
+
+Use `--release-combined` with the same inputs and the committed combined
+intent digest. The owner requires the exact selected destination and fresh
+authenticated evidence before archiving the guard. After the archive, the
+same release pins can replay the recorded outcome without a session, including
+after a later ordinary renewal or journal continuation. Keep the prior forward
+release, both selection journals and the archived guard for recovery.
 
 ## Required integration before activation
 

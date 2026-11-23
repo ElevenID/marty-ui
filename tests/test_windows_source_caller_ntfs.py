@@ -2,15 +2,18 @@
 
 The owner fixture substitutes runtime proofs only when authoring its history.
 Every caller check uses committed source bytes, the real Windows custody code,
-and an audit hook that refuses any child process. No deployed owner, scheduled
-task, Docker daemon, credential or service is read or changed.
+and an audit hook that refuses any child process. Optional local Task Scheduler
+rehearsal launches the same read-only caller on a disposable synthetic task.
+No deployed owner, production task, Docker daemon, credential or service is used.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+import base64
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 import pytest
 
@@ -21,7 +24,11 @@ import package_windows_owner_source as package
 import selfhost_windows_inputs as windows
 import selfhost_windows_selection as selection
 import selfhost_windows_source_install as install
-from test_selfhost_windows_continuation import candidate, advance
+from test_selfhost_windows_continuation import candidate as continuation_candidate, advance
+from test_selfhost_windows_selection import fixture as selection_fixture
+from tests.test_package_web_composition import candidate as candidate
+from tests.test_windows_website_plan import planned as planned
+from tests.test_windows_website_owner import prepare as prepare_website, _retire_published
 from test_selfhost_windows_inputs import powershell
 from test_windows_source_install_ntfs import (
     committed_bootstrap, options_for, broaden_read_acl, owner_snapshot,
@@ -158,13 +165,8 @@ print(json.dumps(result,sort_keys=True))
 @pytest.fixture(scope="module")
 def installed_caller(committed_bootstrap):
     """One immutable installation; each test restores its synthetic fault."""
-    revision, _inventory, _bodies = committed_bootstrap
-    raw = package.archive_bytes(ROOT, revision)
-    _tree, entries = package.object_inventory(ROOT, revision)
-    name = "scripts/selfhost_windows_source_caller.py"
-    body = package.read_blobs(ROOT, {name: entries[name]})[name]
     with pytest.MonkeyPatch.context() as monkeypatch:
-        with candidate(monkeypatch) as (root, phase, transaction, outcome, anchor, config):
+        with continuation_candidate(monkeypatch) as (root, phase, transaction, outcome, anchor, config):
             # Retain the original anchor across multiple continuation links.
             # Local2/global3 also qualifies a real selected lease for the
             # synthetic hook-journal writer proofs below.
@@ -188,56 +190,65 @@ def installed_caller(committed_bootstrap):
                 assert lease.journal_path == newest and lease.secrets_dir == new
                 expected_selection = (lease.sequence, lease.generation_sequence, lease.selected_sha256)
             assert expected_selection[:2] == (2, 3)
-            options = options_for(root, raw, revision, committed_bootstrap,
-                                  anchor=anchor, project=config["project"])
-            receipt = install.install(**options)
-            caller_root = root / "operational-caller"
-            caller_root.mkdir()
-            script = caller_root / "run-owner.py"
-            script.write_bytes(body)
-            helper = root / "google-helper.py"
-            helper.write_bytes(b"raise RuntimeError('PUBLIC_HOOK_MUST_NOT_EXECUTE_IN_CHECK_ONLY')\n")
-            client_id, client_secret = root / "google-client-id", root / "google-client-secret"
-            client_id.write_bytes(b"PUBLIC_SYNTHETIC_CLIENT_ID\n")
-            client_secret.write_bytes(b"PUBLIC_SYNTHETIC_CLIENT_SECRET\n")
-            docker = root / "synthetic-docker.exe"
-            docker.write_bytes(b"PUBLIC_NOT_AN_EXECUTABLE\n")
-            log = root / "operational-caller.log"
-            log.write_bytes(b"PUBLIC_EXISTING_LOG_ENTRY\n")
-            hook_state = root / "hook-state"
-            hook_state.mkdir()
-            profile = {
-                "schema": "marty.windows-owner-source-caller/v1",
-                "script_sha256": install.digest(body),
-                "python": Path(sys.executable).absolute().as_posix(),
-                "installation": {"root": options["destination"].as_posix(),
-                                 "sha256": receipt["installation_sha256"]},
-                "logical_project": "marty-selfhost-fixture",
-                "log": log.as_posix(),
-                "hook_state": hook_state.as_posix(),
-                "hook": {
-                    "helper": helper.as_posix(), "helper_sha256": install.digest(helper.read_bytes()),
-                    "client_id": client_id.as_posix(), "client_secret": client_secret.as_posix(),
-                    "docker": docker.as_posix(), "image": "python@sha256:" + "4" * 64,
-                    "network": config["project"] + "_default", "timeout_seconds": 90,
-                    "success_stdout": "PUBLIC_SYNTHETIC_GOOGLE_IDP_OK",
-                },
-            }
-            profile_path = caller_root / "caller.json"
-            profile_path.write_bytes(install.packed(profile))
-            profile_sha = install.digest(profile_path.read_bytes())
-            (hook_state / "owner.json").write_bytes(install.packed({
-                "schema": "marty.windows-owner-source-hook-state/v1",
-                "profile_sha256": profile_sha, "installation_sha256": receipt["installation_sha256"],
-            }))
-            (hook_state / "lock").write_bytes(b"")
-            yield {
-                "root": root, "source": options["destination"], "caller": caller_root,
-                "script": script, "profile_path": profile_path, "profile": profile,
-                "profile_sha256": profile_sha, "helper": helper, "hook_state": hook_state,
-                "log": log, "anchor": anchor, "receipt": receipt,
-                "expected_selection": expected_selection, "bootstrap": committed_bootstrap,
-            }
+            yield install_caller(root, anchor, config, committed_bootstrap, expected_selection)
+
+
+def install_caller(root, anchor, config, committed_bootstrap, expected_selection):
+    revision, _inventory, _bodies = committed_bootstrap
+    raw = package.archive_bytes(ROOT, revision)
+    _tree, entries = package.object_inventory(ROOT, revision)
+    name = "scripts/selfhost_windows_source_caller.py"
+    body = package.read_blobs(ROOT, {name: entries[name]})[name]
+    options = options_for(root, raw, revision, committed_bootstrap,
+                          anchor=anchor, project=config["project"])
+    receipt = install.install(**options)
+    caller_root = root / "operational-caller"
+    caller_root.mkdir()
+    script = caller_root / "run-owner.py"
+    script.write_bytes(body)
+    helper = root / "google-helper.py"
+    helper.write_bytes(b"raise RuntimeError('PUBLIC_HOOK_MUST_NOT_EXECUTE_IN_CHECK_ONLY')\n")
+    client_id, client_secret = root / "google-client-id", root / "google-client-secret"
+    client_id.write_bytes(b"PUBLIC_SYNTHETIC_CLIENT_ID\n")
+    client_secret.write_bytes(b"PUBLIC_SYNTHETIC_CLIENT_SECRET\n")
+    docker = root / "synthetic-docker.exe"
+    docker.write_bytes(b"PUBLIC_NOT_AN_EXECUTABLE\n")
+    log = root / "operational-caller.log"
+    log.write_bytes(b"PUBLIC_EXISTING_LOG_ENTRY\n")
+    hook_state = root / "hook-state"
+    hook_state.mkdir()
+    profile = {
+        "schema": "marty.windows-owner-source-caller/v1",
+        "script_sha256": install.digest(body),
+        "python": Path(sys.executable).absolute().as_posix(),
+        "installation": {"root": options["destination"].as_posix(),
+                         "sha256": receipt["installation_sha256"]},
+        "logical_project": "marty-selfhost-fixture",
+        "log": log.as_posix(),
+        "hook_state": hook_state.as_posix(),
+        "hook": {
+            "helper": helper.as_posix(), "helper_sha256": install.digest(helper.read_bytes()),
+            "client_id": client_id.as_posix(), "client_secret": client_secret.as_posix(),
+            "docker": docker.as_posix(), "image": "python@sha256:" + "4" * 64,
+            "network": config["project"] + "_default", "timeout_seconds": 90,
+            "success_stdout": "PUBLIC_SYNTHETIC_GOOGLE_IDP_OK",
+        },
+    }
+    profile_path = caller_root / "caller.json"
+    profile_path.write_bytes(install.packed(profile))
+    profile_sha = install.digest(profile_path.read_bytes())
+    (hook_state / "owner.json").write_bytes(install.packed({
+        "schema": "marty.windows-owner-source-hook-state/v1",
+        "profile_sha256": profile_sha, "installation_sha256": receipt["installation_sha256"],
+    }))
+    (hook_state / "lock").write_bytes(b"")
+    return {
+        "root": root, "source": options["destination"], "caller": caller_root,
+        "script": script, "profile_path": profile_path, "profile": profile,
+        "profile_sha256": profile_sha, "helper": helper, "hook_state": hook_state,
+        "log": log, "anchor": anchor, "receipt": receipt,
+        "expected_selection": expected_selection, "bootstrap": committed_bootstrap,
+    }
 
 
 def run_check(fixture, *, expected=None, preload=""):
@@ -336,18 +347,21 @@ def junction_directory(directory, target):
 
 @contextmanager
 def preserved_acl(path):
+    # The fixture changes the DACL. Save and restore Access only so an
+    # unprivileged caller never needs to set the unrelated audit SACL.
     quoted = str(path).replace("'", "''")
     original = subprocess.run([
         "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
         "$ErrorActionPreference='Stop';[IO.File]::GetAccessControl('" + quoted
-        + "').GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All)",
+        + "').GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)",
     ], capture_output=True, timeout=15, check=True).stdout.decode().strip()
     try:
         yield
     finally:
         powershell("$a=[Security.AccessControl.FileSecurity]::new();"
                    "$a.SetSecurityDescriptorSddlForm('" + original.replace("'", "''")
-                   + "');[IO.File]::SetAccessControl('" + quoted + "',$a)")
+                   + "',[Security.AccessControl.AccessControlSections]::Access);"
+                   "[IO.File]::SetAccessControl('" + quoted + "',$a)")
 
 
 @contextmanager
@@ -588,3 +602,202 @@ def test_native_hook_state_requires_private_exclusive_custody(installed_caller, 
     with fault:
         assert_refused(run_check(fixture))
     assert owner_snapshot(fixture["root"], []) == before
+
+
+SELECTED_LOCATION_CHILD = r'''
+import hashlib,json,pathlib,sys,types
+script,script_sha,profile_sha=sys.argv[1:]
+path=pathlib.Path(script)
+raw=path.read_bytes()
+assert hashlib.sha256(raw).hexdigest()==script_sha
+def no_process(event,arguments):
+ if event in {'subprocess.Popen','os.system','os.exec','os.posix_spawn'}:
+  raise AssertionError('Selected location proof attempted a runtime process')
+sys.addaudithook(no_process)
+caller=types.ModuleType('_website_caller_location')
+caller.__file__=script
+sys.modules[caller.__name__]=caller
+exec(compile(raw,script,'exec'),caller.__dict__)
+with caller.held_caller(path.parent/'caller.json',profile_sha) as values:
+ profile,record,selection,renewal,recovery,native,installer=values
+ with caller.held_hook_state(profile,profile_sha,record,native,installer) as state:
+  assert not state.pending
+  with selection.selected_inputs(pathlib.Path(record['anchor']['path'])) as lease:
+   result={'journal':str(lease.journal_path),'compose_file':str(lease.compose_file),
+           'generation_sequence':lease.generation_sequence,'selected_sha256':lease.selected_sha256}
+print(json.dumps(result,sort_keys=True))
+'''
+
+
+def assert_website_caller(caller, *, journal, model, generation, selected):
+    before = owner_snapshot(caller["root"], [])
+    result = run_check(caller)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    output = json.loads(result.stdout)
+    assert output["result"] == "bindings-and-history-verified"
+    assert output["source_commit"] == caller["receipt"]["source_commit"]
+    assert output["generation_sequence"] == generation and output["selected_sha256"] == selected
+    assert all(output[key] is False for key in ("active_callers_migrated", "credential_admission", "runtime_admission"))
+    location = subprocess.run([sys.executable, "-I", "-B", "-c", SELECTED_LOCATION_CHILD,
+        str(caller["script"]), caller["profile"]["script_sha256"], caller["profile_sha256"]],
+        capture_output=True, timeout=120)
+    assert location.returncode == 0, location.stderr.decode("utf-8", errors="replace")
+    assert json.loads(location.stdout) == {"journal": journal, "compose_file": str(model),
+                                          "generation_sequence": generation, "selected_sha256": selected}
+    assert owner_snapshot(caller["root"], []) == before
+
+
+# This opt-in local check uses a real one-shot clock trigger, a limited current
+# user principal and the installed caller's actual check-only command line.
+# Its isolated name and exact action are verified before any task cleanup.
+SCHEDULER_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$taskPath = '\'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principalName = $identity.Name
+$arguments = '-I -B "' + $runner + '" --expected-profile-sha256 ' + $profilePin + ' --check-only'
+function Test-ExactTask($task) {
+    if ($task.Principal.UserId -match '^S-1-') {
+        $taskSid = [Security.Principal.SecurityIdentifier]::new($task.Principal.UserId)
+    } else {
+        $taskSid = [Security.Principal.NTAccount]::new($task.Principal.UserId).Translate([Security.Principal.SecurityIdentifier])
+    }
+    return ((@($task.Actions).Count -eq 1) -and
+        ($task.Actions[0].Execute -eq $python) -and ($task.Actions[0].Arguments -ceq $arguments) -and
+        ($taskSid.Value -eq $identity.User.Value) -and ($task.Principal.RunLevel -eq 'Limited') -and
+        ($task.Principal.LogonType -eq 'Interactive'))
+}
+if (Get-ScheduledTask -TaskName $name -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+    throw 'Synthetic rehearsal name is already registered'
+}
+$action = New-ScheduledTaskAction -Execute $python -Argument $arguments
+$start = (Get-Date).AddSeconds(13)
+$trigger = New-ScheduledTaskTrigger -Once -At $start
+$principal = New-ScheduledTaskPrincipal -UserId $principalName -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 40) -AllowStartIfOnBatteries
+try {
+    Register-ScheduledTask -TaskName $name -TaskPath $taskPath -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+    $deadline = $start.AddSeconds(45)
+    $completed = $false
+    do {
+        $entry = Get-ScheduledTask -TaskName $name -TaskPath $taskPath
+        if (-not (Test-ExactTask $entry)) { throw 'Synthetic scheduler action changed' }
+        $info = Get-ScheduledTaskInfo -TaskName $name -TaskPath $taskPath
+        # Scheduler can expose a new LastRunTime while LastTaskResult still
+        # reports SCHED_S_TASK_RUNNING, even on a Ready state sample.
+        $completed = ($info.LastRunTime -ge $start.AddSeconds(-1) -and $entry.State -eq 'Ready' -and
+                      $info.LastTaskResult -ne 0x00041301)
+        if (-not $completed) { Start-Sleep -Milliseconds 350 }
+    } until ($completed -or (Get-Date) -ge $deadline)
+    if (-not $completed) { throw 'Synthetic timer did not finish before its bounded deadline' }
+    $result = [ordered]@{task=$name; result=$info.LastTaskResult; fired_utc=$info.LastRunTime.ToUniversalTime().ToString('o')}
+} finally {
+    $owned = Get-ScheduledTask -TaskName $name -TaskPath $taskPath -ErrorAction SilentlyContinue
+    if ($owned) {
+        if (-not (Test-ExactTask $owned)) { throw 'Synthetic scheduler ownership changed before cleanup' }
+        if ($owned.State -eq 'Running') {
+            Stop-ScheduledTask -InputObject $owned
+            $stopping = (Get-Date).AddSeconds(6)
+            while ((Get-ScheduledTask -TaskName $name -TaskPath $taskPath).State -eq 'Running') {
+                if ((Get-Date) -ge $stopping) { throw 'Synthetic task still running at cleanup' }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        Unregister-ScheduledTask -TaskName $name -TaskPath $taskPath -Confirm:$false
+        if (Get-ScheduledTask -TaskName $name -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+            throw 'Synthetic rehearsal registration was retained'
+        }
+    }
+}
+$result | ConvertTo-Json -Compress
+'''
+
+
+def assert_synthetic_scheduled_check(caller, expected_code):
+    if os.environ.get("MARTY_TEST_TASK_SCHEDULER") != "1":
+        return
+    name = "Marty-Synthetic-Website-Caller-" + uuid.uuid4().hex
+    assignments = {"name": name, "python": sys.executable, "runner": str(caller["script"]),
+                   "profilePin": caller["profile_sha256"]}
+    variables = "\n".join("$" + variable + " = '" + value.replace("'", "''") + "'"
+                          for variable, value in assignments.items())
+    script = (variables + "\n" + SCHEDULER_SCRIPT).encode("utf-16-le")
+    before = owner_snapshot(caller["root"], [])
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+        base64.b64encode(script).decode("ascii")], capture_output=True, timeout=100)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    receipt = json.loads(result.stdout)
+    assert receipt["task"] == name and receipt["result"] == expected_code
+    assert owner_snapshot(caller["root"], []) == before
+    print("Synthetic Task Scheduler check-only " + json.dumps(receipt, sort_keys=True), flush=True)
+
+
+def test_installed_caller_replays_released_split_and_restored_combined_owners(committed_bootstrap, planned, monkeypatch):
+    import selfhost_windows_website_abort_release as release
+    import selfhost_windows_website_owner as owner
+
+    forward, store = owner.forward, owner.store
+    digest = forward.contract.digest
+    with selection_fixture(monkeypatch) as (root, phase, _transaction, _outcome, anchor, config):
+        combined = {"b"*64: {"project": config["project"], "service": "edge", "image": "sha256:"+"b"*64,
+                             "mounts": [], "status": "running"}}
+        phase["data"] = digest(forward.edge._retained_data(combined))
+        source, _, plan, guard_pin, pins, split, _ = prepare_website(planned, root, anchor, config, combined_runtime=combined)
+        phase["data"] = plan["states"]["split"]["data_sha256"]
+        published = owner.finish(anchor, plan, guard_sha256=guard_pin, **pins, check_live=lambda *_: None)
+        caller = install_caller(root, anchor, config, committed_bootstrap,
+            (1, published["generation_sequence"], published["selected_sha256"]))
+        before = owner_snapshot(root, [])
+        assert_refused(run_check(caller))
+        assert owner_snapshot(root, []) == before
+        assert_synthetic_scheduled_check(caller, 1)
+
+        attempt = Path(plan["attempt_directory"])
+        qualification = selection.decode((attempt / ("forward-qualification-" + pins["qualification_sha256"] + ".json")).read_bytes())
+        monkeypatch.setattr(forward, "check_publication", lambda *_, **_options: qualification)
+        options = {"guard_sha256": guard_pin, "expected_anchor_sha256": pins["terminal_sha256"],
+                   "intent_sha256": published["intent_sha256"], "assets": root/"assets",
+                   "gh": None, "cosign": None, "registry_config": None}
+        released = selection.release_selected_website(anchor, plan, **options, mode="forward")
+        assert_website_caller(caller, journal=published["journal"], model=split,
+                              generation=published["generation_sequence"], selected=published["selected_sha256"])
+        assert_synthetic_scheduled_check(caller, 0)
+
+        with ExitStack() as held:
+            observed = store.read_evidence(plan, expected_anchor_sha256=pins["terminal_sha256"], held=held,
+                references={"seal-forward-after.json": ("seal-forward", "completed"),
+                            "route-website-after.json": ("route-website", "completed")})
+        sealed = observed["seal-forward-after.json"]
+        readmission = {key: sealed[key] for key in ("runtime_after", "native_custody", "foreign_storage")}
+        readmission["edge_configuration"] = observed["route-website-after.json"]["edge_configuration"]
+        monkeypatch.setattr(release, "_qualify_released_split", lambda *_, **_options: readmission)
+        readmitted = selection.readmit_website_backout(anchor, plan, **options, release_sha256=released["release_sha256"])
+        assert_refused(run_check(caller))
+
+        original = {entry.name: entry.read_bytes() for entry in source.iterdir()}
+        selected_dir = Path(published["journal"])
+        split_raw = {entry.name: entry.read_bytes() for entry in selected_dir.iterdir()}
+        lineage = owner._published_binding(original, selection.decode(original[owner.INTENT]), split_raw)
+        terminal = _retire_published(plan, lineage, guard_pin, pins["terminal_sha256"], combined,
+            readmission={"readmission_sha256": readmitted["readmission_sha256"],
+                         "containers": readmission["runtime_after"],
+                         "edge_configuration": readmission["edge_configuration"]})
+
+        def refresh(_config, _choice, _values, _record, _plan, retained, _attempt, **_options):
+            return {"runtime_sha256": digest(retained["runtime_after"]),
+                    "edge_sha256": digest(retained["edge_configuration"]),
+                    "public_routes_sha256": "c"*64, "application_handoffs_sha256": "d"*64,
+                    "native_sha256": plan["owner"]["native_sha256"], "foreign_storage_sha256": None,
+                    "foreign_storage_changes": 0}
+
+        monkeypatch.setattr(release, "_refresh", refresh)
+        rollback_options = {**options, "expected_anchor_sha256": terminal["anchor_sha256"]}
+        rollback_options.pop("intent_sha256")
+        restored = selection.select_combined_website(anchor, plan,
+            **rollback_options, forward_intent_sha256=published["intent_sha256"])
+        assert_refused(run_check(caller))
+        selection.release_selected_website(anchor, plan, **rollback_options, intent_sha256=restored["intent_sha256"], mode="combined")
+        assert_website_caller(caller, journal=restored["journal"], model=config["compose_file"],
+            generation=published["generation_sequence"], selected=published["selected_sha256"])
+        assert_synthetic_scheduled_check(caller, 0)

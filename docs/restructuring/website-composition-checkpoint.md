@@ -5,6 +5,477 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Complete managed-transition source candidate
+
+The final managed-transition PR now brings together stage reconciliation,
+abort release, guarded publication, live sealing, forward release, reverse
+publication, post-release readmission, installed-caller rehearsal and rollback
+under the current renewed generation. Its qualified stage and abort parents
+are retained in the commit history. The intermediate source PRs retain their
+published checkpoints while the assembled candidate is reviewed and qualified.
+
+The release owner selected the existing public Cosign transparency record.
+New release hashes and workflow certificate metadata follow that policy.
+Private source files, artifact contents and signing credentials remain private.
+The reusable private attester now admits a local runner through the protected
+guest approval guard. Its fresh genuine qualification is waiting on the
+protected opaque approval. The original successful qualification remains
+evidence for its original source.
+
+Actual production release jobs and independent consumer admission still need
+their final local-runner integration and signed artifact qualification.
+Production credential recovery, healthy runtime, the managed cutover and
+legacy source removal remain required acceptance gates.
+
+## Local producer testing and release approval, November 23
+
+The private website and application producer changes merged. The producer
+contract suite passed on the exact integration tree with 83 Python tests
+and 13 Node tests. The local runner also checks the GitHub Actions workflow
+syntax. A genuine historical private release signature verified locally
+with the GitHub CLI.
+
+The release owner approved keeping GitHub's workflow identity and running
+each approved job in a fresh local virtual machine. An opaque SHA-256
+digest on protected public main binds approval to the private invocation.
+The first one-job qualification passed. After the digest reached protected
+main, the isolated VM signed its fixed qualification document using the
+original GitHub workflow identity. The controller independently verified the
+private Sigstore bundle, original job assignment and ephemeral runner removal.
+The VM and its disk were retired. GitHub skipped every private hosted job.
+The website, application and composition still require their own approved
+release runs, signatures and intake verification.
+
+Local UI qualification also passed lint, 38 Vitest cases across six files
+and the production library build after correcting discovery of a Node-only
+signing suite. A separate rootless Docker VM built an image and served its
+expected content over loopback. The selected production host still serves
+the combined release. Its midnight renewal returned an operator
+reconciliation error. Later samples found 16 of 31 containers restarting.
+A fresh comparison found ten containers changing restart or process state.
+The installed expired-origin preparation requires stable runtime identities.
+Its inspection phase also requires an existing renewal-staging journal,
+which is absent. Preserve the original selected generation and recovery
+evidence while resolving these prerequisites.
+
+## Routing integration and acceptance qualification, November 23
+
+Managed routing [#2046](https://github.com/ElevenID/marty-ui/pull/2046)
+merged through the protected queue at
+`9c2d7b4ee6b19a437bd56c2bf1aa1baada1ad1e9`. Every original merge-group
+workflow passed, including its service and browser qualification.
+
+Acceptance [#2047](https://github.com/ElevenID/marty-ui/pull/2047) now targets
+main at `63de4eb7dc8558f815e9dcc47ff86d95e219aca9`. Its nine-file delta
+was replayed from the exact integrated routing feature head onto protected
+main, preserving the upstream content and both branch histories.
+The candidate passed 519 Windows tests with two symlink skips and 72 browser
+contract tests in Linux. The Windows TLS test passed after setting the
+installed OpenSSL configuration. Native Windows browser-contract execution
+requires Unix filesystem semantics and was qualified in Linux.
+Required GitHub checks are running and normal protected-queue automatic
+merge is enabled. The clean acceptance checkout was parked after publication
+and the full lifecycle audit. Its branch and exact checkpoint remain retained.
+
+Live routing, sign-in and application acceptance still require healthy
+production services and authenticated website, application and composition
+release artifacts. The local signing qualification proves the approved
+workflow mechanism. Each production release still needs its own evidence.
+
+## Approved full-release database rollback, November 23
+
+If the full v1.1.292 upgrade must return to v1.1.274, the deployment owner
+accepts resetting the selected Windows PostgreSQL cluster to its verified
+pre-upgrade recovery point. Later writes can be lost across the application,
+Keycloak and Applicant databases. An edge-only backout can keep the accepted
+application and database. This decision covers the selected Windows cluster.
+
+A disposable PostgreSQL 15 rehearsal ran the released v1.1.274 migration
+owners, captured a verified physical backup and WAL, and ran the v1.1.292
+migrations twice. An isolated restore paused at the exact pre-upgrade log
+position. A second copy promoted at the same named point, accepted new writes
+in all three databases and retained those writes after restarting. All five
+available v1.1.274 service schema verifiers passed on the restarted database.
+The separate upgraded database still contained its later records. The
+Keycloak and Applicant databases used synthetic markers in this rehearsal.
+Receipt SHA-256 `de5c749ed7701f9de0b7cef8605b1f2423dd74104f1c5d1030c4a9c385422d77`.
+
+The selected project's 31 containers include 19 roles with database
+connection settings. One read-only sample found six sessions from Keycloak,
+issuance, device registration and trust profile. PostgreSQL has no published
+host port. Two Cloudflare connectors share its network, including a connector
+attached to three project networks. Coordinate shared ingress separately
+from application and identity writers. The production writer boundary still
+requires a fresh census and an agreed switch. Receipt SHA-256
+`aef6314d307804ff3cc571204235b638e720d5541e732877ccba5ba7851c39ce`.
+
+The production owner still needs a consistent recovery point, retained
+backup and WAL, a verified restore, and a coordinated writer switch on the
+selected host. Reconcile the separate Applicant file, Redis sessions and
+provider bindings and verify fresh sign-in before reopening traffic.
+
+## Source-removal compatibility review, November 23
+
+A read-only merge projection of source-removal PR #2017 at
+`b85dfac93f061f97000b7b1014ca7ce9ad95e1af` against protected main
+`86812db416a64e35bb8c045afc3a02ce379d7ab5` found 12 conflicting files.
+They cover CI and affected-component tests, website release evidence and
+documentation, and the application package exporter and consumer.
+
+Both revisions' Node package-policy readers ran against the four original
+contract files. Both accepted the original npm map (575 inputs, 24 test
+files, 296 assertions). Main also accepted the agent-trust npm map (581
+inputs, 26 test files, 321 assertions). The parked candidate rejected that
+map's digest, `7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41`.
+Its two Bun maps have distinct digests and each selects 578 inputs, 25
+test files and 308 assertions. This check exercised contract selection.
+
+After production acceptance, the #2017 integration owner must retain the
+exact agent-trust npm contract alongside the earlier npm and Bun contracts,
+include the six agent-trust files in the refreshed active application
+export, and qualify fresh full, reduced and restored packages against the
+actual combined test roster. Preserve the upstream signed full-website
+evidence handling in the release workflow and verifier as well.
+[Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017) /
+[Agent-trust integration #1994](https://github.com/ElevenID/marty-ui/pull/1994) /
+[Full website evidence #2024](https://github.com/ElevenID/marty-ui/pull/2024)
+
+## Managed Windows staging and routing, November 23
+
+Staging merged at `86812db416a64e35bb8c045afc3a02ce379d7ab5`. The
+prior routing candidate passed [hosted CI](https://github.com/ElevenID/marty-ui/actions/runs/45108269826).
+The separate deployment then merged into protected main at
+`50b5bfacfc23359ce31d783fb137c60642142cf6`. Routing reconciled the one
+conflict in the frozen bundle listing against that commit. Its new head
+`22d55484990f0adc6859463a963ee1d973faa83e` preserves all upstream bundle
+assets in order and adds the edge module, for 233 entries. The other 33
+frozen catalog cases and nine routing source and test files retain their
+original content. All 462 applicable Windows tests passed. Two symlink
+cases skipped because the test account could not create symlinks. The
+organization audit passed at the revision selected by the new base,
+`4fe2d2d7a30b5a72195ec1192ad22db43c298e7d`.
+JUnit SHA-256 `5e898217bdfd71477571e81812723624b94a9988d73f213487f3a883e4fc6237`.
+
+Both remote routing refs matched the tested commit. The checkout was
+parked after the data, activity and recovery checks. Protected auto-merge
+is enabled for routing and its [new hosted CI](https://github.com/ElevenID/marty-ui/actions/runs/45116428187)
+is pending. Reconcile the parked acceptance branch against the integrated
+routing commit once it reaches main. Production still serves the combined
+release.
+[Staging #2045](https://github.com/ElevenID/marty-ui/pull/2045) /
+[Routing #2046](https://github.com/ElevenID/marty-ui/pull/2046) /
+[Acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
+The draft acceptance verifier at `329b4011b8993fa0fb5d68f29d10a0a74ab98758`
+now checks the OpenID scope, nonce, state and 43-character S256 challenge
+that both release versions send on login. It checks field multiplicity
+and rejects error or token parameters before recording the handoff.
+The exact commit passed 518 Windows tests with two symlink skips and
+14 related browser-runner contract tests. Signed-in acceptance on the
+selected deployment still requires a healthy gateway. The local test
+report SHA-256 is `05890bdb31ca4100ae71d19bbd4a4ce7a977517ebcee4e3c74444ffafa1c70a0`.
+[Acceptance qualification #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
+The protected deployment change and the routing and acceptance branches
+add files to the same selfhost bundle inventory. The earlier local
+projection used the queued Resources tree at
+`5a48f2638f57d76a9b38eff40b445d5c9a6aa9cf`, which includes that deployment change. A local integration rehearsal found one conflict at
+each step, in the frozen CLI output for `bundle-assets selfhost`. Deriving
+that case from the combined manifest retained all queued entries in order
+and added the edge module, then the verifier (233 and 234 assets).
+The catalog-output and bundled-import tests passed on both projected
+trees. Routing now includes the qualified resolution on its actual base.
+Acceptance then reconciled its stacked branch at
+`497b3fc604c8b86946b16301e4170a420b9fcd1f`. The bundle contains 234 assets.
+All 518 applicable Windows tests passed, with two symlink cases skipped.
+The Linux browser contract suite passed all 58 cases. Retarget the draft
+after routing reaches protected main.
+[Resources queue run](https://github.com/ElevenID/marty-ui/actions/runs/45111440032)
+
+## Full website and application qualification, November 23
+
+The full v1.1.292 application built from the verified backend source and
+passed local image checks for 414 static files and all 14 image layers.
+The installed v1.1.274 combined release remains the rollback selection.
+[Application producer #116](https://github.com/ElevenID/marty-subscriptions/pull/116)
+
+Website main commit `98beddf93a1422f2da3ba8c3346e8387e4dfc994` and
+standalone producer `92fde38303af240cf336483a4fa144970855fd6b` passed
+local full-audience qualification. The private producer passed 74 offline
+tests. The production image passed 259 route checks, 57 resource checks,
+26 denied or retired route checks and six sandboxed Chromium cases. The
+archive scanner checked all 13 layers and 2,988 entries. The final image
+contained 454 static files. The three withheld pricing routes returned 404.
+Both release-plan consumers accepted the v4 plan. The local qualification
+SHA-256 is `cb34e4e7f2b821bf34df7d7d156d031d45bc82334bcb020df27bb831406301fe`.
+The merged PR records the plan and original evidence.
+[Standalone producer #113](https://github.com/ElevenID/marty-subscriptions/pull/113)
+
+The managed acceptance verifier previously expected a pricing page. The
+qualified website returns HTTP 404 on both exact pricing paths and identifies
+the selected revision in its response headers. The corrected verifier passed
+against two real loopback Nginx listeners serving the verified 453-file full
+website build. The disposable edge restored the combined release with its
+original v1.1.274 application container still running. The standalone site
+also passed after the disposable application was removed. The Windows suite
+passed 487 tests and skipped two symbolic-link cases. The local rehearsal
+receipt SHA-256 is `9113d3e45bca63ae03e8dbe1fd21e58a6191144bd7bd93bdc20d6c10387de29b`.
+[Acceptance correction #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
+The installed edge template already defines an exact Resources redirect.
+The plain website include duplicated that location and Nginx refused to start
+in a disposable reproduction. The managed correction passed with a copy of
+the installed template and its original rendering script. Two loopback edges
+served the standalone build at `/resources`, preserved its query, kept the
+slash path on the application and sent a descendant to the Keycloak fixture.
+The apex redirect held. Backout restored the combined redirect on the same
+application container, and a fresh split edge served Resources even after
+the disposable application was removed. All five rendered defaults matched.
+The rehearsal receipt SHA-256 is
+`a8120de9cf3fce5c88dc4e6d31ece22476a962752abe68e6d1294e838a09c2d0`.
+[Retained edge correction #2064](https://github.com/ElevenID/marty-ui/pull/2064)
+
+A live public request to exact `/resources` reached the selected edge and
+application as `/index.html`. The release marker and the slash path reached
+both containers under their original paths. The retained deployment procedure
+identifies the temporary www Resources SPA rule. At the cutover the zone
+owner must capture its current configuration, disable the rewrite when the
+signed split origin is ready, and restore its prior behavior on combined
+backout. The Windows owner and public zone have separate routing controls.
+
+The verifier now checks the Resources canonical path, selected revision and
+revisioned script through public and loopback ingress. In a disposable
+rehearsal it rejected the stale public rewrite, accepted the correct
+Resources page after removing it, and the original public page was restored
+on combined backout. The source at
+`07fe01edf17449a4464724ce756e4465de2d416e` passed 490 Windows tests with
+two symlink cases skipped. Rehearsal receipt SHA-256
+`ec40a3ad933d60f3fb02e97e5ea79a1c240659a54a37716b8d3fbfe999c8e639`.
+[Public acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
+The full application upgrade also changes the Keycloak configuration used
+for fresh sign-in. Both installed configurator scripts and all 29 inspected
+realm and theme paths matched v1.1.274. The v1.1.292 bundle changes 24 of
+those paths. It includes the new account theme and the UI client mapper
+that emits the authentication timestamp. The selected realm has one UI
+client and lacks that direct mapper. The image-only transition preserves
+both mounted scripts and skips the configurator.
+
+A disposable PostgreSQL, Keycloak and OpenBao installation exercised the
+three signed v1.1.292 image pins. The original configurator created the
+mapper on an existing synthetic UI client, updated it on the second pass
+and read back the expected values both times. A fresh authorization-code
+login with S256 PKCE returned a remotely signed ID token. Its signature,
+issuer, UI audience, nonce and authentication timestamp passed. The
+rehearsal receipt SHA-256 is
+`aae14cc4bb589919ec3c8c4bcf614d7f2a4279237a8721e7af627073291285a0`.
+The production upgrade still needs to select the signed configuration
+alongside the images and verify a fresh sign-in on the recovered host.
+
+The selected services mount 37 distinct paths represented in the two
+signed prepared bundles. All matched the installed v1.1.274 release by
+presence and content. The v1.1.292 bundle changes 28, including the shared
+secret-loading script and the PostgreSQL initialization script. Preserve
+the established database when selecting the new files. The signed base
+Compose model also changes environment bindings and the Redis command.
+
+Docker Compose resolved the signed v1.1.292 environment expressions against
+the selected Windows environment file with shell overrides excluded. Across
+the 22 installed roles that use the organization name, the one existing
+explicit value matched and 21 roles gain that same configured name. The
+auth service resolves passkey login to false. The Keycloak configurator
+receives an empty management setting and RP ID, preserving the existing
+realm passkey policy. The optional kms-initialize role was absent from the
+31 installed containers. This read-only comparison covers three settings.
+Verify the resulting values again in the fully assembled release before
+activation. Receipt SHA-256
+`ce64146904b2f3c36667286524ba6db3043c508387ce5c2677b5e09ba4aa66d6`.
+
+Both releases pin the same Redis image. They select different memory
+policies, `allkeys-lru` in v1.1.274 and `noeviction` in v1.1.292. A
+disposable instance used each original release command with the same
+Windows data bind and Unix socket volume through upgrade and backout. The
+append-only file retained the synthetic identity value, a replay marker
+and its absolute expiry, and a write acknowledged after upgrade. The
+rehearsal receipt SHA-256 is
+`b893c0ec17717a3820de07996762fa95d9d925fdd3a8a6e0a1e261ccd227da5d`.
+The managed full application upgrade still needs to select the signed
+command and confirm the data and socket mount identities on the host.
+
+The selected PostgreSQL 15 cluster contains three service databases,
+`marty`, `keycloak` and `marty_applicants`. The Applicant service also
+writes to a separate host-mounted `applicant_store.json`. Its released
+file persistence, store decoder and migration module are byte-identical
+in v1.1.274 and v1.1.292. A production recovery boundary must account for
+that file independently of the PostgreSQL and Redis recovery points.
+
+A local rehearsal ran the release-pinned Applicant images with an isolated
+writable bind and synthetic service identities. The original service
+created a profile. The v1.1.292 service updated it and created a second
+profile. Returning to the v1.1.274 image on the same bind preserved both
+acknowledged writes, as did restoring a copy of the file taken after those
+writes. A copy taken before the upgrade restored only the original profile
+and its earlier values. Each copy was taken after the fixture service had
+stopped. Production sign-in, other Applicant record types and consistency
+across the file, PostgreSQL and Redis still require separate verification.
+Rehearsal SHA-256 `63a0f4819297a3412a30226ca55db211d1d8e923591286ee4501405705045401`.
+
+A disposable cluster initialized by the original v1.1.274 initializer
+accepted authenticated connections to all three databases with both
+releases' signed secret loaders. After a verified base backup, separate
+writes committed in each database before and after a named recovery
+point. Restoring that point retained the three earlier commits and
+excluded all three later commits. A second restore retained the later
+commits in all three databases. Both restores paused at their expected
+WAL positions. The test used synthetic rows and did not apply service
+schema migrations. Receipt SHA-256
+`4ea381cf730b5329e03ca4fa87a8b0dd4ff15b700f875588667a9162f6feec37`.
+The database owner still needs to capture and verify the production recovery point.
+[PostgreSQL 15 recovery scope](https://www.postgresql.org/docs/15/continuous-archiving.html)
+
+The original v1.1.274 combined package and application evidence were
+retrieved again from their successful producer run. Both archives matched
+their published digests. The full package matched the retained authenticated
+archive byte for byte, and all 246 files in the accepted local inventory
+matched their hashes. The 31 selected Windows container roles matched both
+the signed manifest digests and their local immutable image IDs. The
+database owner still needs to establish the production writer boundary.
+
+At 00:43 UTC the public and installed loopback endpoints served the combined
+release marker. Both readiness and current-account requests returned 502.
+The production owner must reconcile the selected workload's credential
+through the supported recovery owner and verify live readiness and identity.
+The release owner must obtain the original signed full application, website
+and composition within the existing private Actions budget. The managed
+cutover and source-removal PR remain pending those results.
+[Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017)
+
+### Renewal history and database recovery rehearsal
+
+The installed owner verified the current selection against the activation
+published on November 18 at 15:10 UTC. The next two renewals timed out at
+19:01 and 23:01 UTC. Both retained attempt directories were empty. The
+original selected certificates show all 18 leaves were still within their
+validity period at both timeouts. They expired between 23:01:27 and 23:01:29
+UTC. The November 17 installed owner checks Docker and storage before it
+stages replacement credentials. The retained evidence does not identify
+which inspection timed out. At 01:10 UTC on November 23, both public and
+installed loopback still served the combined release marker and returned
+502 for readiness and account lookup.
+
+A disposable v1.1.274 database was upgraded to v1.1.292. After the original
+backup, the rehearsal inserted, updated and deleted organization records and
+added a verification receipt specific to the new schema. A physical backup
+of the upgraded cluster passed PostgreSQL backup and WAL verification. A
+second instance booted from that backup on the isolated rehearsal network.
+Its schema dump matched the source after normalization of the paired dump
+nonce. Row counts and content digests matched for all 89 application tables.
+All five available v1.1.292 service schema verifiers passed against the
+restored instance. The private rehearsal receipt SHA-256 is
+`2b52d25f1ffb17e1ba7752e8c7478ed05864f37c6077b267300e0fe3691426cf`.
+
+The pre-upgrade archive restored the original v1.1.274 state, including a row
+deleted after that backup. The upgraded cluster retained its later writes and
+new-schema receipt. The approved full-release reset can rewind these writes.
+The physical restore
+exercise used a read-only synthetic database during backup. Production
+credential recovery, signing and cutover remain pending.
+
+### Installed v1.1.292 migration prerequisites
+
+On November 23 the installed owner observed zero of the ten required migration
+records in the selected production database. An independent Docker Desktop
+rehearsal confirmed that the image-only preflight refuses the released
+v1.1.274 database and accepts both completed v1.1.292 migration passes.
+Omitting each of the ten records individually caused the query to refuse.
+All 167 Windows product tests passed. PR #2062 merged into protected main
+at `b7587d8f05f98e5d5d491505fa085d9c725244ea` on November 23.
+The five-file change matched the Windows-qualified patch byte for byte.
+The merge-group CI workflow finished with 28 successful jobs and one skip.
+[Database preflight #2062](https://github.com/ElevenID/marty-ui/pull/2062) /
+[Protected queue run](https://github.com/ElevenID/marty-ui/actions/runs/45107017431)
+
+The product owner still needs a schema-changing upgrade and a verified
+production restore point for the approved backout. Production credential recovery precedes the
+managed deployment. The rehearsal receipt SHA-256 is
+`6a03e1557e22a780e7f14580dba5bf4715ede5e13b97d18d2e12635ef18b3227`.
+
+### Recovery points across the database upgrade
+
+One verified physical v1.1.274 backup and three archived PostgreSQL WAL
+segments recovered three named points on a disposable cluster. The first
+restore included a v1.1.274 write committed after the backup and before the
+schema upgrade. The next two restores included the new verification receipt
+and the deletion of an organization. A separate writer held a transaction
+open at the second point and committed before the third. Its update became
+visible only at the third point. A later write was excluded from all three.
+Each restored server paused at the recorded log position and passed all five
+schema verifiers from the corresponding release. The rehearsal receipt has
+SHA-256 `ab13d7af4b3700b9ed080b2c7dd04eaabf296aad7871d630f5b4e53283a2ad4f`.
+
+Two read-only observations of the selected production PostgreSQL instance
+found archive mode off, zero replication slots and zero connected WAL
+senders. A production upgrade still needs a retained backup and WAL stream,
+and a verified restore before applying the approved full-release rollback. The release owner must
+also account for identity, Redis and provider state outside the application
+database. The installed readback has SHA-256 `8c98652a766460240efd05b2df1cfebcc328b2c409a61fbd32059ae8574e8563`.
+
+## Managed full-audience cutover, November 22
+
+The release owner selected v1.1.292 for both the backend and the full
+application. All five backend release subjects passed provenance verification
+at source `ab8c96626100418f8a88a883380e807a575fbe16`. The producer candidate
+accepted the matching full application plan and passed 44 Linux producer tests.
+The application image, standalone full-audience website and signed composition
+still need their original producers. Retain the installed v1.1.274 combined
+package for rollback. [Stable backend release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.292)
+
+An isolated database rehearsal used the released v1.1.274 migration and service
+images to establish the baseline and create a synthetic organization. The
+v1.1.292 images upgraded that same database twice. Both passes verified all
+ten new migration records across Credential Template, Device Registration,
+Flow, Issuance and Trust Profile. The organization survived. The release
+owner still needs to qualify production data recovery and the application
+journeys on the signed full composition.
+
+In the database rollback rehearsal, the v1.1.274 Issuance schema verifier
+refused the migrated database. The other four available v1.1.274 read-only
+schema verifiers passed. All five passed on a separate restore of the
+pre-upgrade PostgreSQL archive, which contained the synthetic organization.
+The full-release rollback plan must account for writes made after the backup.
+An edge-only website rollback can retain the accepted application and database
+generation.
+
+At 22:34 UTC, the original installed recovery caller still selected generation
+33, local sequence 9. A read-only check found the same 31 container IDs in two
+snapshots. Seven services changed runtime state. The installed expired-origin
+predicate rejected the change before any credential operation was attempted.
+Both public and loopback ingress served the signed application marker and
+returned HTTP 502 on `/ready` and `/v1/auth/me`. The next production step
+requires a stable runtime under the existing recovery owner.
+
+The first-cutover planner landed through [#2042](https://github.com/ElevenID/marty-ui/pull/2042).
+The durable journal merged through
+[#2043](https://github.com/ElevenID/marty-ui/pull/2043). The Windows caller
+rehearsal in [#2058](https://github.com/ElevenID/marty-ui/pull/2058) exercised
+guarded and released selections with a synthetic runtime.
+Commit `b8768c295b8d6f6772866851be4d30437ac45a7d` adds read-only rollback
+planning after credential renewal. The Windows owner test exercised a
+completed renewal and a subsequent journal continuation. Docker Compose
+rendered both replacement credential environments.
+
+The [rollback PR](https://github.com/ElevenID/marty-ui/pull/2059) restores the
+edge under the renewed selection. It verifies combined public and loopback
+routes, authenticated account and organization access, and candidate identity
+before retirement. It repeats the live checks with the candidate absent.
+The renewed rollback path publishes the combined model with the current
+credentials and archives its guard after authenticated readback. The installed
+Windows caller and host rehearsal still need to exercise this path.
+Production activation still requires credential
+recovery, healthy application and identity checks, the signed full composition,
+and renewal and reboot rehearsal. Keep [#2017](https://github.com/ElevenID/marty-ui/pull/2017)
+pending through actual routing, sign-in, application and backout acceptance.
+
 ## Qualified original releases
 
 The following exact completed attempts and non-expired archives were rechecked
@@ -133,7 +604,33 @@ Composition deliberately records `runtime_tested: false` and
 success. Production traffic changes, source deletion, slim-application
 activation and repository renaming are later gates.
 
-## Production split checkpoint, November 22, 2026
+
+## Preparatory tooling reference inventory
+
+The held source-removal candidate remains at
+`b85dfac93f061f97000b7b1014ca7ce9ad95e1af`.
+A read-only inventory examined thirteen website, web-surface and crawler
+scripts and their filename references. The final seven-file orphan audit
+still follows live acceptance and integrated source removal.
+
+The retained release verifier in `scripts/website_release.py` names
+`ui/scripts/render-website-nginx.mjs` in its source inventory. The historical
+v2 and v3 release fixtures also bind that path. The renderer imports
+`website-assets.mjs`, which the current application export contract still
+selects as a build/test input. Its graph and omission map require explicit
+review before retiring those files.
+
+The website distribution assertion, crawler checker and crawler tests have
+references in current and retained export contracts. The affected-component
+tests also exercise some retired names. Preserve the legacy contract bytes
+and signed fixture history while updating the current omission map after
+the final source decision. The current export contract explicitly records
+`source_ownership_audit_complete: false` and
+`package_graph_minimized: false`.
+
+
+## Historical protected-main checkpoint from November 22
+
 
 The signed public website from [run `44877079325`, attempt 1](https://github.com/ElevenID/website/actions/runs/44877079325/attempts/1) was reverified with the original producer intake. The verifier authenticated the original archive, the receipt and registry image signatures, provenance, and route contract. Artifact `14696722096` binds image `ghcr.io/elevenid/website@sha256:05c4acbafa4378049e3ede64bdaa58fb50934e180d468e5ee98ef5356b12bfcf`. Retain the public v3 proof set and the earlier composition as release history.
 

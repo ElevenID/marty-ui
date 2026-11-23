@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Inspect website composition compatibility under the retained Windows lease.
+"""Inspect or advance the managed Windows website transition.
 
-This command does not deploy or grant production admission. It authenticates the
-composition and reads the selected model/container identities without creating
-Docker helpers, renewing credentials, initializing OpenBao or writing host state.
-Only the existing selection owner can resolve its predecessor/recovery chain.
+The check-only path reads selected identities and authenticates the composition.
+Forward sealing and selection refresh the live split with the original owner guard held.
+Combined release requalifies the original runtime before archiving its guard.
 """
 from __future__ import annotations
 
@@ -28,6 +27,9 @@ import website_release as web
 SCHEMA = "marty.windows-website-preflight/v1"
 WEBSITE_ROLES = frozenset({"website-a", "website-b", "website-c"})
 ERROR = "Managed website inspection refused; no deployment was attempted. Preserve the selected owner and its records."
+RELEASE_ERROR = "Managed website guard release did not complete verification. Inspect the original guard and archive using the same pins."
+BACKOUT_ERROR = "Managed website backout did not complete verification. Preserve the guard and inspect the retained journal before continuing."
+FORWARD_ERROR = "Managed website forward operation did not complete verification. Preserve the guard and retained verification records."
 
 ROUTE_TARGET = '/etc/nginx/marty-website'
 TEMPLATE_TARGET = '/etc/nginx/conf.d/default.conf.template'
@@ -334,17 +336,162 @@ def main(argv: list[str] | None = None) -> int:
             self.exit(2, ERROR + "\n")
 
     parser = PrivateParser(description=__doc__)
-    parser.add_argument("--check-only", action="store_true", required=True)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--check-only", action="store_true")
+    modes.add_argument("--release-abort", action="store_true")
+    modes.add_argument("--retire-candidate", action="store_true")
+    modes.add_argument("--release-backout", action="store_true")
+    modes.add_argument("--prepare-forward", action="store_true")
+    modes.add_argument("--seal-forward", action="store_true")
+    modes.add_argument("--publish-forward", action="store_true")
+    modes.add_argument("--backout-published", action="store_true")
+    modes.add_argument("--select-combined", action="store_true")
+    modes.add_argument("--release-forward", action="store_true")
+    modes.add_argument("--release-combined", action="store_true")
+    modes.add_argument("--readmit-backout", action="store_true")
+    modes.add_argument("--plan-current-backout", action="store_true")
+    modes.add_argument("--restore-current-edge", action="store_true")
+    modes.add_argument("--reconcile-current-edge", action="store_true")
     for name in ("selection-file", "composition-dir", "gh", "cosign"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--registry-config", type=Path)
     parser.add_argument("--plan-attempt-directory", type=Path)
+    parser.add_argument("--plan-file", type=Path)
+    parser.add_argument("--guard-sha256")
+    parser.add_argument("--expected-anchor-sha256")
+    parser.add_argument("--authority-file")
+    parser.add_argument("--session-state-file", type=Path)
+    parser.add_argument("--expected-account-sha256")
+    parser.add_argument("--expected-organization-sha256")
+    parser.add_argument("--candidate-sha256")
+    parser.add_argument("--qualification-sha256")
+    parser.add_argument("--retired-receipt-sha256")
+    parser.add_argument("--intent-sha256")
+    parser.add_argument("--forward-intent-sha256")
+    parser.add_argument("--release-sha256")
+    parser.add_argument("--current-plan-sha256")
+    parser.add_argument("--readmission-sha256")
+    parser.add_argument("--backout-phase", choices=("restore-combined", "verify-combined", "retire-candidate", "verify-retirement"))
     args = parser.parse_args(argv)
+    operation, error = None, ERROR
+    if args.release_abort:
+        operation, error = selection.release_website_abort, RELEASE_ERROR
+    elif args.retire_candidate:
+        operation, error = selection.retire_website_backout, BACKOUT_ERROR
+    elif args.release_backout:
+        operation, error = selection.release_website_backout, BACKOUT_ERROR
+    elif args.prepare_forward:
+        operation, error = selection.prepare_website_forward, FORWARD_ERROR
+    elif args.seal_forward:
+        operation, error = selection.seal_website_forward, FORWARD_ERROR
+    elif args.publish_forward:
+        operation, error = selection.publish_website_forward, FORWARD_ERROR
+    elif args.backout_published:
+        operation, error = selection.backout_published_website, BACKOUT_ERROR
+    elif args.select_combined:
+        operation, error = selection.select_combined_website, BACKOUT_ERROR
+    elif args.release_forward or args.release_combined:
+        operation, error = selection.release_selected_website, RELEASE_ERROR
+    elif args.readmit_backout:
+        operation, error = selection.readmit_website_backout, BACKOUT_ERROR
+    elif args.plan_current_backout:
+        operation, error = selection.plan_current_website_backout, BACKOUT_ERROR
+    elif args.restore_current_edge or args.reconcile_current_edge:
+        operation, error = selection.restore_current_website_edge, BACKOUT_ERROR
     try:
-        result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
-                       registry_config=args.registry_config, plan_attempt_directory=args.plan_attempt_directory)
+        renewed_backout = args.backout_published and args.current_plan_sha256 is not None
+        renewed_selection = args.select_combined and args.current_plan_sha256 is not None
+        renewed_release = args.release_combined and args.current_plan_sha256 is not None
+        renewed_owner = renewed_selection or renewed_release
+        if renewed_backout:
+            selection.require(args.backout_phase in {'verify-combined', 'retire-candidate', 'verify-retirement'})
+            operation = selection.backout_current_website
+        verify_retirement = args.backout_phase == 'verify-retirement'
+        if verify_retirement:
+            selection.require(renewed_backout and product_journal.sha(args.retired_receipt_sha256))
+        elif renewed_owner:
+            selection.require(product_journal.sha(args.retired_receipt_sha256) and product_journal.sha(args.release_sha256))
+        else:
+            selection.require(args.retired_receipt_sha256 is None)
+        forward = {'session_state_file': args.session_state_file, 'expected_account_sha256': args.expected_account_sha256,
+                   'expected_organization_sha256': args.expected_organization_sha256}
+        forward_operation = args.prepare_forward or args.seal_forward or args.publish_forward or args.release_forward
+        if renewed_release:
+            selection.require(all(forward.values()) or not any(forward.values()))
+        else:
+            selection.require(all(forward.values()) if forward_operation or renewed_backout or renewed_selection else not any(forward.values()))
+        pins = {'candidate_sha256': args.candidate_sha256, 'qualification_sha256': args.qualification_sha256}
+        if args.seal_forward or args.publish_forward:
+            selection.require(all(product_journal.sha(pin) for pin in pins.values()))
+            forward.update(pins)
+        elif renewed_backout and args.backout_phase == 'retire-candidate':
+            selection.require(args.candidate_sha256 is None and product_journal.sha(args.qualification_sha256))
+            forward['qualification_sha256'] = args.qualification_sha256
+        else:
+            selection.require(not any(pins.values()))
+        current_edge = args.restore_current_edge or args.reconcile_current_edge
+        selection.require(product_journal.sha(args.current_plan_sha256) if current_edge or renewed_backout or renewed_owner else args.current_plan_sha256 is None)
+        selection.require(args.release_sha256 is None or args.readmit_backout or args.plan_current_backout or current_edge or renewed_backout or renewed_owner)
+        selection.require(args.readmission_sha256 is None or (
+            args.backout_published and args.backout_phase == "restore-combined" and product_journal.sha(args.readmission_sha256)))
+        if renewed_backout:
+            selection.require(product_journal.sha(args.release_sha256) and product_journal.sha(args.intent_sha256)
+                              and args.forward_intent_sha256 is None and args.readmission_sha256 is None)
+            extra = dict(forward, intent_sha256=args.intent_sha256, release_sha256=args.release_sha256,
+                         current_plan_sha256=args.current_plan_sha256, backout_phase=args.backout_phase)
+            if verify_retirement:
+                extra['retired_receipt_sha256'] = args.retired_receipt_sha256
+        elif args.readmit_backout or args.plan_current_backout or current_edge:
+            selection.require(all(product_journal.sha(pin) for pin in (args.release_sha256, args.intent_sha256))
+                              and args.forward_intent_sha256 is None and args.backout_phase is None)
+            extra = {'intent_sha256': args.intent_sha256, 'release_sha256': args.release_sha256}
+            if current_edge:
+                extra.update(current_plan_sha256=args.current_plan_sha256, reconcile=args.reconcile_current_edge)
+        elif args.release_forward or args.release_combined:
+            selection.require(product_journal.sha(args.intent_sha256) and args.backout_phase is None)
+            selection.require(product_journal.sha(args.forward_intent_sha256) if renewed_release else args.forward_intent_sha256 is None)
+            mode = 'forward' if args.release_forward else 'combined'
+            extra = {'mode': mode, 'intent_sha256': args.intent_sha256}
+            if renewed_release:
+                extra.update(forward, forward_intent_sha256=args.forward_intent_sha256, current_plan_sha256=args.current_plan_sha256,
+                             release_sha256=args.release_sha256, retired_receipt_sha256=args.retired_receipt_sha256)
+            if args.release_forward:
+                extra.update(forward)
+        elif args.select_combined:
+            selection.require(product_journal.sha(args.forward_intent_sha256) and args.backout_phase is None
+                              and (args.intent_sha256 is None or product_journal.sha(args.intent_sha256)))
+            extra = {'forward_intent_sha256': args.forward_intent_sha256, 'intent_sha256': args.intent_sha256}
+            if renewed_selection:
+                extra.update(forward, current_plan_sha256=args.current_plan_sha256, release_sha256=args.release_sha256,
+                             retired_receipt_sha256=args.retired_receipt_sha256)
+        elif args.backout_published:
+            selection.require(args.backout_phase is not None and product_journal.sha(args.intent_sha256)
+                              and args.forward_intent_sha256 is None)
+            extra = {'backout_phase': args.backout_phase, 'intent_sha256': args.intent_sha256,
+                     'readmission_sha256': args.readmission_sha256}
+        else:
+            selection.require(args.forward_intent_sha256 is None)
+            selection.require(args.backout_phase is None)
+            if args.intent_sha256 is not None:
+                selection.require(args.publish_forward and product_journal.sha(args.intent_sha256))
+                forward['intent_sha256'] = args.intent_sha256
+            extra = forward if forward_operation else {}
+        release_inputs = (args.plan_file, args.guard_sha256, args.expected_anchor_sha256)
+        if operation is not None:
+            selection.require(all(release_inputs) and args.plan_attempt_directory is None)
+            with renewal.hold_private_input(args.plan_file.absolute(), max_bytes=2*1024*1024) as raw:
+                plan = selection.decode(raw)
+                selection.require(raw == selection.packed(plan))
+                result = operation(args.selection_file.absolute(), plan,
+                    guard_sha256=args.guard_sha256, expected_anchor_sha256=args.expected_anchor_sha256,
+                    assets=args.composition_dir, gh=args.gh, cosign=args.cosign, registry_config=args.registry_config,
+                    authority_file=args.authority_file, **extra)
+        else:
+            selection.require(not any(release_inputs) and args.authority_file is None)
+            result = check(args.selection_file, args.composition_dir, gh=args.gh, cosign=args.cosign,
+                           registry_config=args.registry_config, plan_attempt_directory=args.plan_attempt_directory)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, RuntimeError, subprocess.SubprocessError):
-        sys.stderr.write(ERROR + "\n")
+        sys.stderr.write(error + "\n")
         return 2
     sys.stdout.write(selection.packed(result).decode())
     return 0

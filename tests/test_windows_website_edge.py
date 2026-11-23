@@ -11,7 +11,10 @@ import pytest
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_windows_website_plan import planned, propose
 from tests.test_windows_website_store import paths
+from tests.test_windows_website_verify import HOST, SIGNED, transport
+from tests.test_windows_website_forward import ACCOUNT, COOKIE, ORG, session_state, wire
 import selfhost_windows_selection as selection
+import selfhost_windows_website_current_backout as current_backout
 import selfhost_windows_website_edge as edge
 import selfhost_windows_website_plan as contract
 import selfhost_windows_website_stage as stage
@@ -58,8 +61,8 @@ def test_real_compose_edge_overlay_changes_only_route_bind(paths, planned):
 
 
 @pytest.mark.parametrize('fault', [None, 'backout-before-routing', 'changed-evidence', 'failed-compose',
-    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout'])
-def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault):
+    'changed-application', 'unexpected-bind', 'nginx-rejected', 'foreign-storage-changed', 'unready-site', 'changed-default-before-backout', 'sealed-backout', 'readmitted-restart', 'renewed-observation'])
+def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(paths, planned, monkeypatch, fault, transport):
     plan, records, anchors = paths
     proposal = with_path(propose(planned), plan)
     attempt = records.parent
@@ -68,6 +71,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     calls = []
     site_unhealthy = fault == 'unready-site'
     changed_default = False
+    restarted = False
     hashes = {role: f'{index+1:064x}' for index, role in enumerate(proposal['models']['staged']['services'])}
     routed_hashes = {**hashes, 'edge': 'f'*64}
     combined = proposal['models']['combined']
@@ -83,7 +87,10 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
             status = {'StartedAt': 'synthetic', 'Status': 'exited' if exited else 'running', 'ExitCode': 0}
             if model.get('healthcheck'):
                 status.update(health)
-            rows.append({'Id': f'{edge_id if role == "edge" else index+1:064x}', 'Image': data['image'],
+            container_id = edge_id if role == 'edge' else index+1
+            if restarted and role == contract.SLOT:
+                container_id += 500
+            rows.append({'Id': f'{container_id:064x}', 'Image': data['image'],
                          'Mounts': deepcopy(data['mounts']), 'Config': {'Image': model['image'], 'Labels': {
                              'com.docker.compose.project': project, 'com.docker.compose.service': role,
                              'com.docker.compose.config-hash': (routed_hashes if state == 'split' else hashes)[role]}},
@@ -118,6 +125,14 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
                 ui['RestartCount'] = 1
             if state == 'split' and fault == 'unexpected-bind':
                 edge._edge(rows)['Mounts'][-1]['RW'] = True
+            if fault == 'renewed-observation':
+                row = edge._edge(rows)
+                row['Config']['Env'] = ['PUBLIC_DOMAIN=' + HOST]
+                row['NetworkSettings']['Ports'] = {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29382'}]}
+                candidate = stage._candidate_rows(rows, project)[0]
+                candidate['Name'] = f'/{project}-{contract.SLOT}-1'
+                candidate['Config']['Labels'].update({'com.docker.compose.container-number': '1',
+                    'com.docker.compose.oneoff': 'False', 'com.docker.compose.project.config_files': str(attempt / 'selected-split.json')})
             return rows
 
         def volumes(self):
@@ -171,7 +186,7 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
     def mutate(command, *, timeout):
         nonlocal state, edge_id
         phase = edge.FORWARD if state == 'staged' else edge.BACKOUT
-        sequence = '000004' if phase == edge.FORWARD else '000006'
+        sequence = '000004' if phase == edge.FORWARD else ('000010' if fault in {'sealed-backout', 'readmitted-restart'} else '000006')
         assert (records / f'{sequence}.{phase}.started.json').is_file()
         assert (anchors / f'{sequence}.tail.json').is_file()
         assert command[-10:] == ['up', '--no-deps', '--no-build', '--pull', 'never',
@@ -226,7 +241,80 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         routed = advance(staged, edge.FORWARD)
         assert state == 'split' and routed['model_state'] == 'split'
         assert routed['permitted_record_phases'] == ['verify-website', 'restore-combined']
+        if fault == 'renewed-observation':
+            current_layouts = {'combined': (base_command, combined, hashes)}
+            for name, (overlay, configured, service_hashes) in layouts.items():
+                model = deepcopy(configured)
+                model['services']['edge']['environment'] = {'PUBLIC_DOMAIN': HOST}
+                model['services']['auth'] = {'environment': {'AUTH_SESSION_COOKIE_NAME': 'sessionId'}}
+                current_layouts[name] = (base_command + ['-f', str(attempt / overlay)], model, service_hashes)
+            with ExitStack() as held:
+                context, routes = current_backout._context(config, 'new', {}, record, plan, docker,
+                    {'new': current_layouts}, proposal, held, None, 'split')
+                _, before_edge = current_backout._observe(context, proposal, routes, 'split', before_intent=True)
+                restored = advance(routed, edge.BACKOUT)
+                _, after_edge = current_backout._observe(context, proposal, routes, 'staged', before_intent=False)
+                assert restored['model_state'] == 'staged'
+                assert before_edge['edge_configuration']['container_id'] != after_edge['edge_configuration']['container_id']
+                assert before_edge['protected_runtime_sha256'] == after_edge['protected_runtime_sha256']
+                assert after_edge['ingress_sha256'] == contract.digest((HOST, 29382))
+                staged_context, staged_routes = current_backout._context(config, 'new', {}, record, plan, docker,
+                    {'new': current_layouts}, proposal, held, None, 'staged')
+                session_file = attempt / 'session.private.json'
+                stage._material(session_file, session_state(), held)
+                transport('staged')
+                fetch = current_backout.verify._request
+                def request(host, path, addresses, port, ssl_context, deadline, *, session_cookie=None):
+                    if session_cookie is None:
+                        return fetch(host, path, addresses, port, ssl_context, deadline)
+                    assert host == HOST and port == 443 and ssl_context.check_hostname and session_cookie == ('sessionId', COOKIE)
+                    if path == current_backout.verify.SESSION:
+                        return wire({'authenticated': True, 'user': {'id': ACCOUNT}})
+                    assert path == current_backout.verify.ORGANIZATIONS
+                    return wire([{'id': ORG}])
+                monkeypatch.setattr(current_backout.verify, '_request', request)
+                items_now, runtime_now, observation, proof = current_backout._http_acceptance(staged_context, staged_routes,
+                    {**proposal, 'http': SIGNED}, 'staged', held, session_file,
+                    (selection.digest(ACCOUNT.encode()), selection.digest(ORG.encode())))
+                assert observation['runtime_sha256'] == contract.digest(runtime_now)
+                assert proof['authenticated_application']['authenticated_application_exercised']
+                assert all(value not in json.dumps(proof) for value in (ACCOUNT, ORG, COOKIE))
+                with pytest.raises(ValueError):
+                    current_backout._retirement_inputs(staged_context, items_now, config, proposal)
+                selected = {**config, 'compose_file': str(attempt / 'selected-split.json')}
+                removal, custody = current_backout._retirement_inputs(staged_context, items_now, selected, proposal)
+                assert custody['candidate_id'] == stage._candidate_rows(removal.check(), project)[0]['Id']
+                current_layouts['staged'][1]['services']['edge']['ports'][0]['published'] = '29383'
+                with pytest.raises(ValueError):
+                    current_backout._observe(context, proposal, routes, 'staged', before_intent=False)
+            return
+        if fault in {'sealed-backout', 'readmitted-restart'}:
+            for phase in ('verify-website', 'seal-forward'):
+                for event in ('started', 'completed'):
+                    keys = (store.journal.START_EVIDENCE if event == 'started'
+                            else store.journal.COMPLETION_EVIDENCE[phase])
+                    routed = store.append(plan, expected_anchor_sha256=routed['anchor_sha256'], phase=phase, event=event,
+                                          evidence_sha256={key: 'a'*64 for key in keys})
+            assert routed['classification'] == 'forward-evidence-complete'
+            published = {'intent_sha256': 'c'*64, 'selection_sha256': 'd'*64,
+                         'sealed_anchor_sha256': routed['anchor_sha256'], 'split_selection_sha256': 'e'*64}
+            routed['published_selection'] = published
         site_unhealthy = True
+        if fault == 'readmitted-restart':
+            import selfhost_windows_website_abort_release as release
+
+            restarted = True
+            edge_id += 25
+            with pytest.raises(ValueError):
+                advance(routed, edge.BACKOUT)
+            assert not (records / '000010.restore-combined.started.json').exists()
+            monkeypatch.setattr(release.verify, '_installed_ingress', lambda *_: ('example.test', 443))
+            with ExitStack() as held:
+                baseline = release._qualify_released_split(config, 'new', {}, record, plan,
+                    {**routed, 'guard_sha256': pin}, assets=attempt, gh=None, cosign=None,
+                    registry_config=None, authority_file=None, held=held)
+            assert baseline['edge_configuration']['container_id'] == f'{edge_id:064x}'
+            routed.update(readmitted_runtime=baseline, readmission_sha256=contract.digest(baseline))
         if fault == 'changed-default-before-backout':
             changed_default = True
             with pytest.raises(ValueError):
@@ -237,5 +325,17 @@ def test_edge_phase_reuses_owner_preserves_application_and_qualifies_reverse(pat
         restored = advance(routed, edge.BACKOUT)
         assert state == 'staged' and restored['model_state'] == 'staged'
         assert restored['permitted_record_phases'] == ['verify-combined']
-        assert calls == ['authenticate', 'native', edge.FORWARD, 'authenticate', 'native', edge.BACKOUT]
+        if fault in {'sealed-backout', 'readmitted-restart'}:
+            with ExitStack() as held:
+                retained = store.read_evidence(plan, expected_anchor_sha256=restored['anchor_sha256'], held=held,
+                    references={'restore-combined-before.json': ('restore-combined', 'started')})
+            start = retained['restore-combined-before.json']
+            assert start['owner_lease']['published_selection'] == published
+            if fault == 'readmitted-restart':
+                assert start['runtime_before']['readmission_sha256'] == routed['readmission_sha256']
+                assert start['runtime_before']['containers'] == routed['readmitted_runtime']['runtime_after']
+        expected = ['authenticate', 'native', edge.FORWARD]
+        if fault == 'readmitted-restart':
+            expected += ['authenticate', 'authenticate', 'native']
+        assert calls == [*expected, 'authenticate', 'native', edge.BACKOUT]
         assert (attempt / 'routes/active.conf').read_bytes() == proposal['routes']['split']

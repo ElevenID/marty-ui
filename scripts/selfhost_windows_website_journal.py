@@ -21,7 +21,13 @@ ABORT_OBSERVATIONS = {'owner_lease', 'native_custody', 'foreign_storage', 'runti
     'public_routes', 'application_handoffs', 'candidate_absence', 'selected_credentials'}
 FORWARD = ('stage-candidate', 'route-website', 'verify-website', 'seal-forward')
 BACKOUT = ('restore-combined', 'verify-combined', 'retire-candidate')
-MAX_RECORDS = 1 + 2*(len(FORWARD)-1+len(BACKOUT))
+STAGE_ACTIONS = {'dispatch-authorized': 'stage_command', 'dispatch-returned': 'stage_result',
+                 'compensation-authorized': 'candidate_compensation', 'compensation-returned': 'compensation_result'}
+STAGE_ACTION_ORDER = tuple(STAGE_ACTIONS)
+RETIRE_RETURNED = 'retirement-returned'
+MAX_RECORDS = 1 + 2*(len(FORWARD)+len(BACKOUT)) + 3
+RECORD_NAME = re.compile(r'[0-9]{6}\.[a-z-]+\.(recorded|started|completed|reconciled-abort|'
+                         + '|'.join((*STAGE_ACTIONS, RETIRE_RETURNED)) + r')\.json')
 FIELDS = {'schema', 'sequence', 'plan_sha256', 'parent_sha256', 'phase', 'event', 'state', 'evidence_sha256'}
 START_EVIDENCE = {'owner_lease', 'native_custody', 'foreign_storage', 'runtime_before'}
 COMPLETION_EVIDENCE = {
@@ -72,8 +78,10 @@ def _next(completed):
     if not completed:
         return ('stage-candidate',)
     last = completed[-1]
-    if last in {'seal-forward', 'retire-candidate'}:
+    if last == 'retire-candidate':
         return ()
+    if last == 'seal-forward':
+        return ('restore-combined',)
     if last in BACKOUT:
         return (BACKOUT[BACKOUT.index(last)+1],)
     return (FORWARD[FORWARD.index(last)+1], 'restore-combined')
@@ -93,10 +101,12 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
             and all(isinstance(name, str) for name in entries) and plan_contract.sha(expected_tail_sha256))
     ordered = sorted(entries)
     prior = None;pending = None;completed = [];state = 'combined';aborted = False
+    started_stage = None
+    stage_actions = []
+    retirement_returned = False
     for index, name in enumerate(ordered, 1):
         body = entries[name]
-        require(not aborted and isinstance(name, str) and re.fullmatch(
-            r'[0-9]{6}\.[a-z-]+\.(recorded|started|completed|reconciled-abort)\.json', name)
+        require(not aborted and isinstance(name, str) and RECORD_NAME.fullmatch(name)
                 and isinstance(body, bytes) and 0 < len(body) <= 16384)
         record = selection.decode(body)
         require(type(record) is dict and set(record) == FIELDS and body == selection.packed(record)
@@ -113,15 +123,28 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
             require(pending is None and phase in _next(completed)
                     and record['state'] == plan['states'][state] and set(evidence) == START_EVIDENCE)
             pending = phase
+            if phase == 'stage-candidate':
+                started_stage = selection.digest(body)
+        elif event in STAGE_ACTIONS:
+            require(phase == pending == 'stage-candidate' and not completed
+                    and len(stage_actions) < len(STAGE_ACTION_ORDER) and event == STAGE_ACTION_ORDER[len(stage_actions)]
+                    and record['state'] == plan['states']['combined'] and set(evidence) == {STAGE_ACTIONS[event]})
+            stage_actions.append(event)
+        elif event == RETIRE_RETURNED:
+            require(phase == pending == 'retire-candidate' and not retirement_returned
+                    and record['state'] == plan['states']['staged'] and set(evidence) == {'candidate_retirement'})
+            retirement_returned = True
         elif event == 'completed':
             require(pending == phase and phase in COMPLETION_EVIDENCE
                     and set(evidence) == COMPLETION_EVIDENCE[phase]
-                    and record['state'] == plan['states'][AFTER[phase]])
+                    and record['state'] == plan['states'][AFTER[phase]]
+                    and (phase != 'stage-candidate' or len(stage_actions) in {0, 2}))
             completed.append(phase);pending = None;state = AFTER[phase]
         elif event == 'reconciled-abort':
-            require(index == 3 and phase == pending == 'stage-candidate'
-                    and not completed and state == 'combined')
-            _abort_receipt(held_abort_receipt, plan, prior)
+            require(phase == pending == 'stage-candidate' and not completed and state == 'combined'
+                    and len(stage_actions) in {0, len(STAGE_ACTION_ORDER)})
+            _abort_receipt(held_abort_receipt, plan, started_stage)
+            require(not stage_actions or held_abort_receipt['candidate_outcome'] == 'created-then-compensated')
             require(record['state'] == plan['states']['combined']
                     and evidence == {'reconciliation': plan_contract.digest(held_abort_receipt)})
             pending = None;aborted = True
@@ -135,8 +158,10 @@ def inspect(entries, plan, *, expected_tail_sha256, held_abort_receipt=None):
         'combined-backout-evidence-complete' if terminal == 'retire-candidate' else 'phase-boundary')
     return {'schema': SCHEMA, 'plan_sha256': plan['plan_sha256'], 'tail_sha256': prior,
         'record_count': len(entries), 'classification': classification, 'pending_phase': pending,
+        'stage_actions': stage_actions, 'started_stage_sha256': started_stage,
+        'retirement_returned': retirement_returned,
         'completed_phases': completed, 'aborted_phase': 'stage-candidate' if aborted else None, 'model_state': state,
-        'permitted_record_phases': [] if pending or terminal or aborted else list(_next(completed)),
+        'permitted_record_phases': [] if pending or aborted else list(_next(completed)),
         'receipt_contents_verified': False, 'automatic_replay_allowed': False,
         'owner_publication_supported': False, 'activation_supported': False, 'production_admission': False}
 
@@ -160,7 +185,7 @@ def append(entries, plan, *, expected_tail_sha256, phase, event, evidence_sha256
     """
     status = inspect(entries, plan, expected_tail_sha256=expected_tail_sha256)
     require(isinstance(phase, str) and isinstance(event, str)
-            and phase in COMPLETION_EVIDENCE and event in {'started', 'completed'})
+            and phase in COMPLETION_EVIDENCE and event in {'started', 'completed', *STAGE_ACTIONS, RETIRE_RETURNED})
     state = AFTER[phase] if event == 'completed' else status['model_state']
     record = {'schema': SCHEMA, 'sequence': len(entries)+1, 'plan_sha256': plan['plan_sha256'],
         'parent_sha256': expected_tail_sha256, 'phase': phase, 'event': event,
@@ -180,10 +205,10 @@ def reconciled_abort(entries, plan, *, expected_tail_sha256, held_abort_receipt)
     observations, and cannot clear an owner guard or publish a selection.
     """
     status = inspect(entries, plan, expected_tail_sha256=expected_tail_sha256)
-    require(status['record_count'] == 2 and status['pending_phase'] == 'stage-candidate'
-            and not status['completed_phases'] and status['model_state'] == 'combined')
-    _abort_receipt(held_abort_receipt, plan, expected_tail_sha256)
-    record = {'schema': SCHEMA, 'sequence': 3, 'plan_sha256': plan['plan_sha256'],
+    require(status['pending_phase'] == 'stage-candidate' and not status['completed_phases']
+            and status['model_state'] == 'combined')
+    _abort_receipt(held_abort_receipt, plan, status['started_stage_sha256'])
+    record = {'schema': SCHEMA, 'sequence': len(entries) + 1, 'plan_sha256': plan['plan_sha256'],
         'parent_sha256': expected_tail_sha256, 'phase': 'stage-candidate', 'event': 'reconciled-abort',
         'state': deepcopy(plan['states']['combined']),
         'evidence_sha256': {'reconciliation': plan_contract.digest(held_abort_receipt)}}
