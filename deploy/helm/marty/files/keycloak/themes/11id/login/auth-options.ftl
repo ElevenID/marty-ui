@@ -30,6 +30,9 @@
 </#macro>
 
 <#macro renderAuthOptions allowGoogleFallback=false>
+    <#local credentialLoginUrl = properties.credentialLoginUrl!"/v1/auth/credential-login">
+    <#local credentialLoginEnabled = ((properties.credentialLoginEnabled!"true")?lower_case == "true") && credentialLoginUrl?has_content>
+    <#if credentialLoginEnabled || allowGoogleFallback || (social.providers?? && social.providers?size > 0)>
     <div id="kc-social-providers" class="elevenid-social-providers">
         <div class="elevenid-social-separator"><span>${msg("identity-provider-login-label")!"Or sign in with"}</span></div>
 
@@ -49,12 +52,15 @@
             <@renderGoogleFallback />
         </#if>
 
+        <#if credentialLoginEnabled>
         <a id="credential-login"
            class="elevenid-social-btn elevenid-social-btn--credential"
-           href="${properties.credentialLoginUrl!"/v1/auth/credential-login"}"
+           href="${credentialLoginUrl}"
            data-testid="social-login-credential">
             <@credentialIcon />
             <span>Present Open Badge Credential</span>
         </a>
+        </#if>
     </div>
+    </#if>
 </#macro>

@@ -1,5 +1,6 @@
 <#import "auth-layout.ftl" as shared>
 <#macro registrationLayout bodyClass="" displayInfo=false displayMessage=true displayRequiredFields=false showAnotherWayIfPresent=true>
+<#local automaticReturn = message?has_content && ((message.type)!"") == "success" && pageRedirectUri?has_content && !(actionUri?has_content) && !(requiredActions?has_content) && !(skipLink??)>
 <!DOCTYPE html>
 <html<#if realm.internationalizationEnabled> lang="${locale.currentLanguageTag}"</#if>>
 <head>
@@ -37,7 +38,7 @@
         {"imports":{"rfc4648":"${url.resourcesCommonPath}/vendor/rfc4648/rfc4648.js"}}
     </script>
 </head>
-<body>
+<body<#if automaticReturn> data-elevenid-return-url="${pageRedirectUri}"</#if>>
     <@shared.authLayout; section>
         <#if section == "actions">
                 <#if realm.internationalizationEnabled && locale.supported?has_content && (locale.supported?size > 1)>
@@ -50,7 +51,11 @@
                         </select>
                     </div>
                 </#if>
-                <a class="elevenid-home-btn" href="${(client.baseUrl)!'/'}">HOME</a>
+                <#local homeUrl = properties.homeUrl!"">
+                <#if !homeUrl?has_content>
+                    <#local homeUrl = (client.baseUrl)!"/">
+                </#if>
+                <a class="elevenid-home-btn" href="${homeUrl}">HOME</a>
         <#elseif section == "content">
             <#if displayMessage && message?has_content && (message.type != 'warning' || !isAppInitiatedAction??)>
                 <div class="elevenid-alert elevenid-alert-${message.type}">
@@ -58,11 +63,21 @@
                 </div>
             </#if>
 
-            <#-- The "header" section — page title, etc. -->
-            <#nested "header">
-
-            <#-- The "form" section — main form content -->
-            <#nested "form">
+            <#-- Native pages supply heading content; custom forms own their card. -->
+            <#local inheritedHeader><#nested "header"></#local>
+            <#if inheritedHeader?markup_string?trim?has_content>
+                <section class="elevenid-inherited-card" aria-labelledby="kc-page-title">
+                    <#if otpLogin??>
+                        <h1 id="kc-page-title" class="elevenid-login-title elevenid-login-title--with-hint">${msg("mfaVerificationTitle")}</h1>
+                        <p class="elevenid-context-hint">${msg("mfaAuthenticatorHint")}</p>
+                    <#else>
+                        <h1 id="kc-page-title" class="elevenid-login-title">${inheritedHeader}</h1>
+                    </#if>
+                    <#nested "form">
+                </section>
+            <#else>
+                <#nested "form">
+            </#if>
 
             <#if displayInfo>
                 <div class="elevenid-info">
@@ -131,6 +146,25 @@
             var passwordInputs = document.querySelectorAll('#kc-form-wrapper input[type="password"]');
             for (var i = 0; i < passwordInputs.length; i += 1) {
                 attachPasswordToggle(passwordInputs[i]);
+            }
+
+            // Only a completed native action with an explicit server-provided
+            // destination can return automatically. Keep its ordinary link.
+            var destination = document.body.getAttribute('data-elevenid-return-url');
+            var returnLink = document.querySelector('#kc-info-message a');
+            if (!destination || !returnLink) {
+                return;
+            }
+            try {
+                var target = new URL(destination, window.location.href);
+                var linkedTarget = new URL(returnLink.href, window.location.href);
+                var loopbackHttp = target.protocol === 'http:' &&
+                    ['localhost', '127.0.0.1', '[::1]'].indexOf(target.hostname) !== -1;
+                if (target.href === linkedTarget.href && (target.protocol === 'https:' || loopbackHttp)) {
+                    window.location.replace(target.href);
+                }
+            } catch (error) {
+                // The existing explicit return link remains the fallback.
             }
         });
     })();

@@ -176,7 +176,8 @@ body {
 
 /* ===== Card ===== */
 #kc-form-wrapper,
-#kc-form {
+#kc-form,
+.elevenid-inherited-card {
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 16px;
   background: #fff;
@@ -185,11 +186,22 @@ body {
   text-align: center;
 }
 
-#kc-form > #kc-form-wrapper {
+#kc-form > #kc-form-wrapper,
+.elevenid-inherited-card #kc-form,
+.elevenid-inherited-card #kc-form-wrapper {
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
+}
+
+/* Native OTP, information and required-action pages share one heading/card. */
+.elevenid-inherited-card > .elevenid-login-title {
+  margin-bottom: 24px;
+}
+
+.elevenid-inherited-card > .elevenid-login-title--with-hint {
+  margin-bottom: 0;
 }
 
 /* ===== Titles ===== */
@@ -216,17 +228,25 @@ label,
   color: rgba(0, 0, 0, 0.6);
   font-size: 0.84rem;
   font-weight: 500;
-  text-align: center;
+  text-align: left;
   display: block;
+  margin-bottom: 8px;
 }
 
 #kc-form-wrapper label {
-  text-align: center;
-  justify-content: center;
+  text-align: left;
+  justify-content: flex-start;
 }
 
-.pf-c-form__group {
-  margin-bottom: 22px;
+.pf-c-form__group,
+#kc-form .form-group,
+.elevenid-inherited-card .form-group {
+  margin: 0 0 22px;
+}
+
+#kc-form .form-group:last-child,
+.elevenid-inherited-card .form-group:last-child {
+  margin-bottom: 0;
 }
 
 /* ===== Form inputs ===== */
@@ -564,7 +584,8 @@ a:hover {
   }
 
   #kc-form-wrapper,
-  #kc-form {
+  #kc-form,
+  .elevenid-inherited-card {
     padding: 24px 16px;
   }
 }

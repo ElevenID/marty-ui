@@ -130,3 +130,47 @@ They cover the actual runner functions using a simulated browser and API, includ
 failure and cleanup paths. Passing them is **not** live Cloudflare/Supabase
 qualification. The existing Kubernetes acceptance CI job runs them alongside the
 existing acceptance contracts, without a new workflow or paid infrastructure.
+
+
+## Separate identity and application origins
+
+Start normal sign-in from the ElevenID application. Its Auth callback creates
+an application session and returns the user to the console. The identity
+provider's account console manages sign-in methods and provider identity fields;
+it is not the application console or the owner of organization membership and
+business profile data. Selecting Supabase PostgreSQL does not change those
+application responsibilities or select an unqualified OAuth provider.
+
+For the packaged ElevenID Keycloak theme, set public navigation on the Keycloak
+container when it has a different origin from the website and API:
+
+| Environment setting | Purpose |
+| --- | --- |
+| `ELEVENID_AUTH_HOME_URL` | Absolute website destination for Home. An empty value retains the registered client base URL, then the existing `/` fallback. |
+| `ELEVENID_CREDENTIAL_LOGIN_URL` | Absolute application credential-login endpoint. The same-origin default remains `/v1/auth/credential-login`. |
+| `ELEVENID_CREDENTIAL_LOGIN_ENABLED` | Set `false` while that endpoint is unavailable or not qualified. Hiding it preserves configured social providers and removes an otherwise empty alternative-sign-in section. |
+
+These settings supply navigation only. They do not change registered callbacks,
+consent, required MFA, state/nonce/PKCE validation, or the application's session
+and authorization checks. Keep the credential option hidden until its actual
+application endpoint passes the selected profile's qualification. A custom login
+screen must not invent MFA assurance that the selected provider's signed tokens
+do not establish.
+
+Verify the rendered Home and credential links from the real public identity
+origin. A root-relative link on a separate login host reaches that host; a valid
+application path at another origin does not make that link usable. After an
+asset update, verify the delivered CSS bytes and cache behavior as well as the
+HTML. The provider account console is a diagnostic/security-settings destination,
+not a substitute for the installed application callback journey.
+
+
+The Keycloak adapter gives inherited OTP, information and required-action pages
+the same heading/card treatment as the custom forms. For a successful native
+information page with an explicit server-provided return URI, it returns to the
+matching existing link automatically. This is limited to HTTPS and loopback
+HTTP development destinations. An action URI, pending required actions, errors,
+`skipLink`, a missing destination or a native/nonsecure remote scheme retains
+explicit navigation. The existing return link remains usable without JavaScript.
+No return destination is taken from an incoming query parameter, and neither a
+first consent decision nor a required-action confirmation is approved implicitly.
