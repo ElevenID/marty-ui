@@ -16,9 +16,20 @@ with the GitHub CLI.
 The release owner approved keeping GitHub's workflow identity and running
 each approved job in a fresh local virtual machine. An opaque SHA-256
 digest on protected public main binds approval to the private invocation.
-GitHub accepted the first qualification job after the workflow syntax fix.
-The private hosted jobs were skipped. Independent verification of a new
-signature and the signed website, application and composition remain open.
+The first one-job qualification passed. After the digest reached protected
+main, the isolated VM signed its fixed qualification document using the
+original GitHub workflow identity. The controller independently verified the
+private Sigstore bundle, original job assignment and ephemeral runner removal.
+The VM and its disk were retired. GitHub skipped every private hosted job.
+The website, application and composition still require their own approved
+release runs, signatures and intake verification.
+
+Local UI qualification also passed lint, 38 Vitest cases across six files
+and the production library build after correcting discovery of a Node-only
+signing suite. A separate rootless Docker VM built an image and served its
+expected content over loopback. The selected production host still serves
+the combined release. Its midnight renewal returned an operator
+reconciliation error and 15 of 31 containers were restarting.
 
 ## Approved full-release database rollback, November 23
 
