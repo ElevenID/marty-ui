@@ -33,6 +33,37 @@ and composition within the existing private Actions budget. The managed
 cutover and source-removal PR remain pending those results.
 [Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017)
 
+### Renewal history and database recovery rehearsal
+
+The installed owner verified the current selection against the activation
+published on November 18 at 15:10 UTC. The next two renewals timed out at
+19:01 and 23:01 UTC. Both retained attempt directories were empty. The
+original selected certificates show all 18 leaves were still within their
+validity period at both timeouts. They expired between 23:01:27 and 23:01:29
+UTC. The November 17 installed owner checks Docker and storage before it
+stages replacement credentials. The retained evidence does not identify
+which inspection timed out. At 01:10 UTC on November 23, both public and
+installed loopback still served the combined release marker and returned
+502 for readiness and account lookup.
+
+A disposable v1.1.274 database was upgraded to v1.1.292. After the original
+backup, the rehearsal inserted, updated and deleted organization records and
+added a verification receipt specific to the new schema. A physical backup
+of the upgraded cluster passed PostgreSQL backup and WAL verification. A
+second instance booted from that backup on the isolated rehearsal network.
+Its schema dump matched the source after normalization of the paired dump
+nonce. Row counts and content digests matched for all 89 application tables.
+All five available v1.1.292 service schema verifiers passed against the
+restored instance. The private rehearsal receipt SHA-256 is
+`2b52d25f1ffb17e1ba7752e8c7478ed05864f37c6077b267300e0fe3691426cf`.
+
+The pre-upgrade archive restored the original v1.1.274 state, including a row
+deleted after that backup. The upgraded cluster retained its later writes and
+new-schema receipt. A full return to v1.1.274 still needs an approved way to
+account for those writes and protect writes in flight. The physical restore
+exercise used a read-only synthetic database during backup. Production
+credential recovery, signing and cutover remain pending.
+
 ## Managed full-audience cutover, November 22
 
 The release owner selected v1.1.292 for both the backend and the full
