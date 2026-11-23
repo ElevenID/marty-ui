@@ -81,6 +81,7 @@ pub(crate) fn bootstrap_inputs(
 ) -> Result<ComposeInputs> {
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
+    let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let binding = state
         .journal()
@@ -227,6 +228,9 @@ pub(crate) fn bootstrap_inputs(
         )?);
     }
     if let Some(selection) = external_oidc {
+        selection.bind_inputs(&mut inputs)?;
+    }
+    if let Some(selection) = external_postgres {
         selection.bind_inputs(&mut inputs)?;
     }
     hosting.bind_inputs(&mut inputs)?;
@@ -390,6 +394,7 @@ fn start_inner(
     state.require_live_phase(Phase::Provisioning)?;
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
+    let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let public_acme =
         hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme;
@@ -493,6 +498,20 @@ fn start_inner(
         "installation_id":state.journal().installation_id(),"project":state.journal().compose_project(),"origin":origin,
         "engine_id":binding.engine_id,"directories":env.required_private_directories,"installation_ready":false})).map_err(|_| "cannot encode application intent")?)?;
     let mut source_env = env.env_bytes;
+    if let Some(selection) = &external_postgres {
+        let mut postgres_env = BTreeMap::new();
+        selection
+            .configuration
+            .external_postgres
+            .apply_environment(&mut postgres_env)?;
+        for (key, value) in postgres_env {
+            append(&mut source_env, &key, &value)?;
+        }
+        selection
+            .configuration
+            .external_postgres
+            .append_root_certificate(&mut source_env)?;
+    }
     let bootstrap_env =
         crate::installer_verify::read_private_bytes(&bootstrap.environment.path, 65536)?;
     for line in std::str::from_utf8(&bootstrap_env)
@@ -603,6 +622,11 @@ fn start_inner(
             .files
             .push(bundle_bound(bundle, crate::installer_oidc::LAYER)?);
     }
+    if external_postgres.is_some() {
+        inputs
+            .files
+            .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
+    }
     crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
@@ -666,6 +690,13 @@ fn start_inner(
         maintenance_inputs
             .files
             .push(bundle_bound(bundle, crate::installer_oidc::LAYER)?);
+    }
+    if external_postgres.is_some() {
+        // The external OIDC layer still configures the local database for its
+        // default case. Remove it only after all runtime and login layers.
+        maintenance_inputs
+            .files
+            .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
     #[cfg(feature = "installer-development")]

@@ -32,12 +32,20 @@ creation defaults to `false`, matching `.env.selfhost.production.example`;
 its UI runtime flag together.
 
 Keycloak SMTP supplies **Keycloak registration-verification and password-reset
-email**. It does not enable application notification email. The native
-notification worker currently returns `EMAIL_ADAPTER_UNAVAILABLE` for email
-delivery; its legacy `SMTP_*` environment fields are not a functioning adapter.
-The settings input therefore rejects `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`
-and raw SMTP passwords as application settings. Webhook notification delivery
-has a separate existing implementation.
+email**. Application notification email has a separate, opt-in Resend HTTPS
+adapter, usable with managed Keycloak or an external OIDC provider. Select
+`NOTIFICATION_EMAIL_PROVIDER: "resend"`, supply `NOTIFICATION_EMAIL_FROM`, and
+import `notification_resend_api_key`; see [application email](notification-email.md).
+With application email disabled, delivery returns `EMAIL_ADAPTER_UNAVAILABLE`.
+The legacy application `SMTP_*` environment fields still have no SMTP adapter:
+the settings input rejects `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME` and raw
+SMTP passwords. Webhook delivery retains its existing implementation.
+
+When Supabase Auth owns login, configure its authentication email separately
+using the [Supabase custom SMTP settings](https://supabase.com/docs/guides/auth/auth-smtp).
+The installer does not send Supabase registration or recovery emails. Its
+`KEYCLOAK_*` settings and `smtp_password` remain unavailable with external OIDC;
+the independent Resend application key is supported.
 
 ## Input format
 
@@ -114,6 +122,7 @@ settings are excluded from the supported registry.
 | `UI_ADDITIONAL_BASE_URLS=` | Typed exact HTTPS-origin array. Extends browser origin policy without changing the canonical issuer identity. The operator must separately own DNS, routing and certificates for additional frontends. |
 | `KEYCLOAK_SMTP_HOST=`, `KEYCLOAK_SMTP_USERNAME=` | Typed mail configuration; host, sender, secure transport and matching authentication inputs are validated together. |
 | `SMTP_HOST=`, `SMTP_USERNAME=` | Unimplemented application-email transport; not offered as a working capability. |
+| `NOTIFICATION_EMAIL_PROVIDER=disabled` | Opt-in `resend` enables application email over its fixed HTTPS API. Requires a sender and imported API-key file; independent of OIDC provider. |
 | `UNIVERSAL_RESOLVER_URL=` | Optional explicit HTTPS resolver URL; no network fallback is enabled by default. |
 | `DID_WEB_ALLOWED_HOSTS=` | Typed unique normalized hostname array; required for public DID fallback. |
 
@@ -155,6 +164,8 @@ configuration acceptance is not proof of credentials or remote availability.
 | `KEYCLOAK_SMTP_PORT` | Integer 1–65,535; default 587. |
 | `KEYCLOAK_SMTP_FROM` | Sender email address; explicitly required when SMTP is configured. With mail disabled, the renderer uses `noreply@` the canonical host. |
 | `KEYCLOAK_SMTP_USERNAME`, `KEYCLOAK_SMTP_FROM_DISPLAY_NAME`, `MARTY_ORG_NAME` | Strings up to 256 bytes. Organization display name does not change its generated ID, slug or operator identity. |
+| `NOTIFICATION_EMAIL_PROVIDER` | Exactly `disabled` (default) or `resend`. No endpoint override or raw credential is accepted. |
+| `NOTIFICATION_EMAIL_FROM` | Bare sender email address on a provider-verified domain; required only with `resend`. Display-name syntax is not accepted. |
 | `ORGANIZATION_CREATION_ENABLED`, `CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER`, `CREDENTIAL_LOGIN_CREATE_USERS` | Booleans. Credential-login policy is independent of Keycloak self-registration. The two Keycloak-admin-dependent credential-login choices are refused for external OIDC. |
 | `CREDENTIAL_LOGIN_POLICY_ID`, `CREDENTIAL_LOGIN_TRUST_PROFILE_ID`, `MARTY_DEFAULT_REVOCATION_PROFILE_ID` | Existing identifiers; changing these does not create the referenced policy or profile. |
 | `UI_ADDITIONAL_BASE_URLS` | Array of exact HTTPS origins. Canonical origin remains unchanged. |
@@ -192,7 +203,8 @@ including duplicate-organization, duplicate-key and key-strength rejection.
 | --- | --- |
 | `google_client_id`, `google_client_secret` | Managed Keycloak configurator. Supply together; both required for enabled Google login. Configure the corresponding callback in the Google provider separately. |
 | `google_analytics_measurement_id`, `google_site_verification` | Existing UI integration inputs. Optional and independent of user registration. GA4 identifiers must match `G-` followed by uppercase ASCII letters/digits; invalid IDs are refused before provisioning. |
-| `smtp_password` | Managed Keycloak SMTP. Paired with `KEYCLOAK_SMTP_USERNAME`; the application mail adapter remains unavailable. |
+| `smtp_password` | Managed Keycloak SMTP, paired with `KEYCLOAK_SMTP_USERNAME`. Not used by application notification email or external OIDC. |
+| `notification_resend_api_key` | Application Resend sending key, paired with `NOTIFICATION_EMAIL_PROVIDER=resend` and an explicit sender. Supported with external OIDC. |
 | `canvas_credentials_shared_secret` | Existing Canvas bridge credential. It is not a Credentials API access token. |
 | `canvas_credentials_api_token` | Existing issuance/issuance-native Credentials API token-file input. Required for an enabled global mirror worker; organization-managed provider secrets retain their separate existing onboarding/validation owner. |
 | `passport_tenant_api_keys` | Native gateway, Flow and issuance-native Passport keyring. JSON object of organization identifiers to distinct API keys of at least 32 printable ASCII characters. Not combined with internal service authentication. |

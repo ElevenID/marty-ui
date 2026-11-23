@@ -1,5 +1,7 @@
+pub mod database;
 pub mod delivery;
 pub mod domain;
+pub mod email;
 pub mod grpc;
 pub mod grpc_tls;
 pub mod http;

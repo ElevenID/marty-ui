@@ -386,6 +386,7 @@ services:
     - grpc_service_token
     - smtp_password
     - notification_webhook_secret
+    - notification_resend_api_key
     - notification_applicant_event_token
     - notification_workload_server_cert
     volumes:

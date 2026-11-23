@@ -157,12 +157,15 @@ fn require_runtime_files(
     {
         for reference in service["secrets"].as_array().into_iter().flatten() {
             let name = reference["source"].as_str().ok_or(REFUSED)?;
-            require(
-                binding.files.contains_key(name)
-                    && installer_compose::config_path(&model["secrets"][name]["file"])?
-                        == root.join(name),
+            let source = installer_compose::config_path(&model["secrets"][name]["file"])?;
+            let file = crate::installer_postgres::credential_source_name(
+                installation,
+                &root,
+                name,
+                &source,
             )?;
-            used.insert(name.to_owned());
+            require(binding.files.contains_key(&file))?;
+            used.insert(file);
         }
         for mount in service["volumes"]
             .as_array()
@@ -248,6 +251,79 @@ pub(crate) fn require_runtime_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_alias_uses_the_imported_generation_file_without_relaxing_other_paths() {
+        let (_parent, installation, state, _) =
+            crate::installer_postgres::test_selected_installation();
+        let renewable = crate::installer_renewal_bootstrap::managed_inputs();
+        let binding = GenerationBinding {
+            schema: "elevenid.installer-application-generation/v3".into(),
+            installation_id: state.journal().installation_id().to_string(),
+            engine_id: "fixture".into(),
+            network_id: Some("a".repeat(64)),
+            generation_receipt_sha256: "b".repeat(64),
+            files: renewable
+                .iter()
+                .map(String::as_str)
+                .chain([crate::installer_postgres::SECRET])
+                .map(|name| {
+                    (
+                        name.into(),
+                        generation::GenerationFile {
+                            source: if renewable.contains(name) {
+                                generation::GenerationSource::Candidate
+                            } else {
+                                generation::GenerationSource::Original
+                            },
+                            sha256: "c".repeat(64),
+                            size: 1,
+                            source_mode: 0o444,
+                            mode: 0o444,
+                        },
+                    )
+                })
+                .collect(),
+            activated: false,
+            root_retired: false,
+            installation_ready: false,
+            successor: None,
+        };
+        let root = binding.secret_dir(&installation).unwrap();
+        let model = json!({
+            "services": {"app": {"secrets": [
+                {"source":"marty_db_password", "target":"marty_db_password"},
+                {"source":"installer_ingress_tls_cert"},
+                {"source":"installer_ingress_tls_kms_token"}
+            ]}},
+            "secrets": {
+                "marty_db_password": {"file":root.join(crate::installer_postgres::SECRET)},
+                "installer_ingress_tls_cert": {"file":root.join("installer_ingress_tls_cert")},
+                "installer_ingress_tls_kms_token": {"file":root.join("installer_ingress_tls_kms_token")}
+            }
+        });
+        require_runtime_files(&installation, &binding, &model).unwrap();
+        let mut omitted = binding.clone();
+        omitted.files.remove(crate::installer_postgres::SECRET);
+        assert!(require_runtime_files(&installation, &omitted, &model).is_err());
+        let mut changed = model.clone();
+        changed["secrets"]["marty_db_password"]["file"] = json!(installation
+            .join("secrets")
+            .join(crate::installer_postgres::SECRET));
+        assert!(require_runtime_files(&installation, &binding, &changed).is_err());
+        let mut changed = model.clone();
+        changed["secrets"]["installer_ingress_tls_cert"]["file"] =
+            json!(root.join(crate::installer_postgres::SECRET));
+        assert!(require_runtime_files(&installation, &binding, &changed).is_err());
+        std::fs::remove_file(
+            installation
+                .join("evidence")
+                .join(crate::installer_postgres::RECORD),
+        )
+        .unwrap();
+        assert!(require_runtime_files(&installation, &binding, &model).is_err());
+    }
+
     #[test]
     fn path_rewrite_preserves_absent_optional_declarations_and_mounts() {
         let original = json!({"services":{"plain":{"image":"approved"},

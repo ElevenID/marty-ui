@@ -180,6 +180,17 @@ for public/confidential client examples, provider requirements and separate
 beta/production inputs. This fresh-install selection does not migrate an
 existing issuer or installed user identities.
 
+## External PostgreSQL with external OIDC
+
+Pair `--external-postgres-file /absolute/private/postgres.json` with the fresh
+external-OIDC selection to move the application database off the host. The
+installer imports a private password file, requires hostname-verified TLS,
+removes local PostgreSQL and its health dependencies, and bounds runtime pools.
+The provider database and role must exist before installation. This selection
+does not migrate an installed database or change provider plans. See
+[external PostgreSQL](installer-external-postgres.md) for the input schema,
+Supabase session-pool capacity and deployment qualification requirements.
+
 ## Preprovisioned AWS foundation
 
 For a fresh installation, pass `--foundation-file /absolute/private/foundation.json`

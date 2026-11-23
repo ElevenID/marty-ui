@@ -193,7 +193,7 @@ impl CredentialCallbackApplication {
                 .and_then(|account| account.refresh_token.clone()),
             oidc_claims: account
                 .and_then(|account| account.validated_claims)
-                .map(without_authentication_time),
+                .map(without_linked_authentication_evidence),
         });
         session.keycloak_subject = keycloak_subject;
         session.session_id = self
@@ -245,10 +245,12 @@ impl CredentialCallbackApplication {
     }
 }
 
-fn without_authentication_time(mut claims: Value) -> Value {
+fn without_linked_authentication_evidence(mut claims: Value) -> Value {
     // A token exchanged for a linked account does not prove this user's presence.
     if let Some(object) = claims.as_object_mut() {
-        object.remove("auth_time");
+        for claim in ["auth_time", "amr", "acr", "aal"] {
+            object.remove(claim);
+        }
     }
     claims
 }
