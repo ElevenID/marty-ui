@@ -873,6 +873,9 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       NOTIFICATION_WEBHOOK_SECRET_FILE: /run/secrets/notification_webhook_secret
+      NOTIFICATION_EMAIL_PROVIDER: ${NOTIFICATION_EMAIL_PROVIDER:-disabled}
+      NOTIFICATION_EMAIL_FROM: ${NOTIFICATION_EMAIL_FROM:-}
+      NOTIFICATION_RESEND_API_KEY_FILE: /run/secrets/notification_resend_api_key
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       BAO_ADDR: ${BAO_ADDR:-}
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
@@ -882,6 +885,7 @@ services:
       - grpc_service_token
       - smtp_password
       - notification_webhook_secret
+      - notification_resend_api_key
       - notification_applicant_event_token
       - notification_openbao_token
       - openbao_tls_ca_cert
@@ -1559,6 +1563,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/google_site_verification
   smtp_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/smtp_password
+  notification_resend_api_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_resend_api_key
   passport_tenant_api_keys:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/passport_tenant_api_keys
   personalization_bureau_api_key:

@@ -16,6 +16,7 @@ Login, key custody and public hosting have separate inputs:
 | External OIDC and preprovisioned AWS KMS | Existing `--foundation-file`; see [AWS foundation](compose-installer.md#preprovisioned-aws-foundation). |
 | Canonical public URL, listener, certificates and optional Cloudflare Tunnel | Existing `--hosting-file`; see [Cloudflare hosting](hosting-cloudflare-addon.md). |
 | Supported application policy | Existing `--settings-file`; see [application settings](installer-application-settings.md). |
+| External PostgreSQL with external OIDC and managed OpenBao | Optional `--external-postgres-file`; see [external PostgreSQL](installer-external-postgres.md). |
 
 `--external-oidc-file` and `--foundation-file` are mutually exclusive: the AWS
 foundation already owns its external OIDC selection. The independent option

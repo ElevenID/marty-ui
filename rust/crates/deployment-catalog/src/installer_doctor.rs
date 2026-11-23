@@ -426,25 +426,31 @@ fn inspect(
     docker: &Path,
     deadline: Option<Instant>,
 ) -> Result<Value> {
+    let external_database = crate::installer_postgres::status(state)?;
     if state.diagnostic_record(SESSION_RECORD, true)?.is_none()
         && state
             .diagnostic_record(installer_compose::RUNTIME_CLEANUP_PLAN, true)?
             .is_none()
     {
-        return Ok(
-            json!({"services_observed":false,"reason":"compose_session_incomplete",
-            "installation_ready":false}),
-        );
+        let mut report = json!({"services_observed":false,"reason":"compose_session_incomplete",
+            "installation_ready":false});
+        if let Some(database) = external_database {
+            report["external_database"] = database;
+        }
+        return Ok(report);
     }
     let (saved, session) = open_session_with_deadline(state, installation, docker, deadline)?;
     let before = session.observe_resources()?;
     let statuses = session.status()?;
-    let result = summarize(&before, &statuses)?;
+    let mut result = summarize(&before, &statuses)?;
     require(
         before == session.observe_resources()?
             && serde_json::to_value(&saved).map_err(|_| REFUSED)?
                 == serde_json::to_value(load_session(state, installation)?).map_err(|_| REFUSED)?,
     )?;
+    if let Some(database) = external_database {
+        result["external_database"] = database;
+    }
     state.require_unchanged()?;
     Ok(result)
 }

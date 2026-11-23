@@ -54,6 +54,31 @@ def test_unversioned_or_missing_state_image_is_rejected(tmp_path: Path) -> None:
             read_model(path, root)
 
 
+@pytest.mark.parametrize("external_side", ["source", "target"])
+@pytest.mark.parametrize("keep_local_postgres", [False, True])
+def test_external_database_refuses_before_rehearsal_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    external_side: str, keep_local_postgres: bool,
+) -> None:
+    source = model(tmp_path / "source-state")
+    target = model(tmp_path / "target-state")
+    selected = source if external_side == "source" else target
+    if not keep_local_postgres:
+        del selected["services"]["postgres"]
+    selected["secrets"] = {
+        "marty_db_password": {"file": str(tmp_path / "secrets/external_postgres_password")}
+    }
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("local recovery invoked Docker for an external database selection")
+
+    monkeypatch.setattr("rehearse_selfhost_state_recovery.run", forbidden)
+    work = tmp_path / "work"
+    with pytest.raises(ValueError, match="external databases need a separate"):
+        rehearse(source, target, "source-model", "target-model", "v1", "v2", work)
+    assert not work.exists()
+
+
 def test_corrupted_applicant_restore_is_detected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     applicant = tmp_path / "applicant"
     applicant.mkdir()

@@ -1148,6 +1148,7 @@ fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<Strin
     };
     let operator_owner =
         crate::installer_operator_upgrade::status_locked(state.inspection(), &args.installation)?;
+    let external_database = crate::installer_postgres::status(state.inspection())?;
     if !matches!(args.action, Action::Status | Action::Export) {
         crate::installer_operator_upgrade::require_selected_caller(
             state.inspection(),
@@ -1155,9 +1156,12 @@ fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<Strin
         )?;
     } else if !operator_owner["pending_sequence"].is_null() {
         if args.action == Action::Status {
-            return serde_json::to_string(&json!({"schema":"elevenid.installer-lifecycle/v2", "operation":"status",
-                "operator_owner":operator_owner, "runtime_observed":false, "installation_ready":false}))
-                .map_err(|_| REFUSED.into());
+            let mut report = json!({"schema":"elevenid.installer-lifecycle/v2", "operation":"status",
+                "operator_owner":operator_owner, "runtime_observed":false, "installation_ready":false});
+            if let Some(database) = external_database {
+                report["external_database"] = database;
+            }
+            return serde_json::to_string(&report).map_err(|_| REFUSED.into());
         }
         return Err(
             "Reconcile the pending operator successor before exporting lifecycle units".into(),
@@ -1178,6 +1182,9 @@ fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<Strin
         "unattended_eligible":unattended_eligible(prerequisites.uid, &prerequisites),
         "unattended_eligibility_scope":"user_systemd_prerequisites_only",
         "boot_recovery_qualification":"not_assessed", "scheduler":"customer_user_systemd"});
+    if let Some(database) = external_database {
+        report["external_database"] = database;
+    }
     if args.action == Action::Export {
         let configuration = prepare(state.inspection(), &args.installation, &args.docker)?;
         report["operation"] = json!("export");

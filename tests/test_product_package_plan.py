@@ -258,7 +258,10 @@ def test_frozen_server_plan_binds_runtime_assets_but_console_has_none(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / relative).read_bytes())
     plan = MODULE.build_plan(root, "marty-server", SHA)
-    assert len(plan["runtime_files"]) == 36
+    assert len(plan["runtime_files"]) == 38
+    paths = {entry["path"] for entry in plan["runtime_files"]}
+    assert "config/keycloak/themes/11id/login/auth-layout.ftl" in paths
+    assert "config/keycloak/themes/11id/login/resources/css/auth-layout.css" in paths
     target = root / "scripts/load-secrets-env.sh"
     target.write_bytes(target.read_bytes() + b"\n# changed local source\n")
     with pytest.raises(ValueError, match="runtime source inputs changed"):
