@@ -236,3 +236,62 @@ offline snapshot recovery. It does not prove recovery of live administrative
 authority after that token is revoked. Keep bootstrap retirement blocked until
 the owner has qualified a supported administration/recovery route. Do not
 enable deprecated unauthenticated root-generation endpoints to clear this gate.
+
+### Offline owner-session design boundary
+
+On OpenBao 2.5.5 the disabled legacy root-generation API has no authenticated
+replacement at `sys/generate-root-token`. A separate AppRole can provide owner
+administration without enabling that deprecated API. This is an owner-authority
+design, not another workload identity: a wildcard administrative ACL is
+root-equivalent even when the issued token's policies do not include `root`.
+Never attach it to Keycloak, a timer, a certificate agent, the tunnel or a
+purpose-renewal process.
+
+A disposable restored-node prototype exercised this arrangement:
+
+| Property | Required boundary |
+| --- | --- |
+| Authentication | Separate owner-only AppRole |
+| SecretID | Single-use, retained only in encrypted offline owner custody |
+| Session | Nonperiodic service token, initial/max/explicit maximum 300 seconds |
+| Policies | Owner administrative policy only; no default policy |
+| Enrollment | Temporary bootstrap authority; refuse existing conflicting state |
+| Transport | Explicit trusted CA and hostname verification |
+| Workload access | Existing scoped identities cannot inspect the owner role |
+
+The administrative policy used in that isolated test was deliberately broad:
+
+```json
+{"path":{"*":{"capabilities":["create","read","update","delete","list","sudo"]}}}
+```
+
+Do not treat a successful owner login as sufficient production qualification.
+The isolated test revoked only its restored bootstrap token, proved replay of
+the single-use credential fails, exercised owner policy maintenance and bounded
+renewal-credential recovery, replenished a single-use owner credential and
+proved orphan signing still works afterward. A separate Windows pipe test
+encrypted and reloaded both credentials with their role ID, endpoint, listener
+CA and snapshot binding. It created no live owner authority.
+
+Before live enrollment, implement and review the complete ceremony, including:
+
+1. Persist a pending enrollment boundary before requesting credentials. Preserve
+   lost-response uncertainty rather than automatically minting more authority.
+2. Store complete credentials and trust bindings in encrypted owner custody.
+   Never put credentials in command arguments, environment variables, logs or
+   workload projections. Windows-profile encryption depends on that profile;
+   its rehearsal does not prove recovery after loss of the profile or machine.
+3. Keep two unused recovery slots. Before consuming the final slot, replenish
+   encrypted custody and verify it. Consuming a single-use credential does not
+   make the current five-minute session permanent.
+4. Revoke temporary owner sessions after use and verify actual scope, lifetime,
+   replay denial and workload denial. Preserve a sanitized operation receipt.
+5. Rehearse the enrolled identity from a new snapshot and encrypted custody,
+   including interrupted enrollment/replenishment. Only then retire bootstrap
+   authority and refresh the post-retirement snapshot and recovery record.
+
+The prototype establishes API compatibility after root revocation. It does not
+establish this complete live enrollment protocol, two-slot replenishment,
+cross-machine custody, or production readiness. Keep those distinctions in
+the deployment record instead of silently substituting the prototype for a
+qualified owner route.
