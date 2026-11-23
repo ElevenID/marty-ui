@@ -79,6 +79,27 @@ backout that protects writes. Production credential recovery precedes the
 managed deployment. The rehearsal receipt SHA-256 is
 `6a03e1557e22a780e7f14580dba5bf4715ede5e13b97d18d2e12635ef18b3227`.
 
+### Recovery points across the database upgrade
+
+One verified physical v1.1.274 backup and three archived PostgreSQL WAL
+segments recovered three named points on a disposable cluster. The first
+restore included a v1.1.274 write committed after the backup and before the
+schema upgrade. The next two restores included the new verification receipt
+and the deletion of an organization. A separate writer held a transaction
+open at the second point and committed before the third. Its update became
+visible only at the third point. A later write was excluded from all three.
+Each restored server paused at the recorded log position and passed all five
+schema verifiers from the corresponding release. The rehearsal receipt has
+SHA-256 `ab13d7af4b3700b9ed080b2c7dd04eaabf296aad7871d630f5b4e53283a2ad4f`.
+
+Two read-only observations of the selected production PostgreSQL instance
+found archive mode off, zero replication slots and zero connected WAL
+senders. A production upgrade still needs a retained backup and WAL stream,
+a verified restore, and a decision on how to serve writes accepted under the
+new schema if the original application must return. The release owner must
+also account for identity, Redis and provider state outside the application
+database. The installed readback has SHA-256 `8c98652a766460240efd05b2df1cfebcc328b2c409a61fbd32059ae8574e8563`.
+
 ## Managed full-audience cutover, November 22
 
 The release owner selected v1.1.292 for both the backend and the full
