@@ -166,20 +166,35 @@ def test_initial_current_adoption_uses_real_current_proof_without_transition(mon
 
 def test_website_inspection_callback_is_scoped_to_the_real_selection_lease(monkeypatch):
     import selfhost_windows_website as website
-    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, _cfg):
+    with fixture(monkeypatch, initial_current=True) as (_root, _phase, _tx, _outcome, path, cfg):
+        cfg['tls_init_receipt'] = {'id': '1'*64, 'image': 'sha256:'+'2'*64, 'config_hash': '3'*64}
+        path.write_bytes(selection.packed(cfg))
         selection.adopt_current(path)
         calls = []
-        def inspect(config, choice, _values, record, assets, **_kwargs):
-            calls.append((config['project'], choice, record['sequence'], assets))
+        def inspect(config, choice, _values, record, assets, *, plan_owner, plan_attempt_directory, **_kwargs):
+            calls.append((config['project'], choice, record['sequence'], assets, plan_owner, plan_attempt_directory))
             return {'inspection_completed': True, 'activation_supported': False}
         monkeypatch.setattr(website, 'inspect_composition', inspect)
         with selection.selected_inputs(path) as lease:
             assert lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None,
                 registry_config=None) == {'inspection_completed': True, 'activation_supported': False}
-        assert calls == [(PROJECT, 'old', 1, 'PUBLIC_ASSETS')]
+            assert lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None,
+                registry_config=None, plan_attempt_directory='PROPOSED_PATH') == {
+                    'inspection_completed': True, 'activation_supported': False}
+            raw = {file.name: selection.digest(file.read_bytes()) for file in lease.journal_path.glob('*.json')}
+            owner = calls[1][4]
+            assert owner['configuration_sha256'] == selection.digest(path.read_bytes())
+            assert owner['root'] == str(lease.journal_path.parent)
+            assert owner['journal_sha256'] == selection.digest(selection.packed(raw))
+            assert owner['selection_sha256'] == raw['000001.selection.json']
+            assert owner['selected_sha256'] == lease.selected_sha256
+            assert owner['historical_tls_sha256'] == selection.digest(selection.packed(cfg['tls_init_receipt']))
+            assert owner['selection_sequence'] == lease.sequence and owner['generation_sequence'] == lease.generation_sequence
+        assert calls[0] == (PROJECT, 'old', 1, 'PUBLIC_ASSETS', None, None)
+        assert calls[1][:4] == calls[0][:4] and calls[1][-1] == 'PROPOSED_PATH'
         with pytest.raises(ValueError):
             lease.check_website_composition('PUBLIC_ASSETS', gh=None, cosign=None, registry_config=None)
-        assert len(calls) == 1
+        assert len(calls) == 2
 
 
 def test_initial_current_pending_intent_completes_only_after_reproof(monkeypatch):

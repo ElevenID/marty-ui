@@ -1,9 +1,9 @@
 """Managed website inspection uses held ownership and read-only transports."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 import sys
 
@@ -19,6 +19,9 @@ from test_selfhost_windows_renewal import PROJECT, model as renewal_model, state
 
 
 PRIVATE = "PRIVATE_VALUE_MUST_NEVER_APPEAR_IN_DIAGNOSTICS"
+OWNER_ROOT = PureWindowsPath(r"C:\Marty\production")
+TEMPLATE_SOURCE = OWNER_ROOT / "config" / "edge.template"
+TEMPLATE_BODY = b"include /etc/nginx/marty-website/*.conf;\nlocation = /edge-healthz {\n}\n"
 
 
 @pytest.fixture
@@ -73,7 +76,11 @@ def runtime(monkeypatch, tmp_path):
                 "openbao_didcomm_image": selected["services"]["openbao"]["image"]}
     values = {"old": {name: PRIVATE.encode() for name in models["old"]["secrets"]}}
     events = []
-    live = {"held": False, "reads": 0, "after": None, "exit_error": False, "proof_error": False}
+    live = {"held": False, "reads": 0, "after": None, "exit_error": False, "proof_error": False,
+            "late_input_error": False, "inputs": {}}
+    proof = tmp_path / "payload" / "website" / "website-release.json"
+    proof.parent.mkdir(parents=True)
+    proof.write_text('{"schema":"marty.website-release/v1"}', encoding="utf-8")
 
     class Docker:
         prefix = ["docker", "--host", config["docker_host"]]
@@ -132,26 +139,143 @@ def runtime(monkeypatch, tmp_path):
         live["held"] = True
         events.append("lease-enter")
         try:
-            yield SimpleNamespace(generation_sequence=33, selected_sha256="d" * 64,
-                check_website_composition=lambda assets, **kwargs: website.inspect_composition(
-                    config, "new", values, record, assets, **kwargs))
+            with ExitStack() as held:
+                yield SimpleNamespace(generation_sequence=33, selected_sha256="d" * 64,
+                    check_website_composition=lambda assets, **kwargs: website.inspect_composition(
+                        config, "new", values, record, assets, owner_root=OWNER_ROOT, held=held,
+                        plan_owner=live.get("plan_owner"), **kwargs))
         finally:
             live["held"] = False
             events.append("lease-exit")
             if live["exit_error"]:
                 raise ValueError(PRIVATE)
 
+    @contextmanager
+    def hold_input(path, *, max_bytes):
+        assert live["held"]
+        value = live["inputs"][path]
+        assert len(value) <= max_bytes
+        events.append(("hold-input", path))
+        yield value
+        events.append(("release-input", path))
+        if path == Path(str(TEMPLATE_SOURCE)) and live["late_input_error"]:
+            raise ValueError(PRIVATE)
+
     monkeypatch.setattr(website.renewal, "Docker", Docker)
+    monkeypatch.setattr(website.renewal, "hold_private_input", hold_input)
     monkeypatch.setattr(website.renewal, "windows_mount_path_equal", lambda left, right: left == right)
     monkeypatch.setattr(website.composition, "verified_package", verified)
     monkeypatch.setattr(website.selection, "selected_inputs", selected_inputs)
     kwargs = {"gh": tmp_path / "gh", "cosign": tmp_path / "cosign", "registry_config": tmp_path / "registry.json"}
     return SimpleNamespace(config=config, manifest=manifest, models=models, items=items, record=record,
-                           live=live, events=events, kwargs=kwargs, root=tmp_path)
+                           live=live, events=events, kwargs=kwargs, root=tmp_path, proof=proof)
 
 
 def run(runtime):
     return website.check(runtime.root / "selection.json", runtime.root / "composition", **runtime.kwargs)
+
+
+def prepare_full_standalone(runtime, *, fault=None):
+    runtime.proof.write_text(json.dumps({"schema": website.web.STANDALONE_FULL_RELEASE_SCHEMA}), encoding="utf-8")
+    declared = {"source": TEMPLATE_SOURCE.as_posix(), "target": website.TEMPLATE_TARGET,
+                "type": "bind", "read_only": True}
+    for model in runtime.models.values():
+        model["services"]["edge"]["volumes"] = [deepcopy(declared)]
+    source = deepcopy(runtime.models["new"])
+    mounted = {"Type": "bind", "Source": "/run/desktop/mnt/host/c/Marty/production/config/edge.template",
+               "Destination": website.TEMPLATE_TARGET, "RW": False}
+    edge = next(item for item in runtime.items if website.renewal._service(item) == "edge")
+    edge["Mounts"] = [mounted]
+    template = TEMPLATE_BODY
+    if fault == "source-render-mismatch":
+        source["services"]["edge"]["volumes"][0]["source"] = "C:/Marty/production/config/other.template"
+    elif fault == "aliased-route-target":
+        source["services"]["edge"]["volumes"].append(
+            {**declared, "target": "/etc/nginx//marty-website"})
+    elif fault == "route-overmount":
+        edge["Mounts"].append({"Type": "bind", "Destination": "/etc/nginx", "Source": mounted["Source"], "RW": False})
+    elif fault == "writable-template":
+        mounted["RW"] = True
+    elif fault == "missing-include":
+        template = template.replace(b"include ", b"# include ")
+    runtime.record["data_sha256"] = website.selection.digest(website.selection.packed(website.renewal.data_mounts(runtime.items)))
+    body = website.selection.packed(source)
+    runtime.config["compose_sha256"] = website.selection.digest(body)
+    runtime.live["inputs"] = {Path(runtime.config["compose_file"]): body, Path(str(TEMPLATE_SOURCE)): template}
+    return mounted
+
+
+def test_full_cutover_preflight_holds_exact_combined_edge_through_final_readback(runtime):
+    mounted = prepare_full_standalone(runtime)
+    result = run(runtime)
+    assert result["mounted_edge_template_checked"] and result["combined_edge_template"] == {
+        "sha256": website.selection.digest(TEMPLATE_BODY), "bytes": len(TEMPLATE_BODY),
+        "runtime_mount_sha256": website.selection.digest(website.selection.packed(mounted))}
+    assert not result["activation_supported"] and not result["public_ingress_checked"]
+    template = Path(str(TEMPLATE_SOURCE))
+    assert runtime.events.index(("hold-input", template)) < len(runtime.events) - 4
+    assert runtime.events[-5:] == ["inspect-containers", "proof-exit",
+        ("release-input", template), ("release-input", Path(runtime.config["compose_file"])), "lease-exit"]
+    assert str(TEMPLATE_SOURCE) not in json.dumps(result)
+
+
+@pytest.mark.parametrize("fault", [
+    "source-render-mismatch", "aliased-route-target", "route-overmount", "writable-template", "missing-include",
+])
+def test_combined_edge_preflight_refuses_unsafe_source_mount_or_content(runtime, fault):
+    prepare_full_standalone(runtime, fault=fault)
+    with pytest.raises(ValueError):
+        run(runtime)
+    assert (("hold-input", Path(str(TEMPLATE_SOURCE))) in runtime.events) == (fault == "missing-include")
+
+
+def test_combined_edge_preflight_withholds_result_on_late_input_failure(runtime):
+    prepare_full_standalone(runtime)
+    runtime.live["late_input_error"] = True
+    with pytest.raises(ValueError, match=PRIVATE):
+        run(runtime)
+
+
+def test_plan_request_holds_original_proof_files_and_uses_observed_template(runtime, monkeypatch):
+    from contextlib import nullcontext
+    import selfhost_windows_website_plan as plan
+
+    prepare_full_standalone(runtime)
+    assets = runtime.root / "composition"
+    assets.mkdir()
+    proofs = {}
+    for name in website.product_journal.ARTIFACTS:
+        path = assets / name
+        raw = name.encode()
+        path.write_bytes(raw)
+        runtime.live["inputs"][path] = raw
+        proofs[name] = website.selection.digest(raw)
+    routes = runtime.proof.with_name("web-surface-routes.json")
+    routes.write_text('{"synthetic":"routes"}', encoding="utf-8")
+    runtime.live["plan_owner"] = {"identity": "owner-derived"}
+    monkeypatch.setattr(website.renewal, "hold_storage_namespace", lambda _path: nullcontext())
+    monkeypatch.setattr(website, "_held_private_input", lambda _path, **_kwargs: nullcontext())
+    attempt = Path(str(OWNER_ROOT / ("windows-website-" + "a"*32)))
+
+    def from_observation(before, manifest, **kwargs):
+        assert runtime.live["held"] and manifest == runtime.manifest
+        assert kwargs["anchor"] == runtime.live["plan_owner"] and kwargs["attempt_directory"] == attempt
+        assert kwargs["edge_template"] == TEMPLATE_BODY
+        assert kwargs["proof_sha256"] == proofs and kwargs["routes"] == {"synthetic": "routes"}
+        assert before["services"]["edge"]["volumes"][0]["read_only"]
+        assert all(("hold-input", assets / name) in runtime.events for name in proofs)
+        assert "proof-exit" not in runtime.events
+        return {"schema": plan.SCHEMA, "plan_sha256": "a"*64, "states": {}, "proof_sha256": proofs,
+                "attempt_directory": str(attempt)}
+
+    monkeypatch.setattr(plan, "from_observation", from_observation)
+    result = website.check(runtime.root / "selection.json", assets, plan_attempt_directory=attempt, **runtime.kwargs)
+    assert result["transition_plan"] == {"schema": plan.SCHEMA, "plan_sha256": "a"*64,
+                                        "states": {}, "proof_sha256": proofs}
+    assert str(attempt) not in json.dumps(result)
+    assert not result["activation_supported"] and not result["production_admission"]
+    assert all(runtime.events.index("proof-exit") < runtime.events.index(("release-input", assets / name))
+               for name in proofs)
 
 
 def test_authenticated_preflight_preserves_historical_initializer_and_never_claims_activation(runtime):
@@ -163,6 +287,7 @@ def test_authenticated_preflight_preserves_historical_initializer_and_never_clai
     assert not result["activation_supported"] and not result["production_admission"]
     assert not any(result[name] for name in ("runtime_readiness_checked", "native_custody_checked",
         "foreign_storage_custody_checked", "mounted_edge_template_checked", "public_ingress_checked"))
+    assert result["combined_edge_template"] is None
     assert runtime.events[0] == "lease-enter" and runtime.events[-2:] == ["proof-exit", "lease-exit"]
     assert PRIVATE not in json.dumps(result)
     assert str(runtime.root) not in json.dumps(result)

@@ -52,8 +52,10 @@ of nine can belong to cumulative generation 33.
 inputs and requires exact equality. `validate_envelope` checks record integrity
 and the immutable contract shape; neither the envelope nor a self-consistent
 SHA256 can authenticate its own inputs. Journal parsing uses envelope integrity
-and still requires the future caller to reconstruct the plan under the existing
-owner.
+and requires a live caller to reconstruct the plan under the existing owner.
+The [managed check-only invocation](windows-managed-website-preflight.md#reconstruct-the-first-cutover-plan)
+can make that reconstruction from the held selection, composition and cached
+image and report its hashes before a transition is attempted.
 
 ## Allowed model and data changes
 
@@ -116,10 +118,11 @@ must contain no existing website route mount, ancestor mount, or nested route
 mount. The new route directory is confined to an attempt directly below the same
 Windows owner root.
 
-These checks make the declared baseline coherent. They do not read the installed
-template, establish file custody, test Nginx syntax, prove Docker path identity, or
-prove that the running edge loaded those bytes. Those qualification fields remain
-false.
+The plan checks these declaration inputs in memory. The [managed website
+preflight](windows-managed-website-preflight.md) separately checks a compatible
+full v4 composition against the installed bind and holds the Windows template
+bytes through owner exit. Running Nginx configuration and route behavior require
+transition qualification.
 
 ## Journal phases, interruption, and backout
 
@@ -156,6 +159,61 @@ is the last completed declared boundary, not an assertion about a partly changed
 runtime. A future owner must reconcile actual observations before recording a
 completion or choosing any recovery action. This contract does not guess whether
 a Docker action happened or replay it.
+
+### Durable storage
+
+The bundled `selfhost_windows_website_store.py` uses the selected owner's private
+NTFS writer. The transition caller must hold the existing project lock and
+provide the reconstructed plan. It allocates a private `journal` directory
+below the planned attempt and a separate `.<project>.website-tail-<cycle>`
+directory directly under the owner root.
+
+The store flushes the canonical phase record and verifies its held bytes before
+creating the corresponding immutable tail record. Each tail binds the exact
+phase record, plan and previous tail. The caller retains the accepted tail
+digest independently. Reads require that pin and check exact membership and
+the complete chain, including the separately stored initial-stage abort
+receipt when present.
+
+A partial write or an advancement past the retained pin requires
+reconciliation. The caller can re-anchor a fully written next phase record
+after independently verifying that record and its observations. This operation
+accepts the retained prior pin and exact verified record digest and writes only
+the missing tail. A durable started record still requires runtime
+reconciliation before any new operation.
+
+### Shared owner guard
+
+The managed selection lease can begin a website attempt after reconstructing
+the full plan under held inputs, matching the operator's expected plan digest,
+and passing existing current readiness, native authority and storage custody
+checks. It reserves the existing project product-transition guard before
+creating the attempt and initial journal. The guard binds the selected owner,
+exact plan, attempt and initial tail. The existing guard blocks ordinary
+renewal, recovery and other product transitions during a website attempt.
+
+A pending website read requires the exact guard and retained tail digests,
+replays the original selected generation and verifies the typed guard against
+that owner before opening the journal. This read returns phase status. The
+runtime executor must reconcile the actual workload and provide its evidence
+before advancing a pending phase or retiring the guard.
+
+### First workload phase
+
+The selection owner can stage the website from the initial guard and tail.
+It re-authenticates the original composition, reconstructs the sealed plan,
+and renders a one-service Compose overlay against the retained source.
+The entire normalized combined model must survive unchanged once the new slot
+is subtracted. Fresh current readiness, native custody and storage checks
+precede the durable `stage-candidate.started` boundary.
+
+Only the new `website-a` service is started, with the cached image, no
+dependencies and no published ports. The foreign-storage observer also
+compares protected existing containers, checks the selected secret mounts and
+verifies the new image, networks and declared data snapshot. Completion
+requires a healthy candidate with zero restarts. A failed command or
+postcheck leaves the guard and started record for reconciliation, and the
+combined edge stays on its retained routing.
 
 ### Failed initial-stage reconciliation
 
