@@ -118,11 +118,25 @@ rehearsal receipt SHA-256 is
 The managed full application upgrade still needs to select the signed
 command and confirm the data and socket mount identities on the host.
 
-The selected PostgreSQL 15 cluster had two Keycloak connections at
-readback. Its built-in WAL archive was off, and it had no active WAL
-senders or replication slots. The production database owner must account
-for identity writes as well as application writes in the recovery point.
-A physical restore rewinds both databases together.
+The selected PostgreSQL 15 cluster contains three service databases,
+`marty`, `keycloak` and `marty_applicants`. The Applicant service also
+writes to a separate host-mounted `applicant_store.json`. Its released
+file persistence, store decoder and migration module are byte-identical
+in v1.1.274 and v1.1.292. A production recovery boundary must account for
+that file independently of the PostgreSQL and Redis recovery points.
+
+A disposable cluster initialized by the original v1.1.274 initializer
+accepted authenticated connections to all three databases with both
+releases' signed secret loaders. After a verified base backup, separate
+writes committed in each database before and after a named recovery
+point. Restoring that point retained the three earlier commits and
+excluded all three later commits. A second restore retained the later
+commits in all three databases. Both restores paused at their expected
+WAL positions. The test used synthetic rows and did not apply service
+schema migrations. Receipt SHA-256
+`4ea381cf730b5329e03ca4fa87a8b0dd4ff15b700f875588667a9162f6feec37`.
+The database owner still needs the production recovery point and a
+rollback policy for writes acknowledged after the upgrade.
 [PostgreSQL 15 recovery scope](https://www.postgresql.org/docs/15/continuous-archiving.html)
 
 The original v1.1.274 combined package and application evidence were
