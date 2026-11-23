@@ -954,7 +954,9 @@ def test_issuance_migrations_use_rust_in_both_beta_modes() -> None:
     assert upgrade < verify < script.index('"issuance-migration-live-verify.log"', verify)
     assert '"issuance-migration-rehearsal.log"' in native
     assert '"issuance-migration-rehearsal-verify.log"' in native
-    assert script.count('"issuance-migrations")') == 2
+    assert script.count('"issuance-migrations")') == 1
+    assert '"issuance-migrations", "verify-owned-schema")' in script
+    assert native.index('"owner-migrations-rehearsal.log"', native.index("fn perform")) < native.index('"issuance-migration-rehearsal.log"', native.index("fn perform"))
 
 
 def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:

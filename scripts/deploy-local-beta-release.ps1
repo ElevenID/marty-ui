@@ -1629,7 +1629,7 @@ try {
         ) `
         -LogPath (Join-Path $logsDir "owner-migrations-live.log") `
         -FailureMessage "Organization, credential catalog, and presentation policy bootstrap failed"
-    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
+    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations", "verify-owned-schema")
     Invoke-ComposeLogged `
         -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-live.log") `

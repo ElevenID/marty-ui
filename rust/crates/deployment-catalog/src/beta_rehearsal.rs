@@ -178,6 +178,7 @@ fn validate(context: &mut Context) -> Result<()> {
         "revocation-migration-rehearsal.log",
         "migration-rehearsal.log",
         "migration-rehearsal-verify.log",
+        "owner-migrations-rehearsal.log",
         "issuance-migration-rehearsal.log",
         "issuance-migration-rehearsal-verify.log",
         "verification-migration-rehearsal-1.log",
@@ -588,15 +589,38 @@ fn perform(
         "migration-rehearsal-verify.log",
         &redactions,
     )?;
-    for log in [
-        "issuance-migration-rehearsal.log",
-        "issuance-migration-rehearsal-verify.log",
+    let mut request = compose(context)?;
+    request.tail(&["run", "--rm", "--no-deps"]);
+    tag_helper(&mut request, owner, names);
+    for (name, value) in [
+        ("DATABASE_URL", url.as_str()),
+        ("MARTY_ORG_ID", &context.pilot_organization_id),
+        ("MARTY_ORG_ADMIN_EMAIL", &context.migration_admin_email),
+        ("MARTY_MIGRATION_PROFILE", "beta"),
+        ("PUBLIC_API_URL", &context.beta_origin),
+    ] {
+        request.env(name, value);
+    }
+    request.tail(&["owner-migrations"]);
+    migration(
+        docker,
+        request,
+        context,
+        "owner-migrations-rehearsal.log",
+        &redactions,
+    )?;
+    for (operation, log) in [
+        ("migrate", "issuance-migration-rehearsal.log"),
+        (
+            "verify-owned-schema",
+            "issuance-migration-rehearsal-verify.log",
+        ),
     ] {
         let mut request = compose(context)?;
         request.tail(&["run", "--rm", "--no-deps"]);
         tag_helper(&mut request, owner, names);
         request.env("DATABASE_URL", &url);
-        request.tail(&["issuance-migrations"]);
+        request.tail(&["issuance-migrations", operation]);
         migration(docker, request, context, log, &redactions)?;
     }
     for pass in 1..=2 {
@@ -804,6 +828,7 @@ mod tests {
                 "revocation-migration-rehearsal.log",
                 "migration-rehearsal.log",
                 "migration-rehearsal-verify.log",
+                "owner-migrations-rehearsal.log",
                 "issuance-migration-rehearsal.log",
                 "issuance-migration-rehearsal-verify.log",
                 "verification-migration-rehearsal-1.log",
@@ -869,14 +894,47 @@ mod tests {
                 .count(),
             2
         );
+        let owner_step = docker
+            .calls
+            .iter()
+            .find(|request| {
+                request
+                    .args
+                    .last()
+                    .is_some_and(|arg| arg == "owner-migrations")
+            })
+            .unwrap();
         assert_eq!(
-            docker
-                .calls
-                .iter()
-                .filter(|r| r.args.last().is_some_and(|s| s == "issuance-migrations"))
-                .count(),
-            2
+            owner_step.environment["MARTY_ORG_ID"],
+            input["pilot_organization_id"].as_str().unwrap()
         );
+        assert_eq!(
+            owner_step.environment["MARTY_ORG_ADMIN_EMAIL"],
+            input["migration_admin_email"].as_str().unwrap()
+        );
+        assert_eq!(owner_step.environment["MARTY_MIGRATION_PROFILE"], "beta");
+        assert_eq!(
+            owner_step.environment["PUBLIC_API_URL"],
+            input["beta_origin"].as_str().unwrap()
+        );
+        assert!(!owner_step.environment.contains_key("BAO_TOKEN"));
+        let issuance_steps: Vec<_> = docker
+            .calls
+            .iter()
+            .filter(|request| request.args.iter().any(|arg| arg == "issuance-migrations"))
+            .collect();
+        assert_eq!(issuance_steps.len(), 2);
+        assert_eq!(issuance_steps[0].args.last().unwrap(), "migrate");
+        assert_eq!(
+            issuance_steps[1].args.last().unwrap(),
+            "verify-owned-schema"
+        );
+        for issuance_step in issuance_steps {
+            assert_eq!(
+                owner_step.environment["DATABASE_URL"],
+                issuance_step.environment["DATABASE_URL"]
+            );
+        }
     }
     #[test]
     fn failures_at_every_command_keep_cleanup_owned_and_fail_closed_when_uncertain() {
