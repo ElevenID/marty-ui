@@ -1621,6 +1621,7 @@ try {
     Invoke-ComposeLogged `
         -Arguments @(
             "run", "--rm", "--no-deps",
+            "--env", "DATABASE_URL=$liveDatabaseUrl",
             "--env", "MARTY_ORG_ID=$PilotOrganizationId",
             "--env", "MARTY_MIGRATION_PROFILE=beta",
             "--env", "PUBLIC_API_URL=$BetaOrigin",
