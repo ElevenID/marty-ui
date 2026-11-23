@@ -195,10 +195,23 @@ fn disabled_exits_before_any_file_or_secret_resolution() {
 }
 
 #[test]
+fn accepts_each_supported_role_pool_limit() {
+    for maximum in 1..=4 {
+        let mut input = values();
+        input.insert(
+            "DELEGATED_USE_POOL_MAX_CONNECTIONS".into(),
+            maximum.to_string(),
+        );
+        assert_eq!(parse(input).unwrap().pool_max_connections, maximum);
+    }
+}
+
+#[test]
 fn valid_configuration_uses_selected_profiles_and_redacts_credentials() {
     let input = values();
     let config = parse(input.clone()).unwrap();
     assert_eq!(config.listen_addr.to_string(), "127.0.0.1:8021");
+    assert_eq!(config.pool_max_connections, 4);
     assert!(!config.public_caller_enabled);
     assert_eq!(
         config.flow_start.definition.organization_id,
@@ -340,6 +353,8 @@ fn scope_endpoints_and_lifetimes_are_closed_and_bounded() {
             "22222222-2222-4222-8222-22222222222A",
         ),
         ("DELEGATED_USE_DELEGATION_POLICY_ID", "../foreign"),
+        ("DELEGATED_USE_POOL_MAX_CONNECTIONS", "0"),
+        ("DELEGATED_USE_POOL_MAX_CONNECTIONS", "5"),
         ("DELEGATED_USE_LISTEN_ADDR", "127.0.0.1:0"),
         ("DELEGATED_USE_PUBLIC_BASE_URL", "http://127.0.0.1:8021"),
         (
