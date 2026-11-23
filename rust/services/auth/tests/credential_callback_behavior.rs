@@ -98,6 +98,9 @@ impl CredentialAccountResolver for LinkedAccount {
             validated_claims: Some(json!({
                 "sub": "linked-user",
                 "auth_time": now().timestamp(),
+                "amr": ["pwd", "otp"],
+                "acr": "2",
+                "aal": "aal2",
             })),
         }))
     }
@@ -244,7 +247,7 @@ async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
 }
 
 #[tokio::test]
-async fn linked_account_token_exchange_cannot_supply_pairing_auth_time() {
+async fn linked_account_token_exchange_preserves_subject_without_authentication_evidence() {
     let nonce = test_nonce();
     let (application, sessions) =
         build_application(&nonce, Some(Arc::new(LinkedAccount)), config()).await;
@@ -260,13 +263,7 @@ async fn linked_account_token_exchange_cannot_supply_pairing_auth_time() {
     let session = &sessions[0];
     assert_eq!(session.id_token.as_deref(), Some("linked-account-token"));
     assert_eq!(session.keycloak_subject.as_deref(), Some("linked-user"));
-    assert_eq!(session.oidc_claims.as_ref().unwrap()["sub"], "linked-user");
-    assert!(session
-        .oidc_claims
-        .as_ref()
-        .unwrap()
-        .get("auth_time")
-        .is_none());
+    assert_eq!(session.oidc_claims, Some(json!({"sub": "linked-user"})));
 }
 
 #[tokio::test]

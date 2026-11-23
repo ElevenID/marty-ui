@@ -490,26 +490,7 @@ impl PostgresFlowRepository {
              AND NOT (flow_instances.context::jsonb ? '_marty_delegation_oid4vp_v1') \
              AND NOT (flow_instances.context::jsonb ? '_marty_delegation_verifier_client_id_v1')"
         };
-        let result = sqlx::query(statement)
-            .bind(&instance.id)
-            .bind(&instance.flow_definition_id)
-            .bind(&instance.organization_id)
-            .bind(instance.status.to_string())
-            .bind(&instance.current_step_id)
-            .bind(&instance.context)
-            .bind(json(&instance.step_history)?)
-            .bind(json(&instance.state_history)?)
-            .bind(&instance.subject_id)
-            .bind(&instance.subject_type)
-            .bind(&instance.external_reference)
-            .bind(&instance.application_flow_key_hash)
-            .bind(instance.started_at)
-            .bind(instance.completed_at)
-            .bind(instance.expires_at)
-            .bind(&instance.result)
-            .bind(&instance.error)
-            .bind(instance.created_at)
-            .bind(instance.updated_at)
+        let result = bind_instance_write(statement, instance)?
             .execute(&self.pool)
             .await
             .map_err(storage)?;
@@ -694,33 +675,15 @@ impl PostgresFlowRepository {
                 return Err(RepositoryError::PublicVerificationCapacityExceeded);
             }
         }
-        let inserted = sqlx::query(
+        let inserted = bind_instance_write(
             "INSERT INTO flow_service.flow_instances (id, flow_definition_id, organization_id, \
              status, current_step_id, context, step_history, state_history, subject_id, subject_type, \
              external_reference, application_flow_key_hash, started_at, completed_at, expires_at, \
              result, error, created_at, updated_at) VALUES \
              ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) \
              ON CONFLICT DO NOTHING",
-        )
-        .bind(&instance.id)
-        .bind(&instance.flow_definition_id)
-        .bind(&instance.organization_id)
-        .bind(instance.status.to_string())
-        .bind(&instance.current_step_id)
-        .bind(&instance.context)
-        .bind(json(&instance.step_history)?)
-        .bind(json(&instance.state_history)?)
-        .bind(&instance.subject_id)
-        .bind(&instance.subject_type)
-        .bind(&instance.external_reference)
-        .bind(&instance.application_flow_key_hash)
-        .bind(instance.started_at)
-        .bind(instance.completed_at)
-        .bind(instance.expires_at)
-        .bind(&instance.result)
-        .bind(&instance.error)
-        .bind(instance.created_at)
-        .bind(instance.updated_at)
+            instance,
+        )?
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
@@ -863,7 +826,7 @@ impl PostgresFlowRepository {
         let mut final_plan = Vec::with_capacity(planned.len());
         for candidate in planned {
             let instance = &candidate.instance;
-            sqlx::query(
+            bind_instance_write(
                 "INSERT INTO flow_service.flow_instances \
                  (id, flow_definition_id, organization_id, status, current_step_id, context, \
                   step_history, state_history, subject_id, subject_type, external_reference, \
@@ -871,26 +834,8 @@ impl PostgresFlowRepository {
                   created_at, updated_at) VALUES \
                  ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) \
                  ON CONFLICT (organization_id, application_flow_key_hash) DO NOTHING",
-            )
-            .bind(&instance.id)
-            .bind(&instance.flow_definition_id)
-            .bind(&instance.organization_id)
-            .bind(instance.status.to_string())
-            .bind(&instance.current_step_id)
-            .bind(&instance.context)
-            .bind(json(&instance.step_history)?)
-            .bind(json(&instance.state_history)?)
-            .bind(&instance.subject_id)
-            .bind(&instance.subject_type)
-            .bind(&instance.external_reference)
-            .bind(&instance.application_flow_key_hash)
-            .bind(instance.started_at)
-            .bind(instance.completed_at)
-            .bind(instance.expires_at)
-            .bind(&instance.result)
-            .bind(&instance.error)
-            .bind(instance.created_at)
-            .bind(instance.updated_at)
+                instance,
+            )?
             .execute(&mut *transaction)
             .await
             .map_err(storage)?;
@@ -1729,6 +1674,32 @@ fn timestamp(value: u64) -> Result<DateTime<Utc>, RepositoryError> {
         .ok()
         .and_then(DateTime::from_timestamp_millis)
         .ok_or_else(|| RepositoryError::Storage("timestamp is out of range".into()))
+}
+
+fn bind_instance_write<'a>(
+    statement: &'static str,
+    instance: &'a FlowInstanceRecord,
+) -> Result<Query<'a, Postgres, PgArguments>, RepositoryError> {
+    Ok(sqlx::query(statement)
+        .bind(&instance.id)
+        .bind(&instance.flow_definition_id)
+        .bind(&instance.organization_id)
+        .bind(instance.status.to_string())
+        .bind(&instance.current_step_id)
+        .bind(&instance.context)
+        .bind(json(&instance.step_history)?)
+        .bind(json(&instance.state_history)?)
+        .bind(&instance.subject_id)
+        .bind(&instance.subject_type)
+        .bind(&instance.external_reference)
+        .bind(&instance.application_flow_key_hash)
+        .bind(instance.started_at)
+        .bind(instance.completed_at)
+        .bind(instance.expires_at)
+        .bind(&instance.result)
+        .bind(&instance.error)
+        .bind(instance.created_at)
+        .bind(instance.updated_at))
 }
 
 fn bind_artifact_write<'a>(

@@ -444,9 +444,18 @@ def test_archive_never_overwrites_outputs_or_archives_itself(tmp_path):
         MODULE.PLAN["write_archive"](bundle, bundle / "self.tar.gz")
 
 
-@pytest.mark.parametrize("worker", ["canvas-sync-worker", "canvas_sync_worker"])
-def test_server_rejects_retired_worker_without_mutating_input(worker):
-    base = {"services": {name: {} for name in ("edge", "gateway", "auth", "keycloak", "flow", worker)}}
+@pytest.mark.parametrize(("worker", "service"), [
+    ("canvas-sync-worker", {}),
+    ("CANVAS_SYNC_WORKER", {}),
+    ("marty-canvas-sync-worker", {}),
+    ("provider-jobs", {"container_name": "canvas-sync-worker"}),
+    ("provider-jobs", {"environment": {"SERVICE_NAME": "canvas_sync_worker"}}),
+    ("provider-jobs", {"entrypoint": ["/usr/local/bin/marty-canvas-sync-worker"]}),
+    ("provider-jobs", {"command": "exec /usr/local/bin/marty-canvas-sync-worker"}),
+])
+def test_server_rejects_retired_worker_without_mutating_input(worker, service):
+    base = {"services": {name: {} for name in ("edge", "gateway", "auth", "keycloak", "flow")}}
+    base["services"][worker] = service
     original = copy.deepcopy(base)
     with pytest.raises(ValueError, match="retired provider worker"):
         MODULE.server_composition(base, package("marty-server"))

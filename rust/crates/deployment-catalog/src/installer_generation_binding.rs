@@ -270,10 +270,15 @@ fn closure(installation: &Path, model: &serde_json::Value, root: &str) -> Result
         {
             let name = reference["source"].as_str().ok_or(REFUSED)?;
             safe_name(name)?;
-            require(
-                decode(model["secrets"][name]["file"].as_str().ok_or(REFUSED)?)? == base.join(name),
+            let source = decode(model["secrets"][name]["file"].as_str().ok_or(REFUSED)?)?;
+            let file = crate::installer_postgres::credential_source_name(
+                installation,
+                &base,
+                name,
+                &source,
             )?;
-            result.insert(name.into());
+            safe_name(&file)?;
+            result.insert(file);
         }
         for mount in service["volumes"]
             .as_array()
@@ -334,6 +339,26 @@ fn external_oidc_for_binding(
     )?
     .ok_or(REFUSED)?;
     Ok(Some(selection))
+}
+fn external_postgres_for_binding(
+    installation: &Path,
+    binding: &GenerationBinding,
+) -> Result<Option<crate::installer_postgres::Selection>> {
+    // Historical generations have no imported database credential. Actual
+    // selected runtimes still require the exact alias closure and bound owner
+    // through Compose inputs/model validation, including the staging check.
+    if !binding
+        .files
+        .contains_key(crate::installer_postgres::SECRET)
+    {
+        return Ok(None);
+    }
+    let selected = crate::installer_postgres::record(
+        installation,
+        uuid::Uuid::parse_str(&binding.installation_id).map_err(|_| REFUSED)?,
+    )?;
+    require(selected.is_some())?;
+    Ok(selected.map(|(_, selection)| selection))
 }
 impl GenerationBinding {
     pub(crate) fn sequence(&self) -> u64 {
@@ -966,6 +991,8 @@ pub fn stage(
     let id = state.journal().installation_id().to_string();
     let engine = state.journal().runtime().ok_or(REFUSED)?.engine_id.clone();
     let oidc = crate::installer_oidc::record(installation, state.journal().installation_id())?;
+    let postgres =
+        crate::installer_postgres::record(installation, state.journal().installation_id())?;
     let wanted = selected_closure(installation, model, "secrets", oidc.is_some())?;
     let proof = provenance(installation, &id, &engine)?;
     if let Some(plan) = &proof.public_plan {
@@ -1006,6 +1033,9 @@ pub fn stage(
         state.write_evidence(IMPORTED_PROVENANCE, &proof.bytes)?;
     }
     if let Some((_, selected)) = &oidc {
+        selected.verify_imported(&values)?;
+    }
+    if let Some((_, selected)) = &postgres {
         selected.verify_imported(&values)?;
     }
     let result = GenerationBinding {
@@ -1197,6 +1227,12 @@ fn verify_one_attempt(
     b.validate()?;
     crate::installer_settings::verify_generation(installation, &b.files)?;
     let oidc = external_oidc_for_binding(installation, &b)?;
+    if let Some(selected) = external_postgres_for_binding(installation, &b)? {
+        selected.verify_imported(&BTreeMap::from([(
+            "external_postgres_password".into(),
+            b.read(installation, "external_postgres_password")?,
+        )]))?;
+    }
     if let Some(successor) = &b.successor {
         let parent = parent.ok_or(REFUSED)?;
         let (bytes, candidates, plan) = candidate_with_parent(
@@ -1527,6 +1563,9 @@ pub fn verify_model(
             && model["name"] == format!("marty-install-{}", b.installation_id.replace('-', "")),
     )?;
     let independent_oidc = external_oidc_for_binding(installation, b)?.is_some();
+    if let Some(selected) = external_postgres_for_binding(installation, b)? {
+        selected.validate_model(model)?;
+    }
     if b.successor.is_some() {
         return crate::installer_generation_maintenance::require_runtime_model(
             installation,
@@ -1637,6 +1676,62 @@ mod tests {
             assert!(verify_model(root, &binding, &changed, binding.network_id.as_deref()).is_err());
         }
         assert!(verify_model(root, &binding, &model, Some(&"c".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn database_alias_requires_bound_selection_and_tracks_actual_imported_file() {
+        let (_parent, installation, state, _) =
+            crate::installer_postgres::test_selected_installation();
+        let id = state.journal().installation_id().to_string();
+        let (mut binding, mut model) = fixture();
+        binding.installation_id = id.clone();
+        model["name"] = json!(format!("marty-install-{}", id.replace('-', "")));
+        for (name, declaration) in model["secrets"].as_object_mut().unwrap() {
+            *declaration = json!({"file":installation.join(ROOT).join(name)});
+        }
+        model["services"]["synthetic"]["secrets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"source":"marty_db_password", "target":"marty_db_password"}));
+        model["secrets"]["marty_db_password"] = json!({
+            "file": installation.join(ROOT).join(crate::installer_postgres::SECRET)
+        });
+        let names = closure(&installation, &model, ROOT).unwrap();
+        assert!(names.contains(crate::installer_postgres::SECRET));
+        assert!(!names.contains("marty_db_password"));
+        // Omitting the imported credential cannot make an actual external
+        // runtime match the generation's exact credential inventory.
+        assert!(verify_model(
+            &installation,
+            &binding,
+            &model,
+            binding.network_id.as_deref()
+        )
+        .is_err());
+        for invalid in [
+            installation
+                .join("secrets")
+                .join(crate::installer_postgres::SECRET),
+            installation.join(ROOT).join("different_password"),
+        ] {
+            let mut changed = model.clone();
+            changed["secrets"]["marty_db_password"]["file"] = json!(invalid);
+            assert!(closure(&installation, &changed, ROOT).is_err());
+        }
+        let mut changed = model.clone();
+        changed["secrets"]["smtp_password"]["file"] = json!(installation
+            .join(ROOT)
+            .join(crate::installer_postgres::SECRET));
+        assert!(closure(&installation, &changed, ROOT).is_err());
+        let record = installation
+            .join("evidence")
+            .join(crate::installer_postgres::RECORD);
+        let raw = std::fs::read(&record).unwrap();
+        std::fs::remove_file(&record).unwrap();
+        assert!(closure(&installation, &model, ROOT).is_err());
+        std::fs::write(&record, raw).unwrap();
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(closure(&installation, &model, ROOT).is_ok());
     }
 
     #[test]

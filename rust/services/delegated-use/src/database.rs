@@ -304,21 +304,25 @@ struct StorageIdentity {
 
 impl DatabasePools {
     pub async fn connect(urls: &DatabaseUrls) -> Result<Self> {
+        Self::connect_with_limit(urls, 4).await
+    }
+
+    pub(crate) async fn connect_with_limit(urls: &DatabaseUrls, maximum: u32) -> Result<Self> {
         Ok(Self {
-            use_writer: connect(&urls.use_writer).await?,
-            runtime_reader: connect(&urls.runtime_reader).await?,
-            organization_authority: connect(&urls.organization_authority).await?,
-            registry_source: connect(&urls.registry_source).await?,
-            access_source: connect(&urls.access_source).await?,
-            machine_policy_source: connect(&urls.machine_policy_source).await?,
-            machine_policy_evidence: connect(&urls.machine_policy_evidence).await?,
-            delegation_policy_source: connect(&urls.delegation_policy_source).await?,
-            machine_audit: connect(&urls.machine_audit).await?,
-            flow_reader: connect(&urls.flow_reader).await?,
-            flow_ingress: connect(&urls.flow_ingress).await?,
-            credential_trust: connect(&urls.credential_trust).await?,
-            credential_status: connect(&urls.credential_status).await?,
-            credential_evidence: connect(&urls.credential_evidence).await?,
+            use_writer: connect(&urls.use_writer, maximum).await?,
+            runtime_reader: connect(&urls.runtime_reader, maximum).await?,
+            organization_authority: connect(&urls.organization_authority, maximum).await?,
+            registry_source: connect(&urls.registry_source, maximum).await?,
+            access_source: connect(&urls.access_source, maximum).await?,
+            machine_policy_source: connect(&urls.machine_policy_source, maximum).await?,
+            machine_policy_evidence: connect(&urls.machine_policy_evidence, maximum).await?,
+            delegation_policy_source: connect(&urls.delegation_policy_source, maximum).await?,
+            machine_audit: connect(&urls.machine_audit, maximum).await?,
+            flow_reader: connect(&urls.flow_reader, maximum).await?,
+            flow_ingress: connect(&urls.flow_ingress, maximum).await?,
+            credential_trust: connect(&urls.credential_trust, maximum).await?,
+            credential_status: connect(&urls.credential_status, maximum).await?,
+            credential_evidence: connect(&urls.credential_evidence, maximum).await?,
         })
     }
     pub fn entries(&self) -> [(&'static DatabaseRoleContract, &PgPool); 14] {
@@ -438,11 +442,11 @@ impl DatabasePools {
     }
 }
 
-async fn connect(url: &str) -> Result<PgPool> {
+async fn connect(url: &str, maximum: u32) -> Result<PgPool> {
     tokio::time::timeout(
         Duration::from_secs(5),
         PgPoolOptions::new()
-            .max_connections(4)
+            .max_connections(maximum)
             .acquire_timeout(Duration::from_secs(5))
             .after_connect(|connection, _| {
                 Box::pin(async move {

@@ -72,6 +72,27 @@ def rehash(value):
     value['plan_sha256'] = plan.digest({key: item for key, item in value.items() if key != 'plan_sha256'})
 
 
+def test_retained_resources_redirect_is_bound_to_exact_template(planned, monkeypatch):
+    ordinary = propose(planned)['routes']
+    assert b'location = /resources {' in ordinary['split']
+    include = plan.composition.EDGE_INCLUDE.encode()
+    planned['edge_template'] = planned['edge_template'].replace(include, include +
+        b'\n    location = /resources { absolute_redirect off; return 308 /resources/; }')
+    with pytest.raises(ValueError, match='transition plan refused'):
+        propose(planned)
+    monkeypatch.setattr(plan, 'RETAINED_RESOURCES_TEMPLATE_SHA256', selection.digest(planned['edge_template']))
+    retained = propose(planned)['routes']
+    assert retained['combined'] == retained['staged'] == b''
+    assert b'location = /resources {' not in retained['split']
+    assert b'rewrite ^/resources$ /_website/.managed-resources last;' in retained['split']
+    assert b'location = /_website/.managed-resources {\n    internal;' in retained['split']
+    assert b'proxy_pass http://$website_upstream/resources$is_args$args;' in retained['split']
+    assert plan.plan(**planned)['states']['split']['routes_sha256'] == selection.digest(retained['split'])
+    planned['edge_template'] += b'\n# changed after qualification\n'
+    with pytest.raises(ValueError, match='transition plan refused'):
+        propose(planned)
+
+
 def test_first_cutover_preserves_combined_product_and_changes_only_declared_model_and_data(planned):
     original = deepcopy(planned)
     result = plan.plan(**planned);proposed = propose(planned)

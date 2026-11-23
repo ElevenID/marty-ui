@@ -1,0 +1,102 @@
+# Fresh installs with an authenticated external PostgreSQL selection only.
+# Apply AFTER compose.external-oidc.yml and, for maintenance, compose.runtime.yml.
+# The installer binds the endpoint and imported password; no credential is put
+# in an environment file. Native runtimes expand the sole password placeholder
+# through load-secrets-env.sh, which percent-encodes it without shell evaluation.
+# Session pooling is required; transaction pooling is not qualified. The provider
+# must allow at least 28 session connections for this application role/database
+# (30 recommended). Supabase Free's default pool size of 15 must be increased.
+x-external-postgres-environment: &external-postgres-environment
+  DATABASE_URL_TEMPLATE: ${MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE:?external PostgreSQL selection required}
+  PGSSLROOTCERT:
+
+services:
+  postgres: !reset null
+  revocation-profile-migrate:
+    environment:
+      <<: *external-postgres-environment
+      RP_DATABASE_MAX_CONNECTIONS: "1"
+    depends_on:
+      postgres: !reset null
+  db-migrate:
+    environment:
+      <<: *external-postgres-environment
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "1"
+    depends_on:
+      postgres: !reset null
+  kms-initialize:
+    environment:
+      <<: *external-postgres-environment
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "1"
+  issuance-migrations:
+    environment:
+      <<: *external-postgres-environment
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "1"
+  auth:
+    environment:
+      <<: *external-postgres-environment
+      AUTH_DATABASE_MAX_CONNECTIONS: "2"
+  organization:
+    environment:
+      <<: *external-postgres-environment
+      ORGANIZATION_DATABASE_MAX_CONNECTIONS: "2"
+  credential-template:
+    environment:
+      <<: *external-postgres-environment
+      CREDENTIAL_TEMPLATE_DATABASE_MAX_CONNECTIONS: "2"
+  trust-profile:
+    environment:
+      <<: *external-postgres-environment
+      TRUST_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+  issuance:
+    environment:
+      <<: *external-postgres-environment
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
+  issuance-native:
+    environment:
+      <<: *external-postgres-environment
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
+    depends_on:
+      postgres: !reset null
+  # The current native applicant uses retained file storage. Replace its legacy
+  # database template as well so the resolved model contains no local endpoint.
+  applicant:
+    environment: *external-postgres-environment
+  notification:
+    environment:
+      <<: *external-postgres-environment
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "2"
+    depends_on:
+      postgres: !reset null
+  compliance-profile:
+    environment:
+      <<: *external-postgres-environment
+      COMPLIANCE_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+  presentation-policy:
+    environment:
+      <<: *external-postgres-environment
+      PRESENTATION_POLICY_DATABASE_MAX_CONNECTIONS: "2"
+  deployment-profile:
+    environment:
+      <<: *external-postgres-environment
+      DEPLOYMENT_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+  flow:
+    environment:
+      <<: *external-postgres-environment
+      FLOW_DATABASE_MAX_CONNECTIONS: "2"
+  revocation-profile:
+    environment:
+      <<: *external-postgres-environment
+      RP_DATABASE_MAX_CONNECTIONS: "2"
+  device-registration:
+    environment:
+      <<: *external-postgres-environment
+      DATABASE_MAX_CONNECTIONS: "2"
+
+secrets:
+  postgres_password: !reset null
+  # Keep the established in-container target /run/secrets/marty_db_password.
+  # Only the source file changes to the separately imported, fingerprinted
+  # provider credential. The locally generated database password is not used.
+  marty_db_password:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/external_postgres_password

@@ -474,7 +474,9 @@ def disabled_optional_model() -> dict:
     model["services"]["keycloak-configurator"]["environment"] = {
         "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
     }
-    model["services"]["notification"]["environment"] = {"SMTP_USERNAME": ""}
+    model["services"]["notification"]["environment"] = {
+        "SMTP_USERNAME": "", "NOTIFICATION_EMAIL_PROVIDER": "disabled", "NOTIFICATION_EMAIL_FROM": "",
+    }
     for owner, flags in runner.PASSPORT_DISABLED_FLAGS.items():
         model["services"][owner]["environment"] = {
             **{name: "false" for name in flags},
@@ -567,7 +569,7 @@ def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
         "google_analytics_measurement_id",
         "google_client_id", "google_client_secret", "google_site_verification",
         "smtp_password", "passport_tenant_api_keys",
-        "personalization_bureau_api_key",
+        "personalization_bureau_api_key", "notification_resend_api_key",
     }
     for name in LOCAL_SECRET_NAMES:
         (tmp_path / name).write_text(
@@ -590,6 +592,10 @@ def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
     ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "unexpected", "google_client_id"),
     ("keycloak-configurator", "KEYCLOAK_SMTP_USERNAME", "sender", "smtp_password"),
     ("notification", "SMTP_USERNAME", "sender", "smtp_password"),
+    ("notification", "NOTIFICATION_EMAIL_PROVIDER", "resend", "notification_resend_api_key"),
+    ("notification", "NOTIFICATION_EMAIL_PROVIDER", "unexpected", "notification_resend_api_key"),
+    ("notification", "NOTIFICATION_EMAIL_FROM", "sender@example.test", "notification_resend_api_key"),
+    ("notification", "NOTIFICATION_RESEND_API_KEY", "synthetic-private-key", "notification_resend_api_key"),
     ("gateway", "PASSPORT_TENANT_API_KEYS_FILE", "/run/secrets/passport_tenant_api_keys", "passport_tenant_api_keys"),
     ("flow", "PASSPORT_TENANT_API_KEYS", "synthetic-test-keyring", "passport_tenant_api_keys"),
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://bureau.test", "personalization_bureau_api_key"),

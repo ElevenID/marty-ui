@@ -328,6 +328,11 @@ def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
     allowed = {"google_analytics_measurement_id", "google_site_verification"}
     keycloak = environment("keycloak-configurator")
     notification = environment("notification")
+    if (notification is not None
+            and notification.get("NOTIFICATION_EMAIL_PROVIDER") == "disabled"
+            and notification.get("NOTIFICATION_EMAIL_FROM") == ""
+            and notification.get("NOTIFICATION_RESEND_API_KEY", "") == ""):
+        allowed.add("notification_resend_api_key")
     if keycloak is not None:
         social = keycloak.get("KEYCLOAK_SOCIAL_LOGIN_ENABLED")
         if isinstance(social, str) and social.lower() in FALSE_VALUES:

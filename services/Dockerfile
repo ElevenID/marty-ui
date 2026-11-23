@@ -122,6 +122,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-event-stream /
 COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+COPY --from=rust-service-builder /build/rust/target/release/marty-delegated-use /usr/local/bin/marty-delegated-use
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer-supported /usr/local/bin/marty-passport-callback-signer-supported
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification

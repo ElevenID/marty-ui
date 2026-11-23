@@ -121,18 +121,24 @@ class _Scripts(HTMLParser):
     def __init__(self):
         super().__init__()
         self.paths = set()
+        self.canonicals = []
 
     def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
         if tag == 'script':
-            source = dict(attrs).get('src')
+            source = attrs.get('src')
             if source and re.fullmatch(r'/[A-Za-z0-9_./-]+\.js', source) and not source.startswith('//'):
                 self.paths.add(source)
+        elif tag == 'link' and 'canonical' in (attrs.get('rel') or '').lower().split():
+            self.canonicals.append(attrs.get('href') or '')
 
 
-def _scripts(response):
+def _scripts(response, *, canonical_path=None):
     require(response.status == 200 and response.header('Content-Type').split(';')[0].strip().lower() == 'text/html')
     parsed = _Scripts()
     parsed.feed(response.body.decode('utf-8'))
+    if canonical_path is not None:
+        require(len(parsed.canonicals) == 1 and urlsplit(parsed.canonicals[0]).path == canonical_path)
     return parsed.paths
 
 
@@ -162,7 +168,7 @@ def _slash_route(fetch, origin, path):
 
 def _split_routes(public, local, origin, metadata, routes):
     boundary = routes['website']
-    require({'/', WEBSITE_MARKER, '/product', '/pricing'} <= set(boundary['exact_paths'])
+    require({'/', WEBSITE_MARKER, '/product', '/resources', '/pricing', '/pricing/'} <= set(boundary['exact_paths'])
             and '/_website/' in boundary['path_prefixes'])
     revision = metadata['revision']
     require(revision == web.revision(metadata['source_sha'], metadata['commerce_extension']['source_sha']))
@@ -176,9 +182,13 @@ def _split_routes(public, local, origin, metadata, routes):
         require(candidates and (assets is None or assets == candidates))
         assets = candidates
         require(_json(marker) == metadata)
-        representative = {path: _slash_route(fetch, origin, path) for path in ('/product', '/pricing')}
-        for response in representative.values():
-            require(any(path.startswith(prefix) for path in _scripts(response)))
+        product = _slash_route(fetch, origin, '/product')
+        require(any(path.startswith(prefix) for path in _scripts(product)))
+        resources = fetch('/resources')
+        require(not resources.header('Location') and any(path.startswith(prefix)
+                for path in _scripts(resources, canonical_path='/resources')))
+        withheld = {path: fetch(path) for path in ('/pricing', '/pricing/')}
+        require(all(row.status == 404 and not row.header('Location') for row in withheld.values()))
         runtime_path = '/_website/runtime-config.js'
         alternate = ('1' if revision.startswith('0') else '0') + revision[1:]
         missing_path = '/_website/' + alternate + '/missing.js'
@@ -187,7 +197,8 @@ def _split_routes(public, local, origin, metadata, routes):
         require(all(row.status == 200 and row.body and row.header('Content-Type').split(';')[0].strip().lower()
                     in {'text/javascript', 'application/javascript'} for row in (runtime, asset)))
         require(missing.status == 404 and not missing.header('Location'))
-        observed = {'/': homepage, WEBSITE_MARKER: marker, **representative, runtime_path: runtime, script: asset}
+        observed = {'/': homepage, WEBSITE_MARKER: marker, '/product': product, '/resources': resources,
+                    **withheld, runtime_path: runtime, script: asset}
         require(all(row.header('X-Marty-Website-Revision') == revision for row in observed.values()))
         report[source] = {path: row.record() for path, row in {**observed, missing_path: missing}.items()}
         if source == 'loopback':
@@ -238,9 +249,13 @@ def _application(public, local, origin, marker):
     require(login.status in {302, 303} and not target.fragment and
             (target.scheme, target.netloc, target.path) == ('https', urlsplit(origin).netloc, AUTH))
     require(all(fields.get(key) == [value] for key, value in {'client_id': 'marty-ui', 'response_type': 'code',
-        'redirect_uri': origin + '/v1/auth/callback', 'code_challenge_method': 'S256'}.items()) and
-        all(len(fields.get(key, [])) == 1 and re.fullmatch(r'[A-Za-z0-9._~-]{16,256}', fields[key][0])
-            for key in ('state', 'code_challenge')))
+        'redirect_uri': origin + '/v1/auth/callback', 'code_challenge_method': 'S256'}.items()))
+    require(len(fields.get('scope', [])) == 1 and 'openid' in fields['scope'][0].split(' '))
+    require(len(fields.get('code_challenge', [])) == 1 and
+            re.fullmatch(r'[A-Za-z0-9_-]{43}', fields['code_challenge'][0]))
+    require(all(len(fields.get(key, [])) == 1 and re.fullmatch(r'[A-Za-z0-9._~-]{16,256}', fields[key][0])
+                for key in ('state', 'nonce')))
+    require(fields.keys().isdisjoint({'client_secret', 'access_token', 'id_token', 'error'}))
     session = public(SESSION)
     require(_json(session) == {'authenticated': False})
     return {'release': {'public': release_public.record(), 'loopback': release_local.record()},

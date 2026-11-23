@@ -61,7 +61,8 @@ def load_page(browser, render):
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
-    css = (THEME / "resources/css/marty.css").read_text(encoding="utf-8")
+    css = "\n".join((THEME / "resources/css" / name).read_text(encoding="utf-8")
+                    for name in ("auth-layout.css", "marty.css"))
 
     def load(scenario, locale="en", *, extra_fields="", prefilled=False):
         html = render(scenario, locale).replace("</head>", "<style>" + css + "</style></head>")

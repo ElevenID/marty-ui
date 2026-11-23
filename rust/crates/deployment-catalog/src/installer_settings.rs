@@ -27,7 +27,8 @@ const REFUSED: &str =
 pub(crate) const SOURCE: &str = "application-settings-input.json";
 pub(crate) const RECORD: &str = "application-settings-selection.json";
 const SCHEMA: &str = "elevenid.installer-application-settings/v1";
-const SELECTION_SCHEMA: &str = "elevenid.installer-application-settings-selection/v1";
+const LEGACY_SELECTION_SCHEMA: &str = "elevenid.installer-application-settings-selection/v1";
+const SELECTION_SCHEMA: &str = "elevenid.installer-application-settings-selection/v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -199,6 +200,12 @@ fn string_value(
 /// setting is not automatically granted installation authority.
 fn typed_value(key: &str, value: &Value) -> Result<String> {
     match key {
+        "NOTIFICATION_EMAIL_PROVIDER" => {
+            string_value(value, key, 16, |s| matches!(s, "disabled" | "resend"))
+        }
+        "NOTIFICATION_EMAIL_FROM" => string_value(value, key, 254, |s| {
+            s.is_empty() || notification_email_address(s)
+        }),
         "KEYCLOAK_USER_REGISTRATION_ENABLED"
         | "KEYCLOAK_PASSKEYS_ENABLED"
         | "KEYCLOAK_VERIFY_EMAIL"
@@ -355,6 +362,21 @@ fn hostname(value: &str) -> bool {
         })
 }
 
+fn notification_email_address(value: &str) -> bool {
+    value.split_once('@').is_some_and(|(local, host)| {
+        !local.is_empty()
+            && local.len() <= 64
+            && local
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".!#$%&*+-/=?^_`{|}~".contains(&b))
+            && !local.starts_with('.')
+            && !local.ends_with('.')
+            && !local.contains("..")
+            && host.contains('.')
+            && hostname(host)
+    })
+}
+
 fn defaults() -> BTreeMap<String, String> {
     let mut values: BTreeMap<String, String> = [
         ("KEYCLOAK_USER_REGISTRATION_ENABLED", "true"),
@@ -368,6 +390,8 @@ fn defaults() -> BTreeMap<String, String> {
         ("KEYCLOAK_SMTP_PORT", "587"),
         ("KEYCLOAK_SMTP_SSL", "false"),
         ("KEYCLOAK_SMTP_STARTTLS", "true"),
+        ("NOTIFICATION_EMAIL_PROVIDER", "disabled"),
+        ("NOTIFICATION_EMAIL_FROM", ""),
         ("ORGANIZATION_CREATION_ENABLED", "false"),
         ("DID_PUBLIC_FALLBACK_ENABLED", "false"),
         ("DIDCOMM_ALLOW_PRIVATE_ENDPOINTS", "false"),
@@ -431,6 +455,20 @@ impl Configuration {
         let text = |key: &str| result.get(key).map_or("", String::as_str);
         let on = |key: &str| text(key) == "true";
         let supplied = |key: &str| self.secret_files.contains_key(key);
+        if text("NOTIFICATION_EMAIL_PROVIDER") == "resend" {
+            require(!text("NOTIFICATION_EMAIL_FROM").is_empty()
+                && supplied("notification_resend_api_key"))
+                .map_err(|_| "Resend application email requires a sender and imported notification_resend_api_key file".to_owned())?;
+        } else {
+            require(
+                text("NOTIFICATION_EMAIL_FROM").is_empty()
+                    && !supplied("notification_resend_api_key"),
+            )
+            .map_err(|_| {
+                "application email sender and API key require NOTIFICATION_EMAIL_PROVIDER=resend"
+                    .to_owned()
+            })?;
+        }
         if on("KEYCLOAK_PASSKEYS_ENABLED") {
             require(!text("KEYCLOAK_PASSKEY_RP_ID").is_empty()).map_err(|_| {
                 "Passkey login requires an explicit stable public KEYCLOAK_PASSKEY_RP_ID".to_owned()
@@ -545,6 +583,15 @@ fn imported_secret(name: &str, path: &Path) -> Result<Vec<u8>> {
         )
         .map_err(|_| "Google Analytics input requires a GA4 measurement identifier".to_owned())?;
     }
+    if name == "notification_resend_api_key" {
+        require(
+            (16..=4096).contains(&text.len())
+                && bytes.len() <= 4096
+                && text.starts_with("re_")
+                && text.bytes().all(|b| b.is_ascii_graphic()),
+        )
+        .map_err(|_| "invalid Resend application-email API-key input".to_owned())?;
+    }
     Ok(bytes)
 }
 
@@ -601,9 +648,17 @@ fn decoded(raw: &[u8], source: &[u8], journal: &Journal) -> Result<Selection> {
     require(Some(digest(raw).as_str()) == journal.application_settings_sha256())?;
     let selected: Selection = decode(raw)?;
     let configuration: Configuration = decode(source)?;
+    let names: BTreeSet<_> = OPTIONAL_INTEGRATION_SECRETS
+        .into_iter()
+        .filter(|name| {
+            selected.schema != LEGACY_SELECTION_SCHEMA || *name != "notification_resend_api_key"
+        })
+        .collect();
     require(
-        selected.schema == SELECTION_SCHEMA
-            && selected.installation_id == journal.installation_id()
+        matches!(
+            selected.schema.as_str(),
+            SELECTION_SCHEMA | LEGACY_SELECTION_SCHEMA
+        ) && selected.installation_id == journal.installation_id()
             && selected.source_sha256 == digest(source)
             && selected.configuration == configuration
             && selected
@@ -611,7 +666,11 @@ fn decoded(raw: &[u8], source: &[u8], journal: &Journal) -> Result<Selection> {
                 .keys()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>()
-                == OPTIONAL_INTEGRATION_SECRETS.into_iter().collect(),
+                == names
+            && configuration
+                .secret_files
+                .keys()
+                .all(|name| names.contains(name.as_str())),
     )?;
     selected
         .configuration
