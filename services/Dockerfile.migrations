@@ -12,7 +12,13 @@ COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
-COPY contracts /build/contracts
+COPY contracts/python-text-semantics.json /build/contracts/python-text-semantics.json
+COPY contracts/demo-seed-reference-v1.json /build/contracts/demo-seed-reference-v1.json
+COPY contracts/issuer-identity-capabilities-response.json /build/contracts/issuer-identity-capabilities-response.json
+COPY contracts/issuer-identity-inspection-response.json /build/contracts/issuer-identity-inspection-response.json
+COPY contracts/http-charset-headers-oracle.json contracts/http-euc-kr-codec.json contracts/http-gb18030-codec.json contracts/http-single-byte-codecs.json contracts/http-unicode-text-oracle.json contracts/organization-permission-catalog.json /build/contracts/
+COPY contracts/http-iso2022-codecs /build/contracts/http-iso2022-codecs
+COPY contracts/http-multibyte-codecs /build/contracts/http-multibyte-codecs
 # Keep source authentication separate from every Rust compilation step.
 RUN --mount=type=secret,id=private_forks_read_token \
     if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
