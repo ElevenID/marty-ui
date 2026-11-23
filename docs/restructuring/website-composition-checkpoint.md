@@ -5,6 +5,79 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Verified local production release chain, November 23
+
+The approved isolated one-job runner path completed the original application,
+standalone website and full composition releases. Independent held native
+verification authenticated the completed original assignments, protected
+approvals, ephemeral runner removal, exact OCI images, original signatures
+and all embedded unchanged backend/application/website evidence.
+
+| Original role | Qualified result |
+| --- | --- |
+| [Application original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45210723263) | Full v1.1.292 at public source `ab8c966`; 37 successful steps and two intentional step skips |
+| [Website original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45239288360) | Full source `bf9e01e`; 38 successful steps, 259 prerender routes and six browser passes with zero skips or retries |
+| [Composition original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45257283947) | Matching v1.1.292 application/backend, full audience, 29-service image map and OpenBao; 21 successful steps |
+
+Each row refers to its original attempt 1. The independently authenticated
+composition identity is
+`sha256:b969520302c7c88973d4d9779f955ea00e42b81f58868e80a488936fad1e5307`.
+
+The composition's two outer subjects and its inner producer/backend artifacts
+passed independent native authentication. Original private SLSA statements
+bind the admitted authorization bytes. The approved public Cosign hash and
+workflow-certificate record is retained. Private source files, artifact
+contents and credentials remain private.
+
+The frozen private producer also passed its committed local contract job:
+88 Python tests, 16 Node tests and pinned actionlint. The UI source and workflow
+inputs are unchanged from the retained lint, 38-case Vitest and library-build
+qualification; that equivalence is not a new UI execution.
+
+[Approval #2080](https://github.com/ElevenID/marty-ui/pull/2080) merged through
+the protected queue after 34 successful checks and two intentional skips.
+Its composition exercised the artifact-download correction successfully:
+two exact GitHub-provided Azure account hostnames were added to the fixed TLS
+services for credential-scrubbed intake. All 14 CA/SNI checks, private-address
+denial, rootless Docker and the default browser sandbox passed. Source,
+assignment, signature and no-default-route guards remain unchanged.
+Resolve the actual original artifact accounts before qualifying a future
+composition guest; account names are not assumed reusable for a new producer.
+
+All successful producer guests and their owned generated overlays were
+retired normally after artifact, full-log, qualification-report and native
+verification custody. Required source/configuration and one compatible
+read-only cache remain retained with their owner and lifecycle record.
+No private GitHub-hosted job was needed for these original production runs.
+
+### Final target and deployment ownership
+
+The user selected the new managed HONEYBURD deployment as the final cutover
+target and assigned all deployment operations to the other worker. The
+website-split worker continues release qualification and repository work.
+The retained nightly v1.1.293 trial passed compatibility but failed install
+and recorded no production cutover. It is partial evidence, not the final
+accepted runtime or product/image/provider map.
+
+The frozen stable v1.1.292 composition must be reconciled with that owner's
+final authenticated operator and selected product map. Existing composition
+contracts require a stable application/backend release with the same source
+and tag. A nightly operator version alone does not establish a different
+selected product. Use the frozen candidate only through a supported matching
+transition; otherwise qualify the actual matching full stable upgrade.
+
+Runtime identity/authority, persistence, startup, ordinary renewal, Google
+IDP hook and reboot acceptance, managed rehearsal/interruption handling,
+public DNS/TLS/routing, registration/mail/reset/login, issuance/verification,
+admin/applicant and organization/team journeys, and retained combined
+backout remain acceptance gates.
+[Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017) stays held
+with auto-merge disabled. After actual cutover acceptance, refresh it against
+protected main, preserve intervening changes, qualify and integrate through
+the normal queue, then finish the seven-file orphan, historical export and
+Bun toolchain audits. Earlier checkpoint entries retain their original
+producing sources and evidence scopes.
+
 ## Complete managed-transition source candidate
 
 The final managed-transition PR now brings together stage reconciliation,
