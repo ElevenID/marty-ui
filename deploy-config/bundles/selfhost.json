@@ -241,6 +241,7 @@
     "scripts/ui_release.py",
     "scripts/verify_installer_provenance.py",
     "scripts/web_auth.py",
+    "scripts/web_release_authorization.py",
     "scripts/website_producer_policy.py",
     "scripts/website_deployment_model.py",
     "scripts/website_provenance.py",

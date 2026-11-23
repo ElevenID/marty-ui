@@ -9,6 +9,8 @@ import ui_release as ui
 import website_provenance as proof
 import website_release as web
 import website_producer_policy as policy
+import web_auth as auth
+import web_release_authorization as local_approval
 
 SUBJECTS = {"website-release.json", "production-web-release.json", "application-web-compatibility.json", "application-release.json",
             "production-deployment.json", "production-openbao.zip", "ui.sbom.cdx.json", "ui-build-evidence.json",
@@ -18,11 +20,17 @@ SUBJECTS = {"website-release.json", "production-web-release.json", "application-
 
 def subject_role(names: list[str]) -> str:
     ui.require(names and len(names) == len(set(names)) and set(names).issubset(SUBJECTS), "unexpected producer subjects")
+    # SBOM/build evidence belongs to the selected release receipt. Its basename
+    # alone cannot distinguish a website build from an application build.
+    auxiliary = {"ui.sbom.cdx.json", "ui-build-evidence.json"}
     roles = {"website" if name == "website-release.json" else
              "composition" if name in {"web-composition.json", "web-composition.zip"} else "application"
-             for name in names}
+             for name in names if name not in auxiliary}
     ui.require(len(roles) == 1, "producer subjects mix release roles")
-    return roles.pop()
+    role = roles.pop()
+    ui.require(role != "composition" or not auxiliary.intersection(names),
+               "composition has no image build evidence")
+    return role
 
 
 def retain(directory: Path, *, names: list[str], producer: dict, release_provenance: Path,
@@ -36,6 +44,7 @@ def retain(directory: Path, *, names: list[str], producer: dict, release_provena
         ui.require(owner["repository"] == producer["repository"], "image and original producer differ")
     proof.verifier.local_file(release_provenance, maximum=proof.PROOF_LIMIT)
     held = release_provenance.read_bytes()
+    approvals = []
     for name in names:
         subject = directory / name
         proof.verifier.local_file(subject, private=True)
@@ -43,7 +52,7 @@ def retain(directory: Path, *, names: list[str], producer: dict, release_provena
         with path.open("xb") as stream:
             stream.write(held)
         path.chmod(0o600)
-        proof.verify_subject(subject, producer=producer, gh=gh, cosign=cosign, role=role)
+        approvals.append(proof.verify_subject(subject, producer=producer, gh=gh, cosign=cosign, role=role))
     if image is not None:
         ui.require(image_provenance is not None, "image provenance is required")
         proof.verifier.local_file(image_provenance, maximum=proof.PROOF_LIMIT)
@@ -51,9 +60,14 @@ def retain(directory: Path, *, names: list[str], producer: dict, release_provena
         with target.open("xb") as stream:
             stream.write(image_provenance.read_bytes())
         target.chmod(0o600)
-        proof.verify_image(image, target, producer=producer, gh=gh, cosign=cosign, registry_config=registry_config, role=role)
+        approvals.append(proof.verify_image(image, target, producer=producer, gh=gh, cosign=cosign, registry_config=registry_config, role=role))
     else:
         ui.require(image_provenance is None, "unexpected image proof")
+    ui.require(all(a == approvals[0] for a in approvals), "producer signing approvals differ")
+    if approvals[0] is not None:
+        reader = auth.GitHubReader(gh=gh, repository=producer['repository'], run_id=producer['run_id'],
+                                  attempt=producer['run_attempt'], kind=role)
+        local_approval.check_assignment(approvals[0], proof.parse_verified_json(reader.jobs()), completed=False)
 
 
 def main() -> None:

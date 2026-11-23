@@ -168,7 +168,7 @@ class GitHubReader:
 
     def __init__(self, *, gh: Path, repository: str, run_id: str, attempt: str,
                  kind: str, token_env: str | None = "GH_TOKEN"):
-        ui.require(kind in {"website", "application", "package-application"}
+        ui.require(kind in {"website", "application", "package-application", "composition"}
                    and all(isinstance(value, str) and ui.RUN.fullmatch(value) for value in (run_id, attempt)),
                    "invalid authenticated Actions intake selection")
         role = "application" if kind == "package-application" else kind
@@ -184,12 +184,13 @@ class GitHubReader:
         self.gh, self._token = gh, token
         self.prefix = f"repos/{repository}/actions"
         self.attempt_endpoint = f"{self.prefix}/runs/{run_id}/attempts/{attempt}"
+        self.jobs_endpoint = self.attempt_endpoint + "/jobs?per_page=100"
         name = (f"application-release-{run_id}-{attempt}" if kind == "package-application"
                 else f"web-{kind}-{run_id}-{attempt}")
         self.artifacts_endpoint = f"{self.prefix}/runs/{run_id}/artifacts?name={name}&per_page=100"
 
     def _read(self, endpoint: str, *, maximum: int) -> bytes:
-        metadata = endpoint in {self.attempt_endpoint, self.artifacts_endpoint}
+        metadata = endpoint in {self.attempt_endpoint, self.artifacts_endpoint, self.jobs_endpoint}
         archive = re.fullmatch(re.escape(self.prefix) + r"/artifacts/[1-9][0-9]*/zip", endpoint) is not None
         ui.require((metadata and maximum == verifier.MAX_OUTPUT)
                    or (archive and type(maximum) is int and 0 < maximum <= ARCHIVE_LIMIT),
@@ -207,6 +208,9 @@ class GitHubReader:
 
     def artifacts(self) -> str:
         return self._read(self.artifacts_endpoint, maximum=verifier.MAX_OUTPUT).decode("utf-8")
+
+    def jobs(self) -> str:
+        return self._read(self.jobs_endpoint, maximum=verifier.MAX_OUTPUT).decode("utf-8")
 
     def archive(self, artifact_id: int, *, maximum: int) -> bytes:
         ui.require(type(artifact_id) is int and artifact_id > 0, "invalid Actions artifact ID")

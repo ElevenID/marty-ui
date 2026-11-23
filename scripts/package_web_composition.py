@@ -234,8 +234,15 @@ def verified_package(assets: Path, *, gh: Path, cosign: Path,
             shutil.copyfile(assets / name, held / name)
             (held / name).chmod(0o600)
         manifest = validate_record(proof.read_metadata(held / "web-composition.json"))
+        approvals = []
         for name in ("web-composition.json", "web-composition.zip"):
-            proof.verify_subject(held / name, producer=manifest["producer"], gh=gh, cosign=cosign, runner=runner, role="composition")
+            approvals.append(proof.verify_subject(held / name, producer=manifest["producer"], gh=gh, cosign=cosign, runner=runner, role="composition"))
+        ui.require(approvals[0] == approvals[1], "composition signing approvals differ")
+        if approvals[0] is not None:
+            inputs = approvals[0]['inputs']
+            ui.require(all(inputs[f'{role}_run_id'] == manifest[role]['producer']['run_id']
+                           and inputs[f'{role}_run_attempt'] == manifest[role]['producer']['run_attempt']
+                           for role in ('website', 'application')), "approved composition inputs differ")
         payload = held / "payload"
         extract(held / "web-composition.zip", manifest, payload)
         expected = describe(payload, manifest["producer"], *authenticate_payloads(
