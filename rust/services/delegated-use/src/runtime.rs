@@ -110,9 +110,12 @@ impl DelegatedUseRuntime {
     /// Flow read/signing adapters and a pinned managed receipt signer. Startup
     /// does not migrate, grant privileges, mint signing grants or sign a request.
     pub async fn connect(configuration: &DelegatedUseHostConfig) -> Result<Self> {
-        let pools = DatabasePools::connect(&configuration.database_urls)
-            .await
-            .map_err(|_| DelegatedUseRuntimeError("database connections"))?;
+        let pools = DatabasePools::connect_with_limit(
+            &configuration.database_urls,
+            configuration.pool_max_connections,
+        )
+        .await
+        .map_err(|_| DelegatedUseRuntimeError("database connections"))?;
         pools
             .readiness()
             .await

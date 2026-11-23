@@ -16,7 +16,7 @@ for option in "$@"; do
   esac
 done
 
-exec cargo build --locked --release "$@" \
+cargo build --locked --release "$@" \
   -p marty-event-stream --bin marty-event-stream \
   -p marty-gateway --bin marty-gateway \
   -p marty-revocation-profile --bin marty-revocation-profile \
@@ -36,3 +36,6 @@ exec cargo build --locked --release "$@" \
   -p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge \
   -p marty-deployment-profile --bin marty-deployment-profile \
   -p marty-compliance-profile --bin marty-compliance-profile
+
+# Keep the delegated-use host on its own normal (non-test) Cargo feature graph.
+exec cargo build --locked --release "$@" -p marty-delegated-use --bin marty-delegated-use

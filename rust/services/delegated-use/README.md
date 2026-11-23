@@ -1,5 +1,11 @@
 # Delegated-use serving candidate
 
+The shared services image packages the host as `/usr/local/bin/marty-delegated-use`.
+Set `SERVICE_NAME=delegated-use` to select it through the image entrypoint.
+The host also requires `MARTY_DELEGATED_USE_ENABLED=true` and the configuration
+below. Deploy it on the private service network after provisioning its database
+roles, trust bindings and signing services.
+
 `marty-delegated-use` is the explicit serving composition for the implemented
 managed organization, full-machine, KEY and EXACT_OPERATION profile. It joins
 the concrete access, consent, machine, credential, policy, audit, Flow and
@@ -166,6 +172,7 @@ output omit connection strings, credentials, key material and upstream bodies.
 | Setting | Meaning |
 | --- | --- |
 | `MARTY_DELEGATED_USE_ENABLED` | Required exact `true` to start |
+| `DELEGATED_USE_POOL_MAX_CONNECTIONS` | Maximum PostgreSQL connections per restricted role (1 to 4, default 4). Budget for fourteen pools per service instance. |
 | `DELEGATED_USE_LISTEN_ADDR` | Socket address; defaults to `127.0.0.1:8021`; port zero is rejected |
 | `DELEGATED_USE_ORGANIZATION_ID` | Canonical, nonnil tenant UUID |
 | `DELEGATED_USE_DEPLOYMENT_PROFILE_ID` | Exact full-machine deployment selection |
