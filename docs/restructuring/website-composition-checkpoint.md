@@ -35,6 +35,19 @@ passed 487 tests and skipped two symbolic-link cases. The local rehearsal
 receipt SHA-256 is `9113d3e45bca63ae03e8dbe1fd21e58a6191144bd7bd93bdc20d6c10387de29b`.
 [Acceptance correction #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
+The installed edge template already defines an exact Resources redirect.
+The plain website include duplicated that location and Nginx refused to start
+in a disposable reproduction. The managed correction passed with a copy of
+the installed template and its original rendering script. Two loopback edges
+served the standalone build at `/resources`, preserved its query, kept the
+slash path on the application and sent a descendant to the Keycloak fixture.
+The apex redirect held. Backout restored the combined redirect on the same
+application container, and a fresh split edge served Resources even after
+the disposable application was removed. All five rendered defaults matched.
+The rehearsal receipt SHA-256 is
+`a8120de9cf3fce5c88dc4e6d31ece22476a962752abe68e6d1294e838a09c2d0`.
+[Retained edge correction #2064](https://github.com/ElevenID/marty-ui/pull/2064)
+
 At 00:43 UTC the public and installed loopback endpoints served the combined
 release marker. Both readiness and current-account requests returned 502.
 The production owner must reconcile the selected workload's credential
