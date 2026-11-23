@@ -40,9 +40,10 @@ def service(owner):
     }
 
 
-def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_path):
+def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_path, monkeypatch):
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose is needed to render the deployment model")
+    monkeypatch.chdir(ROOT / "rust")
     result = GATE["render"](spec(tmp_path), ["docker", "compose"])
     assert result["schema"] == "marty.flow-rendered-selection/v1"
     assert set(result["profiles"]) == {"base", "base_native", "selfhost"}

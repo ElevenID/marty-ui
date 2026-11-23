@@ -384,7 +384,7 @@ def assert_models(
         "/usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
     ]
     assert set(owner["build"]) == {"context", "dockerfile", "args"}
-    assert Path(owner["build"]["context"]).resolve() == ROOT
+    assert (ROOT / owner["build"]["context"]).resolve() == ROOT
     assert owner["build"]["dockerfile"] == "services/Dockerfile"
     assert owner["build"]["args"] == {"SERVICE_NAME": "credential-template"}
     owner_environment = owner["environment"]
