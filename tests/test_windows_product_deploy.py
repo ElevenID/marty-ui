@@ -168,6 +168,27 @@ def test_forward_executor_uses_verifier_and_fresh_authority_before_one_owned_tra
         assert {role for layer in data['mutation_layers'] for role in layer} == data['mutable']
 
 
+def test_pending_product_schema_refuses_before_intent_authority_or_image_recreation(monkeypatch):
+    with runtime(monkeypatch) as data:
+        backend = selection.decode((data['assets']/'web-composition.json').read_bytes())['backend']
+        def pending(docker, owned, project, admitted):
+            assert docker is data['docker'] and project == data['config']['project']
+            assert owned and admitted == backend
+            data['events'].append('pending-migration')
+            raise ValueError('pending migration')
+        monkeypatch.setattr(probe, 'require_image_only_schema', pending)
+        before = selection.status(data['path'])
+        with selection.selected_inputs(data['path']) as lease:
+            entries = set(data['root'].rglob('*'))
+            with pytest.raises(ValueError):
+                transition(lease, data)
+            assert set(data['root'].rglob('*')) == entries
+        assert data['events'] == ['verified-package', 'pending-migration']
+        assert not data['mutation_layers']
+        assert not product.renewal.product_transition_guard(data['config']).exists()
+        assert selection.status(data['path']) == before
+
+
 @pytest.mark.parametrize('fault', ['signature', 'missing-image', 'native', 'native-after', 'uncertain', 'context-drift', 'schema-drift', 'provider-drift', 'unhealthy'])
 def test_refused_or_uncertain_forward_execution_never_rolls_back_or_replays(monkeypatch, fault):
     with runtime(monkeypatch, fault) as data:

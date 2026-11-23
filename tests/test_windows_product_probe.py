@@ -21,6 +21,33 @@ def item(role):
         'NetworkSettings': {'Ports': {'8200/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29200'}]}}}
 
 
+@pytest.mark.parametrize('reply', [True, False, None, 1, 'true', {'ready': True}])
+def test_v292_image_only_preflight_requires_a_true_read_only_ledger_result(reply):
+    class Database:
+        def json(self, args):
+            assert args[:7] == ['exec', '--user', 'postgres', '--env', probe.PG_OPTIONS, 'a'*64, 'psql']
+            assert '--no-password' in args and '--no-psqlrc' in args
+            assert args[-4:] == ['--dbname', 'mapped_application', '--command', probe.V292_MIGRATIONS_SQL]
+            return reply
+
+    backend = {'release_tag': 'v1.1.292', 'source_sha': 'ab8c96626100418f8a88a883380e807a575fbe16'}
+    args = Database(), [item('postgres')], PROJECT, backend
+    profile = probe.LedgerProfile(application='mapped_application')
+    if reply is True:
+        probe.require_image_only_schema(*args, profile=profile)
+    else:
+        with pytest.raises(ValueError, match='schema-changing product upgrade'):
+            probe.require_image_only_schema(*args, profile=profile)
+
+
+def test_preflight_preserves_other_releases_and_refuses_mixed_v292_identities_before_sql():
+    tag, source = probe.V292_RELEASE
+    probe.require_image_only_schema(None, [], PROJECT, {'release_tag': 'v1.1.274', 'source_sha': 'a'*40})
+    for mixed_tag, mixed_source in [(tag, 'a'*40), ('v1.1.274', source)]:
+        with pytest.raises(ValueError, match='release and source disagree'):
+            probe.require_image_only_schema(None, [], PROJECT, {'release_tag': mixed_tag, 'source_sha': mixed_source})
+
+
 class Postgres:
     def __init__(self, fault=None):self.calls = [];self.fault = fault;self.rounds = {}
     def json(self, args):
