@@ -83,6 +83,7 @@ pub(crate) mod installer_openbao_recovery;
 pub(crate) mod installer_openbao_seal;
 #[cfg(target_os = "linux")]
 pub mod installer_operator_upgrade;
+pub(crate) mod installer_postgres;
 pub mod installer_prepare;
 pub mod installer_public_ingress;
 pub(crate) mod installer_purge_host;

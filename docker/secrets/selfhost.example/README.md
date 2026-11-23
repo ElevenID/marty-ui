@@ -125,6 +125,7 @@ Optional files may be left empty when the related integration is disabled:
 - `google_analytics_measurement_id`
 - `google_site_verification`
 - `smtp_password`
+- `notification_resend_api_key`
 
 `cloudflare_tunnel_token` is required only for the explicitly selected Cloudflare integration; the core installer and direct hosting do not need it. The signed installer copies a separately supplied private token into its owned secret generation.
 
@@ -135,3 +136,9 @@ Optional files may be left empty when the related integration is disabled:
 `google_analytics_measurement_id` is the GA4 `G-...` measurement ID. It is public by nature, but the self-host UI startup wrapper can read it from the secret directory for operator convenience.
 
 `google_site_verification` is the Google Search Console verification token. It is also public by nature, but the self-host UI startup wrapper can inject it from the secret directory into the served `index.html`.
+
+`notification_resend_api_key` is the separate sending key for optional application
+email. It remains empty when `NOTIFICATION_EMAIL_PROVIDER=disabled`. The native
+installer imports a private key file when Resend is selected; only Notification
+receives it. It does not configure Supabase Auth or managed Keycloak SMTP. See
+[application email](../../../docs/notification-email.md).

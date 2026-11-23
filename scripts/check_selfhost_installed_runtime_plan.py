@@ -137,6 +137,7 @@ EXPECTED_ROLE_SECRETS = {
     "keycloak-configurator": {"keycloak_admin_password", "google_client_id",
                               "google_client_secret", "marty_api_client_secret", "smtp_password"},
     "notification": {"marty_db_password", "grpc_service_token", "smtp_password",
+                     "notification_resend_api_key",
                      "notification_webhook_secret", "notification_applicant_event_token",
                      "notification_openbao_token", "openbao_tls_ca_cert",
                      "notification_workload_server_cert", "notification_tls_kms_token"},

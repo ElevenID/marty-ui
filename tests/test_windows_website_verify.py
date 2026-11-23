@@ -2,6 +2,7 @@
 from contextlib import ExitStack
 from email.message import Message
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -26,7 +27,7 @@ REVISION = SOURCE + '-' + COMMERCE
 PREFIX = '/_website/' + REVISION + '/'
 SIGNED = {'website': {'revision': REVISION, 'source_sha': SOURCE, 'commerce_extension': {'source_sha': COMMERCE}},
           'application': {'release_version': '1.1.274', 'marty_ui_sha': 'c'*40},
-          'routes': {'website': {'exact_paths': ['/', '/product', '/pricing', verify.WEBSITE_MARKER],
+          'routes': {'website': {'exact_paths': ['/', '/product', '/resources', '/pricing', '/pricing/', verify.WEBSITE_MARKER],
                                  'path_prefixes': ['/_website/']}}}
 EDGE = {'Config': {'Env': ['PUBLIC_DOMAIN=' + HOST]}, 'NetworkSettings': {
     'Ports': {'80/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '29382'}]}}}
@@ -90,15 +91,22 @@ def transport(monkeypatch):
                     'jwks_uri': issuer+'/protocol/openid-connect/certs'})
             elif path == verify.LOGIN:
                 fields = {'client_id': 'marty-ui', 'response_type': 'code', 'redirect_uri': ORIGIN+'/v1/auth/callback',
-                          'state': 'masked_test_state_a234567890', 'code_challenge': 'masked_test_challenge_b23456789',
+                          'scope': 'openid profile email', 'nonce': 'masked_test_nonce_a234567890',
+                          'state': 'masked_test_state_a234567890', 'code_challenge': 'masked_test_challenge_'.ljust(43, 'A'),
                           'code_challenge_method': 'S256'}
                 if fault == 'login':
                     fields['redirect_uri'] = '/wrong'
-                entry = response(302, location=ORIGIN + verify.AUTH + '?' + urlencode(fields))
+                if isinstance(fault, tuple):
+                    key, value = fault
+                    if value is None:
+                        fields.pop(key)
+                    else:
+                        fields[key] = value
+                entry = response(302, location=ORIGIN + verify.AUTH + '?' + urlencode(fields, doseq=True))
                 entry.headers['Set-Cookie'] = 'synthetic=never-record'
             elif path == verify.SESSION:
                 entry = response(body={'authenticated': fault == 'anonymous-session'})
-            elif path in ('/product', '/pricing'):
+            elif path == '/product':
                 entry = response(301, location=path + '/')
             elif state == 'staged':
                 entry = html('/assets/combined-123.js')
@@ -108,7 +116,23 @@ def transport(monkeypatch):
                     entry = response(body=SIGNED['website'], revision=REVISION)
             elif path == verify.WEBSITE_MARKER:
                 entry = response(body=SIGNED['website'], revision=REVISION if fault != 'revision' else 'wrong')
-            elif path in ('/', '/product/', '/pricing/'):
+            elif path == '/resources':
+                canonical = '/' if fault == 'resources-homepage' else path
+                markup = f'<link rel="canonical" href="{ORIGIN}{canonical}"><script src="{PREFIX}resources.js"></script>'
+                entry = response(body=markup.encode(), content='text/html', revision=REVISION)
+                if port == 443 and fault == 'resources-redirect':
+                    entry = response(308, location='/resources/')
+                if port != 443 and fault == 'resources-owner':
+                    entry = response(body=markup.encode(), content='text/html')
+            elif path in ('/pricing', '/pricing/'):
+                entry = response(404, revision=REVISION)
+                if path == '/pricing' and port == 443 and fault == 'pricing-published':
+                    entry = html(PREFIX+'pricing.js', revision=REVISION)
+                if path == '/pricing/' and port != 443 and fault == 'pricing-redirect':
+                    entry = response(302, revision=REVISION, location='/pricing/checkout')
+                if path == '/pricing' and port != 443 and fault == 'pricing-owner':
+                    entry = response(404)
+            elif path in ('/', '/product/'):
                 entry = html(PREFIX + ('home.js' if path == '/' else 'other-entry.js'), revision=REVISION)
             elif path.endswith('/missing.js'):
                 entry = response(200 if fault == 'unknown-revision' else 404)
@@ -136,17 +160,36 @@ def test_public_acceptance_binds_assets_to_local_and_application_to_original(tra
     assert application['authorization']['callback_path'] == '/v1/auth/callback'
     assert application['authenticated_application_exercised'] is False
     evidence = json.dumps([routes, application])
-    assert all(value not in evidence for value in ('masked_test_state', 'masked_test_challenge', 'never-record'))
+    assert all(value not in evidence for value in ('masked_test_state', 'masked_test_challenge', 'masked_test_nonce', 'never-record'))
     if state == 'split':
         assert (HOST, PREFIX+'home.js', 443) in calls and (HOST, PREFIX+'home.js', 29382) in calls
-        assert (HOST, '/pricing/', 443) in calls
+        for origin in ('public', 'loopback'):
+            assert routes['routes'][origin]['/resources']['status'] == 200
+            for path in ('/pricing', '/pricing/'):
+                assert routes['routes'][origin][path]['status'] == 404
 
 
 @pytest.mark.parametrize('fault', ['apex', 'application-marker', 'gateway', 'issuer', 'login', 'anonymous-session',
-    'console', 'asset', 'unknown-revision', 'revision', 'dns-changed', 'lingering-website'])
+    'console', 'asset', 'unknown-revision', 'revision', 'dns-changed', 'lingering-website',
+    'pricing-published', 'pricing-redirect', 'pricing-owner',
+    'resources-homepage', 'resources-redirect', 'resources-owner'])
 def test_public_acceptance_fails_closed_on_wrong_route_or_application(transport, fault):
     state = 'staged' if fault == 'lingering-website' else 'split'
     transport(state, fault)
+    with pytest.raises(ValueError):
+        verify._observe(EDGE, MODEL, SIGNED, state)
+
+
+@pytest.mark.parametrize('state', ['split', 'staged'])
+@pytest.mark.parametrize(('key', 'value'), [
+    ('nonce', None), ('nonce', 'short'), ('nonce', ['n' * 32, 'n' * 32]),
+    ('state', ['s' * 32, 's' * 32]), ('scope', None), ('scope', 'profile email'),
+    ('scope', ['openid', 'openid']), ('code_challenge', 'a' * 42), ('code_challenge', 'a' * 42 + '='),
+    ('code_challenge', ['a' * 43, 'b' * 43]), ('client_secret', 'fixture'), ('access_token', 'fixture'),
+    ('id_token', 'fixture'), ('error', 'login_required'),
+])
+def test_authorization_redirect_requires_the_application_login_contract(transport, state, key, value):
+    transport(state, (key, value))
     with pytest.raises(ValueError):
         verify._observe(EDGE, MODEL, SIGNED, state)
 
@@ -178,6 +221,7 @@ def test_transport_validates_real_tls_server_name(tmp_path):
         worker.join(timeout=2)
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Native NTFS fixture requires Windows PowerShell')
 @pytest.mark.parametrize('phase,fault', [('verify-website', None), ('verify-combined', None),
     ('verify-website', 'gateway'), ('verify-website', 'edge-drift')])
 def test_failed_public_probe_leaves_backout_eligible_and_success_anchors_receipts(paths, transport, monkeypatch, phase, fault):
