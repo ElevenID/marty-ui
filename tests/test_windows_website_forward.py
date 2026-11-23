@@ -7,7 +7,11 @@ import ssl
 import subprocess
 from types import SimpleNamespace
 
+import os
+
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows private website forward evidence')
 
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_windows_website_plan import planned, propose, rehash

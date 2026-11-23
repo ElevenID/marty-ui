@@ -5,11 +5,33 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Complete managed-transition source candidate
+
+The final managed-transition PR now brings together stage reconciliation,
+abort release, guarded publication, live sealing, forward release, reverse
+publication, post-release readmission, installed-caller rehearsal and rollback
+under the current renewed generation. Its qualified stage and abort parents
+are retained in the commit history. The intermediate source PRs retain their
+published checkpoints while the assembled candidate is reviewed and qualified.
+
+The release owner selected the existing public Cosign transparency record.
+New release hashes and workflow certificate metadata follow that policy.
+Private source files, artifact contents and signing credentials remain private.
+The reusable private attester now admits a local runner through the protected
+guest approval guard. Its fresh genuine qualification is waiting on the
+protected opaque approval. The original successful qualification remains
+evidence for its original source.
+
+Actual production release jobs and independent consumer admission still need
+their final local-runner integration and signed artifact qualification.
+Production credential recovery, healthy runtime, the managed cutover and
+legacy source removal remain required acceptance gates.
+
 ## Local producer testing and release approval, November 23
 
 The private website and application producer changes merged. The producer
-contract suite passed on the exact integration tree with 82 Python tests
-and 11 Node tests. The local runner also checks the GitHub Actions workflow
+contract suite passed on the exact integration tree with 83 Python tests
+and 13 Node tests. The local runner also checks the GitHub Actions workflow
 syntax. A genuine historical private release signature verified locally
 with the GitHub CLI.
 
