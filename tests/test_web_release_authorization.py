@@ -64,6 +64,17 @@ def test_signed_approval_uses_verified_time_instead_of_current_expiration(candid
         approval.verified_authorization(result, producer, 'website', read=api.__getitem__)
 
 
+def test_application_approval_requires_exact_verifiers_separate_from_the_build_source():
+    inputs = {'mode': 'combined', 'ui_source_sha': 'a'*40,
+              'stack_release_tag': 'v1.1.292', 'verification_source_sha': 'b'*40}
+    assert approval.inputs_from(inputs) == inputs
+    for value in ('main', '', 'c'*39, 'c'*41):
+        with pytest.raises(ValueError):
+            approval.inputs_from({**inputs, 'verification_source_sha': value})
+    missing = inputs.copy(); missing.pop('verification_source_sha')
+    with pytest.raises(ValueError): approval.inputs_from(missing)
+
+
 def verified_local(candidate, monkeypatch):
     a, producer, result, api, _ = candidate
     output = verified(producer)

@@ -20,7 +20,7 @@ JOB_FOR_MODE = {MODE: MODE, "standalone-website": "standalone-website", "combine
 COMPOSITION_INPUTS = {"website_run_id", "website_run_attempt", "application_run_id",
                       "application_run_attempt"}
 MODE_INPUTS = {MODE: set(), "standalone-website": {"website_source_sha"},
-               "combined": {"stack_release_tag"}, "compose": COMPOSITION_INPUTS}
+               "combined": {"stack_release_tag", "verification_source_sha"}, "compose": COMPOSITION_INPUTS}
 INPUTS = {"mode", "ui_source_sha"}.union(*MODE_INPUTS.values())
 
 
@@ -40,6 +40,7 @@ def inputs_from(values):
     if mode == "standalone-website":
         require(re.fullmatch(r"[0-9a-f]{40}", inputs["website_source_sha"]), "expected exact website source")
     if mode == "combined":
+        require(re.fullmatch(r"[0-9a-f]{40}", inputs["verification_source_sha"]), "expected exact verification tooling source")
         require(re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)",
                              inputs["stack_release_tag"]), "expected a stable backend release tag")
     if mode == "compose":
