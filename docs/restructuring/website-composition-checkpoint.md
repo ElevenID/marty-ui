@@ -173,6 +173,17 @@ file persistence, store decoder and migration module are byte-identical
 in v1.1.274 and v1.1.292. A production recovery boundary must account for
 that file independently of the PostgreSQL and Redis recovery points.
 
+A local rehearsal ran the release-pinned Applicant images with an isolated
+writable bind and synthetic service identities. The original service
+created a profile. The v1.1.292 service updated it and created a second
+profile. Returning to the v1.1.274 image on the same bind preserved both
+acknowledged writes, as did restoring a copy of the file taken after those
+writes. A copy taken before the upgrade restored only the original profile
+and its earlier values. Each copy was taken after the fixture service had
+stopped. Production sign-in, other Applicant record types and consistency
+across the file, PostgreSQL and Redis still require separate verification.
+Rehearsal SHA-256 `63a0f4819297a3412a30226ca55db211d1d8e923591286ee4501405705045401`.
+
 A disposable cluster initialized by the original v1.1.274 initializer
 accepted authenticated connections to all three databases with both
 releases' signed secret loaders. After a verified base backup, separate
