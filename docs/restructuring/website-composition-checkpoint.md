@@ -5,6 +5,32 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Source-removal compatibility review, November 23
+
+A read-only merge projection of source-removal PR #2017 at
+`b85dfac93f061f97000b7b1014ca7ce9ad95e1af` against protected main
+`86812db416a64e35bb8c045afc3a02ce379d7ab5` found 12 conflicting files.
+They cover CI and affected-component tests, website release evidence and
+documentation, and the application package exporter and consumer.
+
+Both revisions' Node package-policy readers ran against the four original
+contract files. Both accepted the original npm map (575 inputs, 24 test
+files, 296 assertions). Main also accepted the agent-trust npm map (581
+inputs, 26 test files, 321 assertions). The parked candidate rejected that
+map's digest, `7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41`.
+Its two Bun maps have distinct digests and each selects 578 inputs, 25
+test files and 308 assertions. This check exercised contract selection.
+
+After production acceptance, the #2017 integration owner must retain the
+exact agent-trust npm contract alongside the earlier npm and Bun contracts,
+include the six agent-trust files in the refreshed active application
+export, and qualify fresh full, reduced and restored packages against the
+actual combined test roster. Preserve the upstream signed full-website
+evidence handling in the release workflow and verifier as well.
+[Source removal #2017](https://github.com/ElevenID/marty-ui/pull/2017) /
+[Agent-trust integration #1994](https://github.com/ElevenID/marty-ui/pull/1994) /
+[Full website evidence #2024](https://github.com/ElevenID/marty-ui/pull/2024)
+
 ## Managed Windows staging and routing, November 23
 
 Website staging merged through the protected queue at
