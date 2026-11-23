@@ -251,6 +251,35 @@ established, do not qualify Supabase for provider-enforced fresh authentication
 or MFA step-up. Ordinary OIDC identity validation and the PostgreSQL integration
 are separate questions.
 
+## Verify authentication methods with Keycloak
+
+For an independently operated Keycloak issuer, configure the native
+`oidc-amr-mapper` on the candidate client with `id.token.claim=true`.
+In the browser flow, set the password execution's reference value to `pwd`
+and the OTP form execution's reference value to `otp`. In a realm export
+these are authenticator configs with `default.reference.value`; the
+qualification fixture used `default.reference.maxAge=300` seconds for each.
+Associate each reference with its specific execution and leave cookie login
+without either reference. Keep the realm's required-factor policy separate
+from the mapper that reports completed methods.
+
+Verify the signed ID token after a fresh two-factor login and after a separate
+password-only control. In the Keycloak 26.8.0 fixture, the former reported
+`amr=["pwd","otp"]` and the latter reported `amr=["pwd"]`. Initial OTP enrollment
+during password login also reported only `pwd`. Both sign-ins reported
+`acr="1"`. Repeat these checks for each actual client, then compare
+`auth_time` with the observed interaction and verify logout with a silent
+authorization request in the same browser.
+
+Marty saves the validated ID-token claims on an ordinary OIDC callback.
+The session-validation RPC can return the authentication timestamp. It has
+no MFA assurance field. A linked-account exchange during a credential login
+identifies the account; its authentication time and assurance claims are
+excluded from the new session's claim set. Qualify the relying application's
+enforcement separately before enabling a policy that depends on MFA.
+
+See [Keycloak's authentication-method mapper reference](https://www.keycloak.org/admin-api/protocol-mappers).
+
 ## Deliberate boundaries
 
 These changes support one selected issuer per installation. They do not
