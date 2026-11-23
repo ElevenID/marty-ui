@@ -2,6 +2,7 @@
 name = "marty-delegated-use"
 version = "0.1.0"
 description = "Explicit internal Marty delegated-use serving composition"
+default-run = "marty-delegated-use"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

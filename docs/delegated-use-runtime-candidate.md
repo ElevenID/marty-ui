@@ -307,6 +307,20 @@ Earlier migration bytes are preserved. Follow the
 [read-only upgrade and rollback procedure](delegated-authority-upgrade.md);
 readiness never repairs missing historical evidence.
 
+The signed migrations image includes the explicit operator entry point
+`/usr/local/bin/marty-delegated-use-migrate`. Run it once with
+`delegated-authority` and once with `machine-credential-source`, using a
+separate one-shot container for each schema on the selected application
+database. Mount only that schema's owner URL and the PostgreSQL server CA as
+read-only files. Set `DELEGATED_USE_MIGRATION_DATABASE_URL_FILE` and
+`DELEGATED_USE_MIGRATION_DATABASE_CA_FILE` to their container paths. The
+command uses one connection with certificate and hostname verification, and
+reuses the native migration ledger for safe retries. Run the existing
+application migrations before these optional owner migrations, then apply the
+reviewed serving grants and validate the restricted runtime roles. Remove the
+owner mounts when each container exits. The default migrations entry point and
+the delegated-use server do not invoke this command.
+
 Existing lifecycle writers additionally require the narrowly scoped shared
 command-identity access. They do not receive the use ledger, proof, receipt,
 consent or authority producer's privileges. A use writer needs its own reviewed

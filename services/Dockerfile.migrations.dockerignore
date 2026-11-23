@@ -9,6 +9,16 @@
 !contracts/demo-seed-reference-v1.json
 !contracts/issuer-identity-capabilities-response.json
 !contracts/issuer-identity-inspection-response.json
+!contracts/http-charset-headers-oracle.json
+!contracts/http-euc-kr-codec.json
+!contracts/http-gb18030-codec.json
+!contracts/http-single-byte-codecs.json
+!contracts/http-unicode-text-oracle.json
+!contracts/organization-permission-catalog.json
+!contracts/http-iso2022-codecs/
+!contracts/http-iso2022-codecs/*.json
+!contracts/http-multibyte-codecs/
+!contracts/http-multibyte-codecs/*.json
 !scripts/
 !scripts/load-secrets-env.sh
 !scripts/run-migrations-with-secrets.sh
