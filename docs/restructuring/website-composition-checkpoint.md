@@ -64,6 +64,21 @@ account for those writes and protect writes in flight. The physical restore
 exercise used a read-only synthetic database during backup. Production
 credential recovery, signing and cutover remain pending.
 
+### Installed v1.1.292 migration prerequisites
+
+On November 23 the installed owner observed zero of the ten required migration
+records in the selected production database. An independent Docker Desktop
+rehearsal confirmed that the image-only preflight refuses the released
+v1.1.274 database and accepts both completed v1.1.292 migration passes.
+Omitting each of the ten records individually caused the query to refuse.
+All 167 Windows product tests passed. Hosted checks and protected integration
+are tracked in [PR #2062](https://github.com/ElevenID/marty-ui/pull/2062).
+
+The product owner still needs a schema-changing upgrade and a qualified
+backout that protects writes. Production credential recovery precedes the
+managed deployment. The rehearsal receipt SHA-256 is
+`6a03e1557e22a780e7f14580dba5bf4715ede5e13b97d18d2e12635ef18b3227`.
+
 ## Managed full-audience cutover, November 22
 
 The release owner selected v1.1.292 for both the backend and the full
