@@ -24,6 +24,10 @@ import website_release as web
 
 SCHEMA = 'marty.windows-website-transition-plan/v1'
 SLOT = routing.SLOTS[0]
+# The retained combined template owns an exact /resources -> /resources/ redirect.
+# Its apex redirect precedes the website include. Only this qualified ordering
+# admits a server rewrite before the legacy location is selected.
+RETAINED_RESOURCES_TEMPLATE_SHA256 = 'f4461462daf66d8860244be6a97939c75c70de6f43142885ee632df7ba635fbe'
 ANCHOR_FIELDS = {'project', 'engine_id', 'docker_host', 'root', 'selection_sequence',
     'generation_sequence', 'binding_sha256', 'journal_sha256', 'configuration_sha256', 'model_sha256',
     'selection_sha256', 'selected_sha256', 'native_sha256', 'historical_tls_sha256', 'data_sha256'}
@@ -143,6 +147,15 @@ def _data(value, roles):
         require(len(targets) == len(set(targets)) and targets == sorted(targets))
 
 
+def managed_routes(state, edge_template):
+    """Select the website include for the original bound edge template."""
+    retained_redirect = selection.digest(edge_template) == RETAINED_RESOURCES_TEMPLATE_SHA256
+    if '/resources' in state['routes']['website']['exact_paths'] and not retained_redirect:
+        directives = b'\n'.join(line.split(b'#', 1)[0] for line in edge_template.splitlines())
+        require(not re.search(rb'''\blocation\s+=\s+["']?/resources["']?\s*\{''', directives))
+    return routing.render_routes(state, retained_resources_redirect=retained_redirect)
+
+
 def proposal(before, manifest, website_release, routes, anchor, *, attempt_directory,
              edge_template, data_before, website_image_id, route_runtime_mount):
     """Return exact model/route/data proposals, without creating or qualifying them.
@@ -221,7 +234,8 @@ def proposal(before, manifest, website_release, routes, anchor, *, attempt_direc
     split_data['edge']['mounts'].sort(key=lambda mount: mount['Destination'])
     return {'models': {'combined': deepcopy(before), 'staged': staged, 'split': split},
             'data': {'combined': deepcopy(data_before), 'staged': staged_data, 'split': split_data},
-            'routes': {'combined': b'', 'staged': b'', 'split': routing.render_routes(render)},
+            'routes': {'combined': b'', 'staged': b'',
+                       'split': managed_routes(render, edge_template)},
             'edge_template': template, 'route_directory': route_directory,
             'route_runtime_mount': deepcopy(route_runtime_mount)}
 
