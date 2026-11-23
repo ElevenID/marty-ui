@@ -185,6 +185,13 @@ body {
   text-align: center;
 }
 
+#kc-form > #kc-form-wrapper {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
 /* ===== Titles ===== */
 .elevenid-login-title {
   margin: 0;
