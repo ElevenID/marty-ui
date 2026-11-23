@@ -115,7 +115,7 @@ when preparing a real build. That file's contents are published as
     {
       "id": "22222222-2222-4222-8222-222222222222",
       "label": "Rifare",
-      "redirectUris": ["https://rifare.example.com/auth/customer/oidc/callback"]
+      "redirectUris": ["https://rifare.example.com/auth/customer/external-oidc/callback"]
     }
   ]
 }

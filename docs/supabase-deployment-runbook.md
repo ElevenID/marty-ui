@@ -81,6 +81,14 @@ issuer metadata, use the published asymmetric signing key, and store any
 confidential-client secret outside the checkout. Keep Rifare's existing
 machine-to-machine credentials and provisioning independent.
 
+The Rifare Medusa adapter builds its callback by appending
+`/auth/customer/external-oidc/callback` to `RIFARE_WEB_ORIGIN` and requires
+`client_secret_post`. At the reviewed commit its commerce hosting profile accepts
+only loopback HTTP, and the callback returns a Medusa JWT as JSON. Before registering
+Rifare, qualify its HTTPS origin, secure browser-binding cookie and storefront
+session delivery, then read the complete callback from that deployment.
+[Rifare implementation and hosted prerequisites](https://github.com/burdettadam/rifare/blob/afd678f44f25396c2159f0532f48fc46a3c4f129/docs/EXTERNAL-CUSTOMER-IDENTITY.md)
+
 Build the [authorization UI](supabase-auth-ui.md) with the frozen Bun lockfile.
 Use the Supabase project URL, publishable key, exact callback allowlists, client
 IDs, and the approved staging Pages origin. Deploy the complete static output,

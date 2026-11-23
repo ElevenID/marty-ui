@@ -117,7 +117,7 @@ describe("callback safety", () => {
     callback().replace("/v1/auth/callback", "/v1/auth/callback/"),
     callback().replace("/v1/auth/callback", "/fake/../v1/auth/callback"),
     callback().replace("/v1/auth/callback", "/v1/auth/%63allback"),
-    callback().replace("elevenid.example.invalid/v1/auth/callback", "rifare.example.invalid/auth/customer/oidc/callback"),
+    callback().replace("elevenid.example.invalid/v1/auth/callback", "rifare.example.invalid/auth/customer/external-oidc/callback"),
     `${callback()}&state=second`,
     `${callback()}&%73tate=second`,
     `${callback()}&redirect_uri=https://attacker.example.invalid`,
