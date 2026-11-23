@@ -122,6 +122,44 @@ def test_standalone_reader_scopes_selected_token_to_website_actions_gets(tmp_pat
         reader(tmp_path, monkeypatch, repository=policy.STANDALONE_REPOSITORY, kind="application")
 
 
+def test_package_application_reader_uses_its_fixed_original_artifact_and_one_token(tmp_path, monkeypatch):
+    selected = reader(tmp_path, monkeypatch, kind="package-application")
+    monkeypatch.setenv("GH_TOKEN", "must-not-use-later-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-use-alternate-token")
+    monkeypatch.setenv("DOCKER_CONFIG", "must-not-inherit-registry")
+    calls = []
+
+    def execute(args, *, env, maximum, **_kwargs):
+        calls.append((args, maximum))
+        assert env["GH_TOKEN"] == TOKEN and env["GH_HOST"] == "github.com"
+        assert "GITHUB_TOKEN" not in env and "DOCKER_CONFIG" not in env
+        assert TOKEN not in " ".join(args)
+        return b"zip" if args[-1].endswith("/zip") else b"{}"
+
+    monkeypatch.setattr(auth, "command", execute)
+    selected.attempt()
+    selected.artifacts()
+    assert selected.archive(55, maximum=3) == b"zip"
+    assert [args[-1] for args, _maximum in calls] == [
+        "repos/ElevenID/marty-ui/actions/runs/21/attempts/2",
+        "repos/ElevenID/marty-ui/actions/runs/21/artifacts?name=application-release-21-2&per_page=100",
+        "repos/ElevenID/marty-ui/actions/artifacts/55/zip",
+    ]
+    assert all(args[1:6] == ["api", "--hostname", "github.com", "--method", "GET"] for args, _maximum in calls)
+    assert calls[-1][1] == 3
+    for endpoint in ("repos/ElevenID/marty-ui/actions/runs/21/artifacts?name=web-application-21-2&per_page=100",
+                     "repos/ElevenID/marty-ui/actions/runs/21/artifacts?name=application-release-diagnostics-21-2&per_page=100"):
+        with pytest.raises(ValueError):
+            selected._read(endpoint, maximum=auth.verifier.MAX_OUTPUT)
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("repository", [policy.STANDALONE_REPOSITORY, ui.COMMERCE_REPOSITORY, "another-owner/marty-ui"])
+def test_package_reader_cannot_admit_another_application_or_website_owner(tmp_path, monkeypatch, repository):
+    with pytest.raises(ValueError, match="original public producer"):
+        reader(tmp_path, monkeypatch, kind="package-application", repository=repository)
+
+
 def test_api_metadata_and_zip_share_one_explicit_token_without_registry_auth(tmp_path, monkeypatch):
     selected = reader(tmp_path, monkeypatch)
     monkeypatch.setenv("GH_TOKEN", "ghs_" + "b" * 36)

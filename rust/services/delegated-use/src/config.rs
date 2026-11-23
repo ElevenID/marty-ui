@@ -58,6 +58,7 @@ const JSON_NAMES: [&str; 3] = [
 ];
 const PUBLIC_NAMES: &[&str] = &[
     "DELEGATED_USE_LISTEN_ADDR",
+    "DELEGATED_USE_POOL_MAX_CONNECTIONS",
     "DELEGATED_USE_PUBLIC_CALLER_ENABLED",
     "DELEGATED_USE_ORGANIZATION_ID",
     "DELEGATED_USE_DEPLOYMENT_PROFILE_ID",
@@ -153,6 +154,7 @@ impl fmt::Debug for ReceiptSigningConfig {
 pub struct DelegatedUseHostConfig {
     pub listen_addr: SocketAddr,
     pub public_caller_enabled: bool,
+    pub pool_max_connections: u32,
     pub organization_id: Uuid,
     pub deployment_profile_id: Uuid,
     pub delegation_policy_id: Uuid,
@@ -314,14 +316,14 @@ impl DelegatedUseHostConfig {
                     .into(),
             },
             120,
-            seconds(
+            bounded_integer(
                 &input,
                 "DELEGATED_USE_CONFIRMATION_MAX_AGE_SECONDS",
                 300,
                 1,
                 300,
             )? as u32,
-            seconds(
+            bounded_integer(
                 &input,
                 "DELEGATED_USE_AUTHORITY_VALIDITY_SECONDS",
                 15,
@@ -402,7 +404,7 @@ impl DelegatedUseHostConfig {
             definition: VerificationDefinitionBinding {
                 organization_id: organization_id.to_string(),
                 definition_id: definition_id.into(),
-                version: seconds(
+                version: bounded_integer(
                     &input,
                     "DELEGATED_USE_FLOW_DEFINITION_VERSION",
                     1,
@@ -533,19 +535,26 @@ impl DelegatedUseHostConfig {
             deployment_profile_id,
             delegation_policy_id,
             database_urls,
+            pool_max_connections: bounded_integer(
+                &input,
+                "DELEGATED_USE_POOL_MAX_CONNECTIONS",
+                4,
+                1,
+                4,
+            )? as u32,
             approval_configuration,
             authority,
             flow_start,
             request_options,
             public_base_url,
-            challenge_lifetime_seconds: seconds(
+            challenge_lifetime_seconds: bounded_integer(
                 &input,
                 "DELEGATED_USE_CHALLENGE_LIFETIME_SECONDS",
                 120,
                 30,
                 600,
             )?,
-            receipt_lifetime_seconds: seconds(
+            receipt_lifetime_seconds: bounded_integer(
                 &input,
                 "DELEGATED_USE_RECEIPT_LIFETIME_SECONDS",
                 30,
@@ -715,7 +724,7 @@ fn credential(
     }
     Ok(text.into())
 }
-fn seconds(
+fn bounded_integer(
     values: &BTreeMap<String, String>,
     name: &'static str,
     default: i64,

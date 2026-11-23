@@ -267,6 +267,7 @@ fn command(env: &BTreeMap<String, String>) -> Command {
     command
         .env_clear()
         .envs(env)
+        .env("DELEGATED_USE_POOL_MAX_CONNECTIONS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
