@@ -66,6 +66,15 @@ two symlink cases skipped. Rehearsal receipt SHA-256
 `ec40a3ad933d60f3fb02e97e5ea79a1c240659a54a37716b8d3fbfe999c8e639`.
 [Public acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
+The original v1.1.274 combined package and application evidence were
+retrieved again from their successful producer run. Both archives matched
+their published digests. The full package matched the retained authenticated
+archive byte for byte, and all 246 files in the accepted local inventory
+matched their hashes. The 31 selected Windows container roles matched both
+the signed manifest digests and their local immutable image IDs. The
+database owner still needs a production writer boundary and a way to
+preserve acknowledged v1.1.292 writes across an application rollback.
+
 At 00:43 UTC the public and installed loopback endpoints served the combined
 release marker. Both readiness and current-account requests returned 502.
 The production owner must reconcile the selected workload's credential
