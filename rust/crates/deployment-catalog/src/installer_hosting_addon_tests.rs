@@ -356,6 +356,30 @@ fn compose_binding_survives_maintenance_layer_reset_without_duplicate_evidence()
         .bind_inputs(&mut inputs)
         .unwrap();
     bind_inputs(&mut inputs).unwrap();
+    // Include the connector credential, external selectors, settings, and
+    // the maintenance layers and plan that are bound before application up.
+    state
+        .with_inspection(installer_hosting::resolve)
+        .unwrap()
+        .bind_connector(&mut inputs)
+        .unwrap();
+    for name in [
+        "external-oidc-selection.json",
+        "external-postgres-selection.json",
+        "application-settings-input.json",
+        "application-settings-selection.json",
+        "docker-compose.selfhost.openbao.yml",
+        "compose.bootstrap.yml",
+        "compose.runtime.yml",
+        "runtime-cleanup-plan.json",
+    ] {
+        inputs.bound_inputs.push(BoundFile {
+            path: installation.join("evidence").join(name),
+            sha256: "b".repeat(64),
+        });
+    }
+    assert_eq!(inputs.bound_inputs.len(), 21);
+    assert!(inputs.bound_inputs.len() <= crate::installer_compose::MAX_BOUND_INPUTS);
     let count = inputs.bound_inputs.len();
     bind_inputs(&mut inputs).unwrap();
     inputs.files.clear();

@@ -30,6 +30,10 @@ mod generation;
 #[path = "installer_compose_recovery_tests.rs"]
 mod recovery_tests;
 const MAX_FILE: u64 = 2 * 1024 * 1024;
+// The combined external OIDC/PostgreSQL, settings, and signed connector
+// profile binds 17 files before startup and up to 21 with cleanup evidence.
+// Leave room for lifecycle plans while retaining the per-file custody checks.
+pub(crate) const MAX_BOUND_INPUTS: usize = 24;
 const MAX_WAIT: u64 = 720;
 const REFUSED: &str = "Compose installation policy refused the operation";
 const UNCERTAIN: &str = "Compose operation failed or was interrupted; inspect retained project evidence before recovery; no automatic retry was performed";
@@ -2361,7 +2365,7 @@ impl ComposeSession {
                     .is_match(&inputs.project)
                 && !inputs.files.is_empty()
                 && inputs.files.len() <= 10
-                && inputs.bound_inputs.len() <= 16
+                && inputs.bound_inputs.len() <= MAX_BOUND_INPUTS
                 && inputs.profiles.len() <= 8
                 && inputs.profiles.iter().all(|v| name(v))
                 && inputs.services.len() <= 96
