@@ -15,6 +15,37 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+const CORE_BUNDLE_SERVICES: [&str; 28] = [
+    "applicant",
+    "auth",
+    "compliance-profile",
+    "credential-template",
+    "db-migrate",
+    "deployment-profile",
+    "device-registration",
+    "edge",
+    "event-stream",
+    "flow",
+    "gateway",
+    "issuance",
+    "issuance-migrations",
+    "issuance-native",
+    "keycloak",
+    "keycloak-configurator",
+    "kms-initialize",
+    "notification",
+    "organization",
+    "postgres",
+    "presentation-policy",
+    "redis",
+    "revocation-profile",
+    "revocation-profile-migrate",
+    "signing-keys",
+    "trust-profile",
+    "ui",
+    "verification",
+];
+
 struct PrivateFixture(Option<tempfile::TempDir>);
 impl PrivateFixture {
     fn new() -> Self {
@@ -384,7 +415,13 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
         .keys()
         .map(|name| (name.clone(), image.clone()))
         .collect();
-    assert!(services.len() >= 29);
+    // The core bundle has 28 named owners after optional tunnel hosting moved
+    // into its selected add-on. Compare the complete inventory rather than a
+    // stale lower bound that could hide an added or missing application owner.
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(CORE_BUNDLE_SERVICES)
+    );
     let stack_lock: Value =
         serde_json::from_slice(&fs::read(source.join("release/stack-lock.json")).unwrap()).unwrap();
     let image_lock = root.join("synthetic-images.json");
@@ -1365,7 +1402,12 @@ fn assert_actual_installer_layers(
         &[],
     );
     let services = install["services"].as_object().unwrap();
-    assert!(services.len() >= 30);
+    let mut installed_owners = BTreeSet::from(CORE_BUNDLE_SERVICES);
+    installed_owners.insert("installer-ingress");
+    assert_eq!(
+        services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        installed_owners
+    );
     assert_eq!(
         services["auth"]["depends_on"]["keycloak-configurator"]["condition"],
         "service_completed_successfully",
@@ -1869,6 +1911,15 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
             .get("KEYCLOAK_UPSTREAM")
             .is_none());
         let restarted = config(executable, bundle, &runtime_files, &env, &[], &[]);
+        assert_native_external_postgres_models(
+            executable,
+            bundle,
+            &env,
+            &files,
+            &runtime_files,
+            &install,
+            &restarted,
+        );
         let runtime = restarted["services"].as_object().unwrap();
         assert_eq!(
             runtime.len() + 1,
@@ -1897,6 +1948,129 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
             }
         }
     }
+}
+
+fn assert_native_external_postgres_models(
+    executable: &OsString,
+    bundle: &Path,
+    oidc_env: &Path,
+    oidc_files: &[PathBuf],
+    oidc_runtime_files: &[PathBuf],
+    oidc_install: &Value,
+    oidc_runtime: &Value,
+) {
+    let temp = PrivateFixture::new();
+    let template = concat!(
+        "postgresql://app.synthetic:${MARTY_DB_PASSWORD}",
+        "@aws-0-region.pooler.supabase.com:5432/marty?sslmode=verify-full"
+    );
+    let expected = template.replace('$', "$$");
+    let root_certificate = "-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICATE-----";
+    let env = temp.path().join("external-postgres.env");
+    private_write(
+        &env,
+        format!(
+            "{}MARTY_EXTERNAL_POSTGRES_URL_TEMPLATE='{template}'\nPGSSLROOTCERT='{root_certificate}'\n",
+            fs::read_to_string(oidc_env).unwrap()
+        )
+        .as_bytes(),
+    );
+    let layer =
+        bundle.join("deploy-config/compose/selfhost-installer/compose.external-postgres.yml");
+    let mut files = oidc_files.to_vec();
+    files.push(layer.clone());
+    let mut runtime_files = oidc_runtime_files.to_vec();
+    runtime_files.push(layer);
+    let install = config(
+        executable,
+        bundle,
+        &files,
+        &env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let runtime = config(executable, bundle, &runtime_files, &env, &[], &[]);
+    for (model, previous, maintenance) in [
+        (&install, oidc_install, false),
+        (&runtime, oidc_runtime, true),
+    ] {
+        let services = model["services"].as_object().unwrap();
+        let previous_services = previous["services"].as_object().unwrap();
+        assert_eq!(services.len() + 1, previous_services.len());
+        assert!(!services.contains_key("postgres"));
+        assert!(!services.contains_key("keycloak"));
+        assert!(services.contains_key("redis"));
+        assert!(services.contains_key("openbao"));
+        assert!(services.contains_key("openbao-unseal"));
+        let mut consumers = 0;
+        for (name, service) in services {
+            assert_eq!(service["secrets"], previous_services[name]["secrets"]);
+            let environment = &service["environment"];
+            if previous_services[name]["environment"]
+                .get("DATABASE_URL_TEMPLATE")
+                .is_some()
+            {
+                consumers += 1;
+                assert_eq!(environment["DATABASE_URL_TEMPLATE"], expected, "{name}");
+                assert_eq!(environment["PGSSLROOTCERT"], root_certificate, "{name}");
+                assert_eq!(
+                    environment["MARTY_DB_PASSWORD_FILE"], "/run/secrets/marty_db_password",
+                    "{name}"
+                );
+            }
+            for (dependency, rule) in service["depends_on"].as_object().into_iter().flatten() {
+                assert_ne!(dependency, "postgres");
+                assert!(
+                    services.contains_key(dependency),
+                    "{name} retains {dependency}"
+                );
+                if maintenance {
+                    assert_ne!(rule["condition"], "service_completed_successfully");
+                }
+            }
+            if maintenance {
+                assert_ne!(service["labels"]["com.elevenid.installer.phase"], "setup");
+            }
+        }
+        assert_eq!(consumers, if maintenance { 14 } else { 18 });
+        assert!(model["secrets"].get("postgres_password").is_none());
+        let secret = model["secrets"]["marty_db_password"]["file"]
+            .as_str()
+            .unwrap();
+        assert!(secret.ends_with("/external_postgres_password"));
+    }
+    let mut runtime_connections = 0;
+    for service in runtime["services"].as_object().unwrap().values() {
+        for (name, value) in service["environment"].as_object().into_iter().flatten() {
+            if name.ends_with("DATABASE_MAX_CONNECTIONS") {
+                let limit: u32 = value.as_str().unwrap().parse().unwrap();
+                assert_eq!(limit, 2);
+                runtime_connections += limit;
+            }
+        }
+    }
+    assert_eq!(runtime_connections, 26);
+    // Compose's serialized model quotes '$' for a later container environment;
+    // the selected raw value still reaches the existing non-evaluating loader.
+    let loaded = Command::new("/bin/sh")
+        .args([
+            "-c",
+            ". \"$1\"; printf '%s' \"$DATABASE_URL\"",
+            "external-pg",
+        ])
+        .arg(bundle.join("scripts/load-secrets-env.sh"))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("DATABASE_URL_TEMPLATE", template)
+        .env("MARTY_DB_PASSWORD", "synthetic%40@:$'")
+        .output()
+        .unwrap();
+    assert!(loaded.status.success());
+    assert!(loaded.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(loaded.stdout).unwrap(),
+        template.replace("${MARTY_DB_PASSWORD}", "synthetic%2540%40%3A%24%27")
+    );
 }
 
 #[test]

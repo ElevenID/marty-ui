@@ -531,7 +531,8 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
 def test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
     # The native database audit belongs to contracts CI, never the narrow
     # published-image selfhost-only selector emitted below.
-    all_files = (*SELFHOST_TEST_FILES, "native_kms_schema_contract.rs")
+    all_files = (*SELFHOST_TEST_FILES, "native_kms_schema_contract.rs",
+                 "managed_postgres_contract.rs", "support/managed_postgres.rs")
     assert _tracked_paths(ROOT, SELFHOST_TEST_ROOT) == sorted(
         SELFHOST_TEST_ROOT + name for name in all_files
     )
@@ -559,6 +560,10 @@ def test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts() 
         {
             "name": "native_kms_schema_contract",
             "path": "tests/native_kms_schema_contract.rs",
+        },
+        {
+            "name": "managed_postgres_contract",
+            "path": "tests/managed_postgres_contract.rs",
         },
     ]
     target = (ROOT / (SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0])).read_text(

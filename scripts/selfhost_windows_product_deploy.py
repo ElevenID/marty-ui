@@ -101,6 +101,7 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
     observed = selection._inspect(config, choice, values, stack, expected_data=record['data_sha256'])
     docker = observed['docker'];owned = observed['owned'];roles = observed['services']
     require(roles == set(old['services'])-renewal.INITIALIZERS)
+    probe.require_image_only_schema(docker, owned, config['project'], admitted['backend'])
     ids = qualified_images(docker, old, new, owned)
     edge = predicted_edge(owned, old, new, admitted, ids, config['project'])
     require(edge['before_sha256'] == record['data_sha256'])

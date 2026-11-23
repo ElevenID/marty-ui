@@ -28,6 +28,7 @@ struct Options {
     directory: Option<PathBuf>,
     foundation_file: Option<PathBuf>,
     external_oidc_file: Option<PathBuf>,
+    external_postgres_file: Option<PathBuf>,
     hosting_file: Option<PathBuf>,
     settings_file: Option<PathBuf>,
     acme_staging_roots: Option<PathBuf>,
@@ -136,6 +137,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--runtime-profile",
             "--foundation-file",
             "--external-oidc-file",
+            "--external-postgres-file",
             "--hosting-file",
             "--settings-file",
             "--acme-staging-roots",
@@ -173,6 +175,12 @@ fn options(args: &[String]) -> Result<Options> {
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
     let external_oidc_file = values.remove("--external-oidc-file").map(PathBuf::from);
+    let external_postgres_file = values.remove("--external-postgres-file").map(PathBuf::from);
+    if external_postgres_file.is_some()
+        && (external_oidc_file.is_none() || foundation_file.is_some())
+    {
+        return Err("--external-postgres-file requires --external-oidc-file and cannot use --foundation-file".into());
+    }
     if foundation_file.is_some() && external_oidc_file.is_some() {
         return Err(
             "--external-oidc-file and --foundation-file select conflicting OIDC owners".into(),
@@ -186,6 +194,7 @@ fn options(args: &[String]) -> Result<Options> {
             || directory.is_some()
             || foundation_file.is_some()
             || external_oidc_file.is_some()
+            || external_postgres_file.is_some()
             || hosting_file.is_some()
             || settings_file.is_some()
             || acme_staging_roots.is_some())
@@ -211,6 +220,9 @@ fn options(args: &[String]) -> Result<Options> {
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
         || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
         || external_oidc_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        || external_postgres_file
             .as_ref()
             .is_some_and(|p| !p.is_absolute())
         || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
@@ -240,6 +252,7 @@ fn options(args: &[String]) -> Result<Options> {
         directory,
         foundation_file,
         external_oidc_file,
+        external_postgres_file,
         hosting_file,
         settings_file,
         acme_staging_roots,
@@ -381,6 +394,11 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     }
     let external_oidc = crate::installer_oidc::prepare(
         o.external_oidc_file.as_deref(),
+        o.foundation_file.is_some(),
+    )?;
+    let external_postgres = crate::installer_postgres::prepare(
+        o.external_postgres_file.as_deref(),
+        o.external_oidc_file.is_some(),
         o.foundation_file.is_some(),
     )?;
     let foundation_origin = o
@@ -601,6 +619,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         crate::installer_foundation::select(path, &directory, &mut state)?;
     }
     crate::installer_oidc::select(external_oidc, &mut state)?;
+    crate::installer_postgres::select(external_postgres, &mut state)?;
     crate::installer_hosting::select(hosting, &mut state)?;
     crate::installer_settings::select(settings, &mut state)?;
     if let Some(roots) = &staging_roots {
@@ -712,6 +731,7 @@ pub(crate) fn provision_runtime(
         return validate_and_complete(docker, installation, bundle, state, inventory, invocation);
     }
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
+    let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
     let realm = if external_oidc.is_none() {
         eprintln!("Marty runtime stage: packaged realm");
         let realm_path = bundle.join("config/keycloak/11id-realm.json");
@@ -733,6 +753,9 @@ pub(crate) fn provision_runtime(
     }
     state.persist_credential_creation_receipt(installation)?;
     if let Some(selection) = &external_oidc {
+        selection.import_inputs(state)?;
+    }
+    if let Some(selection) = &external_postgres {
         selection.import_inputs(state)?;
     }
     hosting.import_connector(state)?;
@@ -1463,6 +1486,7 @@ mod tests {
             vec!["--install-dir", "/private/installation"],
             vec!["--foundation-file", "/private/foundation.json"],
             vec!["--external-oidc-file", "/private/oidc.json"],
+            vec!["--external-postgres-file", "/private/postgres.json"],
             vec!["--hosting-file", "/private/hosting.json"],
             vec!["--settings-file", "/private/settings.json"],
             vec!["--acme-staging-roots", "/private/roots.pem"],
@@ -1493,6 +1517,37 @@ mod tests {
             invalid.extend(extra.map(str::to_owned));
             assert!(candidate_test_options(&invalid).is_err());
         }
+        let mut postgres_args = oidc_args.clone();
+        postgres_args.extend([
+            "--external-postgres-file".into(),
+            "/private/postgres.json".into(),
+        ]);
+        assert_eq!(
+            candidate_test_options(&postgres_args)
+                .unwrap()
+                .external_postgres_file,
+            Some(PathBuf::from("/private/postgres.json"))
+        );
+        let mut admitted_postgres = postgres_args.clone();
+        admitted_postgres[2] = "--verified-admission".into();
+        assert!(options(&admitted_postgres).is_ok());
+        for extra in [
+            vec!["--external-postgres-file", "/private/second.json"],
+            vec!["--foundation-file", "/private/foundation.json"],
+            vec!["--check-compatibility"],
+        ] {
+            let mut invalid = postgres_args.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
+        *postgres_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&postgres_args).is_err());
+        let mut missing_oidc = args.clone();
+        missing_oidc.extend([
+            "--external-postgres-file".into(),
+            "/private/postgres.json".into(),
+        ]);
+        assert!(candidate_test_options(&missing_oidc).is_err());
         let mut hosting_args = args.clone();
         hosting_args.extend(["--hosting-file".into(), "/private/hosting.json".into()]);
         assert_eq!(

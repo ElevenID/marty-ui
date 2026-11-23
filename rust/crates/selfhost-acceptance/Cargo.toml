@@ -13,10 +13,20 @@ autotests = false
 axum.workspace = true
 axum-server.workspace = true
 futures-util.workspace = true
+marty-auth = { path = "../../services/auth" }
+marty-compliance-profile = { path = "../../services/compliance-profile" }
+marty-deployment-profile = { path = "../../services/deployment-profile" }
+marty-device-registration = { path = "../../services/device-registration" }
+marty-flow = { path = "../../services/flow" }
 marty-issuance-service = { path = "../../services/issuance" }
+marty-notification = { path = "../../services/notification" }
 marty-organization = { path = "../../services/organization" }
 marty-credential-template = { path = "../../services/credential-template" }
+marty-presentation-policy = { path = "../../services/presentation-policy" }
+marty-revocation-profile = { path = "../../services/revocation-profile" }
 marty-selfhost-bundle = { path = "../selfhost-bundle" }
+marty-trust-profile = { path = "../../services/trust-profile" }
+mmf-messaging.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 serde.workspace = true
@@ -40,3 +50,7 @@ unsafe_code = "forbid"
 [[test]]
 name = "native_kms_schema_contract"
 path = "tests/native_kms_schema_contract.rs"
+
+[[test]]
+name = "managed_postgres_contract"
+path = "tests/managed_postgres_contract.rs"

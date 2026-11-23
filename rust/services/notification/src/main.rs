@@ -1,4 +1,5 @@
 use marty_notification::{
+    database::database_max_connections,
     delivery::{
         outbox_batch_size, outbox_lease_seconds, outbox_poll_milliseconds,
         outbox_retention_seconds, run_worker,
@@ -118,6 +119,7 @@ fn database_url() -> String {
         .unwrap_or_else(|_| "postgresql://marty:marty_dev@localhost:5432/marty_credentials".into())
         .replace("postgresql+asyncpg://", "postgresql://")
 }
+
 fn address(port_name: &str, default: u16) -> Result<SocketAddr, io::Error> {
     let port = env::var(port_name).ok().map_or(Ok(default), |value| {
         value
@@ -137,7 +139,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .json()
         .init();
     let pool = PgPoolOptions::new()
-        .max_connections(30)
+        .max_connections(database_max_connections(
+            env::var("NOTIFICATION_DATABASE_MAX_CONNECTIONS")
+                .ok()
+                .as_deref(),
+        )?)
         .connect(&database_url())
         .await?;
     let envelope = Arc::new(WebhookSecretEnvelope::from_environment()?);
@@ -149,6 +155,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     migration::validate(&pool).await?;
     validate_internal_auth_config().map_err(io_error)?;
+    marty_notification::email::validate_environment().map_err(io_error)?;
     outbox_retention_seconds().map_err(io_error)?;
     outbox_lease_seconds().map_err(io_error)?;
     outbox_poll_milliseconds().map_err(io_error)?;

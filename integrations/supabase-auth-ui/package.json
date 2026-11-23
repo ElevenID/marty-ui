@@ -1,0 +1,14 @@
+{
+  "name": "@elevenid/supabase-auth-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.mjs",
+    "test": "bun test",
+    "check": "bun test && bun build.mjs --config public/config.example.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.119.2"
+  }
+}

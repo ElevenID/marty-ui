@@ -14,7 +14,7 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application environment differs from the reviewed installation contract";
 const EXAMPLE: &str = include_str!("../../../../.env.selfhost.production.example");
 pub const OPERATOR_EMAIL: &str = "operator@localhost";
-pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 7] = [
+pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 8] = [
     "google_client_id",
     "google_client_secret",
     "google_analytics_measurement_id",
@@ -22,6 +22,7 @@ pub const OPTIONAL_INTEGRATION_SECRETS: [&str; 7] = [
     "smtp_password",
     "passport_tenant_api_keys",
     "personalization_bureau_api_key",
+    "notification_resend_api_key",
 ];
 
 pub struct ApplicationParameters {
@@ -478,7 +479,10 @@ mod tests {
             .all(|line| !line.split_once('=').unwrap().1.contains("REPLACE_")));
         assert!(!text.contains("_PASSWORD="));
         assert!(!result.operator_account_created);
-        assert_eq!(result.optional_empty_secrets.len(), 7);
+        assert_eq!(
+            result.optional_empty_secrets.len(),
+            OPTIONAL_INTEGRATION_SECRETS.len()
+        );
     }
     #[test]
     fn console_only_hosting_keeps_login_and_logout_on_the_enabled_section() {
