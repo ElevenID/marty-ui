@@ -371,32 +371,13 @@ impl AgentDirectoryService {
         let owner = owner
             .filter(|value| !value.is_empty())
             .ok_or(AgentDirectoryError::AccessDenied)?;
-        let member = self
-            .store
-            .member_by_user_and_organization_for_update_in_transaction(tx, user_id, organization_id)
+        let member = crate::locked_membership::load(&self.store, tx, user_id, organization_id)
             .await
-            .map_err(|_| AgentDirectoryError::Unavailable)?
+            .map_err(|error| match error {
+                crate::locked_membership::Error::MemberRead => AgentDirectoryError::Unavailable,
+                crate::locked_membership::Error::RoleLock(error) => database_error(error),
+            })?
             .ok_or(AgentDirectoryError::AccessDenied)?;
-        // Lock every actual membership/role/permission edge used by the decision,
-        // including owner-role attribution. Revocation cannot race this write.
-        sqlx::query("SELECT r.id FROM organization_service.member_roles mr JOIN organization_service.roles r ON r.id=mr.role_id WHERE mr.member_id=$1 AND r.organization_id=$2 ORDER BY r.id FOR SHARE OF mr,r")
-            .bind(member.id).bind(organization_id).fetch_all(&mut **tx).await.map_err(database_error)?;
-        sqlx::query("SELECT p.id FROM organization_service.member_roles mr JOIN organization_service.roles r ON r.id=mr.role_id JOIN organization_service.role_permissions rp ON rp.role_id=r.id JOIN organization_service.permissions p ON p.id=rp.permission_id WHERE mr.member_id=$1 AND r.organization_id=$2 ORDER BY p.id FOR SHARE OF rp,p")
-            .bind(member.id).bind(organization_id).fetch_all(&mut **tx).await.map_err(database_error)?;
-        // Reload after any lock wait; the first hydration is not a cached permit.
-        let member = self
-            .store
-            .member_by_user_and_organization_for_update_in_transaction(tx, user_id, organization_id)
-            .await
-            .map_err(|_| AgentDirectoryError::Unavailable)?
-            .ok_or(AgentDirectoryError::AccessDenied)?;
-        if member
-            .roles
-            .iter()
-            .any(|role| role.organization_id != organization_id)
-        {
-            return Err(AgentDirectoryError::AccessDenied);
-        }
         authorize_forwarded_principal(organization_id, principal, permission, false, Some(&member))
             .map_err(|_| AgentDirectoryError::AccessDenied)?;
         Ok(owner)
