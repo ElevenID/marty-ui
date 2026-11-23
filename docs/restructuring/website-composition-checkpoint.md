@@ -85,6 +85,24 @@ rehearsal receipt SHA-256 is
 The production upgrade still needs to select the signed configuration
 alongside the images and verify a fresh sign-in on the recovered host.
 
+The selected services mount 37 distinct paths represented in the two
+signed prepared bundles. All matched the installed v1.1.274 release by
+presence and content. The v1.1.292 bundle changes 28, including the shared
+secret-loading script and the PostgreSQL initialization script. Preserve
+the established database when selecting the new files. The signed base
+Compose model also changes environment bindings and the Redis command.
+
+Both releases pin the same Redis image. They select different memory
+policies, `allkeys-lru` in v1.1.274 and `noeviction` in v1.1.292. A
+disposable instance used each original release command with the same
+Windows data bind and Unix socket volume through upgrade and backout. The
+append-only file retained the synthetic identity value, a replay marker
+and its absolute expiry, and a write acknowledged after upgrade. The
+rehearsal receipt SHA-256 is
+`b893c0ec17717a3820de07996762fa95d9d925fdd3a8a6e0a1e261ccd227da5d`.
+The managed full application upgrade still needs to select the signed
+command and confirm the data and socket mount identities on the host.
+
 The selected PostgreSQL 15 cluster had two Keycloak connections at
 readback. Its built-in WAL archive was off, and it had no active WAL
 senders or replication slots. The production database owner must account
