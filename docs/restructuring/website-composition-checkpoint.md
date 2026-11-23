@@ -66,6 +66,32 @@ two symlink cases skipped. Rehearsal receipt SHA-256
 `ec40a3ad933d60f3fb02e97e5ea79a1c240659a54a37716b8d3fbfe999c8e639`.
 [Public acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
 
+The full application upgrade also changes the Keycloak configuration used
+for fresh sign-in. Both installed configurator scripts and all 29 inspected
+realm and theme paths matched v1.1.274. The v1.1.292 bundle changes 24 of
+those paths. It includes the new account theme and the UI client mapper
+that emits the authentication timestamp. The selected realm has one UI
+client and lacks that direct mapper. The image-only transition preserves
+both mounted scripts and skips the configurator.
+
+A disposable PostgreSQL, Keycloak and OpenBao installation exercised the
+three signed v1.1.292 image pins. The original configurator created the
+mapper on an existing synthetic UI client, updated it on the second pass
+and read back the expected values both times. A fresh authorization-code
+login with S256 PKCE returned a remotely signed ID token. Its signature,
+issuer, UI audience, nonce and authentication timestamp passed. The
+rehearsal receipt SHA-256 is
+`aae14cc4bb589919ec3c8c4bcf614d7f2a4279237a8721e7af627073291285a0`.
+The production upgrade still needs to select the signed configuration
+alongside the images and verify a fresh sign-in on the recovered host.
+
+The selected PostgreSQL 15 cluster had two Keycloak connections at
+readback. Its built-in WAL archive was off, and it had no active WAL
+senders or replication slots. The production database owner must account
+for identity writes as well as application writes in the recovery point.
+A physical restore rewinds both databases together.
+[PostgreSQL 15 recovery scope](https://www.postgresql.org/docs/15/continuous-archiving.html)
+
 The original v1.1.274 combined package and application evidence were
 retrieved again from their successful producer run. Both archives matched
 their published digests. The full package matched the retained authenticated
