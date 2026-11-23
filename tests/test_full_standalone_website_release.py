@@ -113,7 +113,7 @@ def test_historical_public_receipts_stay_public_and_cannot_gain_full_authority()
             web.validate_release(release)
 
 
-def test_full_original_subject_and_image_still_use_private_hosted_authority(full_release, tmp_path, monkeypatch):
+def test_full_original_hosted_proofs_remain_valid_with_role_aware_private_authority(full_release, tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     for name in (*composition.WEBSITE_FILES, "gh", "cosign"):
         (tmp_path / name).write_bytes(b"test proof bytes; verifier calls are simulated")
@@ -142,11 +142,25 @@ def test_full_original_subject_and_image_still_use_private_hosted_authority(full
     for _, args in (calls[0], calls[2]):
         assert args[args.index("--source-digest") + 1] == producer["source_sha"]
         assert args[args.index("--repo") + 1] == ui.COMMERCE_REPOSITORY
-        assert "--deny-self-hosted-runners" in args and "--no-public-good" in args
+        assert "--deny-self-hosted-runners" not in args
+        assert "--no-public-good" in args
     calls.clear()
     with pytest.raises(ValueError, match="requires --registry-config"):
         proof.verify_website(tmp_path, gh=tmp_path / "gh", cosign=tmp_path / "cosign", runner=run)
     assert all(kind == "subject" for kind, _ in calls)
+    calls.clear()
+
+    def unapproved_local(args):
+        calls.append(("subject", args))
+        value = verified(producer)
+        value[0]["verificationResult"]["signature"]["certificate"]["runnerEnvironment"] = "self-hosted"
+        return json.dumps(value)
+
+    # Removing the blanket CLI flag never authorizes an unbound local signer.
+    with pytest.raises(ValueError, match="private signed release authorization is invalid"):
+        proof.verify_website(tmp_path, gh=tmp_path / "gh", cosign=tmp_path / "cosign",
+                             registry_config=registry, runner=unapproved_local)
+    assert len(calls) == 1 and calls[0][1][1] == "attestation"
 
 
 def full_candidate(candidate):

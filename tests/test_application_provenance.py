@@ -171,7 +171,8 @@ def test_package_proof_does_not_admit_website_private_tagged_or_other_images(pac
 ])
 def test_package_proofs_reject_replay_from_another_owner_workflow_source_or_invocation(package_files, boundary, field, value):
     run, calls = verifier_runner(certificate_change=lambda certificate: certificate.update({field: value}))
-    with pytest.raises(ValueError, match="certificate differs"):
+    expected = "original private repository ID" if field == "runnerEnvironment" else "certificate differs"
+    with pytest.raises(ValueError, match=expected):
         boundary(package_files, run)
     assert len(calls) == 1, "a rejected certificate must not proceed to the second verifier"
 

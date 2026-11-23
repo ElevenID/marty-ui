@@ -358,7 +358,8 @@ def test_private_staging_identity_survives_verifier_execution(publication, tmp_p
 ])
 def test_intake_uses_real_original_certificate_policy(publication, tmp_path, field, value):
     run, _calls = verifier_runner(certificate_change=lambda certificate: certificate.update({field: value}))
-    with pytest.raises(ValueError, match="certificate differs"):
+    expected = "original private repository ID" if field == "runnerEnvironment" else "certificate differs"
+    with pytest.raises(ValueError, match=expected):
         fetch(publication, tmp_path, runner=run)
     absent(tmp_path)
 
