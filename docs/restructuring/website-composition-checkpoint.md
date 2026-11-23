@@ -48,6 +48,24 @@ The rehearsal receipt SHA-256 is
 `a8120de9cf3fce5c88dc4e6d31ece22476a962752abe68e6d1294e838a09c2d0`.
 [Retained edge correction #2064](https://github.com/ElevenID/marty-ui/pull/2064)
 
+A live public request to exact `/resources` reached the selected edge and
+application as `/index.html`. The release marker and the slash path reached
+both containers under their original paths. The retained deployment procedure
+identifies the temporary www Resources SPA rule. At the cutover the zone
+owner must capture its current configuration, disable the rewrite when the
+signed split origin is ready, and restore its prior behavior on combined
+backout. The Windows owner and public zone have separate routing controls.
+
+The verifier now checks the Resources canonical path, selected revision and
+revisioned script through public and loopback ingress. In a disposable
+rehearsal it rejected the stale public rewrite, accepted the correct
+Resources page after removing it, and the original public page was restored
+on combined backout. The source at
+`07fe01edf17449a4464724ce756e4465de2d416e` passed 490 Windows tests with
+two symlink cases skipped. Rehearsal receipt SHA-256
+`ec40a3ad933d60f3fb02e97e5ea79a1c240659a54a37716b8d3fbfe999c8e639`.
+[Public acceptance #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
 At 00:43 UTC the public and installed loopback endpoints served the combined
 release marker. Both readiness and current-account requests returned 502.
 The production owner must reconcile the selected workload's credential
