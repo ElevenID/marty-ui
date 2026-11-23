@@ -90,11 +90,18 @@ def transport(monkeypatch):
                     'jwks_uri': issuer+'/protocol/openid-connect/certs'})
             elif path == verify.LOGIN:
                 fields = {'client_id': 'marty-ui', 'response_type': 'code', 'redirect_uri': ORIGIN+'/v1/auth/callback',
-                          'state': 'masked_test_state_a234567890', 'code_challenge': 'masked_test_challenge_b23456789',
+                          'scope': 'openid profile email', 'nonce': 'masked_test_nonce_a234567890',
+                          'state': 'masked_test_state_a234567890', 'code_challenge': 'masked_test_challenge_'.ljust(43, 'A'),
                           'code_challenge_method': 'S256'}
                 if fault == 'login':
                     fields['redirect_uri'] = '/wrong'
-                entry = response(302, location=ORIGIN + verify.AUTH + '?' + urlencode(fields))
+                if isinstance(fault, tuple):
+                    key, value = fault
+                    if value is None:
+                        fields.pop(key)
+                    else:
+                        fields[key] = value
+                entry = response(302, location=ORIGIN + verify.AUTH + '?' + urlencode(fields, doseq=True))
                 entry.headers['Set-Cookie'] = 'synthetic=never-record'
             elif path == verify.SESSION:
                 entry = response(body={'authenticated': fault == 'anonymous-session'})
@@ -152,7 +159,7 @@ def test_public_acceptance_binds_assets_to_local_and_application_to_original(tra
     assert application['authorization']['callback_path'] == '/v1/auth/callback'
     assert application['authenticated_application_exercised'] is False
     evidence = json.dumps([routes, application])
-    assert all(value not in evidence for value in ('masked_test_state', 'masked_test_challenge', 'never-record'))
+    assert all(value not in evidence for value in ('masked_test_state', 'masked_test_challenge', 'masked_test_nonce', 'never-record'))
     if state == 'split':
         assert (HOST, PREFIX+'home.js', 443) in calls and (HOST, PREFIX+'home.js', 29382) in calls
         for origin in ('public', 'loopback'):
@@ -168,6 +175,20 @@ def test_public_acceptance_binds_assets_to_local_and_application_to_original(tra
 def test_public_acceptance_fails_closed_on_wrong_route_or_application(transport, fault):
     state = 'staged' if fault == 'lingering-website' else 'split'
     transport(state, fault)
+    with pytest.raises(ValueError):
+        verify._observe(EDGE, MODEL, SIGNED, state)
+
+
+@pytest.mark.parametrize('state', ['split', 'staged'])
+@pytest.mark.parametrize(('key', 'value'), [
+    ('nonce', None), ('nonce', 'short'), ('nonce', ['n' * 32, 'n' * 32]),
+    ('state', ['s' * 32, 's' * 32]), ('scope', None), ('scope', 'profile email'),
+    ('scope', ['openid', 'openid']), ('code_challenge', 'a' * 42), ('code_challenge', 'a' * 42 + '='),
+    ('code_challenge', ['a' * 43, 'b' * 43]), ('client_secret', 'fixture'), ('access_token', 'fixture'),
+    ('id_token', 'fixture'), ('error', 'login_required'),
+])
+def test_authorization_redirect_requires_the_application_login_contract(transport, state, key, value):
+    transport(state, (key, value))
     with pytest.raises(ValueError):
         verify._observe(EDGE, MODEL, SIGNED, state)
 

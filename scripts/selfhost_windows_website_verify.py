@@ -240,9 +240,13 @@ def _application(public, local, origin, marker):
     require(login.status in {302, 303} and not target.fragment and
             (target.scheme, target.netloc, target.path) == ('https', urlsplit(origin).netloc, AUTH))
     require(all(fields.get(key) == [value] for key, value in {'client_id': 'marty-ui', 'response_type': 'code',
-        'redirect_uri': origin + '/v1/auth/callback', 'code_challenge_method': 'S256'}.items()) and
-        all(len(fields.get(key, [])) == 1 and re.fullmatch(r'[A-Za-z0-9._~-]{16,256}', fields[key][0])
-            for key in ('state', 'code_challenge')))
+        'redirect_uri': origin + '/v1/auth/callback', 'code_challenge_method': 'S256'}.items()))
+    require(len(fields.get('scope', [])) == 1 and 'openid' in fields['scope'][0].split(' '))
+    require(len(fields.get('code_challenge', [])) == 1 and
+            re.fullmatch(r'[A-Za-z0-9_-]{43}', fields['code_challenge'][0]))
+    require(all(len(fields.get(key, [])) == 1 and re.fullmatch(r'[A-Za-z0-9._~-]{16,256}', fields[key][0])
+                for key in ('state', 'nonce')))
+    require(fields.keys().isdisjoint({'client_secret', 'access_token', 'id_token', 'error'}))
     session = public(SESSION)
     require(_json(session) == {'authenticated': False})
     return {'release': {'public': release_public.record(), 'loopback': release_local.record()},
