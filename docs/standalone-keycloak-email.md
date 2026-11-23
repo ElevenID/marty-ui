@@ -4,6 +4,9 @@ Use this with the independent provider's [credential renewal](standalone-keycloa
 and [TLS maintenance](standalone-keycloak-tls.md). Email delivery is a separate
 qualification gate. A connected mailbox profile, SMTP authentication, or an
 accepted send alone does not prove that the user's verification email arrived.
+Set the realm's human-facing `displayName` to `ElevenID`; keep its stable
+internal realm identifier and issuer unchanged. The email footer uses that
+display name, so a missing/old value can expose `11id` in delivered messages.
 
 ## Sender and spending boundary
 
@@ -102,6 +105,13 @@ Once delivery is qualified and the operator has requested enrollment:
 
 1. Inspect the exact target user and preserve the invitation boundary. Refuse
    unexpected existing credentials or a conflicting account state.
+   Imported users may lack the roles normally assigned by account creation.
+   Before redirecting a person to the native account console, check that they
+   have the built-in `account` client's `view-profile` and `manage-account`
+   self-service roles. These are not realm/global administrative roles. The
+   exercised missing-role case issued login tokens but returned `401` from the
+   account API; granting these two roles returned `200`. Preserve other role
+   mappings and do not substitute broad administrative permissions.
 2. Enable that user for required actions, leaving `emailVerified=false`.
    Require `VERIFY_EMAIL`, `UPDATE_PASSWORD` and `CONFIGURE_TOTP`. Generate
    neither the person's password nor their authenticator secret in an agent.
