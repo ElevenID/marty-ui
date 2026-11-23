@@ -5,6 +5,29 @@ cross-owner composition. The standalone website publisher is qualified; the
 composition and isolated-host gates have distinct evidence and must not be
 inferred from publisher success.
 
+## Approved full-release database rollback, November 23
+
+If the full v1.1.292 upgrade must return to v1.1.274, the deployment owner
+accepts resetting the selected Windows PostgreSQL cluster to its verified
+pre-upgrade recovery point. Later writes can be lost across the application,
+Keycloak and Applicant databases. An edge-only backout can keep the accepted
+application and database. This decision covers the selected Windows cluster.
+
+A disposable PostgreSQL 15 rehearsal ran the released v1.1.274 migration
+owners, captured a verified physical backup and WAL, and ran the v1.1.292
+migrations twice. An isolated restore paused at the exact pre-upgrade log
+position. A second copy promoted at the same named point, accepted new writes
+in all three databases and retained those writes after restarting. All five
+available v1.1.274 service schema verifiers passed on the restarted database.
+The separate upgraded database still contained its later records. The
+Keycloak and Applicant databases used synthetic markers in this rehearsal.
+Receipt SHA-256 `de5c749ed7701f9de0b7cef8605b1f2423dd74104f1c5d1030c4a9c385422d77`.
+
+The production owner still needs a consistent recovery point, retained
+backup and WAL, a verified restore, and a coordinated writer switch on the
+selected host. Reconcile the separate Applicant file, Redis sessions and
+provider bindings and verify fresh sign-in before reopening traffic.
+
 ## Source-removal compatibility review, November 23
 
 A read-only merge projection of source-removal PR #2017 at
@@ -194,8 +217,7 @@ commits in all three databases. Both restores paused at their expected
 WAL positions. The test used synthetic rows and did not apply service
 schema migrations. Receipt SHA-256
 `4ea381cf730b5329e03ca4fa87a8b0dd4ff15b700f875588667a9162f6feec37`.
-The database owner still needs the production recovery point and a
-rollback policy for writes acknowledged after the upgrade.
+The database owner still needs to capture and verify the production recovery point.
 [PostgreSQL 15 recovery scope](https://www.postgresql.org/docs/15/continuous-archiving.html)
 
 The original v1.1.274 combined package and application evidence were
@@ -204,8 +226,7 @@ their published digests. The full package matched the retained authenticated
 archive byte for byte, and all 246 files in the accepted local inventory
 matched their hashes. The 31 selected Windows container roles matched both
 the signed manifest digests and their local immutable image IDs. The
-database owner still needs a production writer boundary and a way to
-preserve acknowledged v1.1.292 writes across an application rollback.
+database owner still needs to establish the production writer boundary.
 
 At 00:43 UTC the public and installed loopback endpoints served the combined
 release marker. Both readiness and current-account requests returned 502.
@@ -242,8 +263,8 @@ restored instance. The private rehearsal receipt SHA-256 is
 
 The pre-upgrade archive restored the original v1.1.274 state, including a row
 deleted after that backup. The upgraded cluster retained its later writes and
-new-schema receipt. A full return to v1.1.274 still needs an approved way to
-account for those writes and protect writes in flight. The physical restore
+new-schema receipt. The approved full-release reset can rewind these writes.
+The physical restore
 exercise used a read-only synthetic database during backup. Production
 credential recovery, signing and cutover remain pending.
 
@@ -261,8 +282,8 @@ The merge-group CI workflow finished with 28 successful jobs and one skip.
 [Database preflight #2062](https://github.com/ElevenID/marty-ui/pull/2062) /
 [Protected queue run](https://github.com/ElevenID/marty-ui/actions/runs/45107017431)
 
-The product owner still needs a schema-changing upgrade and a qualified
-backout that protects writes. Production credential recovery precedes the
+The product owner still needs a schema-changing upgrade and a verified
+production restore point for the approved backout. Production credential recovery precedes the
 managed deployment. The rehearsal receipt SHA-256 is
 `6a03e1557e22a780e7f14580dba5bf4715ede5e13b97d18d2e12635ef18b3227`.
 
@@ -282,8 +303,7 @@ SHA-256 `ab13d7af4b3700b9ed080b2c7dd04eaabf296aad7871d630f5b4e53283a2ad4f`.
 Two read-only observations of the selected production PostgreSQL instance
 found archive mode off, zero replication slots and zero connected WAL
 senders. A production upgrade still needs a retained backup and WAL stream,
-a verified restore, and a decision on how to serve writes accepted under the
-new schema if the original application must return. The release owner must
+and a verified restore before applying the approved full-release rollback. The release owner must
 also account for identity, Redis and provider state outside the application
 database. The installed readback has SHA-256 `8c98652a766460240efd05b2df1cfebcc328b2c409a61fbd32059ae8574e8563`.
 
