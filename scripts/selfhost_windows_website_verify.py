@@ -153,7 +153,7 @@ def _slash_route(fetch, origin, path):
 
 def _split_routes(public, local, origin, metadata, routes):
     boundary = routes['website']
-    require({'/', WEBSITE_MARKER, '/product', '/pricing'} <= set(boundary['exact_paths'])
+    require({'/', WEBSITE_MARKER, '/product', '/pricing', '/pricing/'} <= set(boundary['exact_paths'])
             and '/_website/' in boundary['path_prefixes'])
     revision = metadata['revision']
     require(revision == web.revision(metadata['source_sha'], metadata['commerce_extension']['source_sha']))
@@ -167,9 +167,10 @@ def _split_routes(public, local, origin, metadata, routes):
         require(candidates and (assets is None or assets == candidates))
         assets = candidates
         require(_json(marker) == metadata)
-        representative = {path: _slash_route(fetch, origin, path) for path in ('/product', '/pricing')}
-        for response in representative.values():
-            require(any(path.startswith(prefix) for path in _scripts(response)))
+        product = _slash_route(fetch, origin, '/product')
+        require(any(path.startswith(prefix) for path in _scripts(product)))
+        withheld = {path: fetch(path) for path in ('/pricing', '/pricing/')}
+        require(all(row.status == 404 and not row.header('Location') for row in withheld.values()))
         runtime_path = '/_website/runtime-config.js'
         alternate = ('1' if revision.startswith('0') else '0') + revision[1:]
         missing_path = '/_website/' + alternate + '/missing.js'
@@ -178,7 +179,7 @@ def _split_routes(public, local, origin, metadata, routes):
         require(all(row.status == 200 and row.body and row.header('Content-Type').split(';')[0].strip().lower()
                     in {'text/javascript', 'application/javascript'} for row in (runtime, asset)))
         require(missing.status == 404 and not missing.header('Location'))
-        observed = {'/': homepage, WEBSITE_MARKER: marker, **representative, runtime_path: runtime, script: asset}
+        observed = {'/': homepage, WEBSITE_MARKER: marker, '/product': product, **withheld, runtime_path: runtime, script: asset}
         require(all(row.header('X-Marty-Website-Revision') == revision for row in observed.values()))
         report[source] = {path: row.record() for path, row in {**observed, missing_path: missing}.items()}
         if source == 'loopback':
