@@ -24,6 +24,17 @@ SHA-256 is `cb34e4e7f2b821bf34df7d7d156d031d45bc82334bcb020df27bb831406301fe`.
 The draft PR records the plan and original evidence.
 [Standalone producer #113](https://github.com/ElevenID/marty-subscriptions/pull/113)
 
+The managed acceptance verifier previously expected a pricing page. The
+qualified website returns HTTP 404 on both exact pricing paths and identifies
+the selected revision in its response headers. The corrected verifier passed
+against two real loopback Nginx listeners serving the verified 453-file full
+website build. The disposable edge restored the combined release with its
+original v1.1.274 application container still running. The standalone site
+also passed after the disposable application was removed. The Windows suite
+passed 487 tests and skipped two symbolic-link cases. The local rehearsal
+receipt SHA-256 is `9113d3e45bca63ae03e8dbe1fd21e58a6191144bd7bd93bdc20d6c10387de29b`.
+[Acceptance correction #2047](https://github.com/ElevenID/marty-ui/pull/2047)
+
 At 00:43 UTC the public and installed loopback endpoints served the combined
 release marker. Both readiness and current-account requests returned 502.
 The production owner must reconcile the selected workload's credential
