@@ -15,9 +15,13 @@ and all embedded unchanged backend/application/website evidence.
 
 | Original role | Qualified result |
 | --- | --- |
-| Application | Full v1.1.292 at public source `ab8c966`; 37 successful steps and two intentional step skips |
-| Standalone website | Full source `bf9e01e`; 38 successful steps, 259 prerender routes and six browser passes with zero skips or retries |
-| Composition | Matching v1.1.292 application/backend, full audience, 29-service image map and OpenBao; 21 successful steps |
+| [Application original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45210723263) | Full v1.1.292 at public source `ab8c966`; 37 successful steps and two intentional step skips |
+| [Website original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45239288360) | Full source `bf9e01e`; 38 successful steps, 259 prerender routes and six browser passes with zero skips or retries |
+| [Composition original](https://github.com/ElevenID/marty-subscriptions/actions/runs/45257283947) | Matching v1.1.292 application/backend, full audience, 29-service image map and OpenBao; 21 successful steps |
+
+Each row refers to its original attempt 1. The independently authenticated
+composition identity is
+`sha256:b969520302c7c88973d4d9779f955ea00e42b81f58868e80a488936fad1e5307`.
 
 The composition's two outer subjects and its inner producer/backend artifacts
 passed independent native authentication. Original private SLSA statements
