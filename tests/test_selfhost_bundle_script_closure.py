@@ -64,7 +64,8 @@ ISOLATED_READER = r'''
 import importlib,json,pathlib,sys
 scripts=pathlib.Path(sys.argv[1]).resolve()
 sys.path.insert(0,str(scripts))
-for name in ['selfhost_windows_selection','selfhost_windows_website','selfhost_windows_website_store','selfhost_windows_product_journal',
+for name in ['selfhost_windows_selection','selfhost_windows_website','selfhost_windows_website_store',
+             'selfhost_windows_website_guard','selfhost_windows_product_journal',
              'selfhost_windows_product','selfhost_windows_product_probe','selfhost_windows_product_deploy',
              'selfhost_windows_staging_recovery','selfhost_windows_expired_origin','selfhost_windows_recovery_activation',
              'selfhost_windows_recovery_journal','selfhost_windows_recovery_operator',
