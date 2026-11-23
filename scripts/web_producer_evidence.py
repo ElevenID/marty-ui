@@ -20,11 +20,17 @@ SUBJECTS = {"website-release.json", "production-web-release.json", "application-
 
 def subject_role(names: list[str]) -> str:
     ui.require(names and len(names) == len(set(names)) and set(names).issubset(SUBJECTS), "unexpected producer subjects")
+    # SBOM/build evidence belongs to the selected release receipt. Its basename
+    # alone cannot distinguish a website build from an application build.
+    auxiliary = {"ui.sbom.cdx.json", "ui-build-evidence.json"}
     roles = {"website" if name == "website-release.json" else
              "composition" if name in {"web-composition.json", "web-composition.zip"} else "application"
-             for name in names}
+             for name in names if name not in auxiliary}
     ui.require(len(roles) == 1, "producer subjects mix release roles")
-    return roles.pop()
+    role = roles.pop()
+    ui.require(role != "composition" or not auxiliary.intersection(names),
+               "composition has no image build evidence")
+    return role
 
 
 def retain(directory: Path, *, names: list[str], producer: dict, release_provenance: Path,

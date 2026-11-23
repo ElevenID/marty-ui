@@ -8,6 +8,8 @@ import package_web_composition as composition
 import web_producer_evidence as evidence
 import website_provenance as proof
 import website_release as web
+from tests.test_website_provenance import verified
+import json
 
 
 @pytest.mark.parametrize("candidate", ["legacy", "standalone"], indirect=True)
@@ -36,6 +38,38 @@ def test_producer_export_refuses_arbitrary_subject_paths(candidate, tmp_path):
                         release_provenance=kwargs["website_assets"] / "website-release.json.provenance.jsonl",
                         gh=kwargs["gh"], cosign=kwargs["cosign"])
     assert calls == []
+
+
+def test_full_standalone_receipt_and_auxiliary_subjects_keep_website_authority(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    names = ['website-release.json', 'ui.sbom.cdx.json', 'ui-build-evidence.json']
+    producer = web.producer('a'*40, None, '21', '1')
+    for name in ('gh', 'cosign', 'original.provenance.jsonl', *names,
+                 *(name+'.sigstore.json' for name in names)):
+        (tmp_path/name).write_bytes(b'inert original producer fixture')
+    calls = []
+    def run(args):
+        calls.append(args)
+        return json.dumps(verified(producer)) if args[1] == 'attestation' else 'verified Cosign proof'
+    original = proof.verify_subject
+    monkeypatch.setattr(proof, 'verify_subject', lambda *args, **kwargs: original(*args, **kwargs, runner=run))
+    evidence.retain(tmp_path, names=names, producer=producer,
+                    release_provenance=tmp_path/'original.provenance.jsonl',
+                    gh=tmp_path/'gh', cosign=tmp_path/'cosign')
+    assert [args[1] for args in calls] == ['attestation', 'verify-blob']*3
+    for name in names:
+        assert (tmp_path/(name+'.provenance.jsonl')).read_bytes() == b'inert original producer fixture'
+    assert evidence.subject_role(names) == 'website'
+    assert evidence.subject_role(['production-web-release.json', *names[1:]]) == 'application'
+
+
+@pytest.mark.parametrize('names', [
+    ['website-release.json', 'production-web-release.json', 'ui.sbom.cdx.json'],
+    ['web-composition.json', 'ui-build-evidence.json'],
+    ['ui.sbom.cdx.json', 'ui-build-evidence.json'],
+])
+def test_auxiliary_names_do_not_authorize_mixed_or_unbound_release_roles(names):
+    with pytest.raises(ValueError): evidence.subject_role(names)
 
 
 @pytest.mark.parametrize("names", [["production-web-release.json"], ["application-web-compatibility.json"],
