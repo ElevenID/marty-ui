@@ -1,10 +1,13 @@
 """Terminal website abort release under real private NTFS selection coordination."""
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows private abort-release evidence')
 
 from tests.test_package_web_composition import candidate as candidate
 from tests.test_selfhost_windows_selection import fixture
