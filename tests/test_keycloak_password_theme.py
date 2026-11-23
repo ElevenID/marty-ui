@@ -113,6 +113,25 @@ def test_login_steps_preserve_username_association(load_page, scenario):
         assert page.locator(".kc-password-toggle-btn").count() == 1
 
 
+@pytest.mark.parametrize("reset_available", [True, False])
+def test_login_error_has_one_card_and_only_available_recovery(load_page, reset_available):
+    page = load_page("login-error" if reset_available else "login-error-reset-disabled")
+    error = page.get_by_role("alert")
+    assert error.count() == 1
+    assert error.inner_text().strip() == "Invalid sign-in credentials"
+    for field in ["username", "password"]:
+        assert page.locator("#" + field).get_attribute("aria-describedby") == "input-error"
+    assert page.get_by_test_id("set-password-email-link").count() == int(reset_available)
+    assert page.get_by_test_id("forgot-password-link").count() == 0
+    for width in [320, 1280]:
+        page.set_viewport_size({"width": width, "height": 1000})
+        wrapper = page.locator("#kc-form > #kc-form-wrapper")
+        assert wrapper.evaluate("el => getComputedStyle(el).boxShadow") == "none"
+        assert wrapper.evaluate("el => getComputedStyle(el).padding") == "0px"
+        assert page.locator("#kc-form").evaluate("el => getComputedStyle(el).boxShadow") != "none"
+        assert page.evaluate("document.documentElement.scrollWidth === innerWidth")
+
+
 @pytest.mark.parametrize("scenario", ["register", "register-email"])
 def test_registration_identifies_username_and_both_new_passwords(load_page, scenario):
     page = load_page(scenario)

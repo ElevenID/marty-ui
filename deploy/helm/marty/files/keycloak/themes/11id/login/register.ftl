@@ -6,7 +6,7 @@
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">
-                <p class="elevenid-login-title">${msg("registerTitle")}</p>
+                <h1 class="elevenid-login-title">${msg("registerTitle")}</h1>
                 <p class="elevenid-context-hint">${msg("contextHint")}</p>
                 <form id="kc-register-form" class="${properties.kcFormClass!}" action="${url.registrationAction}" method="post">
                     <div class="${properties.kcFormGroupClass!}">

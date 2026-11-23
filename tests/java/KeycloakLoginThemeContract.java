@@ -21,6 +21,8 @@ public final class KeycloakLoginThemeContract {
             "update", "login-update-password.ftl",
             "update-aia", "login-update-password.ftl",
             "login", "login.ftl",
+            "login-error", "login.ftl",
+            "login-error-reset-disabled", "login.ftl",
             "reauth", "login.ftl",
             "username", "login-username.ftl",
             "register", "register.ftl",
@@ -60,12 +62,14 @@ public final class KeycloakLoginThemeContract {
             return messages.getProperty(key, key);
         });
         data.put("kcSanitize", (TemplateMethodModelEx) values -> values.get(0));
-        data.put("messagesPerField", Map.of("existsError", (TemplateMethodModelEx) values -> false));
+        data.put("messagesPerField", Map.of(
+                "existsError", (TemplateMethodModelEx) values -> scenario.startsWith("login-error"),
+                "getFirstError", (TemplateMethodModelEx) values -> "Invalid sign-in credentials"));
         data.put("realm", Map.of("internationalizationEnabled", true,
                 "displayName", "Synthetic Realm", "password", true,
                 "registrationAllowed", true, "loginWithEmailAllowed", true,
                 "registrationEmailAsUsername", scenario.equals("register-email"),
-                "rememberMe", true, "resetPasswordAllowed", true));
+                "rememberMe", true, "resetPasswordAllowed", !scenario.equals("login-error-reset-disabled")));
         data.put("locale", Map.of("currentLanguageTag", language, "supported", List.of()));
         data.put("client", Map.of("baseUrl", "/"));
         // Relevant inherited properties from Keycloak 26.8.0's keycloak login theme.

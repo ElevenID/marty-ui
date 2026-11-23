@@ -185,6 +185,13 @@ body {
   text-align: center;
 }
 
+#kc-form > #kc-form-wrapper {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
 /* ===== Titles ===== */
 .elevenid-login-title {
   margin: 0;
@@ -550,6 +557,7 @@ a:hover {
 
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
+  #kc-otp-login-form .form-group,
   #kc-totp-settings-form .form-group {
     margin-left: 0;
     margin-right: 0;

@@ -1,13 +1,15 @@
 <#import "template.ftl" as layout>
 <#import "auth-options.ftl" as authOptions>
 <#-- Marty custom login template with test-friendly IDs and language switcher -->
-<@layout.registrationLayout displayMessage=!messagesPerField.existsError('username','password') && !usernameHidden?? displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
+<#assign hasFieldError = messagesPerField.existsError('username','password')>
+<#assign hasFormError = message?has_content && message.type == 'error'>
+<@layout.registrationLayout displayMessage=!hasFieldError && (!hasFormError || !realm.password) && !usernameHidden?? displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
     <#if section = "header">
         <#-- Header content handled by template.ftl -->
     <#elseif section = "form">
         <div id="kc-form">
             <div id="kc-form-wrapper">
-                <p class="elevenid-login-title">${msg("loginAccountTitle")}</p>
+                <h1 class="elevenid-login-title">${msg("loginAccountTitle")}</h1>
                 <p class="elevenid-context-hint">${msg("contextHint")}</p>
                 <#if realm.password>
                     <form id="kc-form-login" onsubmit="login.disabled = true; return true;" action="${url.loginAction}" method="post">
@@ -26,13 +28,8 @@
                                        type="text" 
                                        autofocus 
                                        autocomplete="${(enableWebAuthnConditionalUI?has_content)?then('username webauthn', 'username')}"
-                                       aria-invalid="<#if messagesPerField.existsError('username','password')>true</#if>"
+                                       <#if hasFieldError>aria-invalid="true" aria-describedby="input-error"</#if>
                                 />
-                                <#if messagesPerField.existsError('username','password')>
-                                    <span id="input-error" class="${properties.kcInputErrorMessageClass!}" aria-live="polite">
-                                        ${kcSanitize(messagesPerField.getFirstError('username','password'))?no_esc}
-                                    </span>
-                                </#if>
                             </div>
                         </#if>
 
@@ -57,25 +54,22 @@
                                    name="password" 
                                    type="password" 
                                    autocomplete="current-password"
-                                   aria-invalid="<#if messagesPerField.existsError('username','password')>true</#if>"
+                                   <#if hasFieldError>aria-invalid="true" aria-describedby="input-error"</#if>
                             />
-                            <#if usernameHidden?? && messagesPerField.existsError('username','password')>
-                                <span id="input-error" class="${properties.kcInputErrorMessageClass!}" aria-live="polite">
-                                    ${kcSanitize(messagesPerField.getFirstError('username','password'))?no_esc}
-                                </span>
-                            </#if>
                         </div>
 
                         <#assign loginErrorText = "">
-                        <#if messagesPerField.existsError('username','password')>
+                        <#if hasFieldError>
                             <#assign loginErrorText = messagesPerField.getFirstError('username','password')!"">
-                        <#elseif message?has_content && message.type = 'error'>
+                        <#elseif hasFormError>
                             <#assign loginErrorText = (message.summary!'')?replace('<[^>]+>', '', 'r')>
                         </#if>
                         <#if loginErrorText?has_content>
-                            <div class="elevenid-login-error" role="alert" aria-live="polite" data-testid="login-error-text">
+                            <div id="input-error" class="elevenid-login-error" role="alert" data-testid="login-error-text">
                                 ${kcSanitize(loginErrorText)?no_esc}
                             </div>
+                        </#if>
+                        <#if loginErrorText?has_content && realm.resetPasswordAllowed>
                             <div class="elevenid-login-help" data-testid="login-password-help">
                                 <p class="elevenid-login-help-text">
                                     If you usually sign in with Google, your account may not have a local password yet.
@@ -103,7 +97,7 @@
                                 </#if>
                             </div>
                             <div class="${properties.kcFormOptionsWrapperClass!}">
-                                <#if realm.resetPasswordAllowed>
+                                <#if realm.resetPasswordAllowed && !loginErrorText?has_content>
                                     <span><a tabindex="5" href="${url.loginResetCredentialsUrl}" data-testid="forgot-password-link">${msg("doForgotPassword")}</a></span>
                                 </#if>
                             </div>
