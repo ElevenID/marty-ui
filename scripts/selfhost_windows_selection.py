@@ -120,10 +120,11 @@ def _read(root, stack):
     from selfhost_windows_continuation import FILES
     from selfhost_windows_product_journal import FILES as product_files
     from selfhost_windows_recovery_journal import FILES as recovery_files
+    from selfhost_windows_website_owner import FILES as website_files
     from selfhost_windows_model import ENTRY as model_entry, LIMIT as model_limit
     names = sorted(p.name for p in root.iterdir())
-    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1+len(FILES)+len(product_files)+len(recovery_files)
-            and all(n == 'owner.json' or n in FILES or n in product_files or n in recovery_files or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
+    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1+len(FILES)+len(product_files)+len(recovery_files)+len(website_files)
+            and all(n == 'owner.json' or n in FILES or n in product_files or n in recovery_files or n in website_files or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
     raw = {n: stack.enter_context(renewal.hold_private_input(root/n)) for n in names}
     require(sorted(p.name for p in root.iterdir()) == names)
     return raw
@@ -133,13 +134,14 @@ def _parse(raw, expected, *, allow_pending_model=False):
     from selfhost_windows_continuation import FILES, checkpoint
     from selfhost_windows_product_journal import FILES as product_files, SCHEMA as product_schema
     from selfhost_windows_recovery_journal import FILES as recovery_files, SCHEMA as recovery_schema
+    from selfhost_windows_website_owner import COMBINED_SCHEMA, RENEWED_COMBINED_SCHEMA, FILES as website_files, SCHEMA as website_schema
     from selfhost_windows_model import ENTRY as model_entry, history
     require('owner.json' in raw)
     require(decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
     carry = checkpoint(raw)
     intents = {};selections = {};previous = None;prior_record = None
     for name, value in raw.items():
-        if name == 'owner.json' or name in FILES or name in product_files or name in recovery_files or model_entry.fullmatch(name):continue
+        if name == 'owner.json' or name in FILES or name in product_files or name in recovery_files or name in website_files or model_entry.fullmatch(name):continue
         match = ENTRY.fullmatch(name);require(match is not None)
         number = int(match[1]);require(1 <= number <= MAX_SELECTIONS)
         target = intents if match[2] == 'intent' else selections
@@ -153,7 +155,8 @@ def _parse(raw, expected, *, allow_pending_model=False):
                                'config_sha256', 'inputs', 'operation', 'result_before_sha256'})
         require(intent['schema'] == SCHEMA and intent['sequence'] == number and intent['parent'] == previous)
         require(type(intent['sequence']) is int)
-        first_operation = ({product_schema:'product-successor',recovery_schema:'recovery-successor'}.get(carry['schema'],'continuation')) if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
+        first_operation = ({product_schema:'product-successor',recovery_schema:'recovery-successor',website_schema:'website-successor',
+                            COMBINED_SCHEMA:'website-combined-successor',RENEWED_COMBINED_SCHEMA:'website-combined-successor'}.get(carry['schema'],'continuation')) if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
         require(intent['operation'] == (first_operation if number == 1 else 'activation'))
         require(isinstance(intent['inputs'], dict) and set(intent['inputs']) == {'old', 'new'})
         for snapshot in intent['inputs'].values():
@@ -181,7 +184,8 @@ def _parse(raw, expected, *, allow_pending_model=False):
             require(record['intent_sha256'] == digest(raw[f'{number:06}.intent.json']))
             require(isinstance(record['choice'], str) and record['choice'] in {'old', 'new'} and record['selected'] == intent['inputs'][record['choice']])
             if number == 1 and carry:
-                prefix = {product_schema:'product-selected-',recovery_schema:'recovered-'}.get(carry['schema'],'continued-')
+                prefix = {product_schema:'product-selected-',recovery_schema:'recovered-',website_schema:'website-selected-',
+                          COMBINED_SCHEMA:'website-combined-',RENEWED_COMBINED_SCHEMA:'website-combined-'}.get(carry['schema'],'continued-')
                 require(record['decision'] == prefix+record['choice'])
             else:
                 decisions = {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'}
@@ -214,7 +218,7 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None, _pending_website_sha256=None):
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None, _pending_website_sha256=None, _pending_website_selection_sha256=None, _current_edge_guard=None):
     from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
@@ -226,6 +230,9 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         product_guard = renewal.product_transition_guard(config)
         if _pending_website_sha256 is not None:
             require(_pending_product_sha256 is None and _pending_recovery_sha256 is None)
+        require(_pending_website_selection_sha256 is None or _pending_website_sha256 is not None)
+        if _current_edge_guard is not None:
+            require(digest(packed(_current_edge_guard)) == _pending_website_sha256)
         guard_pin = _pending_product_sha256 if _pending_website_sha256 is None else _pending_website_sha256
         if guard_pin is None:
             require(not renewal.namespace_entry_exists(product_guard))
@@ -238,7 +245,12 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
             if _pending_website_sha256 is not None:
                 from selfhost_windows_website_guard import SCHEMA as WEBSITE_GUARD_SCHEMA
                 website_guard = decode(guard_body)
-                require(type(website_guard) is dict and website_guard.get('schema') == WEBSITE_GUARD_SCHEMA)
+                if _current_edge_guard is None:
+                    require(type(website_guard) is dict and website_guard.get('schema') == WEBSITE_GUARD_SCHEMA)
+                else:
+                    from selfhost_windows_website_current_backout import GUARD_SCHEMA
+                    require(website_guard == _current_edge_guard and website_guard['schema'] == GUARD_SCHEMA
+                            and guard_body == packed(website_guard))
             require(not any(renewal.namespace_entry_exists(getter(config)) for getter in (
                 renewal.recovery_guard, renewal.recovery_preparation_guard, renewal.renewal_staging_guard,
                 renewal.model_repair_guard, renewal.continuation_guard)))
@@ -266,7 +278,14 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
             pending_model=_pending_model_sha256 is not None,
             pending_continuation_sha256=_pending_continuation_sha256, ancestry=ancestry,
             discover_pending=_discover_continuation, pending_product_sha256=_pending_product_sha256,
-            pending_recovery_sha256=_pending_recovery_sha256)
+            pending_recovery_sha256=_pending_recovery_sha256,
+            pending_website_selection_sha256=_pending_website_selection_sha256)
+        if _current_edge_guard is not None and _pending_website_selection_sha256 is not None:
+            from selfhost_windows_website_owner import COMBINED_INTENT, RENEWED_COMBINED_SCHEMA
+            combined = decode(raw[COMBINED_INTENT])
+            require(digest(raw[COMBINED_INTENT]) == _pending_website_selection_sha256
+                    and combined['schema'] == RENEWED_COMBINED_SCHEMA
+                    and combined['current_plan_sha256'] == _current_edge_guard['current_plan_sha256'])
         if _discover_continuation:
             from selfhost_windows_continuation import INTENT, DECISION, validate_marker
             require(INTENT in raw and (DECISION not in raw or _pending_continuation_sha256 is not None))
@@ -1119,7 +1138,9 @@ def renew_once(config_path,logical_project):
 
 
 @contextmanager
-def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None, _website_edge=None):
+def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_website=None, _website_stage=None,
+                     _website_edge=None, _website_forward=None, _coordination=None, _published_backout_intent=None,
+                     _published_readmission_sha256=None, _current_website_backout=None, _renewed_publication=None):
     """Hold local selection and the project lock for a future recovery owner.
 
     The explicit callback delegates live readiness/custody checks after Bao is
@@ -1128,13 +1149,32 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
     completion = [];staging=[];model_completion=[];continuation=[];continuation_started=False
     product_completion=[];product_started=False
     expired_completion=[];expired_started=False
-    require((_website_stage is None and _website_edge is None) or _pending_website is not None)
-    require(_website_edge is None or _website_stage is None)
+    website_actions = sum(action is not None for action in (_website_stage, _website_edge, _website_forward))
+    require(website_actions <= 1 and (not website_actions or _pending_website is not None))
     options = {}
     if _pending_website is not None:
         require(terminal_guard_sha256 is None and _pending_website[1] is not None)
         options['_pending_website_sha256'] = _pending_website[1]
-    with _session(config_path, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
+    require(_published_readmission_sha256 is None or _published_backout_intent is not None)
+    if _published_backout_intent is not None:
+        from selfhost_windows_website_journal import BACKOUT
+        require(_pending_website is not None and _website_edge is not None and _website_edge[0] in BACKOUT
+                and re.fullmatch(r'[0-9a-f]{64}', _published_backout_intent))
+        options['_pending_website_selection_sha256'] = _published_backout_intent
+    ancestry = []
+    if _renewed_publication is not None:
+        require(_current_website_backout is not None and _current_website_backout[1] == 'verify-retirement'
+                and isinstance(_coordination, ExitStack))
+        options['_pending_website_selection_sha256'] = _renewed_publication['intent_sha256']
+    if _current_website_backout is not None:
+        require(terminal_guard_sha256 is None and _pending_website is None and not website_actions)
+        plan, operation, pins = _current_website_backout
+        options['_preserve_history'] = ancestry.extend
+        if operation in {'reconcile', 'verify-combined', 'retire-candidate', 'verify-retirement'}:
+            from selfhost_windows_website_current_backout import edge_guard
+            marker = edge_guard(plan, pins['current_plan_sha256'])
+            options.update(_current_edge_guard=marker, _pending_website_sha256=digest(packed(marker)))
+    with _session(config_path, _coordination=_coordination, **options) as (_config, _cfg_raw, expected, _root, raw, stack):
         if terminal_guard_sha256 is not None:
             require(type(terminal_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}', terminal_guard_sha256))
             require(not renewal.namespace_entry_exists(renewal.recovery_preparation_guard(_config)))
@@ -1143,7 +1183,7 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             require(not renewal.namespace_entry_exists(renewal.continuation_guard(_config)))
             guard_raw = stack.enter_context(renewal.hold_private_input(renewal.recovery_guard(_config)))
             require(digest(guard_raw) == terminal_guard_sha256)
-        elif _pending_website is None:
+        elif _pending_website is None and '_current_edge_guard' not in options:
             require(not renewal.recovery_pending(_config))
         intents, records = _parse(raw, expected);require(len(intents) == len(records))
         sequence = len(records);intent = intents[sequence];record = records[sequence]
@@ -1170,12 +1210,19 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
         generation_sequence=sequence+(checkpoint(raw)['sequence_offset'] if CHECKPOINT in raw else 0)
 
         def website_owner():
+            journal_hashes = {name: digest(body) for name, body in raw.items()}
+            if _published_backout_intent is not None:
+                from selfhost_windows_website_owner import FORWARD_FILES as website_files
+                journal_hashes = {name: sha for name, sha in journal_hashes.items() if name not in website_files}
+            if _renewed_publication is not None:
+                from selfhost_windows_website_owner import COMBINED_FILES
+                journal_hashes = {name: sha for name, sha in journal_hashes.items() if name not in COMBINED_FILES}
             return {
                 'project': cfg['project'], 'engine_id': cfg['engine_id'],
                 'docker_host': cfg['docker_host'], 'root': str(_root.parent),
                 'selection_sequence': sequence, 'generation_sequence': generation_sequence,
                 'binding_sha256': digest(packed(expected)),
-                'journal_sha256': digest(packed({name: digest(body) for name, body in raw.items()})),
+                'journal_sha256': digest(packed(journal_hashes)),
                 'configuration_sha256': digest(cfg_raw),
                 'selection_sha256': digest(raw[f'{sequence:06}.selection.json']),
                 'selected_sha256': digest(packed(selected)),
@@ -1184,6 +1231,27 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 'data_sha256': record['data_sha256'],
             }
 
+        if _current_website_backout is not None:
+            from selfhost_windows_website_current_backout import prepare
+            model_raw = stack.enter_context(renewal.hold_private_input(Path(cfg['compose_file']), max_bytes=2*1024*1024))
+            require(digest(model_raw) == cfg['compose_sha256'])
+            owner = {**website_owner(), 'model_sha256': digest(packed(decode(model_raw)))}
+            capture_http = bool(_renewed_publication and _renewed_publication.get('release'))
+            result = prepare(cfg, choice, values, record, owner, (_root, raw), ancestry, plan, held=stack,
+                             operation=operation, _capture_http=capture_http, **pins)
+            if _renewed_publication is not None:
+                from selfhost_windows_website_owner import stage_renewed_selection, prepare_renewed_release
+                require(result['result'] == 'current-generation-retirement-verified'
+                        and result['receipt_sha256'] == pins['retired_receipt_sha256'])
+                pending_pin = _renewed_publication['intent_sha256']
+                if capture_http:
+                    result = prepare_renewed_release(_root, raw, expected, ancestry, pins, pending_pin,
+                                                     result['fresh_http'], stack, _coordination)
+                else:
+                    result = stage_renewed_selection(_root, raw, expected, ancestry, plan, pins, pending_pin, stack, _coordination)
+            yield result
+            return
+
         if _pending_website is not None:
             from selfhost_windows_website_guard import inspect
             plan, guard_pin, anchor_pin = _pending_website
@@ -1191,6 +1259,24 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
             require(digest(model) == cfg['compose_sha256'])
             owner = {**website_owner(), 'model_sha256': digest(packed(decode(model)))}
             status = inspect(cfg, plan, owner, guard_sha256=guard_pin, expected_anchor_sha256=anchor_pin, held=stack)
+            if _published_backout_intent is not None:
+                from selfhost_windows_website_owner import hold_published_split, verify_backout_binding
+                published = hold_published_split(raw, expected, current_model, _root, plan,
+                                                 _published_backout_intent, stack)
+                if _website_edge[0] == BACKOUT[0]:
+                    require(status['classification'] == 'forward-evidence-complete'
+                            and status['anchor_sha256'] == published['sealed_anchor_sha256'])
+                    status['published_selection'] = published
+                    from selfhost_windows_website_abort_release import READMISSION, hold_readmission
+                    readmitted = renewal.namespace_entry_exists(Path(plan['attempt_directory']) / READMISSION)
+                    require(readmitted == (_published_readmission_sha256 is not None))
+                    if readmitted:
+                        _, baseline = hold_readmission(plan, status, published, stack,
+                                                      expected_sha256=_published_readmission_sha256)
+                        status.update(readmitted_runtime=baseline, readmission_sha256=_published_readmission_sha256)
+                else:
+                    require(_published_readmission_sha256 is None)
+                    verify_backout_binding(plan, status, published, stack)
             if _website_stage is not None:
                 require(status['record_count'] == 1 and status['permitted_record_phases'] == ['stage-candidate'])
                 assets, gh, cosign, registry_config, authority_file = _website_stage
@@ -1205,10 +1291,19 @@ def _selected_inputs(config_path, *, terminal_guard_sha256=None, _pending_websit
                 phase, assets, gh, cosign, registry_config, authority_file = _website_edge
                 if phase in {'verify-website', 'verify-combined'}:
                     from selfhost_windows_website_verify import run
+                elif phase == 'reconcile-stage':
+                    from selfhost_windows_website_reconcile import run
+                elif phase == 'retire-candidate':
+                    from selfhost_windows_website_backout import run
+                elif phase in {'release-abort', 'release-backout'}:
+                    from selfhost_windows_website_abort_release import prepare as run
                 else:
                     from selfhost_windows_website_edge import run
                 status = run(cfg, choice, values, record, plan, status, phase, assets=assets,
                     gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file, held=stack)
+            if _website_forward is not None:
+                operation, options = _website_forward
+                status = operation(cfg, choice, values, record, plan, status, held=stack, **options)
             yield status
             return
 
@@ -1396,6 +1491,137 @@ def verify_website_routes(config_path, plan, phase, *, guard_sha256, expected_an
                           _website_edge=(phase, assets, gh, cosign, registry_config, authority_file)) as status:
         result = status
     return result
+
+
+def reconcile_website_stage(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, authority_file=None):
+    """Qualify a failed initial stage under the exact guard and journal pin."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=('reconcile-stage', assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def release_website_abort(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                          assets, gh, cosign, registry_config, authority_file=None):
+    """Archive only the exact terminal abort and restore the existing owner path."""
+    from selfhost_windows_website_abort_release import finalize
+    return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
+                    assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file)
+
+
+def retire_website_backout(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                           assets, gh, cosign, registry_config, authority_file=None):
+    """Remove the exact staged candidate after the restored combined routes qualify."""
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_edge=('retire-candidate', assets, gh, cosign, registry_config, authority_file)) as status:
+        result = status
+    return result
+
+
+def release_website_backout(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, authority_file=None):
+    """Archive the terminal backout guard after refreshing the combined owner."""
+    from selfhost_windows_website_abort_release import finalize
+    return finalize(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
+                    assets=assets, gh=gh, cosign=cosign, registry_config=registry_config, authority_file=authority_file,
+                    mode='backout')
+
+
+def backout_published_website(config_path, plan, *, guard_sha256, expected_anchor_sha256, intent_sha256,
+                              backout_phase, assets, gh, cosign, registry_config, authority_file=None,
+                              readmission_sha256=None):
+    """Restore the combined runtime under the guard and committed split selection."""
+    require(intent_sha256 is not None and (readmission_sha256 is None or re.fullmatch(r'[0-9a-f]{64}', readmission_sha256)))
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+            _website_edge=(backout_phase, assets, gh, cosign, registry_config, authority_file),
+            _published_backout_intent=intent_sha256, _published_readmission_sha256=readmission_sha256) as status:
+        result = dict(status, published_intent_sha256=intent_sha256, guards_retained=True)
+    return result
+
+
+def prepare_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256,
+                            assets, gh, cosign, registry_config, session_state_file,
+                            expected_account_sha256, expected_organization_sha256, authority_file=None):
+    """Prepare the verified successor files while the original owner still has backout."""
+    from selfhost_windows_website_forward import prepare
+    forward = {'assets': assets, 'gh': gh, 'cosign': cosign, 'registry_config': registry_config,
+               'session_state_file': session_state_file, 'expected_account_sha256': expected_account_sha256,
+               'expected_organization_sha256': expected_organization_sha256, 'authority_file': authority_file}
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_forward=(prepare, forward)) as result:
+        prepared = result
+    return prepared
+
+
+def seal_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256, **options):
+    """Refresh and seal the split under the exact original Windows selection."""
+    from selfhost_windows_website_forward import seal
+
+    with _selected_inputs(config_path, _pending_website=(plan, guard_sha256, expected_anchor_sha256),
+                          _website_forward=(seal, options)) as result:
+        sealed = result
+    return sealed
+
+
+def publish_website_forward(config_path, plan, *, guard_sha256, expected_anchor_sha256, candidate_sha256,
+                            qualification_sha256, authority_file=None, intent_sha256=None, **options):
+    """Select the exact sealed split with a live proof through the original owner."""
+    from selfhost_windows_website_forward import check_publication
+    from selfhost_windows_website_owner import finish
+
+    def check_live(config, choice, values, record, link, held):
+        check_publication(config, choice, values, record, plan, link, guard_sha256=guard_sha256,
+                          authority_file=authority_file, held=held, **options)
+
+    return finish(config_path, plan, guard_sha256=guard_sha256, terminal_sha256=expected_anchor_sha256,
+                  candidate_sha256=candidate_sha256, qualification_sha256=qualification_sha256,
+                  check_live=check_live, authority_file=authority_file, intent_sha256=intent_sha256)
+
+
+def select_combined_website(config_path, plan, *, guard_sha256, expected_anchor_sha256, forward_intent_sha256, **options):
+    """Return the restored combined configuration to the credential owner."""
+    from selfhost_windows_website_owner import finish_combined, finish_renewed
+    if options.get('current_plan_sha256') is not None:
+        return finish_renewed(config_path, plan, guard_sha256=guard_sha256, expected_anchor_sha256=expected_anchor_sha256,
+                              forward_intent_sha256=forward_intent_sha256, **options)
+    return finish_combined(config_path, plan, guard_sha256=guard_sha256, terminal_sha256=expected_anchor_sha256,
+                           forward_intent_sha256=forward_intent_sha256, **options)
+
+
+def release_selected_website(config_path, plan, *, mode, **options):
+    """Archive the website guard for the exact selected destination."""
+    if options.get('current_plan_sha256') is not None:
+        from selfhost_windows_website_owner import release_renewed
+        require(mode == 'combined')
+        return release_renewed(config_path, plan, **options)
+    from selfhost_windows_website_abort_release import finalize_selected
+    return finalize_selected(config_path, plan, mode=mode, **options)
+
+
+def readmit_website_backout(config_path, plan, **options):
+    from selfhost_windows_website_abort_release import readmit_forward_backout
+    return readmit_forward_backout(config_path, plan, **options)
+
+
+def plan_current_website_backout(config_path, plan, **options):
+    with _selected_inputs(config_path, _current_website_backout=(plan, 'plan', options)) as result:
+        prepared = result
+    return prepared
+
+
+def restore_current_website_edge(config_path, plan, *, reconcile, current_plan_sha256, **options):
+    require(type(reconcile) is bool)
+    mode = 'reconcile' if reconcile else 'restore'
+    pins = dict(options, current_plan_sha256=current_plan_sha256)
+    with _selected_inputs(config_path, _current_website_backout=(plan, mode, pins)) as result:
+        return result
+
+
+def backout_current_website(config_path, plan, *, backout_phase, **options):
+    require(backout_phase in {'verify-combined', 'retire-candidate', 'verify-retirement'})
+    with _selected_inputs(config_path, _current_website_backout=(plan, backout_phase, options)) as result:
+        return result
 
 
 def reconcile_existing(config_path, *, authority_file=None):

@@ -79,6 +79,26 @@ def _held_routes(path, routes, held, *, create):
     return inventory
 
 
+def _hold_inactive_routes(path, routes, held):
+    """Preserve exact route artifacts even if preparation stopped before routing."""
+    if not renewal.namespace_entry_exists(path):
+        def check_absent():
+            require(not renewal.namespace_entry_exists(path))
+        held.callback(check_absent)
+        return 'absent', check_absent
+    if renewal.namespace_entry_exists(path / 'active.conf'):
+        return 'materialized', _held_routes(path, routes, held, create=False)
+    held.enter_context(renewal.hold_storage_namespace(path))
+    held.enter_context(_held_private_input(path, directory=True))
+
+    def check_empty():
+        require(not any(path.iterdir()))
+
+    check_empty()
+    held.callback(check_empty)
+    return 'empty', check_empty
+
+
 def _probe(docker, edge, proposal, state):
     container = edge['Id']
     require(re.fullmatch(r'[0-9a-f]{64}', container) is not None)
@@ -152,8 +172,10 @@ class EdgeContext(renewal.ForeignContext):
 
 def _prepare(config, choice, values, record, plan, status, *, prior_phase, current, target,
              create_routes, candidate_ready, assets, gh, cosign, registry_config, authority_file,
-             held, include_http=False):
+             held, include_http=False, readmitted_runtime=None, qualify_restarted_split=False):
     """Rebuild signed layouts and qualify the exact runtime of an anchored phase."""
+    require(not qualify_restarted_split or (
+        prior_phase == FORWARD and current == target == 'split' and not candidate_ready and readmitted_runtime is None))
     attempt = Path(plan['attempt_directory'])
     held.enter_context(renewal.hold_storage_namespace(attempt))
     held.enter_context(_held_private_input(attempt, directory=True, mutable_directory=True))
@@ -178,7 +200,9 @@ def _prepare(config, choice, values, record, plan, status, *, prior_phase, curre
         layouts['split'] = _split_model(docker, *staged, proposal, attempt, held)
     baseline = docker.containers()
     owned = _owned(baseline, config['project'])
-    require(renewal.context_snapshot(owned) == evidence[prior]['runtime_after'])
+    previous = evidence[prior] if readmitted_runtime is None else readmitted_runtime
+    if not qualify_restarted_split:
+        require(renewal.context_snapshot(owned) == previous['runtime_after'])
     retained_roles = {renewal._service(row) for row in owned} - {contract.SLOT}
     changing = renewal.owned_roles(models[choice], retained_roles)
     renewal.dependency_layers(models[choice], retained_roles, changing)
@@ -191,7 +215,7 @@ def _prepare(config, choice, values, record, plan, status, *, prior_phase, curre
     context = EdgeContext(docker, config, baseline, docker.volumes(), proposal, layouts, current, target,
                           Path(record['selected']['secrets_dir']), require_candidate_ready=candidate_ready)
     selection._native_current(config, choice, values, docker, authority_file)
-    return context, proposal, evidence[prior], check_routes
+    return context, proposal, previous, check_routes
 
 
 def _start_observation(plan, status, context, items, edge_configuration):
@@ -207,26 +231,40 @@ def _start_observation(plan, status, context, items, edge_configuration):
     }
 
 
+def recreate_command(compose):
+    return [*compose, 'up', '--no-deps', '--no-build', '--pull', 'never',
+            '--force-recreate', '--wait', '--wait-timeout', '90', 'edge']
+
+
 def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosign, registry_config,
         authority_file, held):
     """Switch or restore edge routing under the independently pinned owner."""
-    require(phase in {FORWARD, BACKOUT} and status['classification'] == 'phase-boundary'
-            and phase in status['permitted_record_phases'])
+    require(phase in {FORWARD, BACKOUT} and phase in status['permitted_record_phases']
+            and (status['classification'] == 'phase-boundary'
+                 or phase == BACKOUT and status['classification'] == 'forward-evidence-complete'))
     current = status['model_state']
     target = 'split' if phase == FORWARD else 'staged'
     require(current == 'staged' if phase == FORWARD else current in {'split', 'staged'})
+    readmission = {}
+    if 'readmitted_runtime' in status:
+        require(phase == BACKOUT and current == 'split' and contract.sha(status['readmission_sha256']))
+        readmission['readmitted_runtime'] = status['readmitted_runtime']
     context, proposal, prior, check_routes = _prepare(config, choice, values, record, plan, status,
         prior_phase=FORWARD if current == 'split' else 'stage-candidate', current=current, target=target,
         create_routes=phase == FORWARD, candidate_ready=phase == FORWARD, assets=assets, gh=gh, cosign=cosign,
-        registry_config=registry_config, authority_file=authority_file, held=held)
+        registry_config=registry_config, authority_file=authority_file, held=held, **readmission)
     docker = context.docker
     attempt = Path(plan['attempt_directory'])
     initial = context.check(before_intent=True)
     original_edge = _probe(docker, _edge(_owned(initial, config['project'])), proposal, current)
     if current == 'split':
         require(original_edge == prior['edge_configuration'])
-    started_evidence = stage._evidence(attempt / (phase + '-before.json'),
-                                    _start_observation(plan, status, context, initial, original_edge), held)
+    started = _start_observation(plan, status, context, initial, original_edge)
+    if phase == BACKOUT and 'published_selection' in status:
+        started['owner_lease']['published_selection'] = status['published_selection']
+    if readmission:
+        started['runtime_before']['readmission_sha256'] = status['readmission_sha256']
+    started_evidence = stage._evidence(attempt / (phase + '-before.json'), started, held)
     started = store.append(plan, expected_anchor_sha256=status['anchor_sha256'], phase=phase,
                            event='started', evidence_sha256=started_evidence)
     ready = context.check(before_intent=True)
@@ -235,8 +273,7 @@ def run(config, choice, values, record, plan, status, phase, *, assets, gh, cosi
         check_routes()
     if current != target:
         command, _model, _hashes = context.layouts[target]
-        outcome = renewal.run_owned_mutation([*command, 'up', '--no-deps', '--no-build', '--pull', 'never',
-            '--force-recreate', '--wait', '--wait-timeout', '90', 'edge'], timeout=120)
+        outcome = renewal.run_owned_mutation(recreate_command(command), timeout=120)
         if outcome.returncode != 0:
             raise renewal.UncertainComposeMutation('Website edge change requires operator reconciliation')
     after = context.check()
