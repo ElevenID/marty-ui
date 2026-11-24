@@ -24,6 +24,8 @@ pub(crate) const RECORD: &str = "hosting-selection.json";
 pub(crate) const SOURCE: &str = "hosting-input.json";
 pub(crate) const EXTERNAL_APPLICATION_LAYER: &str =
     "deploy-config/compose/selfhost-installer/compose.external-application.yml";
+pub(crate) const EXTERNAL_OIDC_APPLICATION_LAYER: &str =
+    "deploy-config/compose/selfhost-installer/compose.external-application-oidc.yml";
 pub(crate) const CONNECTOR_TOKEN: &str = "cloudflare_tunnel_token";
 const SCHEMA: &str = "elevenid.installation-hosting/v1";
 const SELECTION_SCHEMA: &str = "elevenid.installation-hosting-selection/v1";

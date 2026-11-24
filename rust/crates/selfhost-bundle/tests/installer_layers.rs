@@ -6,7 +6,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
-const LAYERS: [(&str, &str); 5] = [
+const LAYERS: [(&str, &str); 6] = [
+    (
+        "deploy-config/compose/selfhost-installer/compose.external-application-oidc.yml",
+        "services:\n  ui: !reset null\n  edge:\n    environment:\n      UI_UPSTREAM: !reset null\n      KEYCLOAK_UPSTREAM: !reset null\n",
+    ),
     (
         "deploy-config/compose/selfhost-installer/compose.external-application.yml",
         "services:\n  ui: !reset null\n  edge:\n    environment:\n      UI_UPSTREAM: !reset null\n",

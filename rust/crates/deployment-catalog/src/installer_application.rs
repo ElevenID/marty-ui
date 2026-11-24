@@ -620,6 +620,19 @@ fn start_inner(
             .files
             .push(bundle_bound(bundle, crate::installer_foundation::LAYER)?);
     }
+    // One authenticated reset owns both upstream removals when login is also
+    // external. It must precede the provider layer; separate later environment
+    // resets leave UI_UPSTREAM intact with the installed Compose 5.6.1.
+    let external_application_layer = hosting.external_application_origin().map(|_| {
+        if external_oidc.is_some() {
+            crate::installer_hosting::EXTERNAL_OIDC_APPLICATION_LAYER
+        } else {
+            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER
+        }
+    });
+    if let Some(layer) = external_application_layer {
+        inputs.files.push(bundle_bound(bundle, layer)?);
+    }
     if external_oidc.is_some() {
         inputs
             .files
@@ -631,12 +644,6 @@ fn start_inner(
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
-    if hosting.external_application_origin().is_some() {
-        inputs.files.push(bundle_bound(
-            bundle,
-            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER,
-        )?);
-    }
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
         image.bind_inputs(&mut inputs)?;
@@ -693,6 +700,9 @@ fn start_inner(
                 .push(bundle_bound(bundle, &format!("{LAYERS}/{file}"))?);
         }
     }
+    if let Some(layer) = external_application_layer {
+        maintenance_inputs.files.push(bundle_bound(bundle, layer)?);
+    }
     if external_oidc.is_some() {
         // The runtime layer restores managed provider readiness dependencies.
         // Apply the selected external provider only after that native merge.
@@ -708,12 +718,6 @@ fn start_inner(
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
-    if hosting.external_application_origin().is_some() {
-        maintenance_inputs.files.push(bundle_bound(
-            bundle,
-            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER,
-        )?);
-    }
     #[cfg(feature = "installer-development")]
     if let Some(image) = &maintenance_inputs.development_image {
         maintenance_inputs

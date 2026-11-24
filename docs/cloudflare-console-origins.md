@@ -82,6 +82,12 @@ layer, removes the local `ui` service and `UI_UPSTREAM`, and derives the UI, COR
 callback and post-logout settings shown above. Additional UI origins are refused
 for this installer profile. Maintenance uses the same bound layer.
 
+When login is also external, the installer selects the combined application/OIDC
+upstream-reset layer before the external-provider layer. This preserves both
+removals with Compose 5.6.1; separate later environment resets leave the UI
+upstream behind. Managed Keycloak uses the separate application-only variant,
+which retains its provider route. Do not interchange or reorder these assets.
+
 The API ingress keeps API, health, callback and issuer routes. GET/HEAD requests
 for UI paths receive a permanent redirect to the selected application origin,
 preserving their path and query. Other methods at those UI locations are
