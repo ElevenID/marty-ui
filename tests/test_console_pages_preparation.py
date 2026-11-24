@@ -81,7 +81,17 @@ class ConsolePagesTests(unittest.TestCase):
             self.assertNotIn("Access-Control-Allow-Origin", headers)
             self.assertIn("Cache-Control: no-store", headers)
             redirects = (output / "_redirects").read_text()
-            self.assertIn("/console/* /console/index.html 200", redirects)
+            self.assertIn("/console/* /_console-shell.html 200", redirects)
+            self.assertEqual(
+                (output / "console/index.html").read_bytes(),
+                (output / "_console-shell.html").read_bytes(),
+            )
+            for line in redirects.splitlines():
+                route, target, status = line.split()
+                self.assertFalse(
+                    fnmatch.fnmatchcase(target, route),
+                    "Rewrite target overlaps its source pattern",
+                )
             self.assertIn("/auth/callback/ /index.html 200", redirects)
             self.assertNotIn("\n/* ", redirects)
             self.assertNotIn("/v1/", redirects)
@@ -173,6 +183,8 @@ class ConsolePagesTests(unittest.TestCase):
             "_WoRkEr.Js/index.js",
             "Functions",
             "FuNcTiOnS/auth.js",
+            "_CONSOLE-SHELL.HTML",
+            "_Console-Shell/index.js",
         ):
             with (
                 self.subTest(relative=relative),
