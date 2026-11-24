@@ -108,8 +108,24 @@ Build the [authorization UI](supabase-auth-ui.md) with the frozen Bun lockfile.
 Use the Supabase project URL, publishable key, exact callback allowlists, client
 IDs, and the approved staging Pages origin. Deploy the complete static output,
 including `_headers` and `_redirects`, to a staging Pages project on Free. Verify
-the exact consent route, CSP, no-store and no-referrer headers. Set the Supabase
-Site URL and OAuth authorization path to that staging UI.
+the exact consent route, CSP, no-store and no-referrer headers. Supabase derives
+the OAuth authorization URL from the project-wide Site URL plus the authorization
+path. If this project already serves an authorization UI, leave those settings
+and its current hostname in place during staging. Changing either setting sends
+all clients to the new UI, including clients still using the old deployment.
+
+For a controlled candidate browser test on the same project, intercept only the
+test browser's navigation to the current authorization URL and redirect it to
+the staging UI with the original path and query intact, before the old page
+loads. Do not log, copy into a report, or reuse the one-time authorization ID.
+Qualify that test path with the candidate client and the existing client; a
+successful static route check alone is not an OAuth acceptance result. If the
+provider binds authorization records to the configured origin, stop and use a
+separate Free staging project if an available Free project slot and migration
+plan are verified. Switch the project's Site URL to the accepted UI only in
+the reviewed production cutover, with current-client continuity and rollback
+ready. Keep the authorization path at `/oauth/consent` unless its change is
+separately qualified.
 
 Run the [OIDC provider qualification](oidc-provider-qualification.md) for each
 client. Verify first login and consent, denied consent, signed claims and exact
