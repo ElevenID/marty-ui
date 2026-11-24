@@ -1,6 +1,6 @@
 import {
   UiError, authorizationResponse, requiredMfa, safeError,
-  validateConfig, validateCredentials, validateRedirect, verifiedUser,
+  nativeCallbackPost, validateConfig, validateCredentials, validateRedirect, verifiedUser,
 } from "./protocol.js";
 
 const STALE = Symbol("stale authorization attempt");
@@ -12,12 +12,13 @@ const STALE = Symbol("stale authorization attempt");
  * old login/MFA/consent response from affecting a switched account.
  */
 export class AuthController {
-  constructor({ config, authorizationId, createClient, onChange, navigate }) {
+  constructor({ config, authorizationId, createClient, onChange, navigate, postCallback }) {
     this.config = validateConfig(config);
     this.authorizationId = authorizationId;
     this.createClient = createClient;
     this.onChange = onChange;
     this.navigate = navigate;
+    this.postCallback = postCallback;
     this.epoch = 0;
     this.attempt = null;
     this.authorizationStarted = false;
@@ -170,6 +171,8 @@ export class AuthController {
     this.check(attempt);
     if (result.error) throw new UiError("authorization");
     const response = authorizationResponse(result.data, this.config, this.authorizationId, attempt.user);
+    const clientId = response.kind === "consent" ? response.details.clientId : response.redirect.clientId;
+    if (this.config.clients.find((client) => client.id === clientId)?.callbackMode === "native_mfa_post" && !attempt.totpVerified) throw new UiError("mfa_incomplete");
     if (response.kind === "consent") {
       attempt.details = response.details;
       this.emit({ phase: "consent", busy: false, error: null, email: attempt.user.email, details: response.details });
@@ -194,7 +197,7 @@ export class AuthController {
       this.check(attempt);
       if (result.error) throw new UiError("decision");
       const redirect = validateRedirect(result.data?.redirect_url, this.config, outcome, attempt.details);
-      this.leave(attempt, redirect);
+      await this.leave(attempt, redirect, outcome);
     } catch (error) { this.fail(attempt, error, "decision"); }
   }
 
@@ -207,17 +210,25 @@ export class AuthController {
       this.check(attempt);
       if (factors.length) throw new UiError("mfa_incomplete");
       const redirect = validateRedirect(attempt.redirect.url, this.config, "approve", attempt.redirect);
-      this.leave(attempt, redirect);
+      await this.leave(attempt, redirect, "approve");
     } catch (error) { this.fail(attempt, error, "session"); }
   }
 
-  leave(attempt, redirect) {
+  async leave(attempt, redirect, outcome) {
     this.check(attempt);
+    let handoff;
+    if (outcome === "approve" && this.config.clients.find((client) => client.id === redirect.clientId)?.callbackMode === "native_mfa_post") {
+      if (!attempt.totpVerified || typeof this.postCallback !== "function") throw new UiError("mfa_incomplete");
+      const result = await attempt.client.auth.getSession();
+      this.check(attempt);
+      if (result.error || result.data?.session?.user?.id !== attempt.user.id) throw new UiError("session");
+      handoff = nativeCallbackPost(redirect, this.config, result.data.session.access_token);
+    }
     this.epoch += 1;
     this.attempt = null;
     this.cleanup(attempt);
     this.emit({ phase: "leaving", busy: true, error: null, label: redirect.label });
-    try { this.navigate(redirect.url); }
+    try { if (handoff) this.postCallback(handoff); else this.navigate(redirect.url); }
     catch { this.emit({ phase: "blocked", busy: false, error: "redirect", restartRequired: true }); }
   }
 }
