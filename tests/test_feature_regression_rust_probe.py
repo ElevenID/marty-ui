@@ -96,8 +96,9 @@ for case_id, (operation, result) in CONFIGURATION_RESULTS.items():
         (case_id, "safe_server_diagnostic"): result,
     })
 
-# HTTP expectations derive from the pre-change production router/application,
-# not from an invocation capture. Provider/cache ports are synthetic; response
+# HTTP expectations specify the intended production router/application contract,
+# not an invocation capture. Native proof support deliberately adds no-store to
+# both callback methods, including rejection redirects. Provider/cache ports are synthetic; response
 # status, public errors, redirects, cookie attributes and logged stage codes
 # are produced by the actual Auth owners.
 HTTP_UI = "https://console.probe.invalid"
@@ -124,7 +125,7 @@ http_expectation("auth-http-registration-disabled", 409, cache=HTTP_NO_STORE, bo
 })
 for case_id in ("auth-http-state-save-failure", "auth-http-authorization-failure"):
     http_expectation(case_id, 503, body={"detail": "Authentication service unavailable"})
-http_expectation("auth-http-missing-parameters", 302, location=HTTP_UI + "/?auth_error=Missing+authentication+parameters")
+http_expectation("auth-http-missing-parameters", 302, cache=HTTP_NO_STORE, location=HTTP_UI + "/?auth_error=Missing+authentication+parameters")
 for case_id, diagnostic in {
     "auth-http-unknown-state": "auth_oidc_state_invalid",
     "auth-http-expired-state": "auth_oidc_state_expired",
@@ -140,8 +141,8 @@ for case_id, diagnostic in {
     "auth-http-session-event-failure": "auth_session_event_publish_failed",
     "auth-http-callback-replay": "auth_oidc_state_invalid",
 }.items():
-    http_expectation(case_id, 302, location=HTTP_FAILURE, diagnostics=(diagnostic,))
-http_expectation("auth-http-callback-success", 302, location=HTTP_UI + "/console/profile", cookies=(
+    http_expectation(case_id, 302, cache=HTTP_NO_STORE, location=HTTP_FAILURE, diagnostics=(diagnostic,))
+http_expectation("auth-http-callback-success", 302, cache=HTTP_NO_STORE, location=HTTP_UI + "/console/profile", cookies=(
     "HttpOnly;Max-Age=3600;Path=/;SameSite=Lax;Secure",
 ))
 for case_id in ("auth-http-anonymous", "auth-http-after-logout"):
