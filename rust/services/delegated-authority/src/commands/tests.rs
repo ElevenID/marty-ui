@@ -761,6 +761,9 @@ async fn postgres_expired_command_access_after_result_write_rolls_back_create() 
     f.access.lifetime_ms.store(80, Ordering::SeqCst);
     sqlx::raw_sql("CREATE FUNCTION delegated_authority_service.test_delay_access_result() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.15); RETURN NEW; END $$; CREATE TRIGGER test_delay_access_result BEFORE INSERT ON delegated_authority_service.command_results FOR EACH ROW EXECUTE FUNCTION delegated_authority_service.test_delay_access_result();")
         .execute(&pool).await.unwrap();
+    // Observe access after setup: trigger DDL must not consume the 80ms
+    // authorization lifetime before the delayed result write is attempted.
+    *f.clock.0.lock().unwrap() = Utc::now();
     let started = std::time::Instant::now();
     assert!(f.execute(&f.create).await.is_err());
     assert!(started.elapsed() >= std::time::Duration::from_millis(140));
