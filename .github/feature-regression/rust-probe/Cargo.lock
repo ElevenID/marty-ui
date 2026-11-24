@@ -1899,10 +1899,14 @@ dependencies = [
  "axum",
  "chrono",
  "http-body-util",
+ "marty-auth",
+ "marty-flow",
  "marty-issuance-service",
  "serde_json",
  "tokio",
  "tower",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3627,6 +3631,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "marty-api-key-policy"
+version = "0.1.0"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
+name = "marty-auth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "hmac 0.12.1",
+ "marty-oid4vci",
+ "marty-oid4vp-contract",
+ "marty-service-runtime",
+ "mmf-core",
+ "mmf-data",
+ "mmf-messaging",
+ "mmf-platform",
+ "mmf-push",
+ "mmf-runtime",
+ "mmf-security",
+ "prost",
+ "protoc-bin-vendored",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
 source = "git+https://github.com/ElevenID/marty-core?rev=bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0#bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0"
@@ -3690,6 +3741,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-delegated-authority"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "chrono",
+ "ecdsa",
+ "ed25519-dalek",
+ "hex",
+ "marty-crypto",
+ "marty-oid4vci",
+ "marty-organization",
+ "marty-principal-runtime-binding",
+ "marty-service-runtime",
+ "marty-signing-grant",
+ "marty-verification",
+ "mmf-platform",
+ "mmf-security",
+ "p256",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-didcomm"
 version = "0.2.2"
 source = "git+https://github.com/ElevenID/marty-core?rev=bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0#bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0"
@@ -3728,6 +3815,77 @@ dependencies = [
  "spki 0.7.3",
  "thiserror 2.0.21",
  "x509-cert",
+]
+
+[[package]]
+name = "marty-flow"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "futures-core",
+ "hex",
+ "marty-api-key-policy",
+ "marty-crypto",
+ "marty-delegated-authority",
+ "marty-didcomm",
+ "marty-iso18013",
+ "marty-jwt-vc-issuance",
+ "marty-key-material-policy",
+ "marty-oid4vci",
+ "marty-oid4vp-contract",
+ "marty-passport-auth",
+ "marty-schema-startup",
+ "marty-service-contracts",
+ "marty-service-runtime",
+ "marty-signing-grant",
+ "marty-verification",
+ "mmf-core",
+ "mmf-messaging",
+ "mmf-platform",
+ "mmf-push",
+ "mmf-runtime",
+ "mmf-security",
+ "mmf-workflow",
+ "p256",
+ "percent-encoding",
+ "prost",
+ "protoc-bin-vendored",
+ "rand 0.9.5",
+ "redis",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-iso18013"
+version = "0.2.2"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0#bd96bd2f91ba921b7a9e42b1bc84356e3b40d5f0"
+dependencies = [
+ "anyhow",
+ "ciborium",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3858,6 +4016,7 @@ dependencies = [
  "p384",
  "rand 0.8.8",
  "regex",
+ "reqwest",
  "sd-jwt-rs",
  "serde",
  "serde_json",
@@ -3865,6 +4024,7 @@ dependencies = [
  "ssi-jwk",
  "thiserror 2.0.21",
  "time",
+ "tokio",
  "tracing",
  "url",
  "uuid",
@@ -3896,6 +4056,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-organization"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "libc",
+ "marty-api-key-policy",
+ "marty-key-material-policy",
+ "marty-principal-runtime-binding",
+ "marty-service-contracts",
+ "marty-service-runtime",
+ "mmf-core",
+ "mmf-data",
+ "mmf-messaging",
+ "mmf-platform",
+ "mmf-runtime",
+ "mmf-security",
+ "prost",
+ "protoc-bin-vendored",
+ "rand 0.9.5",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-passport-auth"
 version = "0.1.0"
 dependencies = [
@@ -3912,6 +4113,22 @@ dependencies = [
  "libc",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "marty-principal-runtime-binding"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ecdsa",
+ "ed25519-dalek",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3938,9 +4155,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-server",
+ "marty-crypto",
  "mmf-aws-kms",
  "mmf-platform",
  "mmf-runtime",
+ "mmf-security",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -4179,6 +4398,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmf-data"
+version = "0.1.1"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
+dependencies = [
+ "async-trait",
+ "mmf-core",
+ "redis",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "mmf-messaging"
+version = "0.1.1"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
+dependencies = [
+ "async-trait",
+ "mmf-core",
+ "mmf-observability",
+ "mmf-resilience",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "mmf-observability"
 version = "0.1.1"
 source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
@@ -4220,6 +4471,25 @@ dependencies = [
  "tokio-rustls",
  "tonic",
  "tower",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "mmf-push"
+version = "0.1.1"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
+dependencies = [
+ "async-trait",
+ "hmac 0.13.0",
+ "mmf-core",
+ "mmf-resilience",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
  "url",
  "uuid",
 ]
@@ -4283,6 +4553,18 @@ dependencies = [
  "mmf-core",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mmf-workflow"
+version = "0.1.1"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -7102,7 +7384,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

@@ -47,7 +47,10 @@ KMS_ONLY_CRATES = {
     "marty-oid4vci",
     "marty-verification",
 }
-PROBE_CORE_CRATES = CORE_CRATES - {"marty-iso18013", "marty-status"}
+# Flow's production verifier reaches ISO 18013. Retain an exact closed package
+# set and the same reviewed source; this does not admit another Core revision
+# or change the production KMS-only feature checks.
+PROBE_CORE_CRATES = CORE_CRATES - {"marty-status"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
 
 
