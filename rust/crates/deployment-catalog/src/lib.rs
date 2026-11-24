@@ -22,6 +22,8 @@ pub mod installer_application_env;
 pub mod installer_artifacts;
 pub mod installer_bundle;
 #[cfg(target_os = "linux")]
+mod installer_custody_watch;
+#[cfg(target_os = "linux")]
 pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
