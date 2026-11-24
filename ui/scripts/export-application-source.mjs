@@ -17,7 +17,10 @@ const CONTRACT = 'contracts/application-source-export.json';
 // Source maps may evolve without changing the archive grammar. Each accepted
 // map, including the initial package, is pinned to exact reviewed bytes.
 const SOURCE_CONTRACTS = Object.freeze([
-  Object.freeze({ path: CONTRACT, sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41',
+  Object.freeze({ path: CONTRACT, sha256: 'sha256:5d6c8e98b38b8069bf518800cf8195999facd3c6ea777be4835098a29f831af3',
+    files: 583, test_files: 27, assertions: 340 }),
+  Object.freeze({ path: 'contracts/application-source-export-history/before-static-auth-origins-v1.json',
+    sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41',
     files: 581, test_files: 26, assertions: 321 }),
   Object.freeze({ path: 'contracts/application-source-export-history/initial-v1.json',
     sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad',
