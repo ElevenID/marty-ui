@@ -64,6 +64,16 @@ def origin(value: str) -> str:
     raise ValueError("A DNS name is required for the Pages origin")
 
 
+def ordinary_path(path: Path) -> Path:
+    lexical = path.absolute()
+    for component in (lexical, *lexical.parents):
+        if component.is_symlink() or getattr(component, "is_junction", lambda: False)():
+            raise ValueError(
+                "Pages paths must not use links or junctions in their ancestry"
+            )
+    return lexical.resolve()
+
+
 def prepare(
     source: Path,
     output: Path,
@@ -81,7 +91,7 @@ def prepare(
         raise ValueError("An exact source revision is required")
     if source.is_symlink() or not source.is_dir():
         raise ValueError("Application output must be an ordinary directory")
-    source, output = source.resolve(), output.resolve()
+    source, output = ordinary_path(source), ordinary_path(output)
     if output.exists() or output.is_symlink() or output.is_relative_to(source):
         raise ValueError(
             "Pages output must be a new directory outside application output"
@@ -95,7 +105,11 @@ def prepare(
         raise ValueError("Application source marker differs from selected revision")
     files = []
     for path in source.rglob("*"):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+        if (
+            path.is_symlink()
+            or getattr(path, "is_junction", lambda: False)()
+            or not (path.is_file() or path.is_dir())
+        ):
             raise ValueError("Application output contains a link or special file")
         relative = path.relative_to(source).as_posix()
         if relative.split("/", 1)[0] in {

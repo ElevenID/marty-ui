@@ -186,6 +186,37 @@ class ConsolePagesTests(unittest.TestCase):
                     self.prepare(source, root / "pages")
                 self.assertFalse((root / "pages").exists())
 
+    def test_dangling_output_and_linked_ancestors_are_refused_without_writes(self):
+        for kind in ("dangling-output", "output-parent", "source-parent"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = self.fixture(root)
+                destination = root / "pages"
+                referent = root / "referent"
+                link = root / "link"
+                if kind != "dangling-output":
+                    referent.mkdir()
+                try:
+                    link.symlink_to(
+                        source.parent if kind == "source-parent" else referent,
+                        target_is_directory=True,
+                    )
+                except OSError as error:
+                    self.skipTest(
+                        f"Platform does not permit fixture symlinks: {error.errno}"
+                    )
+                if kind == "dangling-output":
+                    destination = link
+                elif kind == "output-parent":
+                    destination = link / "pages"
+                else:
+                    source = link / "application"
+                with self.assertRaisesRegex(ValueError, "links or junctions"):
+                    self.prepare(source, destination)
+                self.assertFalse((referent / "pages").exists())
+                self.assertFalse((referent / "pages-deployment.json").exists())
+                self.assertFalse((root / "pages").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

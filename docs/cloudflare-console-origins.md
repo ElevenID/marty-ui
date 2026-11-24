@@ -119,8 +119,10 @@ python tools/cloudflare/prepare_console_pages.py \
 ```
 
 Replace the illustrative domains and commit with the actual deployment inputs;
-the destination must be new and outside the build directory. The helper copies
-the build without changing it, checks its source marker and both HTML entries,
+the destination must be new and outside the build directory.
+Source and destination paths, including their supplied ancestors, must not use
+symlinks or Windows junctions; select their ordinary filesystem locations.
+The helper copies the build without changing it, checks its source marker and both HTML entries,
 and creates static Pages rules. Console deep links use `console/index.html`;
 declared public browser routes use `index.html`. A custom `404.html` disables
 the implicit global SPA fallback, so API, missing asset and locale paths are not
