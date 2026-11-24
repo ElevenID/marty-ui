@@ -3520,6 +3520,13 @@
       ]
     },
     {
+      "source": "ui/src/services/__tests__/authApiOrigin.test.ts",
+      "path": "ui/src/services/__tests__/authApiOrigin.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
       "source": "ui/src/services/adminImpersonationApi.js",
       "path": "ui/src/services/adminImpersonationApi.js",
       "roles": [
@@ -3578,6 +3585,13 @@
     {
       "source": "ui/src/services/authApi.js",
       "path": "ui/src/services/authApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/authApiOrigin.js",
+      "path": "ui/src/services/authApiOrigin.js",
       "roles": [
         "application-or-shared-source"
       ]
@@ -5789,6 +5803,7 @@
       "src/components/console/agents/AgentTrustPages.test.tsx",
       "src/services/__tests__/agentTrustApi.test.ts",
       "src/services/__tests__/authApi.test.ts",
+      "src/services/__tests__/authApiOrigin.test.ts",
       "tests/application/surface-profile.test.tsx"
     ],
     "shared_contracts": [
