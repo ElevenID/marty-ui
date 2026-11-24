@@ -127,7 +127,10 @@ and creates static Pages rules. Console deep links use a byte-identical copy of
 `console/index.html` at `/_console-shell.html`, outside the `/console/*` source
 pattern. A live Pages check returned 404 for deep links rewritten directly to
 the overlapping `/console/index.html`; the separate shell avoids that target.
-declared public browser routes use `index.html`. A custom `404.html` disables
+Declared public browser routes similarly use a byte-identical copy of
+`index.html` at `/_application-shell.html`; nested public route checks also
+returned 404 when their rewrite target was `/index.html`. The root still serves
+the original `index.html`. A custom `404.html` disables
 the implicit global SPA fallback, so API, missing asset and locale paths are not
 rewritten into the application shell. Keep the explicit route list aligned with
 the application routers; its test checks the current absolute route declarations.

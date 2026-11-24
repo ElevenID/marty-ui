@@ -92,7 +92,11 @@ class ConsolePagesTests(unittest.TestCase):
                     fnmatch.fnmatchcase(target, route),
                     "Rewrite target overlaps its source pattern",
                 )
-            self.assertIn("/auth/callback/ /index.html 200", redirects)
+            self.assertIn("/auth/callback/ /_application-shell.html 200", redirects)
+            self.assertEqual(
+                (output / "index.html").read_bytes(),
+                (output / "_application-shell.html").read_bytes(),
+            )
             self.assertNotIn("\n/* ", redirects)
             self.assertNotIn("/v1/", redirects)
             self.assertNotIn("/assets/", redirects)
@@ -185,6 +189,8 @@ class ConsolePagesTests(unittest.TestCase):
             "FuNcTiOnS/auth.js",
             "_CONSOLE-SHELL.HTML",
             "_Console-Shell/index.js",
+            "_APPLICATION-SHELL.HTML",
+            "_Application-Shell/index.js",
         ):
             with (
                 self.subTest(relative=relative),

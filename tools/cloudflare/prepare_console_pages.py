@@ -121,6 +121,8 @@ def prepare(
             "pages-deployment.json",
             "_console-shell.html",
             "_console-shell",
+            "_application-shell.html",
+            "_application-shell",
         }:
             raise ValueError(
                 "Application output already contains a Pages deployment override"
@@ -140,6 +142,7 @@ def prepare(
     # A live Pages probe returned 404 for deep routes targeting the overlapping
     # /console/index.html. Keep an identical shell outside the source prefix.
     shutil.copyfile(output / "console/index.html", output / "_console-shell.html")
+    shutil.copyfile(output / "index.html", output / "_application-shell.html")
     csp = "; ".join(
         (
             "default-src 'self'",
@@ -175,9 +178,9 @@ def prepare(
         "/console/* /_console-shell.html 200",
     ]
     for route in PUBLIC_ROUTES:
-        redirects.append(f"{route} /index.html 200")
+        redirects.append(f"{route} /_application-shell.html 200")
         if not route.endswith("*"):
-            redirects.append(f"{route}/ /index.html 200")
+            redirects.append(f"{route}/ /_application-shell.html 200")
     (output / "_redirects").write_text(
         "\n".join(redirects) + "\n", encoding="utf-8", newline="\n"
     )
