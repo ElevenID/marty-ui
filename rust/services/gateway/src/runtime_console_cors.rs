@@ -13,6 +13,45 @@ fn single<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     values.next().is_none().then_some(value)
 }
 
+/// Response-only envelope: never skips authentication, tenant, body or rate
+/// decisions. The innermost CORS stage cannot decorate their early rejections.
+/// Strict preflight responses remain exclusively owned by their admission path.
+pub(super) async fn error_headers(
+    State(state): State<Arc<GatewayRuntimeState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let scope = request.method() != axum::http::Method::OPTIONS
+        && (request.uri().path().starts_with("/v1/auth/")
+            || crate::external_association::requires_own_session(request.uri().path()));
+    let origin = scope
+        .then(|| single(request.headers(), "origin"))
+        .flatten()
+        .filter(|origin| state.cors_origins.contains(*origin))
+        .map(str::to_owned);
+    let mut response = next.run(request).await;
+    if let Some(origin) = origin
+        .filter(|_| response.status().is_client_error() || response.status().is_server_error())
+    {
+        insert_header(&mut response, "access-control-allow-origin", &origin);
+        insert_header(&mut response, "access-control-allow-credentials", "true");
+        insert_header(&mut response, "cache-control", "no-store");
+        let varies_origin = response
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|value| value.trim().eq_ignore_ascii_case("origin"));
+        if !varies_origin {
+            response
+                .headers_mut()
+                .append(header::VARY, HeaderValue::from_static("Origin"));
+        }
+    }
+    response
+}
+
 pub(super) fn preflight(state: &GatewayRuntimeState, path: &str, headers: &HeaderMap) -> Response {
     let refused = || {
         let mut response = StatusCode::FORBIDDEN.into_response();

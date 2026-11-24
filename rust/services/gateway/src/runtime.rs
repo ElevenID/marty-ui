@@ -534,6 +534,12 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
             Arc::clone(&state),
             mip_version_middleware,
         ))
+        // Preserve the decision-stage order while making early Auth/learner
+        // errors readable by the one configured browser Origin.
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            console_cors::error_headers,
+        ))
         .layer(middleware::from_fn(crate::public_verification::no_store))
         .with_state(state)
 }

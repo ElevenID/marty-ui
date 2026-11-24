@@ -167,7 +167,12 @@ async fn console_preflight_does_not_authorize_a_real_learner_operation() {
             .status(),
         StatusCode::NO_CONTENT
     );
-    for session in [None, Some("observation-impersonated"), Some("valid")] {
+    for (session, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("observation-impersonated"), StatusCode::FORBIDDEN),
+        (Some("valid"), StatusCode::UNAUTHORIZED),
+        (Some("valid-uuid"), StatusCode::FORBIDDEN),
+    ] {
         let mut request = Request::builder()
             .method("POST")
             .uri(CONSOLE_ASSOCIATION)
@@ -181,7 +186,16 @@ async fn console_preflight_does_not_authorize_a_real_learner_operation() {
             .oneshot(request.body(Body::from("{}")).unwrap())
             .await
             .unwrap();
-        assert!(!response.status().is_success());
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            CONSOLE_ORIGIN
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-credentials"],
+            "true"
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
     }
     let duplicate = Request::builder()
         .method("POST")
@@ -197,6 +211,32 @@ async fn console_preflight_does_not_authorize_a_real_learner_operation() {
     assert_eq!(duplicate.headers().get_all("origin").iter().count(), 2);
     let response = router.oneshot(duplicate).await.unwrap();
     assert!(!response.status().is_success());
+    assert!(!response
+        .headers()
+        .contains_key("access-control-allow-origin"));
+    assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn console_error_headers_exclude_unallowed_origins_and_nonlearner_operations() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    for (path, origin) in [
+        (CONSOLE_ASSOCIATION, None),
+        (CONSOLE_ASSOCIATION, Some("https://untrusted.example")),
+        ("/v1/identity/association-challenges/30000000-0000-4000-8000-000000000001/create", Some(CONSOLE_ORIGIN)),
+        ("/v1/organizations/20000000-0000-4000-8000-000000000001/external-association-sources/30000000-0000-4000-8000-000000000001/create", Some(CONSOLE_ORIGIN)),
+    ] {
+        let mut request = Request::builder().method("POST").uri(path).header("content-type", "application/json");
+        if path == CONSOLE_ASSOCIATION { request = request.header("cookie", "sessionId=observation-session"); }
+        if let Some(origin) = origin { request = request.header("origin", origin); }
+        let response = router.clone().oneshot(request.body(Body::from("{}")).unwrap()).await.unwrap();
+        assert!(!response.status().is_success(), "{path}");
+        assert!(!response.headers().contains_key("access-control-allow-origin"), "{path}");
+    }
     assert!(recorder.0.lock().unwrap().is_empty());
 }
 
@@ -252,6 +292,14 @@ async fn console_preflight_http_boundary() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        CONSOLE_ORIGIN
+    );
+    assert_eq!(
+        response.headers()["access-control-allow-credentials"],
+        "true"
+    );
     assert!(recorder.0.lock().unwrap().is_empty());
     if browser {
         let directory = std::path::Path::new("/browser-evidence");
