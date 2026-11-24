@@ -116,6 +116,32 @@ administrative role. Runtime and migrations currently share that application's
 credential; separating migration and runtime roles is a further deployment
 change.
 
+When provisioning schemas in advance, check their owners as well as grants.
+Flow's delegated-use lock helpers must have the same owner as the
+`flow_service` schema and the tables they lock. Granting the migration role
+`USAGE, CREATE` on an administrator-owned schema is insufficient: the native
+migration creates role-owned tables/functions, then refuses the inconsistent
+ownership and rolls back its transaction. Allowing the migration role to create
+an absent schema gives it the expected ownership.
+
+For an existing schema, capture its objects, owners and grants first and have
+the database administrator reconcile the intended migration owner. Do not drop
+the schema, recreate application data, or weaken the native ownership checks.
+On managed PostgreSQL, an administrator may also need permission to `SET ROLE`
+to the intended owner for a transfer. Any temporary role membership must be
+bounded to that operation and removed by its exact grantor; verify the complete
+membership inventory afterward. A grant from a second grantor is a separate
+membership, rather than an update to the original grant.
+
+The released Flow executable provides separate `migrate` and
+`verify-owned-schema` commands. They use the private `DATABASE_URL` transport,
+the selected `MARTY_ORG_ID`, and one database connection, without starting Flow
+or contacting Redis or identity providers. Keep verified TLS enabled. Their
+success proves schema migration/validation only; it does not resume a failed
+installer or establish service readiness. Follow the
+[failed-provisioning recovery restrictions](linux-installer-tester.md) before
+attempting another installation.
+
 Keep all ElevenID internal tables and schemas outside the Supabase Data API.
 Do not add service schemas to the exposed schema list. Review the shared
 bootstrap tables too. For a project used only for managed Auth and direct SQL,
