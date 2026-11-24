@@ -33,6 +33,10 @@ test("built HTML and HTTP policies agree and permit proof submission only for ex
       const redirects = readFileSync(join(root, "dist/_redirects"), "utf8");
       expect(redirects.includes("/account/recover / 200\n")).toBe(mode === "lifecycle");
       expect(redirects.includes("/account/verify / 200\n")).toBe(mode === "lifecycle");
+      for (const route of ["register", "confirm", "security"]) {
+        expect(redirects.includes(`/account/${route} / 200\n`)).toBe(mode === "lifecycle");
+      }
+      expect(headers).toContain(mode === "lifecycle" ? "img-src 'self' data:;" : "img-src 'self';");
     }
   } finally {
     // Only the unique test-owned temporary directory, never the checkout.

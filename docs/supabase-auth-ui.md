@@ -52,10 +52,9 @@ authenticator challenge. Multiple enrolled TOTP factors can be selected. A
 successful challenge must actually result in AAL2 before authorization details
 are retrieved. An unmet requirement for only phone, WebAuthn, recovery codes or
 an unknown factor type is blocked; it never falls back to password-only
-consent. Registration, email confirmation, factor enrollment,
-recovery codes, social login, SSO and CAPTCHA are not implemented here. Accounts
-or project policies that require those flows need further product work.
-Password recovery is available only with the explicit v3 configuration below.
+consent. Recovery codes, social login, SSO and CAPTCHA are not implemented here.
+Registration, email confirmation, initial TOTP enrollment and password recovery
+are available only with the explicit v3 configuration below.
 
 Authorization details come from the provider SDK. The request ID, user ID,
 email, client ID and registered callback must match the current verified
@@ -129,7 +128,7 @@ unless it is the real application's callback.
 
 | Field | Accepted value |
 | --- | --- |
-| `schema` | `elevenid.supabase-auth-ui/v1`, explicit native-proof transport `elevenid.supabase-auth-ui/v2`, or opt-in account recovery `elevenid.supabase-auth-ui/v3` described below. |
+| `schema` | `elevenid.supabase-auth-ui/v1`, explicit native-proof transport `elevenid.supabase-auth-ui/v2`, or opt-in account lifecycle `elevenid.supabase-auth-ui/v3` described below. |
 | `supabaseUrl` | One exact canonical HTTPS project origin, without a path, trailing slash, credentials, custom port, query or fragment. A custom Auth domain may be used if it is the actual selected project origin. |
 | `publishableKey` | Only a modern `sb_publishable_` key. Secret keys, service-role keys, legacy JWT keys and management credentials are rejected. |
 | `brand` | A bounded plain-text site label. |
@@ -222,7 +221,7 @@ logout. The application session retains separate typed authentication-event
 evidence and the unchanged signed ID claims. Internal step-up checks use the
 actual earlier authentication event, never the OAuth exchange timestamp.
 
-### Password recovery (v3, delivery qualification pending)
+### Account lifecycle (v3, delivery qualification pending)
 
 `public/config.lifecycle.example.json` shows the closed v3 schema. It retains
 v2 per-client callback modes and requires `accountLifecycle` with a `clientId`
@@ -233,8 +232,9 @@ destinations are rejected. This starts a new application login after recovery;
 it cannot reuse an old OAuth state or turn an email token into an application
 session.
 
-The static build adds only `/account/recover` and `/account/verify` rewrites
-when v3 is selected. The sign-in screen then offers **Forgot your password?**.
+The static build adds `/account/register`, `/account/confirm`, `/account/security`,
+`/account/recover` and `/account/verify` rewrites only when v3 is selected. The
+sign-in screen then offers account creation, authenticator setup and password recovery.
 Recovery requests use the provider's normal email API with a fixed verification
 page callback and a non-enumerating success message. A recovery request does
 not create an account or sign the browser into an application.
@@ -271,8 +271,56 @@ This source has synthetic pinned-SDK and Chrome checks, not live email-delivery
 or real password-reset acceptance. Verify the custom SMTP sender, Free-plan
 limits, exact site/redirect configuration, email template and actual delivered
 link before enabling v3 on the deployed site. No provider settings or human
-accounts are changed by a build. Signup, email confirmation, factor enrollment
-and recovery for a lost authenticator still require additional product work.
+accounts are changed by a build. Recovery for a lost authenticator still requires
+additional product work.
+
+#### Signup, email confirmation and first authenticator
+
+The signup form sends email/password directly through the pinned SDK with a
+fixed `/account/confirm` destination. Matching passwords must contain 12-1024
+characters; stricter provider rules remain authoritative. A successful request
+shows a generic email notice and never grants organization or merchant access.
+Email confirmation must be enabled: an unexpected signup session is logged out
+and blocked instead of accepted as verified signup.
+
+Configure Supabase's confirmation template from
+`integrations/supabase-auth-ui/email/confirmation.html` and allow the exact
+`/account/confirm` redirect on the same Site URL origin. Its link carries only
+`token_hash` and `type=email` in the fragment. The page scrubs the URL before
+configuration/provider requests, and an explicit confirmation action protects
+the one-time credential against email prefetching. After server-backed verified
+account validation, local provider logout precedes automatic navigation to
+`/account/security`. An email link never grants an application session or
+silently enrolls an authenticator.
+
+Setup requires a fresh password sign-in and another server-backed account/factor
+check. An existing verified TOTP factor is preserved and the browser returns to
+the fixed application sign-in entry without enrolling or replacing anything.
+Unsupported required factors block setup. For accounts without verified factors,
+the user explicitly chooses enrollment; duplicate clicks cannot create multiple
+factors in that page attempt. The provider-generated QR uses a passive SVG data
+image, never SVG markup inserted into the document. Only v3 permits `data:` in
+the CSP image directive. The manual setup key is hidden until requested, and
+both key and QR remain outside public controller state and persistent storage.
+
+Verification targets only the factor created by that setup attempt. Account
+identity and its pending factor are checked before verification; actual AAL2
+and the same verified factor are required afterward. Success clears the setup
+material, logs out the provider session locally and automatically opens a fresh
+application sign-in. Explicit rejected OTP responses permit another code;
+uncertain network or account/factor changes clear setup material and block the
+attempt. Cleanup failure reports the completed change with a manual sign-in
+fallback. No setup path removes a factor. Cancelling or closing the page can
+therefore leave an unverified factor at the provider; repeated abandoned
+attempts can reach provider limits and require operator inspection. These pages
+do not provide factor replacement or lost-authenticator recovery.
+
+Automated Chrome checks at 390px and 1280px exercise the built site with the
+real pinned SDK and entirely synthetic HTTP responses, including signup,
+explicit email confirmation, fresh password setup, passive QR loading, manual
+key visibility, factor verification, local logout and automatic return. This
+does not prove real mail delivery, a scannable provider QR, actual enrollment,
+or acceptance by the installed ElevenID application.
 
 ## Local verification and static build
 
@@ -419,6 +467,6 @@ registered ElevenID and Rifare clients: first-time consent, prior consent,
 denial, wrong or unverified accounts, required TOTP, unsupported MFA, expired
 requests, account switching through a new application authorization, actual
 signed claims, application membership/customer binding, local logout and
-restart behavior. Registration, recovery, enrollment, account management and
-provider-wide assurance remain explicit further work. No hosted qualification
+restart behavior. Real registration, recovery and enrollment journeys, account
+management and provider-wide assurance remain explicit qualification work. No hosted qualification
 is claimed by the synthetic test suite or static build.

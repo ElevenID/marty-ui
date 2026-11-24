@@ -87,7 +87,8 @@ export function renderView(document, root, state, actions) {
     content.append(form);
     if (actions.recover) {
       content.append(button("Forgot your password?", "text-button", actions.recover));
-      content.append(element("p", "help", "Need an account or authenticator setup? Contact your operator."));
+      content.append(button("Create an account", "text-button", actions.register));
+      content.append(button("Set up an authenticator", "text-button", actions.security));
     } else content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
   } else if (state.phase === "checking") {
     heading.textContent = "Checking your account";
@@ -183,6 +184,7 @@ export function renderView(document, root, state, actions) {
     notice();
     if (!state.restartRequired && !["configuration", "request", "cancelled", "restart"].includes(state.error)) content.append(button("Start sign-in again", "secondary", actions.switchAccount, false));
     if (state.restartRequired && !["restart", "cancelled"].includes(state.error)) content.append(element("p", "help", "Return to your application and start a new sign-in. This authorization request cannot be reused."));
+    if (actions.security && ["mfa_incomplete", "mfa_unavailable"].includes(state.error)) content.append(button("Set up an authenticator", "secondary", actions.security, false));
   }
   root.setAttribute("aria-busy", String(state.busy));
   const previousPhase = root.dataset.phase;

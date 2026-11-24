@@ -4,10 +4,13 @@ import { createProviderClient } from "./sdk.js";
 import { renderView } from "./view.js";
 import { consumeRecoveryRequest, RecoveryController } from "./recovery.js";
 import { renderRecoveryView } from "./recovery-view.js";
+import { AccountSetupController, consumeSetupRequest } from "./account-setup.js";
+import { renderSetupView } from "./account-setup-view.js";
 
 const root = document.getElementById("app");
 let controller;
-const recoveryPage = window.location.pathname.startsWith("/account/");
+const accountPage = window.location.pathname.startsWith("/account/");
+const recoveryPage = ["/account/recover", "/account/verify"].includes(window.location.pathname);
 let requestValidated = false;
 const actions = {
   signIn: (...args) => controller.signIn(...args),
@@ -21,8 +24,10 @@ const render = (state) => renderView(document, root, state, actions);
 
 try {
   const replaceLocation = (cleanUrl) => window.history.replaceState(null, "", cleanUrl);
-  let request = recoveryPage ? consumeRecoveryRequest(window.location.href, replaceLocation)
-    : consumeAuthorizationRequest(window.location.href, replaceLocation);
+  let request;
+  if (recoveryPage) request = consumeRecoveryRequest(window.location.href, replaceLocation);
+  else if (accountPage) request = consumeSetupRequest(window.location.href, replaceLocation);
+  else request = consumeAuthorizationRequest(window.location.href, replaceLocation);
   requestValidated = true;
   const response = await fetch("/config.json", { cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error("Configuration unavailable");
@@ -45,8 +50,34 @@ try {
       createClient: createProviderClient, onChange: renderRecovery, navigate: (url) => window.location.replace(url) });
     document.title = `Account recovery · ${config.brand}`;
     renderRecovery(controller.state);
+  } else if (accountPage) {
+    const local = (path) => { controller?.dispose(); window.location.replace(path); };
+    const setupActions = {
+      register: (...args) => controller.register(...args),
+      signIn: (...args) => controller.signIn(...args),
+      resendEmail: (email) => controller.resendEmail(email),
+      confirmEmail: () => controller.confirmEmail(),
+      beginEnrollment: () => controller.beginEnrollment(),
+      verifyEnrollment: (code) => controller.verifyEnrollment(code),
+      enrollmentDisplay: () => controller.enrollmentDisplay(),
+      toggleSetupKey: () => controller.toggleSetupKey(),
+      cancel: () => controller.cancel(),
+      security: () => local("/account/security"),
+      resend: () => local("/account/confirm"),
+      application: () => local(config.accountLifecycle.signInUri),
+    };
+    const renderSetup = (state) => renderSetupView(document, root, state, setupActions);
+    controller = new AccountSetupController({ config, mode: request.mode, tokenHash: request.tokenHash, origin: window.location.origin,
+      createClient: createProviderClient, onChange: renderSetup, navigate: (url) => window.location.replace(url) });
+    document.title = `Account setup · ${config.brand}`;
+    renderSetup(controller.state);
   } else {
-    if (config.accountLifecycle) actions.recover = () => { controller.dispose(); window.location.replace("/account/recover"); };
+    if (config.accountLifecycle) {
+      const local = (path) => { controller.dispose(); window.location.replace(path); };
+      actions.recover = () => local("/account/recover");
+      actions.register = () => local("/account/register");
+      actions.security = () => local("/account/security");
+    }
     controller = new AuthController({
       config,
       authorizationId: request,
@@ -77,9 +108,13 @@ try {
   }
   request = null;
 } catch (error) {
-  if (recoveryPage) renderRecoveryView(document, root, { phase: "blocked", busy: false, error: requestValidated ? "configuration" : "request" }, {
-    restart: () => window.location.replace("/account/recover"),
-  });
+  if (accountPage) {
+    const state = { phase: "blocked", busy: false, error: requestValidated ? "configuration" : "request" };
+    if (recoveryPage) renderRecoveryView(document, root, state, { restart: () => window.location.replace("/account/recover") });
+    else renderSetupView(document, root, state, {
+      resend: () => window.location.replace("/account/confirm"), security: () => window.location.replace("/account/security"),
+    });
+  }
   else render({ phase: "blocked", busy: false, error: safeError(error, "configuration") });
 }
 

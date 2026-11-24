@@ -31,7 +31,7 @@ const postOrigins = [...new Set(config.clients.filter((client) => client.callbac
 const referrerPolicy = postOrigins.length ? "strict-origin" : "no-referrer";
 const csp = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'",
-  `connect-src 'self' ${config.supabaseUrl}`, "img-src 'self'",
+  `connect-src 'self' ${config.supabaseUrl}`, `img-src 'self'${config.accountLifecycle ? " data:" : ""}`,
   "font-src 'none'", "base-uri 'none'",
   `form-action ${postOrigins.join(" ") || "'none'"}`,
   "frame-ancestors 'none'", "object-src 'none'", "upgrade-insecure-requests",
@@ -72,6 +72,6 @@ await Promise.all([
   writeFile(resolve(output, "app.css"), `${sharedCss}\n${formCss}`),
   writeFile(resolve(output, "config.json"), `${JSON.stringify(config, null, 2)}\n`),
   writeFile(resolve(output, "_headers"), headers),
-  writeFile(resolve(output, "_redirects"), "/oauth/consent / 200\n/oauth/consent/ / 200\n" + (config.accountLifecycle ? "/account/recover / 200\n/account/verify / 200\n" : "")),
+  writeFile(resolve(output, "_redirects"), "/oauth/consent / 200\n/oauth/consent/ / 200\n" + (config.accountLifecycle ? "/account/recover / 200\n/account/verify / 200\n/account/register / 200\n/account/confirm / 200\n/account/security / 200\n" : "")),
 ]);
 console.log("Built static authorization UI in dist/ with exact-origin CSP. No provider requests were made.");
