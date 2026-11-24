@@ -199,3 +199,104 @@ async fn console_preflight_does_not_authorize_a_real_learner_operation() {
     assert!(!response.status().is_success());
     assert!(recorder.0.lock().unwrap().is_empty());
 }
+
+/// Exercise the production router over HTTP. The opt-in hold only serves a
+/// separately run local browser fixture; identities and upstreams remain test
+/// doubles, so this cannot attest live Auth, provider or installed acceptance.
+#[tokio::test]
+async fn console_preflight_http_boundary() {
+    let browser = std::env::var("MARTY_TEST_GATEWAY_BROWSER").as_deref() == Ok("1");
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    if browser {
+        Arc::get_mut(&mut state)
+            .unwrap()
+            .cors_origins
+            .insert("https://console.elevenid.test:38443".into());
+    }
+    let listener = tokio::net::TcpListener::bind(if browser {
+        "0.0.0.0:38143"
+    } else {
+        "127.0.0.1:0"
+    })
+    .await
+    .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, gateway_router(state)).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let base = format!("http://127.0.0.1:{port}");
+    for (path, method) in [(CONSOLE_ASSOCIATION, "POST"), ("/v1/auth/me", "PATCH")] {
+        let response = client
+            .request(reqwest::Method::OPTIONS, format!("{base}{path}"))
+            .header("origin", CONSOLE_ORIGIN)
+            .header("access-control-request-method", method)
+            .header("access-control-request-headers", "content-type")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.headers()["access-control-allow-methods"], method);
+    }
+    let response = client
+        .post(format!("{base}{CONSOLE_ASSOCIATION}"))
+        .header("origin", CONSOLE_ORIGIN)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(recorder.0.lock().unwrap().is_empty());
+    if browser {
+        let directory = std::path::Path::new("/browser-evidence");
+        let nonce = uuid::Uuid::new_v4().to_string();
+        std::fs::write(
+            directory.join("ready.json"),
+            serde_json::to_vec(&json!({
+                "fixture": true, "nonce": nonce, "port": port,
+                "scope": "Actual Gateway router with controlled identity/upstream ports",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        loop {
+            if let Ok(bytes) = std::fs::read(directory.join("browser-complete.json")) {
+                let complete: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(complete["nonce"], nonce);
+                assert_eq!(complete["passed"], true);
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "browser fixture timed out"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let records = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(service, request)| {
+                json!({
+                    "service": service, "path": request.path,
+                    "method": format!("{:?}", request.method),
+                    "authenticated_actor_present": request.header("x-user-id").is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(
+            directory.join("gateway-observations.json"),
+            serde_json::to_vec(&json!({"fixture":true,"upstream_operations":records})).unwrap(),
+        )
+        .unwrap();
+    }
+    server.abort();
+}
