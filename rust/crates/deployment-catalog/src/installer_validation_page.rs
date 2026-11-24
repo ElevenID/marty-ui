@@ -29,6 +29,37 @@ pub(crate) struct PageObservation {
     pub alias_api_isolation_observed: bool,
 }
 
+fn external_redirect_valid(response: &Response, expected: &str) -> bool {
+    response.status() == StatusCode::PERMANENT_REDIRECT
+        && response.headers().get_all(header::LOCATION).iter().count() == 1
+        && response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            == Some(expected)
+        && !response.headers().contains_key(header::SET_COOKIE)
+}
+
+/// Observe only the pinned local API's handoff. Never follow it to a cloud host
+/// or count a redirect as downloaded Pages assets/browser acceptance.
+pub(super) async fn check_external_application(trust: &TrustInfo, origin: &str) -> [bool; 2] {
+    let Ok(origin) = marty_selfhost_identity::origin::PublicOrigin::parse(origin) else {
+        return [false, false];
+    };
+    let Ok(client) = client(trust) else {
+        return [false, false];
+    };
+    for path in ["/", "/console", "/console/profile?tab=security"] {
+        let Some(response) = bound_get(&client, trust, path).await else {
+            return [false, false];
+        };
+        if !external_redirect_valid(&response, &format!("{}{path}", origin.as_str())) {
+            return [false, false];
+        }
+    }
+    [true, true]
+}
+
 fn fingerprint(path: &str, media_type: &str, bytes: &[u8]) -> PageAsset {
     PageAsset {
         path: path.into(),

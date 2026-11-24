@@ -488,10 +488,13 @@ fn start_inner(
     if state.validate_applicant_storage()? != group.host_gid() {
         return Err("applicant state group changed".into());
     }
-    let nginx = crate::installer_ingress_config::render_selected(
+    let nginx = crate::installer_ingress_config::render_for_application(
         &bundle_text(bundle, "docker/nginx-selfhost.prod.conf.template", 131072)?,
         &origin,
         foundation.is_none() && external_oidc.is_none(),
+        hosting
+            .external_application_origin()
+            .map(PublicOrigin::as_str),
     )?;
     state.write_evidence("installer-nginx.conf", nginx.as_bytes())?;
     state.write_evidence("application-intent.json",&serde_json::to_vec(&json!({"schema":"elevenid.installer-application-intent/v2",
@@ -628,6 +631,12 @@ fn start_inner(
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
+    if hosting.external_application_origin().is_some() {
+        inputs.files.push(bundle_bound(
+            bundle,
+            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER,
+        )?);
+    }
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
         image.bind_inputs(&mut inputs)?;
@@ -699,6 +708,12 @@ fn start_inner(
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
+    if hosting.external_application_origin().is_some() {
+        maintenance_inputs.files.push(bundle_bound(
+            bundle,
+            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER,
+        )?);
+    }
     #[cfg(feature = "installer-development")]
     if let Some(image) = &maintenance_inputs.development_image {
         maintenance_inputs

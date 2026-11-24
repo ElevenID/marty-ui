@@ -20,6 +20,7 @@
     "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",
     "deploy-config/compose/selfhost-installer/compose.external-oidc.yml",
     "deploy-config/compose/selfhost-installer/compose.external-postgres.yml",
+    "deploy-config/compose/selfhost-installer/compose.external-application.yml",
     "deploy-config/compose/selfhost-installer/compose.organization-bootstrap.yml",
     "docker-compose.service.issuance-native-runtime.yml",
     ".env.selfhost.production.example",

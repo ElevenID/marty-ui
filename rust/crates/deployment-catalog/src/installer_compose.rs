@@ -1732,9 +1732,16 @@ pub(crate) fn bound_ingress_listener(
         )?;
         // Startup exposure is part of the exact hosting selection, not an
         // inherited process environment or an editable Compose override.
-        match model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS") {
-            Some(value) => require(value.as_str() == Some(selection.enabled_web_sections()))?,
-            None => require(!selection.has_web_selection())?,
+        match (
+            selection.external_application_origin(),
+            model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS"),
+        ) {
+            (Some(_), None) => require(model["services"].get("ui").is_none())?,
+            (Some(_), Some(_)) => return Err(REFUSED.into()),
+            (None, Some(value)) => {
+                require(value.as_str() == Some(selection.enabled_web_sections()))?
+            }
+            (None, None) => require(!selection.has_web_selection())?,
         }
         let configured_entry = service["environment"]
             .get("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")
@@ -2388,6 +2395,7 @@ impl ComposeSession {
         let foundation = crate::installer_foundation::for_inputs(&inputs)?;
         let external_oidc = crate::installer_oidc::for_inputs(&inputs)?;
         let external_postgres = crate::installer_postgres::for_inputs(&inputs)?;
+        let hosting = crate::installer_hosting::for_inputs(&inputs)?;
         crate::installer_settings::for_inputs(&inputs)?;
         for root in inputs
             .writable_bind_roots
@@ -2481,6 +2489,9 @@ impl ComposeSession {
         }
         if let Some(selection) = external_postgres {
             selection.validate_model(&model)?;
+        }
+        if let Some(selection) = hosting {
+            selection.validate_application_model(&model)?;
         }
         if cleanup_only {
             validate_failed_runtime_cleanup(session.inputs.prior.as_ref().ok_or(REFUSED)?, &model)?;

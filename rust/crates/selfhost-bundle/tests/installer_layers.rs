@@ -6,7 +6,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
-const LAYERS: [(&str, &str); 4] = [
+const LAYERS: [(&str, &str); 5] = [
+    (
+        "deploy-config/compose/selfhost-installer/compose.external-application.yml",
+        "services:\n  ui: !reset null\n  edge:\n    environment:\n      UI_UPSTREAM: !reset null\n",
+    ),
     (
         "deploy-config/compose/selfhost-installer/compose.installer.yml",
         "x-installer-defaults: &installer-defaults\n  init: true\nservices:\n  app:\n    <<: *installer-defaults\n    ports: !override [\"127.0.0.1:${MARTY_LOCAL_PORT:?}:8000\"]\n",
