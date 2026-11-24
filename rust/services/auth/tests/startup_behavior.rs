@@ -180,6 +180,73 @@ fn external_values() -> BTreeMap<String, String> {
 }
 
 #[test]
+fn supabase_native_profile_requires_complete_explicit_public_configuration() {
+    let mut disabled = external_values();
+    disabled.insert("SUPABASE_AUTH_UI_ORIGIN".into(), "".into());
+    disabled.insert("SUPABASE_PUBLISHABLE_KEY".into(), "".into());
+    assert!(AuthServiceConfig::from_values(disabled)
+        .unwrap()
+        .supabase_native
+        .is_none());
+    let mut values = external_values();
+    values.extend([
+        (
+            "OIDC_ISSUER_URL".into(),
+            "https://project.example.invalid/auth/v1".into(),
+        ),
+        (
+            "OIDC_CLIENT_ID".into(),
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+        ),
+        ("OIDC_NATIVE_PROOF_MODE".into(), "supabase_totp".into()),
+        ("OIDC_ALLOWED_ALGORITHMS".into(), "ES256".into()),
+        (
+            "SUPABASE_AUTH_UI_ORIGIN".into(),
+            "https://authorization.example.invalid".into(),
+        ),
+        (
+            "SUPABASE_PUBLISHABLE_KEY".into(),
+            "sb_publishable_SYNTHETIC_public_0123456789".into(),
+        ),
+    ]);
+    assert!(AuthServiceConfig::from_values(values.clone())
+        .unwrap()
+        .supabase_native
+        .is_some());
+    for (field, value) in [
+        ("OIDC_NATIVE_PROOF_MODE", "disabled"),
+        ("OIDC_NATIVE_PROOF_MODE", "unknown"),
+        ("SUPABASE_PUBLISHABLE_KEY", "sb_secret_never_allowed"),
+        ("SUPABASE_PUBLISHABLE_KEY", ""),
+        (
+            "SUPABASE_AUTH_UI_ORIGIN",
+            "https://authorization.example.invalid/path",
+        ),
+        (
+            "SUPABASE_AUTH_UI_ORIGIN",
+            "http://authorization.example.invalid",
+        ),
+        ("OIDC_MAX_AGE_SECONDS", "omit"),
+        ("OIDC_ALLOWED_ALGORITHMS", "RS256"),
+        ("OIDC_CLIENT_ID", "not-a-uuid"),
+        ("COOKIE_SAMESITE", "strict"),
+        ("OIDC_ISSUER_URL", "https://project.example.invalid/other"),
+    ] {
+        let mut invalid = values.clone();
+        invalid.insert(field.into(), value.into());
+        assert!(
+            AuthServiceConfig::from_values(invalid).is_err(),
+            "accepted {field}"
+        );
+    }
+    for field in ["SUPABASE_AUTH_UI_ORIGIN", "SUPABASE_PUBLISHABLE_KEY"] {
+        let mut invalid = values.clone();
+        invalid.remove(field);
+        assert!(AuthServiceConfig::from_values(invalid).is_err());
+    }
+}
+
+#[test]
 fn external_oidc_starts_without_keycloak_admin_or_realm_and_retains_claim_only_policy() {
     let mut values = external_values();
     values.insert(

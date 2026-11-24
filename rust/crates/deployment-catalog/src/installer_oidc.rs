@@ -111,6 +111,13 @@ impl MaxAge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct NativeSupabaseTotp {
+    pub authorization_origin: String,
+    pub publishable_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ExternalOidc {
     pub issuer_url: String,
     pub client_id: String,
@@ -137,6 +144,8 @@ pub(crate) struct ExternalOidc {
     pub account_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_supabase_totp: Option<NativeSupabaseTotp>,
 }
 
 impl ExternalOidc {
@@ -234,6 +243,27 @@ impl ExternalOidc {
         }
         if let Some(MaxAge::Seconds(value)) = self.max_age {
             require(value <= 86400)?;
+        }
+        if let Some(native) = &self.native_supabase_totp {
+            scalar(&native.authorization_origin)?;
+            scalar(&native.publishable_key)?;
+            let origin = url::Url::parse(&native.authorization_origin).map_err(|_| REFUSED)?;
+            let key = native
+                .publishable_key
+                .strip_prefix("sb_publishable_")
+                .ok_or(REFUSED)?;
+            require(
+                self.issuer_url.ends_with("/auth/v1")
+                    && uuid::Uuid::parse_str(&self.client_id).is_ok()
+                    && self.allowed_algorithms == ["ES256"]
+                    && self.max_age.unwrap_or(MaxAge::Seconds(0)) == MaxAge::Seconds(0)
+                    && origin.scheme() == "https"
+                    && origin.origin().ascii_serialization() == native.authorization_origin
+                    && (16..=256).contains(&key.len())
+                    && key
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
+            )?;
         }
         if let Some(name) = &self.provider_name {
             // The private native env transport is single-quoted. Reject its
@@ -382,6 +412,27 @@ impl ExternalOidc {
         for (key, value) in self.optional_environment() {
             values.insert(format!("MARTY_EXTERNAL_OIDC_{key}"), value);
         }
+        for key in [
+            "NATIVE_PROOF_MODE",
+            "SUPABASE_UI_ORIGIN",
+            "SUPABASE_PUBLISHABLE_KEY",
+        ] {
+            values.remove(&format!("MARTY_EXTERNAL_OIDC_{key}"));
+        }
+        if let Some(native) = &self.native_supabase_totp {
+            values.insert(
+                "MARTY_EXTERNAL_OIDC_NATIVE_PROOF_MODE".into(),
+                "supabase_totp".into(),
+            );
+            values.insert(
+                "MARTY_EXTERNAL_OIDC_SUPABASE_UI_ORIGIN".into(),
+                native.authorization_origin.clone(),
+            );
+            values.insert(
+                "MARTY_EXTERNAL_OIDC_SUPABASE_PUBLISHABLE_KEY".into(),
+                native.publishable_key.clone(),
+            );
+        }
         Ok(())
     }
 
@@ -390,6 +441,26 @@ impl ExternalOidc {
         environment: &serde_json::Map<String, Value>,
     ) -> Result<()> {
         let selected = self.optional_environment();
+        let native = self.native_supabase_totp.as_ref();
+        for (name, expected) in [
+            (
+                "OIDC_NATIVE_PROOF_MODE",
+                native.map_or("disabled", |_| "supabase_totp"),
+            ),
+            (
+                "SUPABASE_AUTH_UI_ORIGIN",
+                native.map_or("", |value| value.authorization_origin.as_str()),
+            ),
+            (
+                "SUPABASE_PUBLISHABLE_KEY",
+                native.map_or("", |value| value.publishable_key.as_str()),
+            ),
+        ] {
+            let actual = environment.get(name).and_then(Value::as_str);
+            require(
+                actual == Some(expected) || (native.is_none() && !environment.contains_key(name)),
+            )?;
+        }
         for (key, default) in [
             ("TOKEN_ENDPOINT_AUTH_METHOD", ""),
             ("USERINFO_MODE", "disabled"),

@@ -25,6 +25,7 @@ pub struct AuthServiceConfig {
     pub redis_url: String,
     pub redis_database: u32,
     pub oidc: OidcConfig,
+    pub supabase_native: Option<crate::SupabaseNativeConfig>,
     pub ui_origins: UiOriginPolicy,
     pub session_ttl_seconds: i64,
     pub cookie: SessionCookieConfig,
@@ -266,6 +267,14 @@ impl AuthServiceConfig {
                 .map_err(|error| invalid(error.to_string()))?;
         }
         let oidc = oidc_config_from_map(&values)?;
+        let supabase_native = match get("OIDC_NATIVE_PROOF_MODE").unwrap_or("disabled") {
+            "disabled" if get("SUPABASE_AUTH_UI_ORIGIN").is_none_or(str::is_empty) && get("SUPABASE_PUBLISHABLE_KEY").is_none_or(str::is_empty) => None,
+            "supabase_totp" => Some(crate::SupabaseNativeConfig {
+                authorization_origin: required(get("SUPABASE_AUTH_UI_ORIGIN"), "SUPABASE_AUTH_UI_ORIGIN")?,
+                publishable_key: required(get("SUPABASE_PUBLISHABLE_KEY"), "SUPABASE_PUBLISHABLE_KEY")?,
+            }.validate(&oidc).map_err(|error| invalid(error.message))?),
+            _ => return Err(invalid("OIDC_NATIVE_PROOF_MODE must be disabled without Supabase inputs, or supabase_totp with complete public configuration")),
+        };
         let session_ttl_seconds = number(
             get("SESSION_TTL_SECONDS"),
             86_400_i64,
@@ -319,6 +328,9 @@ impl AuthServiceConfig {
         cookie
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
+        if supabase_native.is_some() && cookie.same_site.eq_ignore_ascii_case("strict") {
+            return Err(invalid("Native cross-origin callback requires SameSite=Lax or secure SameSite=None cookies"));
+        }
         let keycloak_admin = if provider_mode == OidcProviderMode::External {
             if [
                 "KEYCLOAK_ADMIN_URL",
@@ -369,6 +381,7 @@ impl AuthServiceConfig {
             redis_url: required(get("REDIS_URL"), "REDIS_URL")?,
             redis_database: number(get("AUTH_REDIS_DATABASE"), 0, "AUTH_REDIS_DATABASE")?,
             oidc,
+            supabase_native,
             ui_origins,
             session_ttl_seconds,
             cookie,

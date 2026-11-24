@@ -134,6 +134,45 @@ Choose the algorithm actually used by the provider; `ES256` is an example.
 The installer retains an empty private secret placeholder for this public-client
 selection and leaves the Auth secret-file setting empty. S256 PKCE still applies.
 
+### Supabase native password and TOTP proof
+
+For the first-party static authorization companion's `native_mfa_post` mode,
+add an explicit `native_supabase_totp` object inside `external_oidc`:
+
+```json
+"native_supabase_totp": {
+  "authorization_origin": "https://authorization.example.invalid",
+  "publishable_key": "sb_publishable_REPLACE_WITH_THE_PUBLIC_PROJECT_KEY"
+}
+```
+
+The origin must be the exact HTTPS origin of the deployed companion, with no
+path or trailing slash. Supply a modern public project key; secret, service-role
+and management keys are forbidden. The provider issuer must end in `/auth/v1`,
+the registered client ID must be a UUID, `allowed_algorithms` must contain only
+`ES256`, and `max_age` must be omitted (the default is zero) or explicitly zero.
+Use the actual registered confidential client and its existing secret-file
+transport when that is the selected client type. The native block adds no
+client secret and creates no provider account or factor.
+
+This selection is retained and authenticated with the rest of the fresh
+installation's provider inputs. It sets Auth's explicit native-proof mode,
+authorization origin and publishable key through the authenticated Compose
+layer. A missing or changed selected runtime value is refused. Omitting the
+block preserves the generic external-provider behavior and rejects later
+injection of native-proof settings. Do not edit a retained selection or its
+Compose model to switch a running installation; use a separately qualified
+fresh installation for that change.
+
+Auth requires the companion's native token in the callback POST body as well as
+the OAuth code/state. It verifies both identities and the actual signed
+password/TOTP times, rejects reused native sessions, then revokes the bootstrap
+provider sessions before creating its own application session. It does not
+promote OAuth AAL1 or manufacture ID-token MFA claims. See the
+[companion protocol and qualification requirements](supabase-auth-ui.md#native-mfa-proof-transport-release-qualification-pending).
+Metadata preflight alone cannot qualify this flow. Complete installed browser,
+revocation, account lifecycle and application-console tests before cutover.
+
 ### Confidential client
 
 For token-endpoint authentication method `client_secret_post`, reference the

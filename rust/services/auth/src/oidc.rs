@@ -318,6 +318,18 @@ fn config_error(message: impl Into<String>) -> PortError {
 
 #[async_trait]
 pub trait OidcHttpClient: Send + Sync {
+    async fn revoke_supabase_bootstrap(
+        &self,
+        _issuer: &str,
+        _publishable_key: &str,
+        _client_id: &str,
+        _token: &str,
+    ) -> Result<(), PortError> {
+        Err(PortError::new(
+            "native_revocation_unavailable",
+            "Native provider revocation is unavailable",
+        ))
+    }
     async fn get_json_object(
         &self,
         url: &str,
@@ -438,6 +450,48 @@ impl ReqwestOidcHttpClient {
 
 #[async_trait]
 impl OidcHttpClient for ReqwestOidcHttpClient {
+    async fn revoke_supabase_bootstrap(
+        &self,
+        issuer: &str,
+        publishable_key: &str,
+        client_id: &str,
+        token: &str,
+    ) -> Result<(), PortError> {
+        let invalid = || {
+            PortError::new(
+                "native_revocation_failed",
+                "Native provider sessions could not be revoked",
+            )
+        };
+        let mut grant_url =
+            Url::parse(&format!("{issuer}/user/oauth/grants")).map_err(|_| invalid())?;
+        grant_url
+            .query_pairs_mut()
+            .append_pair("client_id", client_id);
+        let grant = self
+            .client
+            .delete(grant_url)
+            .header("apikey", publishable_key)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map(|response| response.status().as_u16() == 204)
+            .map_err(|_| invalid());
+        // Always attempt local-session cleanup, even if grant revocation failed.
+        let local = self
+            .client
+            .post(format!("{issuer}/logout?scope=local"))
+            .header("apikey", publishable_key)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map(|response| response.status().as_u16() == 204)
+            .map_err(|_| invalid());
+        if !grant? || !local? {
+            return Err(invalid());
+        }
+        Ok(())
+    }
     async fn get_json_object(
         &self,
         url: &str,
@@ -588,6 +642,7 @@ pub struct KeycloakOidcProvider {
     http: Arc<dyn OidcHttpClient>,
     jwks: Mutex<JwksCache>,
     external_metadata: RwLock<Option<ExternalProviderMetadata>>,
+    native_authentication: Option<crate::SupabaseNativeConfig>,
 }
 
 impl KeycloakOidcProvider {
@@ -600,11 +655,22 @@ impl KeycloakOidcProvider {
                 expires_at: Instant::now(),
             }),
             external_metadata: RwLock::new(None),
+            native_authentication: None,
         })
     }
 
     pub fn with_reqwest(config: OidcConfig) -> Result<Self, PortError> {
         Self::new(config, Arc::new(ReqwestOidcHttpClient::new()?))
+    }
+
+    pub fn with_native_authentication(
+        mut self,
+        config: Option<crate::SupabaseNativeConfig>,
+    ) -> Result<Self, PortError> {
+        self.native_authentication = config
+            .map(|value| value.validate(&self.config))
+            .transpose()?;
+        Ok(self)
     }
 
     /// Resolve discovery and JWKS before the service becomes ready.
@@ -1116,6 +1182,51 @@ impl KeycloakOidcProvider {
 
 #[async_trait]
 impl OidcProvider for KeycloakOidcProvider {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        self.native_authentication
+            .as_ref()
+            .map(|config| config.authorization_origin.as_str())
+    }
+
+    async fn validate_native_authentication(
+        &self,
+        token: &str,
+        identity: &OidcValidatedIdentity,
+        started_at: i64,
+        now: i64,
+    ) -> Result<crate::NativeAuthenticationEvidence, PortError> {
+        if self.native_authentication.is_none() || token.len() > 16_384 {
+            return Err(PortError::new(
+                "native_authentication_unsupported",
+                "Native authentication is not configured or proof exceeds its limit",
+            ));
+        }
+        let claims = self.validate(token, "authenticated", None, None).await?;
+        crate::NativeAuthenticationEvidence::from_verified_claims(
+            &claims,
+            identity,
+            &self.config.external_issuer_url,
+            started_at,
+            now,
+        )
+    }
+
+    async fn revoke_native_authentication(&self, token: &str) -> Result<(), PortError> {
+        let config = self.native_authentication.as_ref().ok_or_else(|| {
+            PortError::new(
+                "native_authentication_unsupported",
+                "Native authentication is not configured",
+            )
+        })?;
+        self.http
+            .revoke_supabase_bootstrap(
+                &self.config.external_issuer_url,
+                &config.publishable_key,
+                &self.config.client_id,
+                token,
+            )
+            .await
+    }
     fn capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         let external = self.config.provider_mode == OidcProviderMode::External;
         let metadata = if external {

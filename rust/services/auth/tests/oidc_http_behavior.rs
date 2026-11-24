@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use axum::{
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use base64::Engine as _;
@@ -22,6 +22,68 @@ async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
 fn client() -> ReqwestOidcHttpClient {
     marty_service_runtime::install_tls_crypto_provider();
     ReqwestOidcHttpClient::new().unwrap()
+}
+
+#[tokio::test]
+async fn native_revocation_scopes_the_client_and_always_attempts_local_cleanup() {
+    for grant_status in [
+        StatusCode::NO_CONTENT,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::TEMPORARY_REDIRECT,
+    ] {
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let grants = observations.clone();
+        let logout = observations.clone();
+        let (origin, server) = serve(
+            Router::new()
+                .route(
+                    "/auth/v1/user/oauth/grants",
+                    delete(move |headers: HeaderMap, uri: axum::http::Uri| {
+                        let grants = grants.clone();
+                        async move {
+                            assert_eq!(headers["apikey"], "sb_publishable_synthetic");
+                            assert_eq!(
+                                headers[header::AUTHORIZATION],
+                                "Bearer synthetic-native-token"
+                            );
+                            assert_eq!(uri.query(), Some("client_id=fixture-client"));
+                            grants.lock().unwrap().push("grant");
+                            (
+                                grant_status,
+                                [(header::LOCATION, "https://attacker.invalid/")],
+                            )
+                        }
+                    }),
+                )
+                .route(
+                    "/auth/v1/logout",
+                    post(move |headers: HeaderMap, uri: axum::http::Uri| {
+                        let logout = logout.clone();
+                        async move {
+                            assert_eq!(
+                                headers[header::AUTHORIZATION],
+                                "Bearer synthetic-native-token"
+                            );
+                            assert_eq!(uri.query(), Some("scope=local"));
+                            logout.lock().unwrap().push("local");
+                            StatusCode::NO_CONTENT
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let result = client()
+            .revoke_supabase_bootstrap(
+                &format!("{origin}/auth/v1"),
+                "sb_publishable_synthetic",
+                "fixture-client",
+                "synthetic-native-token",
+            )
+            .await;
+        assert_eq!(result.is_ok(), grant_status == StatusCode::NO_CONTENT);
+        assert_eq!(*observations.lock().unwrap(), ["grant", "local"]);
+        server.abort();
+    }
 }
 
 #[tokio::test]

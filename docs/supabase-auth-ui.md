@@ -52,9 +52,9 @@ authenticator challenge. Multiple enrolled TOTP factors can be selected. A
 successful challenge must actually result in AAL2 before authorization details
 are retrieved. An unmet requirement for only phone, WebAuthn, recovery codes or
 an unknown factor type is blocked; it never falls back to password-only
-consent. Registration, email confirmation, password recovery, factor enrollment,
-recovery codes, social login, SSO and CAPTCHA are not implemented here. Accounts
-or project policies that require those flows need further product work.
+consent. Recovery codes, social login, SSO and CAPTCHA are not implemented here.
+Registration, email confirmation, initial TOTP enrollment and password recovery
+are available only with the explicit v3 configuration below.
 
 Authorization details come from the provider SDK. The request ID, user ID,
 email, client ID and registered callback must match the current verified
@@ -128,7 +128,7 @@ unless it is the real application's callback.
 
 | Field | Accepted value |
 | --- | --- |
-| `schema` | Exactly `elevenid.supabase-auth-ui/v1`. |
+| `schema` | `elevenid.supabase-auth-ui/v1`, explicit native-proof transport `elevenid.supabase-auth-ui/v2`, or opt-in account lifecycle `elevenid.supabase-auth-ui/v3` described below. |
 | `supabaseUrl` | One exact canonical HTTPS project origin, without a path, trailing slash, credentials, custom port, query or fragment. A custom Auth domain may be used if it is the actual selected project origin. |
 | `publishableKey` | Only a modern `sb_publishable_` key. Secret keys, service-role keys, legacy JWT keys and management credentials are rejected. |
 | `brand` | A bounded plain-text site label. |
@@ -144,6 +144,183 @@ The publishable key is intentionally available to every browser. Supabase
 database permissions and RLS remain a separate operator responsibility. OAuth
 client secrets stay in their respective server-side applications; this page
 must never receive them.
+
+### Native MFA proof transport (release qualification pending)
+
+The optional `elevenid.supabase-auth-ui/v2` schema requires a `callbackMode`
+on **every** client: either `redirect` or `native_mfa_post`. Version 1 rejects
+this field and retains its existing redirect-only behavior. Enable the POST
+mode only for a first-party application whose deployed Auth callback supports
+the protocol. The Auth source implements this POST protocol behind the explicit
+runtime selection below; its generic GET callback cannot supply native proof.
+Signed installer selection and installed end-to-end qualification must also be
+complete before deploying a configuration that enables this browser mode.
+
+For `native_mfa_post`, an explicit approval or Continue action requires a TOTP
+challenge completed in this page's current attempt. Password-only accounts are
+blocked before approval. After checking the current session and account again,
+the page submits a top-level, URL-encoded POST to the exact configured callback
+without a query string. Its three fields are `code`, `state`, and
+`native_access_token`. The token is read from the memory-only SDK session; it
+does not enter the URL, public controller state, local storage or error text.
+A transient hidden form carries the body and is removed after submission.
+Denial uses the existing error redirect and never reads or sends the token.
+Account switching or disposal during asynchronous session retrieval prevents
+submission. The generated CSP permits forms only to the origins of clients
+explicitly configured for POST; redirect-only builds retain `form-action 'none'`.
+POST builds use `strict-origin` in both the HTTP referrer policy and HTML meta
+tag. This sends the public login-page origin, with no path or query, and
+preserves a verifiable `Origin` on the cross-origin form submission. The
+receiver must require that exact configured origin and reject `null`, absent
+or unexpected origins. Redirect-only builds retain `no-referrer`.
+
+The browser checks transport shape, not cryptographic assurance. The receiving
+Auth service must independently verify the native token's signature, fixed
+issuer/audience, subject, expiry, AAL2, signed password and TOTP event times,
+and freshness against its one-time login state. It must also perform the
+normal OAuth code exchange and verify client binding, PKCE, nonce and signed
+verified identity, requiring both identities to match before provisioning or
+creating an application session. Native assurance must be retained as separate
+typed evidence rather than inserted into the provider's ID-token claims.
+Provider-session revocation and application logout need their own qualified
+implementation. Configuring this browser mode alone satisfies none of those
+server requirements.
+
+The Auth runtime selection consists of `OIDC_NATIVE_PROOF_MODE=supabase_totp`,
+`SUPABASE_AUTH_UI_ORIGIN` (one exact HTTPS origin, without a trailing slash), and
+`SUPABASE_PUBLISHABLE_KEY` (the same public project key used by the companion).
+It requires external OIDC mode, the exact project `/auth/v1` issuer, a UUID
+client ID, only ES256 signatures, and `OIDC_MAX_AGE_SECONDS=0`. The application
+cookie must use Lax or secure None SameSite policy for the cross-origin POST
+and its subsequent redirect. The signed installer's fresh provider-selection
+input exposes these through its explicit
+[`native_supabase_totp` block](installer-external-oidc.md#supabase-native-password-and-totp-proof).
+Do not bypass authenticated configuration ownership by editing a retained
+installation. Source support does not establish that an installed release has
+qualified this protocol.
+
+Auth snapshots the native-proof origin in one-time PKCE state. A GET callback,
+changed provider policy or mismatched POST origin fails before code exchange.
+The POST body is limited to 24 KiB, has exactly the three named fields and has
+no query string. Normal OAuth signature, audience, client, nonce, verified
+email and request-freshness checks remain in place. Native proof uses the same
+trusted JWKS, an exact `authenticated` audience, AAL2, matching subject/email,
+and actual signed password/TOTP events no earlier than the request start
+(with five seconds of clock tolerance). Refresh issuance cannot make old
+authentication events fresh. A shared atomic cache marker reserves each native
+provider session for one use, including concurrent callbacks and other states.
+
+After both proofs validate, Auth revokes this user's OAuth grant for its own
+configured client, then attempts local native-session logout. Both must succeed
+before provisioning or saving an application session. Grant revocation covers
+all provider sessions for that user/client and requires consent again on a
+later login; it does not delete other ElevenID application sessions. Bootstrap
+bearer and refresh tokens are not stored in the application session. Provider
+JWTs remain cryptographically valid until expiration, as with ordinary Supabase
+logout. The application session retains separate typed authentication-event
+evidence and the unchanged signed ID claims. Internal step-up checks use the
+actual earlier authentication event, never the OAuth exchange timestamp.
+
+### Account lifecycle (v3, delivery qualification pending)
+
+`public/config.lifecycle.example.json` shows the closed v3 schema. It retains
+v2 per-client callback modes and requires `accountLifecycle` with a `clientId`
+and `signInUri`. The selected client must use native MFA POST, and the sign-in
+URI must be exactly `/v1/auth/login` on the same origin as that client's
+registered `/v1/auth/callback`. Query strings, fragments and arbitrary return
+destinations are rejected. This starts a new application login after recovery;
+it cannot reuse an old OAuth state or turn an email token into an application
+session.
+
+The static build adds `/account/register`, `/account/confirm`, `/account/security`,
+`/account/recover` and `/account/verify` rewrites only when v3 is selected. The
+sign-in screen then offers account creation, authenticator setup and password recovery.
+Recovery requests use the provider's normal email API with a fixed verification
+page callback and a non-enumerating success message. A recovery request does
+not create an account or sign the browser into an application.
+
+Configure the Supabase recovery email template from `email/recovery.html`.
+Set its Site URL to the exact authorization-site HTTPS **origin**, without a
+trailing slash, and allow the exact `/account/verify` redirect there. The email
+template puts only `token_hash` and `type=recovery` in the URL fragment. The
+page removes both query and fragment from browser history before loading its
+configuration or contacting the provider; hashes never enter HTTP URLs,
+rendered controller state, local storage or error messages. Malformed,
+duplicate, wrong-purpose or redirect-bearing links fail closed.
+
+An explicit confirmation button consumes the one-time email credential only
+after the user acts. This follows Supabase's
+[email-prefetching guidance](https://supabase.com/docs/guides/auth/auth-email-templates#email-prefetching)
+so loading a link preview does not itself verify the credential. A server-backed
+account check then preserves required MFA. Enrolled TOTP must complete and
+actually reach AAL2 before a password update; unsupported required factors are
+blocked. The page checks account and verified-factor identity again before
+writing, requires matching passwords of 12–1024 characters, and leaves stricter
+provider password policy authoritative. Passwords and codes are cleared from
+inputs on submit and never enter public controller state.
+
+After a successful password change, another account/factor check and local
+provider logout precede the automatic return to the fixed application sign-in
+entry. There is no extra Return button on that successful path. If cleanup
+fails after the write, the page clearly says the password was saved and offers
+a manual fresh sign-in; it does not falsely report an unchanged password.
+Disposal stops stale work from rendering or redirecting and clears the local
+memory session. It cannot undo a request the provider already committed.
+
+This source has synthetic pinned-SDK and Chrome checks, not live email-delivery
+or real password-reset acceptance. Verify the custom SMTP sender, Free-plan
+limits, exact site/redirect configuration, email template and actual delivered
+link before enabling v3 on the deployed site. No provider settings or human
+accounts are changed by a build. Recovery for a lost authenticator still requires
+additional product work.
+
+#### Signup, email confirmation and first authenticator
+
+The signup form sends email/password directly through the pinned SDK with a
+fixed `/account/confirm` destination. Matching passwords must contain 12-1024
+characters; stricter provider rules remain authoritative. A successful request
+shows a generic email notice and never grants organization or merchant access.
+Email confirmation must be enabled: an unexpected signup session is logged out
+and blocked instead of accepted as verified signup.
+
+Configure Supabase's confirmation template from
+`integrations/supabase-auth-ui/email/confirmation.html` and allow the exact
+`/account/confirm` redirect on the same Site URL origin. Its link carries only
+`token_hash` and `type=email` in the fragment. The page scrubs the URL before
+configuration/provider requests, and an explicit confirmation action protects
+the one-time credential against email prefetching. After server-backed verified
+account validation, local provider logout precedes automatic navigation to
+`/account/security`. An email link never grants an application session or
+silently enrolls an authenticator.
+
+Setup requires a fresh password sign-in and another server-backed account/factor
+check. An existing verified TOTP factor is preserved and the browser returns to
+the fixed application sign-in entry without enrolling or replacing anything.
+Unsupported required factors block setup. For accounts without verified factors,
+the user explicitly chooses enrollment; duplicate clicks cannot create multiple
+factors in that page attempt. The provider-generated QR uses a passive SVG data
+image, never SVG markup inserted into the document. Only v3 permits `data:` in
+the CSP image directive. The manual setup key is hidden until requested, and
+both key and QR remain outside public controller state and persistent storage.
+
+Verification targets only the factor created by that setup attempt. Account
+identity and its pending factor are checked before verification; actual AAL2
+and the same verified factor are required afterward. Success clears the setup
+material, logs out the provider session locally and automatically opens a fresh
+application sign-in. Explicit rejected OTP responses permit another code;
+uncertain network or account/factor changes clear setup material and block the
+attempt. Cleanup failure reports the completed change with a manual sign-in
+fallback. No setup path removes a factor. Cancelling or closing the page can
+therefore leave an unverified factor at the provider; repeated abandoned
+attempts can reach provider limits and require operator inspection. These pages
+do not provide factor replacement or lost-authenticator recovery.
+
+Automated Chrome checks at 390px and 1280px exercise the built site with the
+real pinned SDK and entirely synthetic HTTP responses, including signup,
+explicit email confirmation, fresh password setup, passive QR loading, manual
+key visibility, factor verification, local logout and automatic return. This
+does not prove real mail delivery, a scannable provider QR, actual enrollment,
+or acceptance by the installed ElevenID application.
 
 ## Local verification and static build
 
@@ -290,6 +467,6 @@ registered ElevenID and Rifare clients: first-time consent, prior consent,
 denial, wrong or unverified accounts, required TOTP, unsupported MFA, expired
 requests, account switching through a new application authorization, actual
 signed claims, application membership/customer binding, local logout and
-restart behavior. Registration, recovery, enrollment, account management and
-provider-wide assurance remain explicit further work. No hosted qualification
+restart behavior. Real registration, recovery and enrollment journeys, account
+management and provider-wide assurance remain explicit qualification work. No hosted qualification
 is claimed by the synthetic test suite or static build.

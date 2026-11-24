@@ -144,6 +144,8 @@ pub struct Session {
     /// Trusted account resolution, independent of application IDs or OIDC claims.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keycloak_subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_authentication: Option<crate::NativeAuthenticationEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +176,7 @@ impl Session {
             refresh_token: spec.refresh_token,
             oidc_claims: spec.oidc_claims,
             keycloak_subject: None,
+            native_authentication: None,
         }
     }
 
@@ -215,6 +218,8 @@ pub struct PkceState {
     pub nonce: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication_freshness: Option<crate::OidcAuthenticationFreshness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_proof_origin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey_enrollment: Option<PasskeyEnrollmentBinding>,
     pub created_at: DateTime<Utc>,

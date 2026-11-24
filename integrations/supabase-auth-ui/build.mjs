@@ -25,15 +25,20 @@ const result = await Bun.build({
   sourcemap: "none",
 });
 if (!result.success) throw new Error("Static JavaScript build failed");
+const postOrigins = [...new Set(config.clients.filter((client) => client.callbackMode === "native_mfa_post").flatMap((client) => client.redirectUris.map((uri) => new URL(uri).origin)))];
+// no-referrer turns Origin into "null" on cross-origin form POST in Chrome.
+// Send only the public page origin so the receiver can enforce its allowlist.
+const referrerPolicy = postOrigins.length ? "strict-origin" : "no-referrer";
 const csp = [
   "default-src 'none'", "script-src 'self'", "style-src 'self'",
-  `connect-src 'self' ${config.supabaseUrl}`, "img-src 'self'",
-  "font-src 'none'", "base-uri 'none'", "form-action 'none'",
+  `connect-src 'self' ${config.supabaseUrl}`, `img-src 'self'${config.accountLifecycle ? " data:" : ""}`,
+  "font-src 'none'", "base-uri 'none'",
+  `form-action ${postOrigins.join(" ") || "'none'"}`,
   "frame-ancestors 'none'", "object-src 'none'", "upgrade-insecure-requests",
 ].join("; ");
 const headers = `/*
   Content-Security-Policy: ${csp}
-  Referrer-Policy: no-referrer
+  Referrer-Policy: ${referrerPolicy}
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Cache-Control: no-store
@@ -59,13 +64,14 @@ shell = replaceOnce(shell, "</#macro>", "");
 shell = replaceOnce(shell, '<#nested "actions">', "");
 shell = replaceOnce(shell, '<#nested "content">', loading.trim());
 if (/<[#@]|<\/[#@]|\$\{/.test(shell)) throw new Error("Unsupported directive in the shared login layout");
-const html = replaceOnce(page, "<!-- auth-layout -->", shell.trim());
+let html = replaceOnce(page, "<!-- auth-layout -->", shell.trim());
+html = replaceOnce(html, '<meta name="referrer" content="no-referrer">', `<meta name="referrer" content="${referrerPolicy}">`);
 await Promise.all([
   writeFile(resolve(output, "index.html"), html),
   writeFile(resolve(output, "favicon.ico"), await readFile(resolve(theme, "resources/img/favicon.ico"))),
   writeFile(resolve(output, "app.css"), `${sharedCss}\n${formCss}`),
   writeFile(resolve(output, "config.json"), `${JSON.stringify(config, null, 2)}\n`),
   writeFile(resolve(output, "_headers"), headers),
-  writeFile(resolve(output, "_redirects"), "/oauth/consent / 200\n/oauth/consent/ / 200\n"),
+  writeFile(resolve(output, "_redirects"), "/oauth/consent / 200\n/oauth/consent/ / 200\n" + (config.accountLifecycle ? "/account/recover / 200\n/account/verify / 200\n/account/register / 200\n/account/confirm / 200\n/account/security / 200\n" : "")),
 ]);
 console.log("Built static authorization UI in dist/ with exact-origin CSP. No provider requests were made.");

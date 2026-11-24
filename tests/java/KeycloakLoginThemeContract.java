@@ -23,6 +23,9 @@ public final class KeycloakLoginThemeContract {
             Map.entry("update", "login-update-password.ftl"),
             Map.entry("update-aia", "login-update-password.ftl"),
             Map.entry("login", "login.ftl"),
+            Map.entry("login-no-i18n", "login.ftl"),
+            Map.entry("login-missing-locale", "login.ftl"),
+            Map.entry("login-empty-locale", "login.ftl"),
             Map.entry("login-error", "login.ftl"),
             Map.entry("login-error-reset-disabled", "login.ftl"),
             Map.entry("reauth", "login.ftl"),
@@ -93,12 +96,15 @@ public final class KeycloakLoginThemeContract {
                 "existsError", (TemplateMethodModelEx) values -> scenario.startsWith("login-error") || scenario.equals("otp-error"),
                 "getFirstError", (TemplateMethodModelEx) values -> "Invalid sign-in credentials",
                 "get", (TemplateMethodModelEx) values -> "Invalid authenticator code"));
-        data.put("realm", Map.of("internationalizationEnabled", true,
+        data.put("realm", Map.of("internationalizationEnabled", !scenario.equals("login-no-i18n") && !scenario.equals("login-missing-locale"),
                 "displayName", "Synthetic Realm", "password", true,
                 "registrationAllowed", true, "loginWithEmailAllowed", true,
                 "registrationEmailAsUsername", scenario.equals("register-email"),
                 "rememberMe", true, "resetPasswordAllowed", !scenario.equals("login-error-reset-disabled")));
-        data.put("locale", Map.of("currentLanguageTag", language, "supported", List.of()));
+        if (!scenario.equals("login-missing-locale")) {
+            data.put("locale", Map.of("currentLanguageTag",
+                    scenario.equals("login-empty-locale") ? "" : language, "supported", List.of()));
+        }
         data.put("client", Map.of("baseUrl", "/"));
         // Relevant inherited properties from Keycloak 26.8.0's keycloak login theme.
         Map<String, String> properties = new HashMap<>(Map.ofEntries(

@@ -62,6 +62,7 @@ fn configuration(root: &Path) -> Configuration {
             provider_name: None,
             account_url: None,
             recovery_url: None,
+            native_supabase_totp: None,
         },
         workload_ca_file: root.join("ca.pem"),
         ingress_ca_file: root.join("ca.pem"),
