@@ -22,8 +22,6 @@ pub mod installer_application_env;
 pub mod installer_artifacts;
 pub mod installer_bundle;
 #[cfg(target_os = "linux")]
-mod installer_custody_watch;
-#[cfg(target_os = "linux")]
 pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
@@ -39,6 +37,8 @@ mod installer_compose_plugin;
 mod installer_container;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_creation_identity;
+#[cfg(target_os = "linux")]
+mod installer_custody_watch;
 #[cfg(all(target_os = "linux", feature = "installer-development"))]
 pub(crate) mod installer_development_image;
 pub mod installer_doctor;
