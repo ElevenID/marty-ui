@@ -110,6 +110,7 @@ impl PkceStateRepository for MemoryStates {
 
 #[derive(Default)]
 struct FakeOidc {
+    exchanges: Mutex<Vec<OidcCodeExchange>>,
     enrollment_hint: Mutex<Option<String>>,
     authorization: Mutex<Option<OidcAuthorizationRequest>>,
     validated_nonce: Mutex<Option<String>>,
@@ -147,7 +148,8 @@ impl OidcProvider for FakeOidc {
         ))
     }
 
-    async fn exchange_code(&self, _request: &OidcCodeExchange) -> Result<OidcTokenSet, PortError> {
+    async fn exchange_code(&self, request: &OidcCodeExchange) -> Result<OidcTokenSet, PortError> {
+        self.exchanges.lock().unwrap().push(request.clone());
         Ok(OidcTokenSet {
             access_token: "access-token".to_owned(),
             id_token: Some("id-token".to_owned()),
@@ -364,6 +366,69 @@ async fn login_and_callback_bind_nonce_consume_state_and_persist_only_validated_
         .await
         .expect_err("state replay must fail");
     assert!(matches!(replay, AuthApplicationError::InvalidState));
+}
+
+#[tokio::test]
+async fn fixed_api_callback_and_console_return_survive_the_real_pkce_application_flow() {
+    let harness = harness();
+    let console_return = "https://console.elevenid.example/console/profile?tab=security";
+    let callback = "https://api.elevenid.example/v1/auth/callback";
+    let initiated = harness
+        .app
+        .initiate_login(
+            InitiateLoginCommand {
+                redirect_uri: Some(console_return.into()),
+                oidc_redirect_uri: Some(callback.into()),
+                ui_locales: None,
+                reauthenticate: false,
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    let stored = harness
+        .states
+        .0
+        .lock()
+        .unwrap()
+        .get(&initiated.state)
+        .cloned()
+        .unwrap();
+    assert_eq!(stored.redirect_uri, console_return);
+    assert_eq!(stored.oidc_redirect_uri.as_deref(), Some(callback));
+    assert_eq!(
+        harness
+            .oidc
+            .authorization
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .redirect_uri
+            .as_deref(),
+        Some(callback)
+    );
+    let command = HandleCallbackCommand {
+        code: "synthetic-code".into(),
+        state: initiated.state.clone(),
+        ip_address: None,
+        user_agent: None,
+    };
+    let result = harness
+        .app
+        .handle_callback(command.clone(), now())
+        .await
+        .unwrap();
+    assert_eq!(result.redirect_uri, console_return);
+    let exchanges = harness.oidc.exchanges.lock().unwrap().clone();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0].redirect_uri.as_deref(), Some(callback));
+    assert_eq!(exchanges[0].code_verifier, stored.code_verifier);
+    assert!(matches!(
+        harness.app.handle_callback(command, now()).await,
+        Err(AuthApplicationError::InvalidState)
+    ));
+    assert_eq!(harness.oidc.exchanges.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

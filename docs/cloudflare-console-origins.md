@@ -41,6 +41,12 @@ Pages headers must permit the intended API connection and logout form target.
 Browser credentials stay in host-only HttpOnly cookies at the API, not in the
 static build or browser storage.
 
+Keycloak email enrollment for credential-only sessions retains its existing
+same-origin email-return restriction. A split-origin console does not authorize
+additional provider email destinations. Qualify those client allowlists and the
+native account-enrollment path separately; a router-port fixture is not proof
+of provider enrollment or email delivery.
+
 This origin contract alone does not qualify a deployment. The installer still
 needs its explicit external-console hosting model and omission of the local UI
 container. Complete the Pages build/routes/CSP/custom-domain and gateway CORS
