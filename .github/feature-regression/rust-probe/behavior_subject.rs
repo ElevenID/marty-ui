@@ -489,7 +489,11 @@ async fn document() -> String {
         ("observations", json!(observed)),
         ("schema", json!("elevenid.behavior-subject-output/v2")),
     ]);
-    serde_json::to_string(&root).expect("probe output is serializable")
+    // Production dependencies may enable serde_json's preserve_order feature.
+    // Canonical output must sort nested result objects as well as the root.
+    let mut document = serde_json::to_value(root).expect("probe output is JSON");
+    document.sort_all_objects();
+    serde_json::to_string(&document).expect("probe output is serializable")
 }
 
 // These library boundaries have no HTTP status or browser message. Record that

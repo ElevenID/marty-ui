@@ -65,6 +65,21 @@ digests and observations in the private deployment audit.
    no role creation, database creation, superuser or RLS-bypass authority,
    no privileged memberships, and no write privileges on managed `auth` or
    `storage` objects. Compare to the pre-migration object inventory.
+   If `flow_service` was pre-created, require the intended migration role to
+   own it; `USAGE, CREATE` grants alone do not satisfy Flow's lock-helper
+   ownership invariant. Check from the application's SQL session:
+
+   ```sql
+   SELECT nspname, pg_get_userbyid(nspowner) AS schema_owner,
+          nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+            AS migration_role_owns_schema
+   FROM pg_namespace WHERE nspname = 'flow_service';
+   ```
+
+   No row means the native migration must be able to create the schema.
+   A false ownership result requires administrator reconciliation before
+   migration, preserving existing objects and grants. See the
+   [external PostgreSQL provisioning instructions](installer-external-postgres.md#supabase-setup-and-connection-budget).
 6. Prove certificate and hostname verification from the actual migration and
    workload images. A successful host-side `psql` probe only covers the host
    client. Hold migration until the admitted installer supplies the required
