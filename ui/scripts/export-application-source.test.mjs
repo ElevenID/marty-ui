@@ -172,9 +172,17 @@ test('source JSON rejects escaped duplicate keys, non-UTF-8, excessive depth and
 test('historical source-map selection preserves its exact inventory and rejects altered or unknown maps', async (t) => {
   const { root } = sourceFixture(t);
   const prepared = await planApplicationSourceExport({ repositoryRoot: root });
-  const legacyBytes = readFileSync(path.join(ROOT, 'contracts/application-source-export-history/initial-v1.json'));
+  const originalInputs = new Map([...prepared.manifest.files, ...prepared.manifest.omission_policy.inputs]
+    .map((row) => [row.source, row]));
+  for (const accepted of [
+    { path: 'initial-v1.json', files: 575, assertions: 296,
+      sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad' },
+    { path: 'before-static-auth-origins-v1.json', files: 581, assertions: 321,
+      sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41' },
+  ]) {
+  const legacyBytes = readFileSync(path.join(ROOT, 'contracts/application-source-export-history', accepted.path));
   const legacyContract = parseApplicationSourceJson(legacyBytes);
-  assert.equal(digest(legacyBytes), 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad');
+  assert.equal(digest(legacyBytes), accepted.sha256);
   // A structural fixture tests archived map selection. It makes no claim that
   // this current-source synthetic projection was executed or released earlier.
   const historical = structuredClone(prepared.manifest);
@@ -188,10 +196,18 @@ test('historical source-map selection preserves its exact inventory and rejects 
   historical.source_inventory_sha256 = digest(canonical(historical.files));
   historical.test_profile = legacyContract.test_profile;
   historical.omission_policy.categories = legacyContract.omission_categories;
+  // A test promoted into today's selected suite was an omission in older
+  // accepted maps. Reconstruct that map's full inventory from committed
+  // records instead of carrying today's smaller omission list into it.
+  historical.omission_policy.inputs = legacyContract.omitted.map((wanted) => {
+    const existing = originalInputs.get(wanted.source); assert.ok(existing, wanted.source);
+    const { bytes, sha256, mode, git_mode, blob_oid } = existing;
+    return { path: wanted.source, ...wanted, bytes, sha256, mode, git_mode, blob_oid };
+  });
   historical.retained_inactive_inputs = legacyContract.retained_inactive_inputs;
   validateApplicationSourcePackageManifest(historical);
-  assert.equal(historical.files.length, 575);
-  assert.equal(applicationSourceTestPolicy(historical).assertions, 296);
+  assert.equal(historical.files.length, accepted.files);
+  assert.equal(applicationSourceTestPolicy(historical).assertions, accepted.assertions);
   const missing = structuredClone(historical); missing.files.pop();
   missing.source_inventory_sha256 = digest(canonical(missing.files));
   assert.throws(() => validateApplicationSourcePackageManifest(missing), /inventory is incomplete/);
@@ -199,6 +215,7 @@ test('historical source-map selection preserves its exact inventory and rejects 
   assert.throws(() => validateApplicationSourcePackageManifest(unknown), /unapproved source contract/);
   const arbitrary = structuredClone(legacyContract); arbitrary.inputs.pop();
   assert.throws(() => validateApplicationSourcePackageManifest(historical, { contract: arbitrary }), /not an approved/);
+  }
 });
 
 test('source exporter CLI resolves its closure import before bounded baseline refusal', (t) => {
