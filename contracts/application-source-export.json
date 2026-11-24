@@ -27,6 +27,13 @@
       ]
     },
     {
+      "source": "docs/restructuring/application-package-README.md",
+      "path": "README.md",
+      "roles": [
+        "package-documentation"
+      ]
+    },
+    {
       "source": "contracts/organization-domain-behavior.json",
       "path": "contracts/organization-domain-behavior.json",
       "roles": [
@@ -45,13 +52,6 @@
       "path": "contracts/website-source-ownership.json",
       "roles": [
         "shared-contract"
-      ]
-    },
-    {
-      "source": "docs/restructuring/application-package-README.md",
-      "path": "README.md",
-      "roles": [
-        "package-documentation"
       ]
     },
     {
@@ -111,17 +111,17 @@
       ]
     },
     {
-      "source": "ui/profiles/application/package-lock.json",
-      "path": "ui/profiles/application/package-lock.json",
-      "roles": [
-        "application-profile-provenance-support"
-      ]
-    },
-    {
       "source": "ui/profiles/application/package.json",
       "path": "ui/package.json",
       "roles": [
         "application-dependency-input"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package-lock.json",
+      "path": "ui/profiles/application/package-lock.json",
+      "roles": [
+        "application-profile-provenance-support"
       ]
     },
     {
