@@ -27,7 +27,7 @@ vi.mock('../authApiOrigin', async (importOriginal) => ({
   ...await importOriginal<typeof import('../authApiOrigin')>(),
   navigateToAuthApi: vi.fn(),
 }))
-vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }))
+vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn(() => true) }))
 import { mockUsers, mockOrganization } from '@test/mocks/fixtures'
 
 describe('authApi', () => {
@@ -53,6 +53,14 @@ describe('authApi', () => {
     server.use(http.post('/v1/auth/passkeys/enroll', () => HttpResponse.json({ detail: 'Sign in again' }, { status: 409 })))
     await expect(startPasskeyEnrollment()).rejects.toThrow('Sign in again')
     expect(redirectBrowser).not.toHaveBeenCalled()
+  })
+
+  it('reports refused legacy provider navigation instead of silently succeeding', async () => {
+    server.use(http.post('/v1/auth/passkeys/enroll', () => HttpResponse.json({
+      authorization_url: 'https://identity.example/auth?kc_action=webauthn-register-passwordless',
+    })))
+    vi.mocked(redirectBrowser).mockReturnValueOnce(false)
+    await expect(startPasskeyEnrollment()).rejects.toThrow('could not open the configured sign-in provider')
   })
 
   it('reports a native enrollment email without navigating or exposing its link', async () => {
@@ -323,6 +331,7 @@ describe('authApi', () => {
       await expect(startPasskeyEnrollment()).resolves.toEqual({ email_sent: true })
       expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/passkeys/enroll`, expect.objectContaining({
         method: 'POST', credentials: 'include',
+        redirect: 'error',
         body: JSON.stringify({ redirect_uri: new URL('/console/applicant/profile', window.location.href).href }),
       }))
     })

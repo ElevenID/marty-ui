@@ -29,3 +29,26 @@ export function navigateToAuthApi(destination, apiOrigin, location = window.loca
   }
   location.assign(target.href);
 }
+
+/** Only the enrollment response from the configured Auth API uses this handoff.
+ * A separately hosted Keycloak needs an explicitly configured public origin.
+ * This does not broaden application links or general browser navigation.
+ */
+export function navigateToPasskeyProvider(destination, apiOrigin, providerOrigin, location = window.location) {
+  const invalid = () => Object.assign(new Error('Passkey enrollment returned an unsupported provider destination.'),
+    { code: 'AUTH_CONFIGURATION' });
+  const api = new URL(resolveAuthBaseUrl(apiOrigin), location.href);
+  const provider = providerOrigin === undefined || providerOrigin === ''
+    ? api : new URL(resolveAuthBaseUrl(providerOrigin), location.href);
+  if (typeof destination !== 'string' || destination.trim() !== destination
+    || /[\u0000-\u001f\u007f\\]/.test(destination)) throw invalid();
+  let target;
+  try { target = new URL(destination); } catch { throw invalid(); }
+  if (target.origin !== provider.origin || target.protocol !== provider.protocol
+    || target.username || target.password || target.hash
+    || target.searchParams.getAll('kc_action').length !== 1
+    || target.searchParams.get('kc_action') !== 'webauthn-register-passwordless'
+    || target.searchParams.getAll('redirect_uri').length !== 1
+    || target.searchParams.get('redirect_uri') !== `${api.origin}/v1/auth/callback`) throw invalid();
+  location.assign(target.href);
+}

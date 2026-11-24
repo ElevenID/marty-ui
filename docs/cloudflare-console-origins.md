@@ -48,6 +48,14 @@ additional provider email destinations. Qualify those client allowlists and the
 native account-enrollment path separately; a router-port fixture is not proof
 of provider enrollment or email delivery.
 
+For OIDC-based managed Keycloak passkey enrollment, the static build permits
+only the API origin by default. If Keycloak uses a separate host, explicitly
+set the public `VITE_AUTH_PROVIDER_ORIGIN` to that HTTPS origin. The dedicated
+enrollment handoff requires the passwordless-enrollment action and exact API
+callback in the provider URL. It grants no authority to general application
+links. Unconfigured provider hosts are refused visibly. External-provider
+capabilities and native email enrollment retain their separate contracts.
+
 ## Installer selection
 
 For a fresh signed installation, extend the existing hosting input with these

@@ -8,7 +8,7 @@ import { LOGOUT_STARTED_EVENT } from './authEvents';
 import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
 import { redirectBrowser } from '../application/routing/appHandoff';
 import { createProfilePictureBody } from './profilePicturePayload';
-import { navigateToAuthApi, resolveAuthBaseUrl } from './authApiOrigin';
+import { navigateToAuthApi, navigateToPasskeyProvider, resolveAuthBaseUrl } from './authApiOrigin';
 
 // Static consoles call the API directly; self-hosted builds keep relative URLs.
 const authUrl = (path) => `${resolveAuthBaseUrl(import.meta.env.VITE_API_URL)}${path}`;
@@ -227,6 +227,7 @@ export async function startPasskeyEnrollment(redirectUri = '/console/applicant/p
     method: 'POST',
     credentials: 'include',
     cache: 'no-store',
+    redirect: 'error',
     headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ redirect_uri: browserReturnUri(redirectUri) }),
   });
@@ -237,7 +238,12 @@ export async function startPasskeyEnrollment(redirectUri = '/console/applicant/p
   if (!response.ok || typeof result.authorization_url !== 'string') {
     throw new Error(result.detail || 'Passkey enrollment could not be started. Please sign in again and retry.');
   }
-  redirectBrowser(result.authorization_url, { replace: false });
+  if (import.meta.env.VITE_API_URL) {
+    navigateToPasskeyProvider(result.authorization_url, import.meta.env.VITE_API_URL,
+      import.meta.env.VITE_AUTH_PROVIDER_ORIGIN);
+  } else if (!redirectBrowser(result.authorization_url, { replace: false })) {
+    throw new Error('Passkey enrollment could not open the configured sign-in provider.');
+  }
 }
 
 export default {
