@@ -104,6 +104,46 @@ This is not a blanket CORS grant for every console SDK operation.
 
 ## Deployment acceptance
 
+### Prepare the static Pages directory
+
+Build the application with `MARTY_UI_SHA` set to the exact reviewed source commit
+and `VITE_API_URL` set to the selected HTTPS API origin. Run the normal application
+build and resource checks first. From the repository root, package that output:
+
+```sh
+python tools/cloudflare/prepare_console_pages.py \
+  --source ui/dist-application --output /private/qualification/console-pages-candidate \
+  --source-revision FULL_REVIEWED_COMMIT_SHA \
+  --console-origin https://console.elevenid.example \
+  --api-origin https://api.elevenid.example
+```
+
+Replace the illustrative domains and commit with the actual deployment inputs;
+the destination must be new and outside the build directory. The helper copies
+the build without changing it, checks its source marker and both HTML entries,
+and creates static Pages rules. Console deep links use `console/index.html`;
+declared public browser routes use `index.html`. A custom `404.html` disables
+the implicit global SPA fallback, so API, missing asset and locale paths are not
+rewritten into the application shell. Keep the explicit route list aligned with
+the application routers; its test checks the current absolute route declarations.
+
+The generated CSP preserves the production script/WASM, font, analytics and
+frame sources and adds the exact API connection and logout-form origin. Static
+responses use no-store headers while this deployment is being qualified. No
+Worker, Pages Function, API proxy or credential is added. Upload the complete
+prepared directory through the selected free Pages deployment path.
+
+The generated `pages-deployment.json` records selected origins and file hashes.
+Matching a build's source marker does not prove source custody or the API origin
+compiled into JavaScript. The report explicitly leaves compiled-origin,
+publication and provider-journey acceptance false. Validate those against the
+actual deployed browser and Gateway before acceptance. A synthetic preparation
+test is not evidence of a live Pages deployment.
+
+Cloudflare documents the static [`_headers` format](https://developers.cloudflare.com/pages/configuration/headers/)
+and [`_redirects` proxy rules](https://developers.cloudflare.com/pages/configuration/redirects/).
+These rules apply to static assets; Functions require their own response handling.
+
 This source profile does not qualify a deployment. Complete native installer
 and target Compose-version qualification, Pages build/routes/CSP/custom-domain
 checks, actual Gateway/browser preflight and operation checks, native
