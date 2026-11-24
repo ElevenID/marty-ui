@@ -30,6 +30,25 @@ try {
     createClient: createProviderClient,
     onChange: render,
     navigate: (url) => window.location.replace(url),
+    postCallback: ({ action, fields }) => {
+      // Top-level POST lets Auth set its application cookie without CORS or
+      // third-party cookies. Tokens never enter a URL or rendered UI state.
+      const form = document.createElement("form");
+      form.method = "post";
+      form.action = action;
+      form.hidden = true;
+      form.autocomplete = "off";
+      for (const [name, value] of Object.entries(fields)) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.append(input);
+      }
+      document.body.append(form);
+      try { HTMLFormElement.prototype.submit.call(form); }
+      finally { form.remove(); }
+    },
   });
   render(controller.state);
 } catch (error) {

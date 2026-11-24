@@ -128,7 +128,7 @@ unless it is the real application's callback.
 
 | Field | Accepted value |
 | --- | --- |
-| `schema` | Exactly `elevenid.supabase-auth-ui/v1`. |
+| `schema` | `elevenid.supabase-auth-ui/v1`, or the explicit native-proof transport schema `elevenid.supabase-auth-ui/v2` described below. |
 | `supabaseUrl` | One exact canonical HTTPS project origin, without a path, trailing slash, credentials, custom port, query or fragment. A custom Auth domain may be used if it is the actual selected project origin. |
 | `publishableKey` | Only a modern `sb_publishable_` key. Secret keys, service-role keys, legacy JWT keys and management credentials are rejected. |
 | `brand` | A bounded plain-text site label. |
@@ -144,6 +144,82 @@ The publishable key is intentionally available to every browser. Supabase
 database permissions and RLS remain a separate operator responsibility. OAuth
 client secrets stay in their respective server-side applications; this page
 must never receive them.
+
+### Native MFA proof transport (release qualification pending)
+
+The optional `elevenid.supabase-auth-ui/v2` schema requires a `callbackMode`
+on **every** client: either `redirect` or `native_mfa_post`. Version 1 rejects
+this field and retains its existing redirect-only behavior. Enable the POST
+mode only for a first-party application whose deployed Auth callback supports
+the protocol. The Auth source implements this POST protocol behind the explicit
+runtime selection below; its generic GET callback cannot supply native proof.
+Signed installer selection and installed end-to-end qualification must also be
+complete before deploying a configuration that enables this browser mode.
+
+For `native_mfa_post`, an explicit approval or Continue action requires a TOTP
+challenge completed in this page's current attempt. Password-only accounts are
+blocked before approval. After checking the current session and account again,
+the page submits a top-level, URL-encoded POST to the exact configured callback
+without a query string. Its three fields are `code`, `state`, and
+`native_access_token`. The token is read from the memory-only SDK session; it
+does not enter the URL, public controller state, local storage or error text.
+A transient hidden form carries the body and is removed after submission.
+Denial uses the existing error redirect and never reads or sends the token.
+Account switching or disposal during asynchronous session retrieval prevents
+submission. The generated CSP permits forms only to the origins of clients
+explicitly configured for POST; redirect-only builds retain `form-action 'none'`.
+POST builds use `strict-origin` in both the HTTP referrer policy and HTML meta
+tag. This sends the public login-page origin, with no path or query, and
+preserves a verifiable `Origin` on the cross-origin form submission. The
+receiver must require that exact configured origin and reject `null`, absent
+or unexpected origins. Redirect-only builds retain `no-referrer`.
+
+The browser checks transport shape, not cryptographic assurance. The receiving
+Auth service must independently verify the native token's signature, fixed
+issuer/audience, subject, expiry, AAL2, signed password and TOTP event times,
+and freshness against its one-time login state. It must also perform the
+normal OAuth code exchange and verify client binding, PKCE, nonce and signed
+verified identity, requiring both identities to match before provisioning or
+creating an application session. Native assurance must be retained as separate
+typed evidence rather than inserted into the provider's ID-token claims.
+Provider-session revocation and application logout need their own qualified
+implementation. Configuring this browser mode alone satisfies none of those
+server requirements.
+
+The Auth runtime selection consists of `OIDC_NATIVE_PROOF_MODE=supabase_totp`,
+`SUPABASE_AUTH_UI_ORIGIN` (one exact HTTPS origin, without a trailing slash), and
+`SUPABASE_PUBLISHABLE_KEY` (the same public project key used by the companion).
+It requires external OIDC mode, the exact project `/auth/v1` issuer, a UUID
+client ID, only ES256 signatures, and `OIDC_MAX_AGE_SECONDS=0`. The application
+cookie must use Lax or secure None SameSite policy for the cross-origin POST
+and its subsequent redirect. The signed installer's fresh provider-selection
+input exposes these through its explicit
+[`native_supabase_totp` block](installer-external-oidc.md#supabase-native-password-and-totp-proof).
+Do not bypass authenticated configuration ownership by editing a retained
+installation. Source support does not establish that an installed release has
+qualified this protocol.
+
+Auth snapshots the native-proof origin in one-time PKCE state. A GET callback,
+changed provider policy or mismatched POST origin fails before code exchange.
+The POST body is limited to 24 KiB, has exactly the three named fields and has
+no query string. Normal OAuth signature, audience, client, nonce, verified
+email and request-freshness checks remain in place. Native proof uses the same
+trusted JWKS, an exact `authenticated` audience, AAL2, matching subject/email,
+and actual signed password/TOTP events no earlier than the request start
+(with five seconds of clock tolerance). Refresh issuance cannot make old
+authentication events fresh. A shared atomic cache marker reserves each native
+provider session for one use, including concurrent callbacks and other states.
+
+After both proofs validate, Auth revokes this user's OAuth grant for its own
+configured client, then attempts local native-session logout. Both must succeed
+before provisioning or saving an application session. Grant revocation covers
+all provider sessions for that user/client and requires consent again on a
+later login; it does not delete other ElevenID application sessions. Bootstrap
+bearer and refresh tokens are not stored in the application session. Provider
+JWTs remain cryptographically valid until expiration, as with ordinary Supabase
+logout. The application session retains separate typed authentication-event
+evidence and the unchanged signed ID claims. Internal step-up checks use the
+actual earlier authentication event, never the OAuth exchange timestamp.
 
 ## Local verification and static build
 

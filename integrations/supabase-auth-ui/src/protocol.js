@@ -55,7 +55,8 @@ function callback(value, code) {
 
 export function validateConfig(input) {
   closed(input, ["schema", "supabaseUrl", "publishableKey", "brand", "clients"], "configuration");
-  if (input.schema !== "elevenid.supabase-auth-ui/v1") fail("configuration");
+  if (!["elevenid.supabase-auth-ui/v1", "elevenid.supabase-auth-ui/v2"].includes(input.schema)) fail("configuration");
+  const nativeModes = input.schema === "elevenid.supabase-auth-ui/v2";
   const project = httpsUrl(input.supabaseUrl, "configuration");
   if (input.supabaseUrl !== project.origin) fail("configuration");
   if (typeof input.publishableKey !== "string" || !/^sb_publishable_[A-Za-z0-9_-]{16,256}$/.test(input.publishableKey)) fail("configuration");
@@ -63,7 +64,8 @@ export function validateConfig(input) {
   const ids = new Set();
   const callbacks = new Set();
   const clients = input.clients.map((client) => {
-    closed(client, ["id", "label", "redirectUris"], "configuration");
+    closed(client, nativeModes ? ["id", "label", "redirectUris", "callbackMode"] : ["id", "label", "redirectUris"], "configuration");
+    if (nativeModes && !["redirect", "native_mfa_post"].includes(client.callbackMode)) fail("configuration");
     if (!identifier(client.id) || ids.has(client.id) || !text(client.label, 100) || !Array.isArray(client.redirectUris) || client.redirectUris.length < 1 || client.redirectUris.length > 8) fail("configuration");
     ids.add(client.id);
     const redirectUris = client.redirectUris.map((uri) => {
@@ -74,7 +76,7 @@ export function validateConfig(input) {
       callbacks.add(uri);
       return uri;
     });
-    return Object.freeze({ id: client.id, label: client.label, redirectUris: Object.freeze(redirectUris) });
+    return Object.freeze({ id: client.id, label: client.label, redirectUris: Object.freeze(redirectUris), ...(nativeModes ? { callbackMode: client.callbackMode } : {}) });
   });
   return Object.freeze({ schema: input.schema, supabaseUrl: input.supabaseUrl, publishableKey: input.publishableKey, brand: input.brand, clients: Object.freeze(clients) });
 }
@@ -184,4 +186,17 @@ export function authorizationResponse(data, config, authorizationId, user) {
 
 export function safeError(error, fallback) {
   return error instanceof UiError ? error.code : fallback;
+}
+
+// This checks transport shape only. Auth must independently verify the native
+// signature, issuer, audience, subject, actual MFA events and request freshness,
+// alongside its normal OAuth code/state/nonce/PKCE and client checks.
+export function nativeCallbackPost(redirect, config, accessToken) {
+  const validated = validateRedirect(redirect.url, config, "approve", redirect);
+  const client = config.clients.find((entry) => entry.id === validated.clientId);
+  if (client?.callbackMode !== "native_mfa_post" || typeof accessToken !== "string" || accessToken.length > 16_384 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) fail("session");
+  const values = new URL(validated.url).searchParams;
+  const state = values.get("state");
+  if (!text(state, 2048)) fail("redirect");
+  return Object.freeze({ action: validated.redirectUri, fields: Object.freeze({ code: values.get("code"), state, native_access_token: accessToken }) });
 }
