@@ -76,6 +76,9 @@ pub async fn migrate_flow_schema_for_organization(
     sqlx::raw_sql(include_str!("../migrations/0007_delegated_use_locks.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0008_catalog_search_path.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
@@ -192,6 +195,13 @@ async fn validate_connection(
     if !delegated_version {
         return Err(incompatible("Delegated-use retention migration is missing"));
     }
+    let catalog_path_version: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM flow_service.rust_schema_versions WHERE version='rust_flow_catalog_search_path_0008')")
+        .fetch_one(&mut *connection).await?;
+    if !catalog_path_version {
+        return Err(incompatible(
+            "Flow catalog search-path migration is missing",
+        ));
+    }
     let delegated_guards: i64 = sqlx::query_scalar(
         "WITH expected(table_name,trigger_name,function_name,trigger_type,deferred) AS (
            SELECT name,name||'_immutable','reject_delegated_use_mutation',27,false FROM unnest(ARRAY[
@@ -299,7 +309,8 @@ async fn validate_connection(
            WHERE namespace.nspname='flow_service'
              AND procedure.proname='physical_start_acl_ready'
              AND procedure.pronargs=0 AND procedure.prorettype='boolean'::regtype
-             AND language.lanname='sql' AND NOT procedure.prosecdef)",
+             AND language.lanname='sql' AND NOT procedure.prosecdef
+             AND procedure.proconfig=ARRAY['search_path=pg_catalog']::text[])",
     )
     .fetch_one(&mut *connection)
     .await?;
