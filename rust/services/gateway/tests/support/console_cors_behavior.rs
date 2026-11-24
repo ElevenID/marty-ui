@@ -615,7 +615,7 @@ async fn console_catalog_ambiguous_origins_cannot_inherit_an_inner_cors_grant() 
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        if *values == [CONSOLE_ORIGIN] {
+        if values.len() == 1 && values[0] == CONSOLE_ORIGIN {
             assert_eq!(
                 response.headers()["access-control-allow-origin"],
                 CONSOLE_ORIGIN
