@@ -174,7 +174,14 @@ export class AccountSetupController {
       const before = await this.snapshot(), id = this.#enrollment.id;
       if (before.all.some((factor) => factor.status === "verified") || !before.all.some((factor) => factor.id === id && factor.factor_type === "totp" && factor.status === "unverified")) throw new Error("changed");
       const result = await this.client.auth.mfa.challengeAndVerify({ factorId: id, code }); code = null; this.check();
-      if (result.error) { retryAllowed = true; throw new Error("code"); }
+      if (result.error) {
+        // Only an explicit provider OTP rejection establishes a safe retry.
+        // A lost verification response may follow a committed enrollment.
+        retryAllowed = result.error.name === "AuthApiError"
+          && result.error.code === "mfa_verification_failed"
+          && [400, 422].includes(result.error.status);
+        throw new Error(retryAllowed ? "code" : "changed");
+      }
       this.#enrollment = null;
       this.emit({ phase: "checking", busy: true, error: null });
       const after = await this.snapshot();

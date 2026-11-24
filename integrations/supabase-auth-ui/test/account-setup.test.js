@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AccountSetupController, consumeSetupRequest } from "../src/account-setup.js";
-import { deferred, factor, fakeClient, ok, publicConfig } from "./fixtures.js";
+import { createProviderClient } from "../src/sdk.js";
+import { deferred, factor, fakeClient, ok, publicConfig, user } from "./fixtures.js";
 
 const ORIGIN = "https://authorization.example.invalid";
 const SIGN_IN = "https://elevenid.example.invalid/v1/auth/login";
@@ -37,6 +38,60 @@ async function enroll(h) {
   await h.controller.signIn("operator@example.invalid", PASSWORD);
   await h.controller.beginEnrollment();
 }
+
+test("pinned SDK response loss after provider verification clears enrollment and never retries or removes the factor", async () => {
+  const account = { ...user(), aud: "authenticated", created_at: "2026-01-01T00:00:00Z",
+    app_metadata: {}, user_metadata: {}, factors: [] };
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ sub: account.id,
+    exp: Math.floor(Date.now()/1000)+3600, aal: "aal1", amr: [{ method: "password", timestamp: Math.floor(Date.now()/1000) }] })}.${Buffer.from("synthetic-signature").toString("base64url")}`;
+  const calls = [], navigations = [], states = [];
+  let committed = false, returnedError;
+  const controller = new AccountSetupController({ config: config(), origin: ORIGIN, mode: "security",
+    createClient: (selected, signal) => {
+      const client = createProviderClient(selected, signal, async (input, options) => {
+        const path = new URL(String(input)).pathname;
+        calls.push({ path, method: options.method });
+        if (path === "/auth/v1/token") return Response.json({ access_token: token,
+          refresh_token: "synthetic-refresh", token_type: "bearer", expires_in: 3600, user: account });
+        if (path === "/auth/v1/user") return Response.json(account);
+        if (path === "/auth/v1/factors") {
+          account.factors.push({ ...factor(), status: "unverified" });
+          return Response.json({ id: factor().id, type: "totp", totp: { secret: SECRET,
+            qr_code: 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg"/>' } });
+        }
+        if (path.endsWith("/challenge")) return Response.json({ id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          type: "totp", expires_at: Math.floor(Date.now()/1000)+300 });
+        if (path.endsWith("/verify")) {
+          account.factors[0].status = "verified"; committed = true;
+          throw new TypeError("Synthetic lost verification response");
+        }
+        throw new Error("Unexpected synthetic provider request");
+      });
+      const verify = client.auth.mfa.challengeAndVerify;
+      client.auth.mfa.challengeAndVerify = async (args) => {
+        const result = await verify(args); returnedError = result.error; return result;
+      };
+      return client;
+    }, onChange: (state) => states.push(state), navigate: (url) => navigations.push(url) });
+  try {
+    await controller.signIn("operator@example.invalid", PASSWORD);
+    await controller.beginEnrollment();
+    expect(controller.state.phase).toBe("enroll");
+    controller.toggleSetupKey(); expect(controller.enrollmentDisplay().secret).toBe(SECRET);
+    await controller.verifyEnrollment("123456");
+    expect(committed).toBe(true);
+    expect(returnedError.name).toBe("AuthRetryableFetchError");
+    expect(controller.state.phase).toBe("blocked");
+    expect(controller.enrollmentDisplay()).toBeNull();
+    await controller.verifyEnrollment("654321");
+    expect(calls.filter((call) => call.path.endsWith("/verify"))).toHaveLength(1);
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(account.factors[0].status).toBe("verified");
+    expect(navigations).toEqual([]);
+    expect(JSON.stringify(states)).not.toContain(SECRET);
+  } finally { controller.dispose(); }
+});
 
 describe("email setup boundaries", () => {
   test("scrubs a confirmation credential before returning it, and rejects cross-purpose links", () => {
@@ -151,12 +206,27 @@ describe("initial authenticator enrollment", () => {
     expect(h.fake.count("signOut")).toBe(1);
   });
   test("explicit rejected OTP permits retry without exposing the manual key", async () => {
-    const h = setup({ verify: () => ({ error: new Error("wrong OTP") }) }); await enroll(h);
+    const h = setup({ verify: () => ({ error: { name: "AuthApiError", code: "mfa_verification_failed", status: 422 } }) }); await enroll(h);
     h.controller.toggleSetupKey(); await h.controller.verifyEnrollment("123456");
     expect(h.controller.state.phase).toBe("enroll");
     expect(h.controller.state.error).toBe("code");
     expect(h.controller.enrollmentDisplay().secret).toBeNull();
     expect(h.navigations).toEqual([]);
+  });
+  test.each([
+    { name: "AuthRetryableFetchError", status: 0 },
+    { name: "AuthApiError", code: "unexpected_failure", status: 500 },
+    { name: "AuthApiError", code: "mfa_verification_failed", status: 503 },
+    { name: "AuthApiError", code: "unknown", status: 422 },
+    new Error("private-provider-detail"),
+  ])("returned uncertain errors close enrollment: %j", async (error) => {
+    const h = setup({ verify: () => ({ error }) }); await enroll(h);
+    h.controller.toggleSetupKey(); await h.controller.verifyEnrollment("123456");
+    expect(h.controller.state.phase).toBe("blocked");
+    expect(h.controller.enrollmentDisplay()).toBeNull();
+    expect(h.navigations).toEqual([]);
+    expect(JSON.stringify(h.states)).not.toContain("private-provider-detail");
+    expect(h.fake.model.factors).toHaveLength(1);
   });
   test.each(["no-aal2", "wrong-factor", "account-change", "network"])("uncertain or false success closes enrollment: %s", async (kind) => {
     const h = setup({ verify: () => {
