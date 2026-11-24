@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { resolveApiUrl } from '../services/authApiOrigin';
 import { Box, Typography, Paper, Grid, Card, CardContent, Divider, Chip, Button, Collapse, Alert, AlertTitle, Stack, Link as MuiLink } from '@mui/material';
 import { SEOHead } from './seo';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -30,7 +31,7 @@ function ApiDocumentation() {
     ];
     const openApiCandidates = [
       import.meta.env.VITE_OPENAPI_URL,
-      '/openapi.json',
+      resolveApiUrl('/openapi.json', import.meta.env.VITE_API_URL),
     ].filter(Boolean);
 
     const isOpenApiReachable = async (url) => {

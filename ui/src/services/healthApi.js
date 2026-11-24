@@ -1,3 +1,5 @@
+import { resolveApiUrl } from './authApiOrigin';
+
 /**
  * Health API Service
  * 
@@ -25,7 +27,7 @@ export async function getSystemHealth({ signal } = {}) {
   try {
     // The liveness endpoint only describes the gateway process. Readiness
     // includes the individual services that the gateway actually checked.
-    const response = await fetch('/health/ready', {
+    const response = await fetch(resolveApiUrl('/health/ready', import.meta.env.VITE_API_URL), {
       method: 'GET',
       headers: {
         'Accept': 'application/json',

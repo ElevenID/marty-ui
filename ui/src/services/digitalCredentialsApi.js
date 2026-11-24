@@ -1,9 +1,18 @@
+import { resolveApiBaseUrl } from './authApiOrigin';
+
 export const DEFAULT_DC_API_PROTOCOL = 'openid4vp-v1-signed';
 
 function resolveApiUrl(path) {
   if (!path) return '';
   if (/^https?:\/\//i.test(path)) return path;
   return `${import.meta.env.VITE_API_URL || ''}${path}`;
+}
+
+function requestCredentials(path) {
+  const api = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
+  if (!api) return 'same-origin';
+  // External wallet/provider request URLs retain their existing credential mode.
+  return new URL(resolveApiUrl(path), api).origin === api ? 'include' : 'same-origin';
 }
 
 async function protocolAllowed(protocol) {
@@ -38,7 +47,7 @@ export function formatDigitalCredentialError(error) {
 
 export async function fetchDigitalCredentialRequest(requestUrl, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(resolveApiUrl(requestUrl), {
-    credentials: 'same-origin',
+    credentials: requestCredentials(requestUrl),
     headers: { Accept: 'application/oauth-authz-req+jwt' },
   });
   if (!response.ok) {
@@ -73,7 +82,7 @@ export async function submitDigitalCredentialResponse({
 }) {
   const response = await fetchImpl(resolveApiUrl(submitUrl), {
     method: 'POST',
-    credentials: 'same-origin',
+    credentials: requestCredentials(submitUrl),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       protocol: credential?.protocol || protocol,

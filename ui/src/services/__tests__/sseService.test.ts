@@ -29,6 +29,7 @@ describe('sseService', () => {
   }
 
   beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', '');
     vi.useFakeTimers()
     MockEventSource.instances = []
     vi.stubGlobal('EventSource', MockEventSource)
@@ -39,6 +40,7 @@ describe('sseService', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
     sseService.disconnect()
     unsubscribeCallbacks.splice(0).forEach(unsubscribe => unsubscribe())
     sseService.maxReconnectAttempts = 5

@@ -94,13 +94,38 @@ preserving their path and query. Other methods at those UI locations are
 refused. An ingress redirect check establishes only that handoff; it does not
 verify Pages assets or an authenticated browser journey.
 
-Gateway preflight for this Auth/learner transport admits only the declared
-Auth endpoint/method pairs and canonical learner-association POST paths, one
-configured Origin and JSON Content-Type. It returns explicit credentialed CORS
-headers without contacting an upstream. Actual operations still require their
-existing session, own-session, tenant, Origin and body checks. Provider and
-administrator association endpoints do not gain browser preflight admission.
-This is not a blanket CORS grant for every console SDK operation.
+Gateway preflight retains the separate Auth endpoint/method and canonical
+learner-association rules. Ordinary console API preflight resolves the requested
+method against the installed route table and admits only authenticated `/v1/`
+operations outside dedicated producer, native OAuth, public verification and
+administrator transports. Public metadata admission is limited to GET
+`/health/ready`, `/openapi.json` and `/v1/protocol-support`. No OPTIONS request is
+forwarded upstream or creates an application session.
+
+The Origin must be a single exact configured value. Ordinary console request
+headers are explicitly limited to Content-Type, If-Match, Idempotency-Key,
+X-MIP-Version and X-Request-ID; names are case-insensitive, bounded and cannot be
+duplicated. These cover the pinned Rust/WASM SDK's actual JSON and protocol
+headers. Authorization, API-key and caller-attribution headers are not admitted
+by this transport. Existing dedicated browser transports keep their own rules.
+The response names the actual method and requested permitted headers instead of
+using wildcards with credentials.
+
+Normal operations still traverse authentication, tenant, body, permission and
+idempotency guards. Session mutations carrying Origin must name one allowed
+origin; the existing originless non-browser transport remains unchanged. The
+response envelope makes early console failures readable without bypassing a
+guard. It exposes only ETag, Location, Retry-After, X-Request-ID, X-MIP-Version and
+Content-Disposition metadata, never session cookies.
+
+Preferences, readiness, agent management, notification EventSource and API docs
+select the same configured API origin. EventSource and first-party digital
+credential requests include the API's cookies; external wallet/provider request
+URLs retain their previous credential mode. Branding and demo assets remain at
+the static site. The unused legacy onboarding helper retains its existing API
+path; no endpoint or domain-join capability is created by selecting an origin.
+Qualify served permission/dashboard/preference operations and readable failures
+with the actual installed Gateway before claiming full console acceptance.
 
 ## Deployment acceptance
 

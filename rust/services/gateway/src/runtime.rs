@@ -538,7 +538,7 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
         // errors readable by the one configured browser Origin.
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
-            console_cors::error_headers,
+            console_cors::response_headers,
         ))
         .layer(middleware::from_fn(crate::public_verification::no_store))
         .with_state(state)
@@ -707,6 +707,13 @@ async fn authentication_middleware(
         // upstream. The subsequent operation still traverses every guard.
         return console_cors::preflight(&state, request.uri().path(), request.headers());
     }
+    if request.method() == "OPTIONS" {
+        if let Some(response) =
+            console_cors::api_preflight(&state, request.uri().path(), request.headers())
+        {
+            return response;
+        }
+    }
     let Some(method) = http_method(request.method().as_str()) else {
         return error_response(
             405,
@@ -753,6 +760,12 @@ async fn authentication_middleware(
     match authenticate(&input, state.identities.as_ref()).await {
         AuthenticationOutcome::Bypass => {}
         AuthenticationOutcome::Authenticated(identity) => {
+            if identity.source == AuthenticationSource::Session
+                && console_cors::api_operation(&state, request.uri().path(), method)
+                && !console_cors::mutation_origin_allowed(&state, method, request.headers())
+            {
+                return detail_response(403, "console_origin_required");
+            }
             request
                 .extensions_mut()
                 .insert(base_trusted_identity(&identity));

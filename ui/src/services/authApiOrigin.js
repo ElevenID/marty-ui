@@ -1,6 +1,6 @@
-/** Auth cookies and browser navigations must use the configured API origin. */
-export function resolveAuthBaseUrl(apiOrigin) {
-  if (apiOrigin === undefined || apiOrigin === '') return '/v1/auth';
+/** Browser API requests must use the configured canonical API origin. */
+export function resolveApiBaseUrl(apiOrigin) {
+  if (apiOrigin === undefined || apiOrigin === '') return '';
   const invalid = () => Object.assign(new Error(
     'VITE_API_URL must be an HTTPS API origin (HTTP is allowed only on loopback).',
   ), { code: 'AUTH_CONFIGURATION' });
@@ -14,7 +14,20 @@ export function resolveAuthBaseUrl(apiOrigin) {
     || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw invalid();
   }
-  return `${url.origin}/v1/auth`;
+  return url.origin;
+}
+
+export function resolveAuthBaseUrl(apiOrigin) {
+  return `${resolveApiBaseUrl(apiOrigin)}/v1/auth`;
+}
+
+/** First-party API paths cannot select an unrelated host. */
+export function resolveApiUrl(path, apiOrigin) {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')
+    || /[\u0000-\u001f\u007f\\]/.test(path)) {
+    throw Object.assign(new Error('A first-party API path is required.'), { code: 'AUTH_CONFIGURATION' });
+  }
+  return `${resolveApiBaseUrl(apiOrigin)}${path}`;
 }
 
 /** The configured API is the only cross-origin destination for starting Auth. */

@@ -348,3 +348,241 @@ async fn console_preflight_http_boundary() {
     }
     server.abort();
 }
+
+#[tokio::test]
+async fn console_catalog_preflight_supports_dashboard_preferences_and_conditional_json_writes() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    for (path, method, requested) in [
+        (
+            "/v1/organizations/org-1/members/me/permissions",
+            "GET",
+            "content-type, x-mip-version, x-request-id",
+        ),
+        ("/v1/me/preferences", "GET", "content-type"),
+        ("/v1/me/preferences", "PUT", "Content-Type, Idempotency-Key"),
+        ("/v1/signing-keys/config", "PATCH", "content-type, if-match"),
+        (
+            "/v1/trust-profiles",
+            "POST",
+            "content-type, idempotency-key",
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(console_preflight_request(
+                path,
+                method,
+                CONSOLE_ORIGIN,
+                requested,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT, "{method} {path}");
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            CONSOLE_ORIGIN
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-credentials"],
+            "true"
+        );
+        assert_eq!(response.headers()["access-control-allow-methods"], method);
+        assert_eq!(
+            response.headers()["access-control-allow-headers"],
+            requested.to_ascii_lowercase()
+        );
+        assert!(!response.headers().contains_key("set-cookie"));
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn console_catalog_transport_rejects_attribution_authority_and_ambiguous_preflights() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    for (origin, requested) in [
+        ("https://untrusted.example", "content-type"),
+        ("null", "content-type"),
+        (CONSOLE_ORIGIN, "authorization"),
+        (CONSOLE_ORIGIN, "x-api-key"),
+        (CONSOLE_ORIGIN, "x-user-id"),
+        (CONSOLE_ORIGIN, "content-type, content-type"),
+        (CONSOLE_ORIGIN, "content-type, x-organization-id"),
+        (CONSOLE_ORIGIN, ""),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(console_preflight_request(
+                "/v1/me/preferences",
+                "PUT",
+                origin,
+                requested,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+    }
+    for name in [
+        "origin",
+        "access-control-request-method",
+        "access-control-request-headers",
+    ] {
+        let mut request =
+            console_preflight_request("/v1/me/preferences", "PUT", CONSOLE_ORIGIN, "content-type");
+        let value = request.headers()[name].clone();
+        request
+            .headers_mut()
+            .append(HeaderName::from_bytes(name.as_bytes()).unwrap(), value);
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert!(response.status().is_client_error());
+        assert!(!response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+    }
+    for (path, method) in [
+        ("/v1/me/preferences", "DELETE"),
+        ("/v1/unknown", "POST"),
+        ("/internal/metrics", "GET"),
+        ("/v1/evidence/observations", "POST"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(console_preflight_request(
+                path,
+                method,
+                CONSOLE_ORIGIN,
+                "content-type",
+            ))
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error(), "{method} {path}");
+        assert!(!response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn console_catalog_errors_are_readable_without_authorizing_operations() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    for (path, method) in [
+        ("/v1/me/preferences", "GET"),
+        ("/v1/me/preferences", "PUT"),
+        ("/v1/organizations/org-1/members/me/permissions", "GET"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("origin", CONSOLE_ORIGIN)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path}"
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            CONSOLE_ORIGIN
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-credentials"],
+            "true"
+        );
+        assert_eq!(
+            response.headers()["access-control-expose-headers"],
+            "etag, location, retry-after, x-request-id, x-mip-version, content-disposition"
+        );
+        assert!(!response.headers().contains_key("set-cookie"));
+    }
+    for origin in ["https://untrusted.example", "null"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/me/preferences")
+                    .header("cookie", "sessionId=valid")
+                    .header("origin", origin)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn console_catalog_transport_preserves_tenant_and_body_rejections() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    Arc::get_mut(&mut state).unwrap().memberships = Arc::new(ScriptedMembership("missing"));
+    let router = gateway_router(state);
+    for (method, path, content_type, expected) in [
+        (
+            "GET",
+            "/v1/signing-keys/config?organization_id=org-other",
+            "application/json",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "POST",
+            "/v1/trust-profiles",
+            "text/plain",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("cookie", "sessionId=valid")
+                    .header("origin", CONSOLE_ORIGIN)
+                    .header("content-type", content_type)
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{method} {path}");
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            CONSOLE_ORIGIN
+        );
+        assert_eq!(
+            response.headers()["access-control-allow-credentials"],
+            "true"
+        );
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
+}

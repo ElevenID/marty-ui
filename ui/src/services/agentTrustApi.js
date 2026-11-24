@@ -1,4 +1,6 @@
-// Same-origin public Gateway. Mutations are sent once; original confirmation
+import { resolveApiUrl } from './authApiOrigin';
+
+// Configured first-party public Gateway. Mutations are sent once; original confirmation
 // identity is retained by the caller for explicit recovery after a lost reply.
 export class AgentTrustError extends Error {
   constructor(code) { super('Agent identity request could not be completed.'); this.code = code; }
@@ -90,8 +92,8 @@ async function request(path, method = 'GET', body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(path, {
-      method, credentials: 'same-origin', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
+    const response = await fetch(resolveApiUrl(path, import.meta.env.VITE_API_URL), {
+      method, credentials: import.meta.env.VITE_API_URL ? 'include' : 'same-origin', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
       signal: controller.signal, headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
