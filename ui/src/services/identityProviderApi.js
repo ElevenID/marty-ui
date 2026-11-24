@@ -1,4 +1,5 @@
 import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
+import { resolveAuthBaseUrl } from './authApiOrigin';
 
 const PROVIDER_REQUEST_TIMEOUT_MS = 10_000;
 const PROVIDER_UNAVAILABLE = 'Sign-in provider details are temporarily unavailable.';
@@ -51,9 +52,9 @@ export async function getIdentityProvider({ signal } = {}) {
   signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(abort, PROVIDER_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch('/v1/auth/provider', {
+    const response = await fetch(`${resolveAuthBaseUrl(import.meta.env.VITE_API_URL)}/provider`, {
       method: 'GET',
-      credentials: 'same-origin',
+      credentials: import.meta.env.VITE_API_URL ? 'include' : 'same-origin',
       cache: 'no-store',
       redirect: 'error',
       signal: controller.signal,

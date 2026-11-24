@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Same-origin public Gateway only. No shared SDK write retries or bearer credentials.
+// Configured public Gateway only. No shared SDK write retries or bearer credentials.
+import { resolveAuthBaseUrl } from './authApiOrigin';
 export class AssociationConsentError extends Error {
  constructor(code) {super('Association request could not be completed.');this.name='AssociationConsentError';this.code=code;}
 }
@@ -41,7 +42,9 @@ async function read(response,limit) {
  }finally{try{await reader.cancel();}catch{/* A closed stream needs no further cancellation. */}reader.releaseLock();}
 }
 async function request(path,body,signal) {
- const response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',
+ const base=resolveAuthBaseUrl(import.meta.env.VITE_API_URL).slice(0,-'/v1/auth'.length);
+ const response=await fetch(`${base}${path}`,{method:body===undefined?'GET':'POST',
+  credentials:import.meta.env.VITE_API_URL?'include':'same-origin',cache:'no-store',
   redirect:'error',referrerPolicy:'no-referrer',signal,headers:{Accept:'application/json',...body===undefined?{}:{'Content-Type':'application/json'}},
   ...body===undefined?{}:{body:JSON.stringify(body)}});
  if(response.status===401)fail('authentication_required');return read(response,body===undefined?32768:8192);
