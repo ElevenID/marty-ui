@@ -54,10 +54,13 @@ function allFiles(root, prefix = '') {
 // construction use the production consumer. All injected executions must stay
 // nonqualifying and remove their context, even when every assertion passes.
 function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false } = {}) {
-  const contractBytes = readFileSync(path.join(ROOT, historical ? 'contracts/application-source-export-history/initial-v1.json' : 'contracts/application-source-export.json'));
+  const contractPath = historical === 'before-static-auth-origins'
+    ? 'contracts/application-source-export-history/before-static-auth-origins-v1.json'
+    : historical ? 'contracts/application-source-export-history/initial-v1.json' : 'contracts/application-source-export.json';
+  const contractBytes = readFileSync(path.join(ROOT, contractPath));
   const sourceContract = JSON.parse(contractBytes);
   const selectedTests = sourceContract.test_profile.files;
-  const assertionCount = historical ? 296 : 321;
+  const assertionCount = historical === 'before-static-auth-origins' ? 321 : historical ? 296 : 383;
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-package-consumer-test-'));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const sourceBytes = new Map();
@@ -195,7 +198,7 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
   assert.equal(result.fixture, true);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
-  assert.equal(result.tests.test_count, 321);
+  assert.equal(result.tests.test_count, 383);
   assert.equal(result.output_comparison.output_files, 88);
   assert.equal(result.output_comparison.mode_transformations.length, 54);
   assert.equal(result.runtime_comparison.payload_files, 92);
@@ -255,14 +258,19 @@ test('the approved historical package keeps its original 24-file, 296-assertion 
 test('release input validation keeps exact current and historical test profiles', async (t) => {
   const current = fixture(t);
   const historical = fixture(t, { historical: true });
+  const predecessor = fixture(t, { historical: 'before-static-auth-origins' });
   assert.deepEqual(current.manifest.test_profile.files.filter((name) => !historical.manifest.test_profile.files.includes(name)), [
     'src/components/console/agents/AgentTrustPages.test.tsx',
     'src/services/__tests__/agentTrustApi.test.ts',
+    'src/services/__tests__/authApiOrigin.test.ts',
+    'src/services/__tests__/identityProviderApi.test.ts',
+    'src/services/__tests__/associationConsent.test.ts',
   ]);
   assert.ok(historical.manifest.test_profile.files.every((name) => current.manifest.test_profile.files.includes(name)));
-  // The retained 296 cases plus the 13 administration/approval and 12 Gateway
-  // client/retry cases form the current 321-case profile; neither is a minimum.
-  for (const [input, assertions, otherAssertions] of [[current, 321, 296], [historical, 296, 321]]) {
+  assert.equal(predecessor.manifest.test_profile.files.length, 26);
+  // All three immutable profiles keep exact counts. The consumer must refuse
+  // an assertion count borrowed from a different approved profile.
+  for (const [input, assertions, otherAssertions] of [[current, 383, 321], [predecessor, 321, 296], [historical, 296, 383]]) {
     const report = await input.run();
     assert.equal(report.status, 'fixture-passed', JSON.stringify(report.failure));
     assert.equal(report.fixture, true);
