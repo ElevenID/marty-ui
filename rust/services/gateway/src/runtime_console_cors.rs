@@ -33,6 +33,21 @@ pub(super) async fn response_headers(
         .filter(|origin| state.cors_origins.contains(*origin))
         .map(str::to_owned);
     let mut response = next.run(request).await;
+    if api && origin.is_none() {
+        // Inner middleware and upstreams cannot grant a rejected/ambiguous
+        // console origin by selecting only the first Origin field value.
+        for name in [
+            "access-control-allow-origin",
+            "access-control-allow-credentials",
+            "access-control-allow-methods",
+            "access-control-allow-headers",
+            "access-control-expose-headers",
+            "access-control-max-age",
+            "access-control-allow-private-network",
+        ] {
+            response.headers_mut().remove(name);
+        }
+    }
     if let Some(origin) = origin.filter(|_| {
         api || response.status().is_client_error() || response.status().is_server_error()
     }) {

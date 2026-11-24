@@ -586,3 +586,59 @@ async fn console_catalog_transport_preserves_tenant_and_body_rejections() {
     }
     assert!(recorder.0.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn console_catalog_ambiguous_origins_cannot_inherit_an_inner_cors_grant() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    let origins: &[&[&str]] = &[
+        &[],
+        &[CONSOLE_ORIGIN],
+        &[CONSOLE_ORIGIN, "https://untrusted.example"],
+        &["https://untrusted.example", CONSOLE_ORIGIN],
+        &[CONSOLE_ORIGIN, CONSOLE_ORIGIN],
+        &["https://untrusted.example"],
+    ];
+    for values in origins {
+        let mut request = Request::builder()
+            .uri("/v1/me/preferences")
+            .header("cookie", "sessionId=valid");
+        for origin in *values {
+            request = request.header("origin", *origin);
+        }
+        let response = router
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        if *values == [CONSOLE_ORIGIN] {
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                CONSOLE_ORIGIN
+            );
+            assert_eq!(
+                response.headers()["access-control-allow-credentials"],
+                "true"
+            );
+        } else {
+            for name in [
+                "access-control-allow-origin",
+                "access-control-allow-credentials",
+                "access-control-expose-headers",
+            ] {
+                assert!(!response.headers().contains_key(name), "{values:?} {name}");
+            }
+        }
+        assert!(!response.headers().contains_key("set-cookie"));
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), origins.len());
+    assert!(calls
+        .iter()
+        .all(|(_, request)| request.path == "/v1/me/preferences"
+            && request.method == HttpMethod::Get));
+}
