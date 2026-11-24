@@ -74,6 +74,17 @@ def test_standalone_probe_uses_reviewed_core_head(tmp_path: Path) -> None:
         guard.check_standalone_probe_lock(stale)
 
 
+@pytest.mark.parametrize("replacement", ["unreviewed-probe-component", "marty-status"])
+def test_standalone_probe_retains_exact_flow_core_package_set(tmp_path: Path, replacement: str) -> None:
+    lock = SCRIPT.parents[2] / ".github/feature-regression/rust-probe/Cargo.lock"
+    original = lock.read_text(encoding="utf-8")
+    assert 'name = "marty-iso18013"' in original
+    changed = tmp_path / "Cargo.lock"
+    changed.write_text(original.replace('name = "marty-iso18013"', f'name = "{replacement}"', 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="Core package graph changed"):
+        guard.check_standalone_probe_lock(changed)
+
+
 @pytest.mark.parametrize("source", [guard.SD_JWT_SOURCE, guard.SSI_SOURCE, guard.LINKED_DATA_SOURCE, guard.ISOMDL_SOURCE])
 def test_standalone_probe_rejects_unreviewed_fork_sources(tmp_path: Path, source: str) -> None:
     lock = SCRIPT.parents[2] / ".github/feature-regression/rust-probe/Cargo.lock"
