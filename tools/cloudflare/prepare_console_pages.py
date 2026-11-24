@@ -112,7 +112,7 @@ def prepare(
         ):
             raise ValueError("Application output contains a link or special file")
         relative = path.relative_to(source).as_posix()
-        if relative.split("/", 1)[0] in {
+        if relative.split("/", 1)[0].casefold() in {
             "_headers",
             "_redirects",
             "_worker.js",

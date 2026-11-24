@@ -169,6 +169,10 @@ class ConsolePagesTests(unittest.TestCase):
             "_worker.js/index.js",
             "functions",
             "functions/auth.js",
+            "_WORKER.JS",
+            "_WoRkEr.Js/index.js",
+            "Functions",
+            "FuNcTiOnS/auth.js",
         ):
             with (
                 self.subTest(relative=relative),
