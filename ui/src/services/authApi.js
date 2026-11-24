@@ -79,6 +79,8 @@ export async function getCurrentUser() {
     if (typeof error?.code === 'string' && error.code.startsWith('AUTH_')) throw error;
     throw sessionCheckError('The sign-in service could not be reached.', 'AUTH_NETWORK');
   } finally {
+    // Close the owned fetch even when an error/401 body was not consumed.
+    controller.abort();
     clearTimeout(timeout);
   }
 }
