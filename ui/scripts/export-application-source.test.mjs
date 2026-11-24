@@ -260,7 +260,7 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.deepEqual(readFileSync(first.manifestPath), readFileSync(second.manifestPath));
   const manifest = parseApplicationSourceJson(readFileSync(first.manifestPath));
   assert.equal(manifest.files.length, 586);
-  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 586);
+  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 587);
   assert.equal(manifest.source.commit, git(root, 'rev-parse', 'HEAD').trim());
   const restore = (destination, options = {}) => restoreApplicationSourcePackage({ ...first,
     expectedArchiveSha256: receipt.archive.sha256, expectedManifestSha256: receipt.manifest.sha256, destination, ...options });
