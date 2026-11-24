@@ -1231,22 +1231,29 @@ async fn static_console_native_callback_keeps_authorization_origin_separate_from
         "no-store, max-age=0"
     );
     assert_eq!(*app.native_callbacks.lock().unwrap(), 1);
-    let cookies = response
+    let session_cookies = response
         .headers()
         .get_all(header::SET_COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
-        .collect::<Vec<_>>()
-        .join(";");
-    assert!(
-        cookies.contains("sessionId=session-1;")
-            && cookies.contains("HttpOnly")
-            && cookies.contains("Secure")
-            && cookies.contains("SameSite=Lax")
-    );
-    assert!(!cookies.to_ascii_lowercase().contains("domain="));
-    assert!(!response.headers()[header::LOCATION]
-        .to_str()
-        .unwrap()
-        .contains("native_access_token"));
+        .filter(|value| value.starts_with("sessionId="))
+        .collect::<Vec<_>>();
+    assert_eq!(session_cookies.len(), 1);
+    let session_cookie = session_cookies[0];
+    assert!(session_cookie.starts_with("sessionId=session-1;"));
+    for attribute in ["HttpOnly", "Secure", "SameSite=Lax"] {
+        assert!(session_cookie
+            .split(';')
+            .map(str::trim)
+            .any(|value| value == attribute));
+    }
+    assert!(!session_cookie.to_ascii_lowercase().contains("domain="));
+    let location = response.headers()[header::LOCATION].to_str().unwrap();
+    for secret in [
+        "native_access_token",
+        "header.payload.signature",
+        "fixture-code",
+    ] {
+        assert!(!location.contains(secret));
+    }
 }

@@ -1074,6 +1074,20 @@ async fn native_fixed_api_callback_and_console_return_preserve_pkce_and_replay_g
             .as_deref(),
         Some(callback)
     );
+    {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let authorization = harness.oidc.authorization.lock().unwrap();
+        let authorization = authorization.as_ref().unwrap();
+        assert!(authorization.reauthenticate);
+        assert_eq!(authorization.state, initiated.state);
+        assert_eq!(Some(authorization.nonce.as_str()), stored.nonce.as_deref());
+        assert_eq!(
+            authorization.code_challenge,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(sha2::Sha256::digest(stored.code_verifier.as_bytes()))
+        );
+    }
     let command = marty_auth::NativeCallbackCommand {
         callback: HandleCallbackCommand {
             code: "synthetic-code".into(),
