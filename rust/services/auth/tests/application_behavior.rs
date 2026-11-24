@@ -1088,7 +1088,7 @@ async fn native_fixed_api_callback_and_console_return_preserve_pkce_and_replay_g
                 .encode(sha2::Sha256::digest(stored.code_verifier.as_bytes()))
         );
     }
-    let command = marty_auth::NativeCallbackCommand {
+    let command = || marty_auth::NativeCallbackCommand {
         callback: HandleCallbackCommand {
             code: "synthetic-code".into(),
             state: initiated.state.clone(),
@@ -1100,7 +1100,7 @@ async fn native_fixed_api_callback_and_console_return_preserve_pkce_and_replay_g
     };
     let result = harness
         .app
-        .handle_native_callback(command.clone(), now())
+        .handle_native_callback(command(), now())
         .await
         .unwrap();
     assert_eq!(result.redirect_uri, console_return);
@@ -1109,7 +1109,7 @@ async fn native_fixed_api_callback_and_console_return_preserve_pkce_and_replay_g
     assert_eq!(exchanges[0].redirect_uri.as_deref(), Some(callback));
     assert_eq!(exchanges[0].code_verifier, stored.code_verifier);
     assert!(matches!(
-        harness.app.handle_native_callback(command, now()).await,
+        harness.app.handle_native_callback(command(), now()).await,
         Err(AuthApplicationError::InvalidState)
     ));
     assert_eq!(harness.oidc.exchanges.lock().unwrap().len(), 1);
