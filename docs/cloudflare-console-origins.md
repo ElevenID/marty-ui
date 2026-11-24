@@ -2,7 +2,8 @@
 
 A static application needs a console origin and an API origin. The website and
 authorization UI are separate surfaces. `VITE_API_URL` selects the API for
-browser Auth fetches, login/registration navigation and logout POST. Empty keeps
+browser Auth fetches, provider details, learner-consent requests,
+login/registration navigation and logout POST. Empty keeps
 relative self-hosted requests. An explicit value must be an HTTPS origin, with
 HTTP allowed only on loopback; paths, queries, fragments and credentials fail.
 
@@ -47,8 +48,53 @@ additional provider email destinations. Qualify those client allowlists and the
 native account-enrollment path separately; a router-port fixture is not proof
 of provider enrollment or email delivery.
 
-This origin contract alone does not qualify a deployment. The installer still
-needs its explicit external-console hosting model and omission of the local UI
-container. Complete the Pages build/routes/CSP/custom-domain and gateway CORS
-checks, native authentication review, actual signed installed login/profile/
-logout journey, restart/recovery checks and rollback before switching traffic.
+## Installer selection
+
+For a fresh signed installation, extend the existing hosting input with these
+fields. This is a fragment of `elevenid.installation-hosting/v1`, not a complete
+hosting configuration; retain the selected listener, keyless TLS and connector
+configuration from [the Cloudflare hosting guide](hosting-cloudflare-addon.md).
+
+```json
+{
+  "mode": "external-proxy",
+  "public_origin": "https://api.elevenid.example",
+  "web": {
+    "enabled_sections": [],
+    "external_application_origin": "https://console.elevenid.example"
+  }
+}
+```
+
+The application origin must be a distinct canonical HTTPS DNS origin. Local
+hosting, a public-entry IP alias and locally enabled web sections cannot be
+combined with this selection. The journal binds the selection before application
+rendering. The installer adds its authenticated external-application Compose
+layer, removes the local `ui` service and `UI_UPSTREAM`, and derives the UI, CORS,
+callback and post-logout settings shown above. Additional UI origins are refused
+for this installer profile. Maintenance uses the same bound layer.
+
+The API ingress keeps API, health, callback and issuer routes. GET/HEAD requests
+for UI paths receive a permanent redirect to the selected application origin,
+preserving their path and query. Other methods at those UI locations are
+refused. An ingress redirect check establishes only that handoff; it does not
+verify Pages assets or an authenticated browser journey.
+
+Gateway preflight for this Auth/learner transport admits only the declared
+Auth endpoint/method pairs and canonical learner-association POST paths, one
+configured Origin and JSON Content-Type. It returns explicit credentialed CORS
+headers without contacting an upstream. Actual operations still require their
+existing session, own-session, tenant, Origin and body checks. Provider and
+administrator association endpoints do not gain browser preflight admission.
+This is not a blanket CORS grant for every console SDK operation.
+
+## Deployment acceptance
+
+This source profile does not qualify a deployment. Complete native installer
+and target Compose-version qualification, Pages build/routes/CSP/custom-domain
+checks, actual Gateway/browser preflight and operation checks, native
+authentication review, the signed installed login/profile/consent/logout
+journey, restart/recovery checks and rollback before switching traffic. Keep
+the current production routes until those checks pass. A `pages.dev` response,
+synthetic router port or rendered Nginx syntax check does not establish the
+same-site installed cookie journey.

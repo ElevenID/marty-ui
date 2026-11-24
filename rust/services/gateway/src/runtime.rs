@@ -47,6 +47,8 @@ mod signing_ceremony;
 #[path = "runtime_signing_compatibility.rs"]
 mod signing_compatibility;
 use signing_compatibility::*;
+#[path = "runtime_console_cors.rs"]
+mod console_cors;
 #[path = "runtime_profile_operations.rs"]
 mod profile_operations;
 use mmf_platform::{
@@ -693,6 +695,11 @@ async fn authentication_middleware(
             request.uri().path(),
             request.headers(),
         );
+    }
+    if request.method() == "OPTIONS" && console_cors::is_namespace(request.uri().path()) {
+        // Preflight carries no application identity and must never reach an
+        // upstream. The subsequent operation still traverses every guard.
+        return console_cors::preflight(&state, request.uri().path(), request.headers());
     }
     let Some(method) = http_method(request.method().as_str()) else {
         return error_response(

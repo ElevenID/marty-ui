@@ -27,13 +27,6 @@
       ]
     },
     {
-      "source": "docs/restructuring/application-package-README.md",
-      "path": "README.md",
-      "roles": [
-        "package-documentation"
-      ]
-    },
-    {
       "source": "contracts/organization-domain-behavior.json",
       "path": "contracts/organization-domain-behavior.json",
       "roles": [
@@ -52,6 +45,13 @@
       "path": "contracts/website-source-ownership.json",
       "roles": [
         "shared-contract"
+      ]
+    },
+    {
+      "source": "docs/restructuring/application-package-README.md",
+      "path": "README.md",
+      "roles": [
+        "package-documentation"
       ]
     },
     {
@@ -111,17 +111,17 @@
       ]
     },
     {
-      "source": "ui/profiles/application/package.json",
-      "path": "ui/package.json",
-      "roles": [
-        "application-dependency-input"
-      ]
-    },
-    {
       "source": "ui/profiles/application/package-lock.json",
       "path": "ui/profiles/application/package-lock.json",
       "roles": [
         "application-profile-provenance-support"
+      ]
+    },
+    {
+      "source": "ui/profiles/application/package.json",
+      "path": "ui/package.json",
+      "roles": [
+        "application-dependency-input"
       ]
     },
     {
@@ -3513,6 +3513,13 @@
       ]
     },
     {
+      "source": "ui/src/services/__tests__/associationConsent.test.ts",
+      "path": "ui/src/services/__tests__/associationConsent.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
       "source": "ui/src/services/__tests__/authApi.test.ts",
       "path": "ui/src/services/__tests__/authApi.test.ts",
       "roles": [
@@ -3522,6 +3529,13 @@
     {
       "source": "ui/src/services/__tests__/authApiOrigin.test.ts",
       "path": "ui/src/services/__tests__/authApiOrigin.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/services/__tests__/identityProviderApi.test.ts",
+      "path": "ui/src/services/__tests__/identityProviderApi.test.ts",
       "roles": [
         "selected-application-test"
       ]
@@ -5539,10 +5553,6 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/services/__tests__/associationConsent.test.ts",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/src/services/__tests__/auditApi.test.ts",
       "role": "unselected-test"
     },
@@ -5596,10 +5606,6 @@
     },
     {
       "source": "ui/src/services/__tests__/idempotency.scope.test.ts",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/services/__tests__/identityProviderApi.test.ts",
       "role": "unselected-test"
     },
     {
@@ -5804,6 +5810,8 @@
       "src/services/__tests__/agentTrustApi.test.ts",
       "src/services/__tests__/authApi.test.ts",
       "src/services/__tests__/authApiOrigin.test.ts",
+      "src/services/__tests__/identityProviderApi.test.ts",
+      "src/services/__tests__/associationConsent.test.ts",
       "tests/application/surface-profile.test.tsx"
     ],
     "shared_contracts": [
