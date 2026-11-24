@@ -27,6 +27,8 @@ marty-issuance-service = { path = "../../../rust/services/issuance", features = 
 serde_json = "=1.0.151"
 tokio = { version = "=1.53.3", features = ["macros", "rt"] }
 tower = { version = "=0.5.3", features = ["util"] }
+tracing = "=0.1.44"
+tracing-subscriber = "=0.3.23"
 
 [lints.rust]
 unsafe_code = "forbid"

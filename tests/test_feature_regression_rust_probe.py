@@ -96,6 +96,67 @@ for case_id, (operation, result) in CONFIGURATION_RESULTS.items():
         (case_id, "safe_server_diagnostic"): result,
     })
 
+# HTTP expectations derive from the pre-change production router/application,
+# not from an invocation capture. Provider/cache ports are synthetic; response
+# status, public errors, redirects, cookie attributes and logged stage codes
+# are produced by the actual Auth owners.
+HTTP_UI = "https://console.probe.invalid"
+HTTP_FAILURE = HTTP_UI + "/?auth_error=Session+expired.+Please+try+again."
+HTTP_NO_STORE = "no-store, max-age=0"
+
+
+def http_expectation(case_id, status, *, body=None, location=None, cookies=(), cache=None, diagnostics=()):
+    EXPECTED_OPERATIONS[case_id] = "auth.http-session"
+    EXPECTED_OBSERVATIONS.update({
+        (case_id, "public_status"): status,
+        (case_id, "public_message"): {
+            "body": body, "location": location, "cache_control": cache,
+            "session_cookie_attributes": list(cookies),
+        },
+        (case_id, "safe_server_diagnostic"): list(diagnostics),
+    })
+
+
+http_expectation("auth-http-login", 302, location="https://identity.probe.invalid/authorize")
+http_expectation("auth-http-invalid-locale", 400, body={"detail": "Supply ui_locales or the legacy kc_locale alias, not both"})
+http_expectation("auth-http-registration-disabled", 409, cache=HTTP_NO_STORE, body={
+    "code": "oidc_registration_unsupported", "detail": "Registration is managed by your identity provider",
+})
+for case_id in ("auth-http-state-save-failure", "auth-http-authorization-failure"):
+    http_expectation(case_id, 503, body={"detail": "Authentication service unavailable"})
+http_expectation("auth-http-missing-parameters", 302, location=HTTP_UI + "/?auth_error=Missing+authentication+parameters")
+for case_id, diagnostic in {
+    "auth-http-unknown-state": "auth_oidc_state_invalid",
+    "auth-http-expired-state": "auth_oidc_state_expired",
+    "auth-http-missing-nonce": "auth_oidc_nonce_missing",
+    "auth-http-state-consume-failure": "auth_oidc_state_consume_failed",
+    "auth-http-exchange-failure": "auth_oidc_code_exchange_failed",
+    "auth-http-missing-access": "auth_oidc_access_token_missing",
+    "auth-http-missing-id": "auth_oidc_id_token_missing",
+    "auth-http-token-validation-failure": "auth_oidc_token_validation_failed",
+    "auth-http-provision-failure": "auth_user_provisioning_failed",
+    "auth-http-session-save-failure": "auth_session_save_failed",
+    "auth-http-login-event-failure": "auth_login_event_publish_failed",
+    "auth-http-session-event-failure": "auth_session_event_publish_failed",
+    "auth-http-callback-replay": "auth_oidc_state_invalid",
+}.items():
+    http_expectation(case_id, 302, location=HTTP_FAILURE, diagnostics=(diagnostic,))
+http_expectation("auth-http-callback-success", 302, location=HTTP_UI + "/console/profile", cookies=(
+    "HttpOnly;Max-Age=3600;Path=/;SameSite=Lax;Secure",
+))
+for case_id in ("auth-http-anonymous", "auth-http-after-logout"):
+    http_expectation(case_id, 200, body={"authenticated": False, "user_fields": []}, cache=HTTP_NO_STORE)
+http_expectation("auth-http-authenticated", 200, cache=HTTP_NO_STORE, body={
+    "authenticated": True,
+    "user_fields": ["email", "organization_context_unavailable", "organizations", "roles", "user_id", "user_type"],
+})
+http_expectation("auth-http-logout", 302, location="https://identity.probe.invalid/logout", cookies=(
+    "Max-Age=0;Path=/;SameSite=Lax;Secure",
+))
+http_expectation("auth-http-invalid-picture", 400, body={"detail": "picture must be an image data URL or https URL"})
+for case_id in ("auth-http-session-get-failure", "auth-http-profile-save-failure"):
+    http_expectation(case_id, 503, body={"detail": "Session store unavailable"})
+
 
 def assert_expected_probe_output(raw: bytes) -> None:
     document = json.loads(raw)
@@ -198,6 +259,10 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "marty_auth::oidc_config_from_values",
         "marty_auth::pkce_s256_challenge",
         "marty_flow::FlowServiceConfig::from_values",
+        "AuthApplication::new",
+        "auth_core_router",
+        "impl SessionRepository for Ports",
+        "impl PkceStateRepository for Ports",
     ):
         assert production_call in subject
     assert "ordinary_issuer_context_dependency_unavailable_diagnostic" not in subject
@@ -209,6 +274,8 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "AUTH.CONFIGURATION:",
         "FLOW.CONFIGURATION:",
         "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "Session+expired.+Please+try+again.",
+        "Missing+authentication+parameters",
     ):
         assert forbidden_expected_output not in subject
 
