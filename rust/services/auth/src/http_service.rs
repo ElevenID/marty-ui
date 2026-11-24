@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, OriginalUri, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Form, Json, Router,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -31,6 +31,7 @@ pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/auth/register"),
     ("POST", "/v1/auth/passkeys/enroll"),
     ("GET", "/v1/auth/callback"),
+    ("POST", "/v1/auth/callback"),
     ("POST", "/v1/auth/logout"),
     ("GET", "/v1/auth/me"),
     ("PATCH", "/v1/auth/me"),
@@ -85,6 +86,18 @@ impl SessionCookieConfig {
 
 #[async_trait]
 pub trait AuthHttpApplication: Send + Sync {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        None
+    }
+    async fn native_callback(
+        &self,
+        _command: crate::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        Err(PortError::new(
+            "native_authentication_unsupported",
+            "Native authentication is not configured",
+        ))
+    }
     fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         Err(PortError::new(
             "oidc_capabilities_unavailable",
@@ -126,6 +139,17 @@ pub trait AuthHttpApplication: Send + Sync {
 
 #[async_trait]
 impl AuthHttpApplication for AuthApplication {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        AuthApplication::native_authentication_origin(self)
+    }
+    async fn native_callback(
+        &self,
+        command: crate::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        self.handle_native_callback(command, Utc::now())
+            .await
+            .map_err(application_error)
+    }
     fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         AuthApplication::provider_capabilities(self)
     }
@@ -243,7 +267,13 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
         .route("/v1/auth/passkeys/enroll", post(enroll_passkey))
-        .route("/v1/auth/callback", get(callback))
+        .route(
+            "/v1/auth/callback",
+            get(callback)
+                .post(native_callback)
+                .layer(DefaultBodyLimit::max(24 * 1024))
+                .layer(middleware::map_response(credential_login_no_store)),
+        )
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/me", get(me).patch(update_me))
         .route(
@@ -473,6 +503,79 @@ async fn callback(
             user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
         })
         .await;
+    complete_callback(&state, &headers, result).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCallbackForm {
+    code: String,
+    state: String,
+    native_access_token: String,
+}
+
+async fn native_callback(
+    State(state): State<AuthHttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Form(body): Form<NativeCallbackForm>,
+) -> Response {
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if state.application.native_authentication_origin().is_none()
+        || origin != state.application.native_authentication_origin()
+        || headers.get_all(header::ORIGIN).iter().count() != 1
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Native callback origin is not allowed",
+        );
+    }
+    if uri.query().is_some()
+        || body.code.is_empty()
+        || body.code.len() > 2048
+        || !body
+            .code
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+        || !(16..=128).contains(&body.state.len())
+        || !body
+            .state
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        || body.native_access_token.is_empty()
+        || body.native_access_token.len() > 16_384
+    {
+        return detail(StatusCode::BAD_REQUEST, "Native callback body is invalid");
+    }
+    let result = state
+        .application
+        .native_callback(crate::NativeCallbackCommand {
+            callback: HandleCallbackCommand {
+                code: body.code,
+                state: body.state,
+                ip_address: client_ip(&headers),
+                user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
+            },
+            native_access_token: body.native_access_token,
+            origin: origin.unwrap_or_default().into(),
+        })
+        .await;
+    let mut response = complete_callback(&state, &headers, result).await;
+    if response.status() == StatusCode::FOUND {
+        *response.status_mut() = StatusCode::SEE_OTHER;
+    }
+    no_store(&mut response);
+    response
+}
+
+async fn complete_callback(
+    state: &AuthHttpState,
+    headers: &HeaderMap,
+    result: Result<HandleCallbackResult, PortError>,
+) -> Response {
+    let ui_base = request_ui_base(&state.origins, headers);
     let mut result = match result {
         Ok(result) => result,
         Err(error) => {
@@ -487,7 +590,7 @@ async fn callback(
     };
     if let Some(impersonation) = build_session_impersonation(
         &result.session,
-        cookie(&headers, &state.impersonation_handoff_cookie_name),
+        cookie(headers, &state.impersonation_handoff_cookie_name),
     ) {
         result.session.user.impersonation = Some(impersonation);
         if state.sessions.save(&result.session).await.is_err() {

@@ -91,10 +91,23 @@ impl SessionRepository for MemorySessions {
 }
 
 #[derive(Default)]
-struct MemoryStates(Mutex<HashMap<String, PkceState>>);
+struct MemoryStates(
+    Mutex<HashMap<String, PkceState>>,
+    Mutex<std::collections::HashSet<String>>,
+);
 
 #[async_trait]
 impl PkceStateRepository for MemoryStates {
+    async fn claim_native_authentication(
+        &self,
+        evidence: &marty_auth::NativeAuthenticationEvidence,
+    ) -> Result<bool, PortError> {
+        Ok(self
+            .1
+            .lock()
+            .unwrap()
+            .insert(evidence.provider_session_id.clone()))
+    }
     async fn save(&self, state: &PkceState) -> Result<(), PortError> {
         self.0
             .lock()
@@ -110,6 +123,9 @@ impl PkceStateRepository for MemoryStates {
 
 #[derive(Default)]
 struct FakeOidc {
+    native_enabled: bool,
+    native_revocation_fails: Mutex<bool>,
+    native_revocations: Mutex<usize>,
     enrollment_hint: Mutex<Option<String>>,
     authorization: Mutex<Option<OidcAuthorizationRequest>>,
     validated_nonce: Mutex<Option<String>>,
@@ -119,6 +135,38 @@ struct FakeOidc {
 
 #[async_trait]
 impl OidcProvider for FakeOidc {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        self.native_enabled
+            .then_some("https://authorization.example.invalid")
+    }
+    async fn validate_native_authentication(
+        &self,
+        token: &str,
+        identity: &OidcValidatedIdentity,
+        _started_at: i64,
+        _now: i64,
+    ) -> Result<marty_auth::NativeAuthenticationEvidence, PortError> {
+        if token != "native-valid" {
+            return Err(PortError::new("native_invalid", "invalid fixture proof"));
+        }
+        Ok(marty_auth::NativeAuthenticationEvidence {
+            issuer: "https://identity.example.invalid/auth/v1".into(),
+            subject: identity.user_info.sub.clone(),
+            provider_session_id: "one-native-provider-session".into(),
+            password_authenticated_at: now().timestamp() - 2,
+            factor_authenticated_at: now().timestamp() - 1,
+        })
+    }
+    async fn revoke_native_authentication(&self, _token: &str) -> Result<(), PortError> {
+        *self.native_revocations.lock().unwrap() += 1;
+        if *self.native_revocation_fails.lock().unwrap() {
+            return Err(PortError::new(
+                "revocation_failed",
+                "fixture revocation failure",
+            ));
+        }
+        Ok(())
+    }
     fn authentication_freshness(
         &self,
         _request: &OidcAuthorizationRequest,
@@ -257,9 +305,16 @@ fn harness() -> Harness {
 }
 
 fn harness_with_passkeys(passkeys_enabled: bool) -> Harness {
+    harness_with_native(passkeys_enabled, false)
+}
+
+fn harness_with_native(passkeys_enabled: bool, native_enabled: bool) -> Harness {
     let sessions = Arc::new(MemorySessions::default());
     let states = Arc::new(MemoryStates::default());
-    let oidc = Arc::new(FakeOidc::default());
+    let oidc = Arc::new(FakeOidc {
+        native_enabled,
+        ..FakeOidc::default()
+    });
     let events = Arc::new(MemoryEvents::default());
     let emails = Arc::new(EnrollmentEmails::default());
     let app = AuthApplication::new(
@@ -286,6 +341,109 @@ fn harness_with_passkeys(passkeys_enabled: bool) -> Harness {
         oidc,
         events,
         emails,
+    }
+}
+
+async fn native_command(h: &Harness, token: &str) -> marty_auth::NativeCallbackCommand {
+    let start = h
+        .app
+        .initiate_login(
+            InitiateLoginCommand {
+                redirect_uri: Some("/console".into()),
+                oidc_redirect_uri: Some("https://ui.example/v1/auth/callback".into()),
+                ui_locales: None,
+                reauthenticate: true,
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    marty_auth::NativeCallbackCommand {
+        callback: HandleCallbackCommand {
+            code: "fixture-code".into(),
+            state: start.state,
+            ip_address: None,
+            user_agent: None,
+        },
+        origin: "https://authorization.example.invalid".into(),
+        native_access_token: token.into(),
+    }
+}
+
+#[tokio::test]
+async fn native_login_requires_post_proof_and_consumes_bypassed_state() {
+    let h = harness_with_native(false, true);
+    let command = native_command(&h, "native-valid").await;
+    assert!(h
+        .app
+        .handle_callback(command.callback.clone(), now())
+        .await
+        .is_err());
+    assert!(h.oidc.validated_nonce.lock().unwrap().is_none());
+    assert!(matches!(
+        h.app.handle_native_callback(command, now()).await,
+        Err(AuthApplicationError::InvalidState)
+    ));
+    assert!(h.sessions.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_login_retains_separate_evidence_and_discards_provider_bearers() {
+    let h = harness_with_native(false, true);
+    let command = native_command(&h, "native-valid").await;
+    let result = h.app.handle_native_callback(command, now()).await.unwrap();
+    assert_eq!(*h.oidc.native_revocations.lock().unwrap(), 1);
+    assert!(result.session.id_token.is_none());
+    assert!(result.session.refresh_token.is_none());
+    assert_eq!(
+        result
+            .session
+            .native_authentication
+            .unwrap()
+            .factor_authenticated_at,
+        now().timestamp() - 1
+    );
+    assert!(result.session.oidc_claims.unwrap().get("aal").is_none());
+    let again = native_command(&h, "native-valid").await;
+    assert!(h.app.handle_native_callback(again, now()).await.is_err());
+    assert_eq!(*h.oidc.native_revocations.lock().unwrap(), 1);
+    assert_eq!(h.sessions.0.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn native_proof_validation_revocation_and_origin_failures_create_no_sessions() {
+    for failure in ["invalid-proof", "revocation", "origin", "policy-change"] {
+        let h = harness_with_native(false, true);
+        let mut command = native_command(
+            &h,
+            if failure == "invalid-proof" {
+                "native-invalid"
+            } else {
+                "native-valid"
+            },
+        )
+        .await;
+        if failure == "revocation" {
+            *h.oidc.native_revocation_fails.lock().unwrap() = true;
+        }
+        if failure == "origin" {
+            command.origin = "https://attacker.invalid".into();
+        }
+        if failure == "policy-change" {
+            h.states
+                .0
+                .lock()
+                .unwrap()
+                .get_mut(&command.callback.state)
+                .unwrap()
+                .native_proof_origin = None;
+        }
+        assert!(
+            h.app.handle_native_callback(command, now()).await.is_err(),
+            "accepted {failure}"
+        );
+        assert!(h.sessions.0.lock().unwrap().is_empty());
+        assert!(h.events.0.lock().unwrap().is_empty());
     }
 }
 
@@ -373,6 +531,7 @@ async fn pre_cutover_state_without_nonce_fails_closed_after_single_use_consumpti
         .states
         .save(&PkceState {
             authentication_freshness: None,
+            native_proof_origin: None,
             state: "legacy".to_owned(),
             code_verifier: "verifier".to_owned(),
             redirect_uri: "/".to_owned(),

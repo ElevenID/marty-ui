@@ -23,6 +23,7 @@ pub mod provisioning;
 pub mod rate_limit;
 pub mod runtime;
 pub mod service_transports;
+pub mod supabase;
 pub mod wallet;
 
 pub use application::*;
@@ -52,6 +53,7 @@ pub use provisioning::*;
 pub use rate_limit::*;
 pub use runtime::*;
 pub use service_transports::*;
+pub use supabase::*;
 pub use wallet::*;
 
 pub mod auth_proto {

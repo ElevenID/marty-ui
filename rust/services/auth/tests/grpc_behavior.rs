@@ -253,6 +253,45 @@ async fn session_validation_exposes_only_plausible_verified_oidc_auth_time() {
 }
 
 #[tokio::test]
+async fn native_step_up_uses_actual_events_and_rejects_mismatched_or_future_evidence() {
+    let mut authenticated = session();
+    let created = authenticated.created_at.timestamp();
+    authenticated.oidc_claims = Some(
+        json!({"iss":"https://project.example.invalid/auth/v1", "sub":"subject", "auth_time":created}),
+    );
+    authenticated.native_authentication = Some(marty_auth::NativeAuthenticationEvidence {
+        issuer: "https://project.example.invalid/auth/v1".into(),
+        subject: "subject".into(),
+        provider_session_id: "provider-session".into(),
+        password_authenticated_at: created - 30,
+        factor_authenticated_at: created - 20,
+    });
+    for (variant, expected) in [
+        ("valid", Some(created - 30)),
+        ("subject", None),
+        ("issuer", None),
+        ("future", None),
+    ] {
+        let mut candidate = authenticated.clone();
+        let evidence = candidate.native_authentication.as_mut().unwrap();
+        match variant {
+            "subject" => evidence.subject = "other".into(),
+            "issuer" => evidence.issuer = "https://attacker.invalid".into(),
+            "future" => evidence.factor_authenticated_at = created + 6,
+            _ => {}
+        }
+        let result = service(Some(candidate.clone()))
+            .validate_session(Request::new(ValidateSessionRequest {
+                session_id: candidate.session_id,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(result.authentication_time_unix, expected, "{variant}");
+    }
+}
+
+#[tokio::test]
 async fn retired_mutation_rpcs_fail_with_unimplemented_and_health_is_serving() {
     let service = service(None);
     let create = service

@@ -169,6 +169,21 @@ impl AuthService for AuthGrpcService {
 }
 
 fn verified_authentication_time(session: &crate::Session) -> Option<i64> {
+    if let Some(native) = &session.native_authentication {
+        let claims = session.oidc_claims.as_ref()?;
+        if claims.get("iss")?.as_str()? != native.issuer
+            || claims.get("sub")?.as_str()? != native.subject
+        {
+            return None;
+        }
+        let timestamp = native
+            .password_authenticated_at
+            .min(native.factor_authenticated_at);
+        return (timestamp > 0
+            && native.password_authenticated_at <= session.created_at.timestamp() + 5
+            && native.factor_authenticated_at <= session.created_at.timestamp() + 5)
+            .then_some(timestamp);
+    }
     let timestamp = session.oidc_claims.as_ref()?.get("auth_time")?.as_i64()?;
     // A future claim must never make an old session appear freshly authenticated.
     (timestamp > 0 && timestamp <= session.created_at.timestamp() + 60).then_some(timestamp)

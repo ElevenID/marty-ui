@@ -136,6 +136,13 @@ pub struct HandleCallbackCommand {
     pub user_agent: Option<String>,
 }
 
+// Intentionally no Debug: the native bearer is transient request material.
+pub struct NativeCallbackCommand {
+    pub callback: HandleCallbackCommand,
+    pub native_access_token: String,
+    pub origin: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HandleCallbackResult {
     pub session: Session,
@@ -224,10 +231,40 @@ pub trait SessionRepository: Send + Sync {
 pub trait PkceStateRepository: Send + Sync {
     async fn save(&self, state: &PkceState) -> Result<(), PortError>;
     async fn take(&self, state: &str) -> Result<Option<PkceState>, PortError>;
+    async fn claim_native_authentication(
+        &self,
+        _evidence: &crate::NativeAuthenticationEvidence,
+    ) -> Result<bool, PortError> {
+        Err(PortError::new(
+            "native_replay_store_unavailable",
+            "Native authentication replay protection is unavailable",
+        ))
+    }
 }
 
 #[async_trait]
 pub trait OidcProvider: Send + Sync {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        None
+    }
+    async fn validate_native_authentication(
+        &self,
+        _token: &str,
+        _identity: &OidcValidatedIdentity,
+        _started_at: i64,
+        _now: i64,
+    ) -> Result<crate::NativeAuthenticationEvidence, PortError> {
+        Err(PortError::new(
+            "native_authentication_unsupported",
+            "Native authentication is not configured",
+        ))
+    }
+    async fn revoke_native_authentication(&self, _token: &str) -> Result<(), PortError> {
+        Err(PortError::new(
+            "native_authentication_unsupported",
+            "Native authentication is not configured",
+        ))
+    }
     fn capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         Err(PortError::new(
             "oidc_capabilities_unavailable",
@@ -325,6 +362,10 @@ pub struct AuthApplicationConfig {
 }
 
 impl AuthApplication {
+    pub fn native_authentication_origin(&self) -> Option<&str> {
+        self.oidc.native_authentication_origin()
+    }
+
     pub fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         let mut capabilities = self.oidc.capabilities()?;
         capabilities.passkey_enrollment_supported &= self.passkeys_enabled;
@@ -458,6 +499,7 @@ impl AuthApplication {
             oidc_redirect_uri: command.oidc_redirect_uri.clone(),
             nonce: Some(nonce.clone()),
             authentication_freshness: None,
+            native_proof_origin: self.oidc.native_authentication_origin().map(str::to_owned),
             passkey_enrollment: enrollment.map(|session| PasskeyEnrollmentBinding {
                 session_id: session.session_id.clone(),
                 subject: keycloak_subject(session).unwrap_or_default().to_owned(),
@@ -497,6 +539,28 @@ impl AuthApplication {
         command: HandleCallbackCommand,
         now: DateTime<Utc>,
     ) -> Result<HandleCallbackResult, AuthApplicationError> {
+        self.handle_callback_with_native(command, None, now).await
+    }
+
+    pub async fn handle_native_callback(
+        &self,
+        command: NativeCallbackCommand,
+        now: DateTime<Utc>,
+    ) -> Result<HandleCallbackResult, AuthApplicationError> {
+        self.handle_callback_with_native(
+            command.callback,
+            Some((command.native_access_token, command.origin)),
+            now,
+        )
+        .await
+    }
+
+    async fn handle_callback_with_native(
+        &self,
+        command: HandleCallbackCommand,
+        native: Option<(String, String)>,
+        now: DateTime<Utc>,
+    ) -> Result<HandleCallbackResult, AuthApplicationError> {
         let state = self
             .pkce_states
             .take(&command.state)
@@ -505,6 +569,18 @@ impl AuthApplication {
             .ok_or(AuthApplicationError::InvalidState)?;
         if !state.is_valid_at(now) {
             return Err(AuthApplicationError::ExpiredState);
+        }
+        let required_origin = self.oidc.native_authentication_origin();
+        if state.native_proof_origin.as_deref() != required_origin
+            || native.as_ref().map(|(_, origin)| origin.as_str()) != required_origin
+        {
+            return Err(port(
+                "validate native proof policy",
+                PortError::new(
+                    "native_authentication_required",
+                    "The configured native authentication callback is required",
+                ),
+            ));
         }
         let nonce = state
             .nonce
@@ -539,6 +615,39 @@ impl AuthApplication {
                 )
                 .map_err(|error| port("validate OIDC tokens", error))?;
         }
+        let native_evidence = if let Some((token, _)) = &native {
+            let evidence = self
+                .oidc
+                .validate_native_authentication(
+                    token,
+                    &identity,
+                    state.created_at.timestamp(),
+                    now.timestamp(),
+                )
+                .await
+                .map_err(|error| port("validate native authentication", error))?;
+            if !self
+                .pkce_states
+                .claim_native_authentication(&evidence)
+                .await
+                .map_err(|error| port("claim native authentication", error))?
+            {
+                return Err(port(
+                    "claim native authentication",
+                    PortError::new(
+                        "native_authentication_replayed",
+                        "Native authentication was already consumed",
+                    ),
+                ));
+            }
+            self.oidc
+                .revoke_native_authentication(token)
+                .await
+                .map_err(|error| port("revoke bootstrap provider sessions", error))?;
+            Some(evidence)
+        } else {
+            None
+        };
         if let Some(binding) = state.passkey_enrollment {
             // The ID-token hint constrains Keycloak before the required action.
             // Independently bind the callback before provisioning or issuing any
@@ -569,16 +678,21 @@ impl AuthApplication {
             .provision(&identity)
             .await
             .map_err(|error| port("provision authenticated user", error))?;
-        let session = Session::create(SessionSpec {
+        let mut session = Session::create(SessionSpec {
             user,
             ttl_seconds: self.session_ttl_seconds,
             now,
             ip_address: command.ip_address,
             user_agent: command.user_agent,
-            id_token: Some(id_token),
-            refresh_token: tokens.refresh_token,
+            id_token: native_evidence.is_none().then_some(id_token),
+            refresh_token: if native_evidence.is_some() {
+                None
+            } else {
+                tokens.refresh_token
+            },
             oidc_claims: Some(identity.id_token_claims),
         });
+        session.native_authentication = native_evidence;
         self.sessions
             .save(&session)
             .await

@@ -23,6 +23,8 @@ use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    native_enabled: std::sync::atomic::AtomicBool,
+    native_callbacks: Mutex<usize>,
     management_returns: Mutex<Vec<String>>,
     email_enrollment: Mutex<bool>,
     enrollments: Mutex<Vec<(String, String, String)>>,
@@ -36,6 +38,18 @@ struct AppStub {
 
 #[async_trait]
 impl AuthHttpApplication for AppStub {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        self.native_enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then_some("https://authorization.example.invalid")
+    }
+    async fn native_callback(
+        &self,
+        command: marty_auth::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        *self.native_callbacks.lock().unwrap() += 1;
+        self.callback(command.callback).await
+    }
     fn provider_capabilities(&self) -> Result<marty_auth::OidcProviderCapabilities, PortError> {
         self.capabilities
             .lock()
@@ -298,6 +312,117 @@ async fn request(
 }
 
 #[tokio::test]
+async fn native_callback_requires_exact_origin_closed_body_and_enabled_provider() {
+    let (router, app, _) = harness();
+    let body = "code=fixture-code&state=synthetic-native-state&native_access_token=header.payload.signature";
+    let headers = [
+        ("origin", "https://authorization.example.invalid"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    assert_eq!(
+        request(&router, Method::POST, "/v1/auth/callback", &headers, body)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    app.native_enabled
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for origin in [
+        "null",
+        "https://attacker.invalid",
+        "https://authorization.example.invalid/",
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[("origin", origin), headers[1]],
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[headers[1]],
+            body
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[headers[0], headers[0], headers[1]],
+            body
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    for invalid in [
+        format!("{body}&unexpected=value"),
+        format!("{body}&state=duplicate"),
+        body.replace("synthetic-native-state", "short"),
+        format!("{body}{}", "a".repeat(25_000)),
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &headers,
+            &invalid,
+        )
+        .await;
+        assert!(response.status().is_client_error());
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback?code=query",
+            &headers,
+            body
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 0);
+    let response = request(&router, Method::POST, "/v1/auth/callback", &headers, body).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 1);
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
+    let cookie = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(";");
+    assert!(cookie.contains("HttpOnly") && cookie.contains("Secure"));
+    assert!(!response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("native_access_token"));
+}
+
+#[tokio::test]
 async fn provider_capabilities_are_public_non_secret_and_never_cached() {
     let (router, app, _) = harness();
     let response = request(&router, Method::GET, "/v1/auth/provider", &[], "").await;
@@ -392,7 +517,7 @@ async fn unsupported_registration_has_a_specific_public_error() {
 fn core_surface_is_the_exact_non_credential_route_subset() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
-    let expected = contract["http_routes"].as_array().unwrap()[..8]
+    let expected = contract["http_routes"].as_array().unwrap()[..9]
         .iter()
         .map(|route| {
             (
