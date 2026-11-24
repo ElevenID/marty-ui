@@ -133,6 +133,14 @@ responses use no-store headers while this deployment is being qualified. No
 Worker, Pages Function, API proxy or credential is added. Upload the complete
 prepared directory through the selected free Pages deployment path.
 
+When logout redirects to a separately hosted identity provider, also pass
+`--auth-provider-origin https://login.elevenid.example` with that exact configured
+provider logout origin. Align it with the selected provider and the build's
+`VITE_AUTH_PROVIDER_ORIGIN` when applicable. This adds only the provider's exact
+origin to `form-action`, because browsers can enforce that policy across the
+logout POST's redirect chain. It does not add general provider connection or
+navigation permission. The chosen provider origin is recorded in the report.
+
 The generated `pages-deployment.json` records selected origins and file hashes.
 Matching a build's source marker does not prove source custody or the API origin
 compiled into JavaScript. The report explicitly leaves compiled-origin,

@@ -137,6 +137,55 @@ class ConsolePagesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.prepare(source, source / "pages")
 
+    def test_configured_provider_logout_redirect_is_allowed_without_connect_access(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self.fixture(root)
+            report = pages.prepare(
+                source,
+                root / "pages",
+                console="https://console.example.com",
+                api="https://api.example.com",
+                revision=REVISION,
+                provider="https://login.example.com",
+            )
+            headers = (root / "pages/_headers").read_text()
+            self.assertIn(
+                "form-action 'self' https://api.example.com https://login.example.com",
+                headers,
+            )
+            self.assertNotIn(
+                "login.example.com", headers.split("connect-src", 1)[1].split(";", 1)[0]
+            )
+            self.assertEqual(
+                "https://login.example.com", report["auth_provider_origin"]
+            )
+
+    def test_worker_directory_and_functions_are_rejected_even_when_empty(self):
+        for relative in (
+            "_worker.js",
+            "_worker.js/index.js",
+            "functions",
+            "functions/auth.js",
+        ):
+            with (
+                self.subTest(relative=relative),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                source = self.fixture(root)
+                path = source / relative
+                if relative.endswith("/index.js") or relative.endswith("/auth.js"):
+                    path.parent.mkdir()
+                    path.write_text("export default {}", encoding="utf-8")
+                else:
+                    path.mkdir()
+                with self.assertRaises(ValueError):
+                    self.prepare(source, root / "pages")
+                self.assertFalse((root / "pages").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,9 +65,16 @@ def origin(value: str) -> str:
 
 
 def prepare(
-    source: Path, output: Path, *, console: str, api: str, revision: str
+    source: Path,
+    output: Path,
+    *,
+    console: str,
+    api: str,
+    revision: str,
+    provider: str | None = None,
 ) -> dict:
     console, api = origin(console), origin(api)
+    provider = origin(provider) if provider is not None else None
     if console == api:
         raise ValueError("Pages console and API must use separate origins")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -90,18 +97,19 @@ def prepare(
     for path in source.rglob("*"):
         if path.is_symlink() or not (path.is_file() or path.is_dir()):
             raise ValueError("Application output contains a link or special file")
+        relative = path.relative_to(source).as_posix()
+        if relative.split("/", 1)[0] in {
+            "_headers",
+            "_redirects",
+            "_worker.js",
+            "functions",
+            "404.html",
+            "pages-deployment.json",
+        }:
+            raise ValueError(
+                "Application output already contains a Pages deployment override"
+            )
         if path.is_file():
-            relative = path.relative_to(source).as_posix()
-            if relative in {
-                "_headers",
-                "_redirects",
-                "_worker.js",
-                "404.html",
-                "pages-deployment.json",
-            } or relative.startswith("functions/"):
-                raise ValueError(
-                    "Application output already contains a Pages deployment override"
-                )
             files.append((path, relative))
     for required in ("index.html", "console/index.html"):
         if not (source / required).is_file():
@@ -124,7 +132,8 @@ def prepare(
             "font-src 'self' https://fonts.gstatic.com",
             "img-src 'self' data: blob: https://www.googletagmanager.com https://www.google-analytics.com https://region1.google-analytics.com",
             f"connect-src 'self' {api} https://cloudflareinsights.com https://www.googletagmanager.com https://www.google-analytics.com https://region1.google-analytics.com https://analytics.google.com https://region1.analytics.google.com",
-            f"form-action 'self' {api}",
+            "form-action 'self' "
+            + " ".join(dict.fromkeys(value for value in (api, provider) if value)),
             "frame-src 'self' https://www.youtube-nocookie.com",
         )
     )
@@ -158,6 +167,7 @@ def prepare(
         "source_revision": revision,
         "console_origin": console,
         "api_origin": api,
+        "auth_provider_origin": provider,
         "published": False,
         "compiled_api_origin_verified": False,
         "provider_journey_verified": False,
@@ -181,6 +191,7 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--console-origin", required=True)
     parser.add_argument("--api-origin", required=True)
+    parser.add_argument("--auth-provider-origin")
     parser.add_argument("--source-revision", required=True)
     args = parser.parse_args()
     prepare(
@@ -188,6 +199,7 @@ def main() -> None:
         args.output,
         console=args.console_origin,
         api=args.api_origin,
+        provider=args.auth_provider_origin,
         revision=args.source_revision,
     )
     print(
