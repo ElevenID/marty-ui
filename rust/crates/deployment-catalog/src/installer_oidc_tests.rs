@@ -198,6 +198,7 @@ fn optional_provider_compatibility_fields_preserve_omission_and_exact_environmen
         "provider_name",
         "account_url",
         "recovery_url",
+        "native_supabase_totp",
     ] {
         assert!(old["external_oidc"].get(field).is_none());
     }
@@ -238,6 +239,144 @@ fn optional_provider_compatibility_fields_preserve_omission_and_exact_environmen
     assert!(chosen.external_oidc.validate_model_scopes(&model).is_err());
     config.external_oidc.apply_environment(&mut env).unwrap();
     assert!(!env.contains_key("MARTY_EXTERNAL_OIDC_PROMPT"));
+}
+
+fn native_configuration() -> Value {
+    let mut value = configuration();
+    value["external_oidc"]["issuer_url"] = json!("https://project.example.test/auth/v1");
+    value["external_oidc"]["client_id"] = json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    value["external_oidc"]["allowed_algorithms"] = json!(["ES256"]);
+    value["external_oidc"]["native_supabase_totp"] = json!({
+        "authorization_origin":"https://authorization.example.test",
+        "publishable_key":"sb_publishable_SYNTHETIC_public_0123456789"
+    });
+    value
+}
+
+#[test]
+fn native_supabase_selection_is_retained_and_enforces_exact_runtime_values() {
+    let (parent, path, mut state) = installation();
+    let selected = choose(parent.path(), &mut state, &native_configuration());
+    let oidc = &selected.configuration.external_oidc;
+    let mut environment = BTreeMap::new();
+    oidc.apply_environment(&mut environment).unwrap();
+    let mut model = serde_json::Map::new();
+    for (suffix, runtime, expected) in [
+        (
+            "NATIVE_PROOF_MODE",
+            "OIDC_NATIVE_PROOF_MODE",
+            "supabase_totp",
+        ),
+        (
+            "SUPABASE_UI_ORIGIN",
+            "SUPABASE_AUTH_UI_ORIGIN",
+            "https://authorization.example.test",
+        ),
+        (
+            "SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_PUBLISHABLE_KEY",
+            "sb_publishable_SYNTHETIC_public_0123456789",
+        ),
+    ] {
+        assert_eq!(
+            environment[&format!("MARTY_EXTERNAL_OIDC_{suffix}")],
+            expected
+        );
+        model.insert(runtime.into(), json!(expected));
+    }
+    oidc.validate_model_scopes(&model).unwrap();
+    for name in [
+        "OIDC_NATIVE_PROOF_MODE",
+        "SUPABASE_AUTH_UI_ORIGIN",
+        "SUPABASE_PUBLISHABLE_KEY",
+    ] {
+        let mut missing = model.clone();
+        missing.remove(name);
+        assert!(
+            oidc.validate_model_scopes(&missing).is_err(),
+            "accepted missing {name}"
+        );
+        let mut changed = model.clone();
+        changed.insert(name.into(), json!("changed"));
+        assert!(
+            oidc.validate_model_scopes(&changed).is_err(),
+            "accepted changed {name}"
+        );
+    }
+    assert_eq!(
+        state.with_inspection(external).unwrap().as_ref(),
+        Some(oidc)
+    );
+    let retained: Value =
+        serde_json::from_slice(&std::fs::read(path.join("evidence").join(RECORD)).unwrap())
+            .unwrap();
+    assert_eq!(
+        retained["configuration"]["external_oidc"]["native_supabase_totp"],
+        native_configuration()["external_oidc"]["native_supabase_totp"]
+    );
+    let legacy: Configuration = serde_json::from_value(configuration()).unwrap();
+    legacy
+        .external_oidc
+        .apply_environment(&mut environment)
+        .unwrap();
+    assert!(!environment.contains_key("MARTY_EXTERNAL_OIDC_NATIVE_PROOF_MODE"));
+    assert!(!environment.contains_key("MARTY_EXTERNAL_OIDC_SUPABASE_UI_ORIGIN"));
+    assert!(!environment.contains_key("MARTY_EXTERNAL_OIDC_SUPABASE_PUBLISHABLE_KEY"));
+    assert!(legacy.external_oidc.validate_model_scopes(&model).is_err());
+    legacy
+        .external_oidc
+        .validate_model_scopes(&serde_json::Map::new())
+        .unwrap();
+}
+
+#[test]
+fn native_supabase_profile_refuses_unsafe_partial_and_incompatible_inputs_before_writes() {
+    let (parent, path, state) = installation();
+    let input = parent.path().join("native-oidc.json");
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    for (field, value) in [
+        ("issuer_url", json!("https://project.example.test/other")),
+        ("client_id", json!("not-a-uuid")),
+        ("allowed_algorithms", json!(["RS256"])),
+        ("allowed_algorithms", json!(["ES256", "RS256"])),
+        ("max_age", json!("omit")),
+        ("max_age", json!(1)),
+        (
+            "native_supabase_totp",
+            json!({"authorization_origin":"https://authorization.example.test"}),
+        ),
+        (
+            "native_supabase_totp",
+            json!({"publishable_key":"sb_publishable_SYNTHETIC_public_0123456789"}),
+        ),
+        (
+            "native_supabase_totp",
+            json!({"authorization_origin":"http://authorization.example.test","publishable_key":"sb_publishable_SYNTHETIC_public_0123456789"}),
+        ),
+        (
+            "native_supabase_totp",
+            json!({"authorization_origin":"https://authorization.example.test/path","publishable_key":"sb_publishable_SYNTHETIC_public_0123456789"}),
+        ),
+        (
+            "native_supabase_totp",
+            json!({"authorization_origin":"https://authorization.example.test","publishable_key":"sb_secret_never_allowed"}),
+        ),
+        (
+            "native_supabase_totp",
+            json!({"authorization_origin":"https://authorization.example.test","publishable_key":"sb_publishable_SYNTHETIC_public_0123456789","service_role":"never"}),
+        ),
+    ] {
+        let mut invalid = native_configuration();
+        invalid["external_oidc"][field] = value;
+        private_file(&input, &serde_json::to_vec(&invalid).unwrap());
+        assert!(prepare(Some(&input), false).is_err(), "accepted {field}");
+    }
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        before
+    );
+    assert!(state.journal().external_oidc_selection_sha256().is_none());
+    assert!(!path.join("evidence").join(RECORD).exists());
 }
 
 #[test]

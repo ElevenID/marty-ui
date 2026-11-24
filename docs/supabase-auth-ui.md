@@ -192,9 +192,12 @@ The Auth runtime selection consists of `OIDC_NATIVE_PROOF_MODE=supabase_totp`,
 It requires external OIDC mode, the exact project `/auth/v1` issuer, a UUID
 client ID, only ES256 signatures, and `OIDC_MAX_AGE_SECONDS=0`. The application
 cookie must use Lax or secure None SameSite policy for the cross-origin POST
-and its subsequent redirect. These are runtime inputs; the signed installer's
-provider-selection file does not expose this profile yet. Do not bypass its
-authenticated configuration ownership by editing a retained installation.
+and its subsequent redirect. The signed installer's fresh provider-selection
+input exposes these through its explicit
+[`native_supabase_totp` block](installer-external-oidc.md#supabase-native-password-and-totp-proof).
+Do not bypass authenticated configuration ownership by editing a retained
+installation. Source support does not establish that an installed release has
+qualified this protocol.
 
 Auth snapshots the native-proof origin in one-time PKCE state. A GET callback,
 changed provider policy or mismatched POST origin fails before code exchange.
