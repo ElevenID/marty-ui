@@ -1,7 +1,9 @@
 # Supabase authorization UI
 
 Static, framework-free email/password sign-in, enrolled TOTP verification and
-OAuth consent for explicitly registered ElevenID and Rifare clients.
+OAuth consent for explicitly registered ElevenID and Rifare clients. The opt-in
+v3 configuration also supplies password recovery pages; live delivery and
+provider settings require separate qualification.
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -24,5 +26,6 @@ the local build and tests.
 
 Read the [operator guide](../../docs/supabase-auth-ui.md) for public configuration,
 provider/client registration, session behavior and the remaining hosted
-qualification gates. Registration, recovery and MFA enrollment are outside this
-companion's scope.
+qualification gates. Signup, email confirmation and MFA enrollment remain
+additional product work; the recovery implementation does not complete those
+account-lifecycle requirements.

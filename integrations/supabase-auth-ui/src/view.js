@@ -85,7 +85,10 @@ export function renderView(document, root, state, actions) {
       void actions.signIn(email.input.value, enteredPassword);
     });
     content.append(form);
-    content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
+    if (actions.recover) {
+      content.append(button("Forgot your password?", "text-button", actions.recover));
+      content.append(element("p", "help", "Need an account or authenticator setup? Contact your operator."));
+    } else content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
   } else if (state.phase === "checking") {
     heading.textContent = "Checking your account";
     intro("Verifying your sign-in and any required account verification.");

@@ -52,9 +52,10 @@ authenticator challenge. Multiple enrolled TOTP factors can be selected. A
 successful challenge must actually result in AAL2 before authorization details
 are retrieved. An unmet requirement for only phone, WebAuthn, recovery codes or
 an unknown factor type is blocked; it never falls back to password-only
-consent. Registration, email confirmation, password recovery, factor enrollment,
+consent. Registration, email confirmation, factor enrollment,
 recovery codes, social login, SSO and CAPTCHA are not implemented here. Accounts
 or project policies that require those flows need further product work.
+Password recovery is available only with the explicit v3 configuration below.
 
 Authorization details come from the provider SDK. The request ID, user ID,
 email, client ID and registered callback must match the current verified
@@ -128,7 +129,7 @@ unless it is the real application's callback.
 
 | Field | Accepted value |
 | --- | --- |
-| `schema` | `elevenid.supabase-auth-ui/v1`, or the explicit native-proof transport schema `elevenid.supabase-auth-ui/v2` described below. |
+| `schema` | `elevenid.supabase-auth-ui/v1`, explicit native-proof transport `elevenid.supabase-auth-ui/v2`, or opt-in account recovery `elevenid.supabase-auth-ui/v3` described below. |
 | `supabaseUrl` | One exact canonical HTTPS project origin, without a path, trailing slash, credentials, custom port, query or fragment. A custom Auth domain may be used if it is the actual selected project origin. |
 | `publishableKey` | Only a modern `sb_publishable_` key. Secret keys, service-role keys, legacy JWT keys and management credentials are rejected. |
 | `brand` | A bounded plain-text site label. |
@@ -220,6 +221,58 @@ JWTs remain cryptographically valid until expiration, as with ordinary Supabase
 logout. The application session retains separate typed authentication-event
 evidence and the unchanged signed ID claims. Internal step-up checks use the
 actual earlier authentication event, never the OAuth exchange timestamp.
+
+### Password recovery (v3, delivery qualification pending)
+
+`public/config.lifecycle.example.json` shows the closed v3 schema. It retains
+v2 per-client callback modes and requires `accountLifecycle` with a `clientId`
+and `signInUri`. The selected client must use native MFA POST, and the sign-in
+URI must be exactly `/v1/auth/login` on the same origin as that client's
+registered `/v1/auth/callback`. Query strings, fragments and arbitrary return
+destinations are rejected. This starts a new application login after recovery;
+it cannot reuse an old OAuth state or turn an email token into an application
+session.
+
+The static build adds only `/account/recover` and `/account/verify` rewrites
+when v3 is selected. The sign-in screen then offers **Forgot your password?**.
+Recovery requests use the provider's normal email API with a fixed verification
+page callback and a non-enumerating success message. A recovery request does
+not create an account or sign the browser into an application.
+
+Configure the Supabase recovery email template from `email/recovery.html`.
+Set its Site URL to the exact authorization-site HTTPS **origin**, without a
+trailing slash, and allow the exact `/account/verify` redirect there. The email
+template puts only `token_hash` and `type=recovery` in the URL fragment. The
+page removes both query and fragment from browser history before loading its
+configuration or contacting the provider; hashes never enter HTTP URLs,
+rendered controller state, local storage or error messages. Malformed,
+duplicate, wrong-purpose or redirect-bearing links fail closed.
+
+An explicit confirmation button consumes the one-time email credential only
+after the user acts. This follows Supabase's
+[email-prefetching guidance](https://supabase.com/docs/guides/auth/auth-email-templates#email-prefetching)
+so loading a link preview does not itself verify the credential. A server-backed
+account check then preserves required MFA. Enrolled TOTP must complete and
+actually reach AAL2 before a password update; unsupported required factors are
+blocked. The page checks account and verified-factor identity again before
+writing, requires matching passwords of 12–1024 characters, and leaves stricter
+provider password policy authoritative. Passwords and codes are cleared from
+inputs on submit and never enter public controller state.
+
+After a successful password change, another account/factor check and local
+provider logout precede the automatic return to the fixed application sign-in
+entry. There is no extra Return button on that successful path. If cleanup
+fails after the write, the page clearly says the password was saved and offers
+a manual fresh sign-in; it does not falsely report an unchanged password.
+Disposal stops stale work from rendering or redirecting and clears the local
+memory session. It cannot undo a request the provider already committed.
+
+This source has synthetic pinned-SDK and Chrome checks, not live email-delivery
+or real password-reset acceptance. Verify the custom SMTP sender, Free-plan
+limits, exact site/redirect configuration, email template and actual delivered
+link before enabling v3 on the deployed site. No provider settings or human
+accounts are changed by a build. Signup, email confirmation, factor enrollment
+and recovery for a lost authenticator still require additional product work.
 
 ## Local verification and static build
 

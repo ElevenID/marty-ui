@@ -54,9 +54,10 @@ function callback(value, code) {
 }
 
 export function validateConfig(input) {
-  closed(input, ["schema", "supabaseUrl", "publishableKey", "brand", "clients"], "configuration");
-  if (!["elevenid.supabase-auth-ui/v1", "elevenid.supabase-auth-ui/v2"].includes(input.schema)) fail("configuration");
-  const nativeModes = input.schema === "elevenid.supabase-auth-ui/v2";
+  const lifecycle = record(input) && input.schema === "elevenid.supabase-auth-ui/v3";
+  closed(input, ["schema", "supabaseUrl", "publishableKey", "brand", "clients", ...(lifecycle ? ["accountLifecycle"] : [])], "configuration");
+  if (!["elevenid.supabase-auth-ui/v1", "elevenid.supabase-auth-ui/v2", "elevenid.supabase-auth-ui/v3"].includes(input.schema)) fail("configuration");
+  const nativeModes = input.schema !== "elevenid.supabase-auth-ui/v1";
   const project = httpsUrl(input.supabaseUrl, "configuration");
   if (input.supabaseUrl !== project.origin) fail("configuration");
   if (typeof input.publishableKey !== "string" || !/^sb_publishable_[A-Za-z0-9_-]{16,256}$/.test(input.publishableKey)) fail("configuration");
@@ -78,7 +79,17 @@ export function validateConfig(input) {
     });
     return Object.freeze({ id: client.id, label: client.label, redirectUris: Object.freeze(redirectUris), ...(nativeModes ? { callbackMode: client.callbackMode } : {}) });
   });
-  return Object.freeze({ schema: input.schema, supabaseUrl: input.supabaseUrl, publishableKey: input.publishableKey, brand: input.brand, clients: Object.freeze(clients) });
+  let accountLifecycle;
+  if (lifecycle) {
+    closed(input.accountLifecycle, ["clientId", "signInUri"], "configuration");
+    const { clientId, signInUri } = input.accountLifecycle;
+    callback(signInUri, "configuration");
+    const signIn = new URL(signInUri);
+    const client = clients.find((entry) => entry.id === clientId && entry.callbackMode === "native_mfa_post");
+    if (signIn.pathname !== "/v1/auth/login" || !client?.redirectUris.some((uri) => uri === `${signIn.origin}/v1/auth/callback`)) fail("configuration");
+    accountLifecycle = Object.freeze({ clientId, signInUri });
+  }
+  return Object.freeze({ schema: input.schema, supabaseUrl: input.supabaseUrl, publishableKey: input.publishableKey, brand: input.brand, clients: Object.freeze(clients), ...(lifecycle ? { accountLifecycle } : {}) });
 }
 
 function query(search, allowed, code, maxLength) {
