@@ -45,6 +45,15 @@ const apiResponses = [];
 const failures = [];
 const consoleErrors = [];
 const pendingRequests = new Map();
+function gatewayDiagnosticRoute(pathname) {
+  if (pathname === '/v1/auth/me') return 'auth-session';
+  const prefix = '/v1/flows/public/verification';
+  if (pathname === `${prefix}/catalog`) return 'verification-catalog';
+  if (pathname === `${prefix}/preview`) return 'verification-preview';
+  if (pathname === `${prefix}/sessions`) return 'verification-launch';
+  if (pathname.startsWith(`${prefix}/sessions/`)) return 'verification-session';
+  return 'other-gateway';
+}
 const artifactDir = path.join(root, '../rust/target/public-verification-browser');
 // A new output directory preserves earlier qualification artifacts and avoids
 // emptying any existing build or operator directory.
@@ -86,6 +95,8 @@ try {
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 500)); });
   page.on('response', response => {
     const url = new URL(response.url());
+    const pending = pendingRequests.get(response.request());
+    if (pending) pending.responseStatus = response.status();
     if (url.origin === gateway.origin && url.pathname.startsWith('/v1/flows/public/verification/')) {
       const headers = response.request().headers();
       if (['cookie', 'authorization', 'x-api-key', 'x-user-id', 'x-organization-id'].some(name => headers[name])) {
@@ -105,6 +116,8 @@ try {
       method: request.method(), type: request.resourceType(),
       location: url.origin === origin ? 'application'
         : url.origin === gateway.origin ? 'gateway' : 'external',
+      ...(url.origin === gateway.origin ? { route: gatewayDiagnosticRoute(url.pathname) } : {}),
+      responseStatus: null,
     });
     if (url.origin === origin && /\/(?:@vite|@id|src)\//.test(url.pathname)) {
       failures.push('Production journey requested development source');
