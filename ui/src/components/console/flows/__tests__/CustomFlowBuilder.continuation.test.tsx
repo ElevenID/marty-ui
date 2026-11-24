@@ -127,7 +127,7 @@ async function settleCapabilities() {
 function holdOrganizationSwitch() {
   let release!: () => void;
   const held = new Promise<void>(done => { release = done; });
-  server.use(http.put('/v1/me/preferences', async ({ request }) => {
+  server.use(http.put('http://localhost:8000/v1/me/preferences', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
     preferenceWrites.push(body);
     if (body.last_active_org_id === 'org-b') await held;
@@ -153,8 +153,8 @@ beforeEach(() => {
   window.localStorage.clear();
   window.history.replaceState({}, '', NEW_PATH);
   server.use(
-    http.get('/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org_admin', last_active_org_id: 'org-a' })),
-    http.put('/v1/me/preferences', async ({ request }) => {
+    http.get('http://localhost:8000/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org_admin', last_active_org_id: 'org-a' })),
+    http.put('http://localhost:8000/v1/me/preferences', async ({ request }) => {
       const body = await request.json() as Record<string, unknown>;
       preferenceWrites.push(body);
       return HttpResponse.json(body);

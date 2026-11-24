@@ -126,7 +126,7 @@ function holdOrganizationSwitch() {
   const ready = new Promise<void>(resolve => { release = resolve; });
   let selection: Promise<unknown> | undefined;
   const persisted: unknown[] = [];
-  server.use(http.put('/v1/me/preferences', async ({ request }) => {
+  server.use(http.put('http://localhost:8000/v1/me/preferences', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
     persisted.push(body.last_active_org_id);
     if (body.last_active_org_id === OTHER_ORGANIZATION) await ready;
@@ -228,8 +228,8 @@ beforeEach(() => {
   window.localStorage.clear();
   window.history.replaceState({}, '', PAGE);
   server.use(
-    http.get('/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org_admin', last_active_org_id: ORGANIZATION })),
-    http.put('/v1/me/preferences', async ({ request }) => HttpResponse.json(await request.json() as Record<string, unknown>)),
+    http.get('http://localhost:8000/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org_admin', last_active_org_id: ORGANIZATION })),
+    http.put('http://localhost:8000/v1/me/preferences', async ({ request }) => HttpResponse.json(await request.json() as Record<string, unknown>)),
     http.get('*/v1/organizations/mine', () => HttpResponse.json(organizations)),
     http.get('*/v1/organizations/:organizationId/members/me/permissions', ({ params }) => {
       permissionReads.push(String(params.organizationId));
