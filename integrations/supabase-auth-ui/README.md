@@ -19,6 +19,10 @@ language selector and provider forms through FreeMarker slots. The static build
 fills the content slot with the loading screen, then the browser renders the
 sign-in, TOTP and consent forms. The Helm chart packages the same theme files.
 
+The existing Fast Feedback CI lane installs the locked companion dependencies
+with hooks disabled, runs its full test suite and builds default and v3 examples.
+This is source verification; it does not configure or contact a live provider.
+
 The example is deliberately synthetic and uses reserved `.invalid` domains.
 The build makes no provider requests. `dist/` contains static assets, public
 configuration, Cloudflare `_headers` and exact consent-path rewrites. It has no
