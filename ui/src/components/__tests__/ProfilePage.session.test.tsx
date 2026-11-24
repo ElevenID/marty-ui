@@ -68,13 +68,14 @@ async function savePicture(container: HTMLElement, user: ReturnType<typeof rende
 
 describe('profile photo readback with the real session providers', () => {
   beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', '');
     window.localStorage.clear();
     server.use(
       http.get('*/v1/organizations/mine', () => HttpResponse.json([])),
       http.get('*/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'applicant', last_active_org_id: null })),
     );
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
   it.each(['503', 'network', 'invalid JSON', 'invalid identity'])('keeps the validated account and reports a saved photo when readback fails with %s', async failure => {
     let saved = false;

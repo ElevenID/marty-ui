@@ -35,6 +35,28 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
 
 
+@pytest.mark.parametrize("filename", ["docker-compose.base.yml", "docker-compose.selfhost.prod.yml"])
+def test_static_console_api_origin_is_an_unset_auth_only_input(filename):
+    services = yaml.safe_load((ROOT / filename).read_text())["services"]
+    assert services["auth"]["environment"]["AUTH_PUBLIC_API_ORIGIN"] == "${AUTH_PUBLIC_API_ORIGIN:-}"
+    assert [name for name, service in services.items()
+            if "AUTH_PUBLIC_API_ORIGIN" in service.get("environment", {})] == ["auth"]
+
+
+@pytest.mark.parametrize("fault", ["changed", "missing", "another-consumer"])
+def test_ordinary_model_cannot_select_or_broaden_the_static_console_origin(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    environment = current["services"]["auth"]["environment"]
+    if fault == "changed":
+        environment["AUTH_PUBLIC_API_ORIGIN"] = "https://unreviewed.example"
+    elif fault == "missing":
+        environment.pop("AUTH_PUBLIC_API_ORIGIN")
+    else:
+        current["services"]["gateway"]["environment"]["AUTH_PUBLIC_API_ORIGIN"] = "${AUTH_PUBLIC_API_ORIGIN:-}"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.mark.parametrize("owner,key", [
     ("auth", "KEYCLOAK_PASSKEYS_ENABLED"),
     ("keycloak-configurator", "KEYCLOAK_PASSKEYS_ENABLED"),

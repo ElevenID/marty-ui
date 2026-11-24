@@ -23,6 +23,9 @@ use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    logout_calls: Mutex<usize>,
+    local_logout: Mutex<bool>,
+    callback_redirect: Mutex<Option<String>>,
     management_returns: Mutex<Vec<String>>,
     email_enrollment: Mutex<bool>,
     enrollments: Mutex<Vec<(String, String, String)>>,
@@ -100,12 +103,21 @@ impl AuthHttpApplication for AppStub {
         }
         Ok(HandleCallbackResult {
             session: self.session.lock().unwrap().clone().unwrap(),
-            redirect_uri: "/".into(),
+            redirect_uri: self
+                .callback_redirect
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| "/".into()),
             audit_warning: None,
         })
     }
 
     async fn logout(&self, _: &str) -> Result<Option<String>, PortError> {
+        *self.logout_calls.lock().unwrap() += 1;
+        if *self.local_logout.lock().unwrap() {
+            return Ok(None);
+        }
         Ok(Some("https://identity.example/logout".into()))
     }
 
@@ -255,7 +267,196 @@ fn session() -> Session {
     session
 }
 
+#[tokio::test]
+async fn static_console_login_binds_the_allowlisted_ui_return_to_a_fixed_api_callback() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    for (route, registration) in [("login", false), ("register", true)] {
+        let response = request(&router, Method::GET,
+            &format!("/v1/auth/{route}?redirect_uri=https%3A%2F%2Fsecondary.example%2Fconsole%2Fprofile%3Ftab%3Dsecurity"),
+            &[("host", "api.example"), ("x-forwarded-host", "untrusted.example"), ("x-forwarded-proto", "http")], "").await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            app.initiated.lock().unwrap().last().cloned(),
+            Some((
+                registration,
+                "https://secondary.example/console/profile?tab=security".into(),
+                "https://api.example/v1/auth/callback".into()
+            ))
+        );
+    }
+    *app.callback_redirect.lock().unwrap() = Some(app.initiated.lock().unwrap()[0].1.clone());
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/auth/callback?code=synthetic&state=synthetic",
+        &[("host", "api.example")],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "https://secondary.example/console/profile?tab=security"
+    );
+    assert!(response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| value.to_str().unwrap().starts_with("sessionId=session-1;")));
+}
+
+#[tokio::test]
+async fn static_console_account_changes_require_an_exact_allowed_browser_origin() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, sessions) = harness_with_origins(origins);
+    for origin in [
+        None,
+        Some("https://untrusted.example"),
+        Some("https://user@console.example"),
+        Some("https://console.example/"),
+        Some("null"),
+    ] {
+        let mut headers = vec![
+            ("host", "api.example"),
+            ("cookie", "sessionId=session-1"),
+            ("content-type", "application/json"),
+        ];
+        if let Some(origin) = origin {
+            headers.push(("origin", origin));
+        }
+        let response = request(
+            &router,
+            Method::PATCH,
+            "/v1/auth/me",
+            &headers,
+            r#"{"picture":"data:image/png;base64,YQ=="}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = request(&router, Method::POST, "/v1/auth/logout", &headers, "").await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert_eq!(*app.logout_calls.lock().unwrap(), 0);
+    assert!(sessions
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .user
+        .picture
+        .is_none());
+    let headers = [
+        ("host", "api.example"),
+        ("origin", "https://secondary.example"),
+        ("cookie", "sessionId=session-1"),
+        ("content-type", "application/json"),
+    ];
+    let response = request(
+        &router,
+        Method::PATCH,
+        "/v1/auth/me",
+        &headers,
+        r#"{"picture":"data:image/png;base64,YQ=="}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        sessions
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .user
+            .picture
+            .as_deref(),
+        Some("data:image/png;base64,YQ==")
+    );
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &headers,
+        r#"{"redirect_uri":"https://secondary.example/console/profile"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        app.enrollments.lock().unwrap()[0],
+        (
+            "session-1".into(),
+            "https://secondary.example/console/profile".into(),
+            "https://api.example/v1/auth/callback".into()
+        )
+    );
+}
+
+#[tokio::test]
+async fn static_console_local_logout_returns_to_the_console_and_clears_the_api_cookie() {
+    let origins = UiOriginPolicy::new("https://console.example", std::iter::empty::<&str>())
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    *app.local_logout.lock().unwrap() = true;
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/logout",
+        &[
+            ("host", "api.example"),
+            ("origin", "https://console.example"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "https://console.example/"
+    );
+    assert_eq!(*app.logout_calls.lock().unwrap(), 1);
+    assert!(response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| {
+            let value = value.to_str().unwrap();
+            value.starts_with("sessionId=;")
+                && value.contains("Max-Age=0")
+                && value.contains("Secure")
+        }));
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/logout",
+        &[
+            ("host", "api.example"),
+            ("origin", "https://console.example"),
+            ("origin", "https://console.example"),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
+    harness_with_origins(
+        UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"]).unwrap(),
+    )
+}
+
+fn harness_with_origins(origins: UiOriginPolicy) -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
     let app = Arc::new(AppStub::default());
     *app.session.lock().unwrap() = Some(session());
     let sessions = Arc::new(Sessions::default());
@@ -264,8 +465,7 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
         application: app.clone(),
         credential_login: Arc::new(CredentialStub),
         sessions: sessions.clone(),
-        origins: UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"])
-            .unwrap(),
+        origins,
         cookie: SessionCookieConfig {
             name: "sessionId".into(),
             secure: true,

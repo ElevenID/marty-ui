@@ -15,14 +15,14 @@ use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::{
-    build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
-    render_credential_login_error_page, sanitize_redirect_uri, validate_ui_locales,
-    AuthApplication, AuthApplicationError, CredentialCallbackContext, CredentialCallbackError,
-    CredentialCallbackHeaders, CredentialCallbackResult, CredentialHttpError,
-    CredentialLoginCompletion, CredentialLoginErrorPage, CredentialLoginHttpService,
-    CredentialStateError, CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult,
-    InitiateLoginCommand, OidcProviderCapabilities, PasskeyEnrollmentStart, PortError, Session,
-    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
+    build_session_impersonation, build_ui_redirect_url, render_credential_login_error_page,
+    validate_ui_locales, AuthApplication, AuthApplicationError, CredentialCallbackContext,
+    CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
+    CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
+    CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
+    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, OidcProviderCapabilities,
+    PasskeyEnrollmentStart, PortError, Session, SessionRepository, UiOriginPolicy,
+    CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
@@ -312,7 +312,9 @@ async fn start_passkey_enrollment(
     }
     let ui_base = request_ui_base(&state.origins, headers);
     if headers.get_all(header::ORIGIN).iter().count() != 1
-        || header_text(headers, header::ORIGIN) != Some(ui_base)
+        || !state
+            .origins
+            .accepts_browser_origin(header_text(headers, header::ORIGIN), ui_base)
     {
         return detail(
             StatusCode::FORBIDDEN,
@@ -333,10 +335,16 @@ async fn start_passkey_enrollment(
             "Passkey enrollment is unavailable for this account session",
         );
     }
-    let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    let redirect = state
+        .origins
+        .login_redirect_uri(query.redirect_uri.as_deref(), ui_base);
     match state
         .application
-        .enroll_passkey(session_id, redirect, oidc_callback_url(ui_base))
+        .enroll_passkey(
+            session_id,
+            redirect,
+            state.origins.oidc_callback_url(ui_base),
+        )
         .await
     {
         Ok(PasskeyEnrollmentStart::Authorization(start)) => {
@@ -377,7 +385,9 @@ async fn initiate(
     registration: bool,
 ) -> Response {
     let ui_base = request_ui_base(&state.origins, &headers);
-    let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    let redirect = state
+        .origins
+        .login_redirect_uri(query.redirect_uri.as_deref(), ui_base);
     if query.ui_locales.is_some() && query.kc_locale.is_some() {
         return detail(
             StatusCode::BAD_REQUEST,
@@ -404,7 +414,7 @@ async fn initiate(
         .initiate(
             registration,
             redirect,
-            oidc_callback_url(ui_base),
+            state.origins.oidc_callback_url(ui_base),
             locales,
             query.reauthenticate,
         )
@@ -494,8 +504,11 @@ async fn callback(
             return detail(StatusCode::SERVICE_UNAVAILABLE, "Session store unavailable");
         }
     }
-    let mut response =
-        redirect_response(&build_ui_redirect_url(Some(&result.redirect_uri), ui_base));
+    let mut response = redirect_response(
+        &state
+            .origins
+            .ui_redirect_url(Some(&result.redirect_uri), ui_base),
+    );
     set_session_cookie(&mut response, &state.cookie, &result.session.session_id);
     delete_cookie(
         &mut response,
@@ -508,10 +521,17 @@ async fn callback(
 }
 
 async fn logout(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response {
+    if state.origins.requires_browser_origin() && !browser_origin_allowed(&state.origins, &headers)
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Account changes require an allowed application origin",
+        );
+    }
     let location = if let Some(session_id) = cookie(&headers, &state.cookie.name) {
         match state.application.logout(session_id).await {
             Ok(Some(location)) => location,
-            Ok(None) => "/".into(),
+            Ok(None) => state.origins.local_logout_redirect(),
             Err(_) => {
                 return detail(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -520,7 +540,7 @@ async fn logout(State(state): State<AuthHttpState>, headers: HeaderMap) -> Respo
             }
         }
     } else {
-        "/".into()
+        state.origins.local_logout_redirect()
     };
     let mut response = redirect_response(&location);
     delete_cookie(
@@ -578,6 +598,13 @@ async fn update_me(
     headers: HeaderMap,
     Json(body): Json<UpdateMeRequest>,
 ) -> Response {
+    if state.origins.requires_browser_origin() && !browser_origin_allowed(&state.origins, &headers)
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Account changes require an allowed application origin",
+        );
+    }
     let Some(session_id) = cookie(&headers, &state.cookie.name) else {
         return detail(StatusCode::UNAUTHORIZED, "Not authenticated");
     };
@@ -610,6 +637,14 @@ async fn update_me(
             ),
         ),
     )
+}
+
+fn browser_origin_allowed(origins: &UiOriginPolicy, headers: &HeaderMap) -> bool {
+    headers.get_all(header::ORIGIN).iter().count() == 1
+        && origins.accepts_browser_origin(
+            header_text(headers, header::ORIGIN),
+            request_ui_base(origins, headers),
+        )
 }
 
 async fn credential_login_styles() -> Response {

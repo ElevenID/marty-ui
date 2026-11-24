@@ -518,6 +518,12 @@ def assert_models(
     applicant = expected["services"]["applicant"]
     applicant["environment"]["ISSUANCE_API_KEY_FILE"] = "/run/secrets/issuance_api_key"
     applicant["secrets"].append({"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"})
+    # The new static-console Auth origin is unset in the ordinary model.
+    # Selection requires its own authenticated external-console profile; this
+    # default projection must not admit a nonempty origin or another consumer.
+    expected["services"]["auth"]["environment"]["AUTH_PUBLIC_API_ORIGIN"] = (
+        "" if interpolated else "${AUTH_PUBLIC_API_ORIGIN:-}"
+    )
     assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),

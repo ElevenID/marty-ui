@@ -149,9 +149,26 @@ fn oidc_config_from_map(values: &HashMap<String, String>) -> Result<OidcConfig, 
             get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
         )
     };
+    let api_callback = get("AUTH_PUBLIC_API_ORIGIN")
+        .filter(|value| !value.is_empty())
+        .map(crate::http_kernel::api_callback_url)
+        .transpose()
+        .map_err(|error| invalid(error.to_string()))?;
     let redirect_uri = get("OIDC_REDIRECT_URI")
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
+        .unwrap_or_else(|| {
+            api_callback
+                .clone()
+                .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')))
+        });
+    if api_callback
+        .as_ref()
+        .is_some_and(|expected| expected != &redirect_uri)
+    {
+        return Err(invalid(
+            "OIDC_REDIRECT_URI must match AUTH_PUBLIC_API_ORIGIN/v1/auth/callback",
+        ));
+    }
     let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
     OidcConfig {
         provider_mode,
@@ -241,8 +258,13 @@ impl AuthServiceConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>();
-        let ui_origins = UiOriginPolicy::new(ui_base, ui_additional)
+        let mut ui_origins = UiOriginPolicy::new(ui_base, ui_additional)
             .map_err(|error| invalid(error.to_string()))?;
+        if let Some(origin) = get("AUTH_PUBLIC_API_ORIGIN").filter(|value| !value.is_empty()) {
+            ui_origins = ui_origins
+                .with_api_callback_origin(origin)
+                .map_err(|error| invalid(error.to_string()))?;
+        }
         let oidc = oidc_config_from_map(&values)?;
         let session_ttl_seconds = number(
             get("SESSION_TTL_SECONDS"),

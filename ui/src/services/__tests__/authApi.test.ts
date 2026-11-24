@@ -65,6 +65,7 @@ describe('authApi', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv('VITE_API_URL', '')
   })
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
@@ -299,8 +300,10 @@ describe('authApi', () => {
     it('preserves the intended UI return and locale on login and registration', () => {
       initiateLogin('/console/profile?tab=security', 'en')
       initiateRegister('/console', 'de')
-      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/login?redirect_uri=%2Fconsole%2Fprofile%3Ftab%3Dsecurity&ui_locales=en`, `${api}/`)
-      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/register?redirect_uri=%2Fconsole&ui_locales=de`, `${api}/`)
+      const profileReturn = encodeURIComponent(new URL('/console/profile?tab=security', window.location.href).href)
+      const consoleReturn = encodeURIComponent(new URL('/console', window.location.href).href)
+      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/login?redirect_uri=${profileReturn}&ui_locales=en`, `${api}/`)
+      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/register?redirect_uri=${consoleReturn}&ui_locales=de`, `${api}/`)
       expect(redirectBrowser).not.toHaveBeenCalled()
     })
 
@@ -318,7 +321,10 @@ describe('authApi', () => {
       const fetchSpy = vi.spyOn(window, 'fetch')
       server.use(http.post(`${api}/v1/auth/passkeys/enroll`, () => HttpResponse.json({ email_sent: true })))
       await expect(startPasskeyEnrollment()).resolves.toEqual({ email_sent: true })
-      expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/passkeys/enroll`, expect.objectContaining({ method: 'POST', credentials: 'include' }))
+      expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/passkeys/enroll`, expect.objectContaining({
+        method: 'POST', credentials: 'include',
+        body: JSON.stringify({ redirect_uri: new URL('/console/applicant/profile', window.location.href).href }),
+      }))
     })
   })
 

@@ -12,6 +12,9 @@ import { navigateToAuthApi, resolveAuthBaseUrl } from './authApiOrigin';
 
 // Static consoles call the API directly; self-hosted builds keep relative URLs.
 const authUrl = (path) => `${resolveAuthBaseUrl(import.meta.env.VITE_API_URL)}${path}`;
+// A fixed API callback needs the console origin in its validated return binding.
+const browserReturnUri = (path) => import.meta.env.VITE_API_URL
+  ? new URL(path, window.location.href).href : path;
 function navigateAuthRequest(destination) {
   if (destination.startsWith('/')) {
     redirectBrowser(publicEntryHref(destination), { replace: false });
@@ -90,7 +93,7 @@ export function initiateLogin(redirectUri = '/', locale = null) {
   const params = new URLSearchParams();
   
   if (redirectUri) {
-    params.append('redirect_uri', redirectUri);
+    params.append('redirect_uri', browserReturnUri(redirectUri));
   }
   
   // The Auth service validates and forwards the standard OIDC locale parameter.
@@ -116,7 +119,7 @@ export function initiateRegister(redirectUri = '/', locale = null) {
   const params = new URLSearchParams();
   
   if (redirectUri) {
-    params.append('redirect_uri', redirectUri);
+    params.append('redirect_uri', browserReturnUri(redirectUri));
   }
   
   // Use the same provider-neutral locale contract as login.
@@ -225,7 +228,7 @@ export async function startPasskeyEnrollment(redirectUri = '/console/applicant/p
     credentials: 'include',
     cache: 'no-store',
     headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ redirect_uri: redirectUri }),
+    body: JSON.stringify({ redirect_uri: browserReturnUri(redirectUri) }),
   });
   const result = await response.json().catch(() => ({}));
   if (response.ok && result.email_sent === true) {

@@ -143,6 +143,28 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     assert_eq!(config.cookie.name, "sessionId");
 }
 
+#[test]
+fn static_console_startup_keeps_ui_and_api_callback_separate() {
+    let mut values = baseline("beta");
+    values.insert("UI_BASE_URL".into(), "https://console.example".into());
+    values.insert(
+        "AUTH_PUBLIC_API_ORIGIN".into(),
+        "https://api.example".into(),
+    );
+    let config = AuthServiceConfig::from_values(values).unwrap();
+    assert_eq!(config.ui_origins.primary(), "https://console.example");
+    assert_eq!(
+        config.oidc.redirect_uri,
+        "https://api.example/v1/auth/callback"
+    );
+    assert_eq!(
+        config
+            .ui_origins
+            .oidc_callback_url(config.ui_origins.primary()),
+        config.oidc.redirect_uri
+    );
+}
+
 fn external_values() -> BTreeMap<String, String> {
     let mut values = baseline("beta");
     values.remove("KEYCLOAK_REALM");
