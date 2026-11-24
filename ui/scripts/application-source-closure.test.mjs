@@ -237,7 +237,7 @@ test('the plan separates the original website roster from the 72-input applicati
   for (const retained of RETAINED_SHARED_INPUTS) assert.ok(plan.boundary.retained.includes(retained), retained);
   assert.deepEqual(plan.test_profile.files, [...APPLICATION_TEST_FILES]);
   assert.deepEqual(plan.test_profile.shared_contracts, ['contracts/organization-domain-behavior.json']);
-  assert.equal(plan.test_profile.files.length, 26);
+  assert.equal(plan.test_profile.files.length, 27);
   assert.ok(plan.boundary.retained.includes('contracts/organization-domain-behavior.json'));
   assert.ok(plan.boundary.retained.includes('ui/package-lock.json'));
 });

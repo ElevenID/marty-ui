@@ -8,10 +8,17 @@ import { LOGOUT_STARTED_EVENT } from './authEvents';
 import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
 import { redirectBrowser } from '../application/routing/appHandoff';
 import { createProfilePictureBody } from './profilePicturePayload';
+import { navigateToAuthApi, resolveAuthBaseUrl } from './authApiOrigin';
 
-// Auth endpoints should always use relative paths to go through nginx proxy
-// This ensures cookies are sent correctly (same origin)
-const AUTH_BASE_URL = '/v1/auth';
+// Static consoles call the API directly; self-hosted builds keep relative URLs.
+const authUrl = (path) => `${resolveAuthBaseUrl(import.meta.env.VITE_API_URL)}${path}`;
+function navigateAuthRequest(destination) {
+  if (destination.startsWith('/')) {
+    redirectBrowser(publicEntryHref(destination), { replace: false });
+  } else {
+    navigateToAuthApi(destination, import.meta.env.VITE_API_URL);
+  }
+}
 const SESSION_CHECK_TIMEOUT_MS = 15_000;
 
 function sessionCheckError(message, code, status) {
@@ -30,7 +37,7 @@ export async function getCurrentUser() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SESSION_CHECK_TIMEOUT_MS);
   try {
-    const response = await fetch(`${AUTH_BASE_URL}/me`, {
+    const response = await fetch(authUrl('/me'), {
       method: 'GET',
       credentials: 'include', // Include cookies
       cache: 'no-store',
@@ -79,8 +86,7 @@ export async function getCurrentUser() {
  * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateLogin(redirectUri = '/', locale = null) {
-  // Build login URL - always use relative path to go through nginx proxy
-  let loginPath = `${AUTH_BASE_URL}/login`;
+  let loginPath = authUrl('/login');
   const params = new URLSearchParams();
   
   if (redirectUri) {
@@ -97,7 +103,7 @@ export function initiateLogin(redirectUri = '/', locale = null) {
     loginPath += `?${queryString}`;
   }
   
-  redirectBrowser(publicEntryHref(loginPath), { replace: false });
+  navigateAuthRequest(loginPath);
 }
 
 /**
@@ -106,8 +112,7 @@ export function initiateLogin(redirectUri = '/', locale = null) {
  * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateRegister(redirectUri = '/', locale = null) {
-  // Build registration URL - always use relative path to go through nginx proxy
-  let registerPath = `${AUTH_BASE_URL}/register`;
+  let registerPath = authUrl('/register');
   const params = new URLSearchParams();
   
   if (redirectUri) {
@@ -124,7 +129,7 @@ export function initiateRegister(redirectUri = '/', locale = null) {
     registerPath += `?${queryString}`;
   }
   
-  redirectBrowser(publicEntryHref(registerPath), { replace: false });
+  navigateAuthRequest(registerPath);
 }
 
 /**
@@ -138,10 +143,9 @@ export function initiateLogout() {
   }
   window.dispatchEvent(new Event(LOGOUT_STARTED_EVENT));
   // Auth deletes the local session and redirects to provider logout when supported.
-  // Using relative path ensures cookies are sent correctly (same origin)
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = `${AUTH_BASE_URL}/logout`;
+  form.action = authUrl('/logout');
   document.body.appendChild(form);
   form.submit();
 }
@@ -162,7 +166,7 @@ export async function isAuthenticated() {
 export async function getUserOrganizations() {
   if (getPublicEntryCanonicalOrigin()) return [];
   try {
-    const response = await fetch(`${AUTH_BASE_URL}/me/organizations`, {
+    const response = await fetch(authUrl('/me/organizations'), {
       method: 'GET',
       credentials: 'include', // Include cookies
       cache: 'no-store',
@@ -193,7 +197,7 @@ export async function updateProfilePicture(pictureDataUrl) {
     return { success: false, error: 'Sign in at the configured application origin to update your profile.' };
   }
   try {
-    const response = await fetch(`${AUTH_BASE_URL}/me`, {
+    const response = await fetch(authUrl('/me'), {
       method: 'PATCH',
       credentials: 'include',
       headers: {
@@ -216,7 +220,7 @@ export async function updateProfilePicture(pictureDataUrl) {
 }
 
 export async function startPasskeyEnrollment(redirectUri = '/console/applicant/profile') {
-  const response = await fetch(`${AUTH_BASE_URL}/passkeys/enroll`, {
+  const response = await fetch(authUrl('/passkeys/enroll'), {
     method: 'POST',
     credentials: 'include',
     cache: 'no-store',

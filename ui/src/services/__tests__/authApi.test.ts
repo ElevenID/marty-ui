@@ -13,12 +13,20 @@ import { server } from '@test/mocks/server'
 import { http, HttpResponse } from 'msw'
 import {
   getCurrentUser,
+  initiateLogin,
+  initiateRegister,
+  initiateLogout,
   isAuthenticated,
   getUserOrganizations,
   startPasskeyEnrollment,
   updateProfilePicture,
 } from '../authApi'
 import { redirectBrowser } from '../../application/routing/appHandoff'
+import { navigateToAuthApi } from '../authApiOrigin'
+vi.mock('../authApiOrigin', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../authApiOrigin')>(),
+  navigateToAuthApi: vi.fn(),
+}))
 vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }))
 import { mockUsers, mockOrganization } from '@test/mocks/fixtures'
 
@@ -58,7 +66,7 @@ describe('authApi', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
   describe('getCurrentUser', () => {
     it('should fetch current user successfully', async () => {
@@ -268,11 +276,59 @@ describe('authApi', () => {
     })
   })
 
-  describe('login/logout redirects', () => {
-    it('should use relative paths for auth endpoints', () => {
-      // These functions trigger window redirects
-      // Testing that they use correct paths
-      // Actual redirect testing would require integration tests
+  describe('static console API transport', () => {
+    const api = 'https://api.elevenid.test'
+    beforeEach(() => vi.stubEnv('VITE_API_URL', `${api}/`))
+
+    it('sends session, organization and profile requests to the API with cookies', async () => {
+      const fetchSpy = vi.spyOn(window, 'fetch')
+      server.use(
+        http.get(`${api}/v1/auth/me`, () => HttpResponse.json({ authenticated: true, user: mockUsers.admin })),
+        http.get(`${api}/v1/auth/me/organizations`, () => HttpResponse.json({ organizations: [mockOrganization] })),
+        http.patch(`${api}/v1/auth/me`, () => HttpResponse.json({ ok: true })),
+      )
+      expect((await getCurrentUser()).authenticated).toBe(true)
+      expect(await getUserOrganizations()).toHaveLength(1)
+      expect(await updateProfilePicture('data:image/png;base64,YQ==')).toEqual({ success: true })
+      for (const path of ['/me', '/me/organizations']) {
+        expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth${path}`, expect.objectContaining({ credentials: 'include' }))
+      }
+      expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/me`, expect.objectContaining({ method: 'PATCH', credentials: 'include' }))
+    })
+
+    it('preserves the intended UI return and locale on login and registration', () => {
+      initiateLogin('/console/profile?tab=security', 'en')
+      initiateRegister('/console', 'de')
+      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/login?redirect_uri=%2Fconsole%2Fprofile%3Ftab%3Dsecurity&ui_locales=en`, `${api}/`)
+      expect(navigateToAuthApi).toHaveBeenCalledWith(`${api}/v1/auth/register?redirect_uri=%2Fconsole&ui_locales=de`, `${api}/`)
+      expect(redirectBrowser).not.toHaveBeenCalled()
+    })
+
+    it('submits logout to the API as a browser POST', () => {
+      const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {})
+      initiateLogout()
+      const form = document.querySelector('form')!
+      expect(form.method).toBe('post')
+      expect(form.action).toBe(`${api}/v1/auth/logout`)
+      expect(submit).toHaveBeenCalledOnce()
+      form.remove()
+    })
+
+    it('uses the same API origin for enrollment without changing its POST contract', async () => {
+      const fetchSpy = vi.spyOn(window, 'fetch')
+      server.use(http.post(`${api}/v1/auth/passkeys/enroll`, () => HttpResponse.json({ email_sent: true })))
+      await expect(startPasskeyEnrollment()).resolves.toEqual({ email_sent: true })
+      expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/passkeys/enroll`, expect.objectContaining({ method: 'POST', credentials: 'include' }))
+    })
+  })
+
+  describe('same-origin navigation', () => {
+    it('preserves relative self-hosted login and registration when no API origin is configured', () => {
+      vi.stubEnv('VITE_API_URL', '')
+      initiateLogin('/console')
+      initiateRegister('/console')
+      expect(redirectBrowser).toHaveBeenCalledWith('/v1/auth/login?redirect_uri=%2Fconsole', { replace: false })
+      expect(redirectBrowser).toHaveBeenCalledWith('/v1/auth/register?redirect_uri=%2Fconsole', { replace: false })
     })
   })
 })
