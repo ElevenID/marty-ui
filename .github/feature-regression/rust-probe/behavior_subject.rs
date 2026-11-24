@@ -485,6 +485,7 @@ async fn document() -> String {
         issuer_failure,
     ]);
     observed.extend(configuration_observations());
+    observed.extend(auth_baseline::observations().await);
     let root = BTreeMap::from([
         ("observations", json!(observed)),
         ("schema", json!("elevenid.behavior-subject-output/v2")),
@@ -580,4 +581,568 @@ async fn main() {
     io::stdout()
         .write_all(document().await.as_bytes())
         .expect("write probe output");
+}
+
+// The application and HTTP router are real production owners. Only persistence,
+// identity-provider transport and provisioning are isolated fixture ports. This
+// observes orchestration and HTTP behavior, not live-provider or JWT parity.
+mod auth_baseline {
+    use async_trait::async_trait;
+    use axum::{
+        body::Body,
+        http::{header, Method, Request},
+        Router,
+    };
+    use chrono::{Duration, Utc};
+    use http_body_util::BodyExt;
+    use marty_auth::*;
+    use serde_json::{json, Value};
+    use std::{
+        collections::BTreeMap,
+        fmt::Debug,
+        sync::{Arc, Mutex},
+    };
+    use tower::ServiceExt;
+    use tracing::{
+        field::{Field, Visit},
+        Event, Subscriber,
+    };
+    use tracing_subscriber::{layer::Context, prelude::*, Layer};
+
+    const UI: &str = "https://console.probe.invalid";
+    const PRIVATE_DETAIL: &str = "private-auth-probe-dependency-detail";
+
+    #[derive(Default)]
+    struct Ports {
+        mode: Mutex<&'static str>,
+        sessions: Mutex<BTreeMap<String, Session>>,
+        states: Mutex<BTreeMap<String, PkceState>>,
+        authorization: Mutex<Option<OidcAuthorizationRequest>>,
+        events: Mutex<Vec<AuthEvent>>,
+    }
+    impl Ports {
+        fn fails(&self, stage: &str) -> bool {
+            *self.mode.lock().unwrap() == stage
+        }
+        fn check(&self, stage: &str) -> Result<(), PortError> {
+            if self.fails(stage) {
+                Err(PortError::new("fixture_dependency", PRIVATE_DETAIL))
+            } else {
+                Ok(())
+            }
+        }
+        fn set(&self, mode: &'static str) {
+            *self.mode.lock().unwrap() = mode;
+        }
+    }
+    #[async_trait]
+    impl SessionRepository for Ports {
+        async fn save(&self, value: &Session) -> Result<(), PortError> {
+            self.check("session_save")?;
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(value.session_id.clone(), value.clone());
+            Ok(())
+        }
+        async fn get(&self, id: &str) -> Result<Option<Session>, PortError> {
+            self.check("session_get")?;
+            Ok(self.sessions.lock().unwrap().get(id).cloned())
+        }
+        async fn delete(&self, id: &str) -> Result<(), PortError> {
+            self.sessions.lock().unwrap().remove(id);
+            Ok(())
+        }
+        async fn get_by_user(&self, user: &str) -> Result<Vec<Session>, PortError> {
+            Ok(self
+                .sessions
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|s| s.user.user_id == user)
+                .cloned()
+                .collect())
+        }
+        async fn delete_all_for_user(&self, user: &str) -> Result<usize, PortError> {
+            let mut sessions = self.sessions.lock().unwrap();
+            let before = sessions.len();
+            sessions.retain(|_, s| s.user.user_id != user);
+            Ok(before - sessions.len())
+        }
+    }
+    #[async_trait]
+    impl PkceStateRepository for Ports {
+        async fn save(&self, state: &PkceState) -> Result<(), PortError> {
+            self.check("state_save")?;
+            self.states
+                .lock()
+                .unwrap()
+                .insert(state.state.clone(), state.clone());
+            Ok(())
+        }
+        async fn take(&self, id: &str) -> Result<Option<PkceState>, PortError> {
+            self.check("state_take")?;
+            Ok(self.states.lock().unwrap().remove(id))
+        }
+    }
+    #[async_trait]
+    impl OidcProvider for Ports {
+        fn capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+            Ok(OidcProviderCapabilities {
+                provider_mode: "external",
+                provider_name: "Probe identity".into(),
+                registration_supported: !self.fails("registration_disabled"),
+                account_url: None,
+                recovery_url: None,
+                passkey_enrollment_supported: false,
+                provider_logout_supported: true,
+            })
+        }
+        fn authorization_url(
+            &self,
+            request: &OidcAuthorizationRequest,
+        ) -> Result<String, PortError> {
+            self.check("authorization_url")?;
+            if request.registration && self.fails("registration_disabled") {
+                return Err(PortError::new(
+                    "oidc_registration_unsupported",
+                    PRIVATE_DETAIL,
+                ));
+            }
+            *self.authorization.lock().unwrap() = Some(request.clone());
+            Ok("https://identity.probe.invalid/authorize".into())
+        }
+        async fn exchange_code(
+            &self,
+            request: &OidcCodeExchange,
+        ) -> Result<OidcTokenSet, PortError> {
+            self.check("exchange")?;
+            let authorization = self.authorization.lock().unwrap();
+            let original = authorization.as_ref().unwrap();
+            assert_eq!(
+                pkce_s256_challenge(&request.code_verifier),
+                original.code_challenge
+            );
+            assert_eq!(request.redirect_uri, original.redirect_uri);
+            Ok(OidcTokenSet {
+                access_token: if self.fails("missing_access") {
+                    String::new()
+                } else {
+                    "probe-access-secret".into()
+                },
+                id_token: (!self.fails("missing_id")).then(|| "probe-id-secret".into()),
+                refresh_token: Some("probe-refresh-secret".into()),
+            })
+        }
+        async fn validate_tokens(
+            &self,
+            id: &str,
+            access: &str,
+            nonce: &str,
+        ) -> Result<OidcValidatedIdentity, PortError> {
+            self.check("validate")?;
+            assert_eq!(id, "probe-id-secret");
+            assert_eq!(access, "probe-access-secret");
+            assert_eq!(
+                nonce,
+                self.authorization.lock().unwrap().as_ref().unwrap().nonce
+            );
+            let claims = json!({"sub":"probe-auth-user","email":"fixture@example.invalid","email_verified":true});
+            Ok(OidcValidatedIdentity {
+                user_info: OidcUserInfo::from_claims(&claims, None),
+                id_token_claims: claims,
+                access_token_claims: json!({"sub":"probe-auth-user"}),
+            })
+        }
+        fn logout_url(&self, _request: &OidcLogoutRequest) -> Result<Option<String>, PortError> {
+            Ok(Some("https://identity.probe.invalid/logout".into()))
+        }
+    }
+    #[async_trait]
+    impl UserProvisioner for Ports {
+        async fn provision(
+            &self,
+            _identity: &OidcValidatedIdentity,
+        ) -> Result<AuthenticatedUser, PortError> {
+            self.check("provision")?;
+            Ok(serde_json::from_value(
+                json!({"user_id":"probe-auth-user","email":"fixture@example.invalid"}),
+            )
+            .unwrap())
+        }
+    }
+    #[async_trait]
+    impl AuthEventPublisher for Ports {
+        async fn publish(&self, event: &AuthEvent) -> Result<(), PortError> {
+            match event {
+                AuthEvent::UserAuthenticated { .. } => self.check("login_event")?,
+                AuthEvent::SessionCreated { .. } => self.check("session_event")?,
+                _ => {}
+            }
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
+    struct UnusedCredentialLogin;
+    #[async_trait]
+    impl CredentialLoginHttpService for UnusedCredentialLogin {
+        async fn start_login(&self) -> Result<CredentialLoginStartResult, CredentialHttpError> {
+            unreachable!("not a credential-login probe")
+        }
+        async fn poll_login(
+            &self,
+            _nonce: &str,
+        ) -> Result<CredentialLoginPoll, CredentialHttpError> {
+            unreachable!("not a credential-login probe")
+        }
+        async fn finalize_login(
+            &self,
+            _nonce: &str,
+        ) -> Result<Option<CredentialLoginCompletion>, CredentialHttpError> {
+            unreachable!("not a credential-login probe")
+        }
+        async fn verified_callback(
+            &self,
+            _payload: &CredentialVerifiedPayload,
+            _headers: &CredentialCallbackHeaders,
+            _context: &CredentialCallbackContext,
+        ) -> Result<CredentialCallbackResult, CredentialHttpError> {
+            unreachable!("not a credential-login probe")
+        }
+    }
+    struct Codes(Vec<String>);
+    impl Visit for Codes {
+        fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+            if field.name() == "error_code" {
+                self.0.push(format!("{value:?}"));
+            }
+        }
+    }
+    struct Diagnostics(Arc<Mutex<Vec<String>>>);
+    impl<S: Subscriber> Layer<S> for Diagnostics {
+        fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+            if event.metadata().target().starts_with("marty_auth::") {
+                let mut codes = Codes(Vec::new());
+                event.record(&mut codes);
+                self.0.lock().unwrap().extend(codes.0);
+            }
+        }
+    }
+    fn router(ports: Arc<Ports>) -> Router {
+        let application = AuthApplication::new(
+            AuthApplicationPorts {
+                passkey_email: None,
+                sessions: ports.clone(),
+                pkce_states: ports.clone(),
+                oidc: ports.clone(),
+                provisioner: ports.clone(),
+                events: ports.clone(),
+                audit: None,
+            },
+            AuthApplicationConfig {
+                passkeys_enabled: false,
+                passkey_client_id: "probe-client".into(),
+                session_ttl_seconds: 3600,
+                post_logout_redirect_uri: format!("{UI}/"),
+            },
+        );
+        auth_core_router(AuthHttpState {
+            application: Arc::new(application),
+            credential_login: Arc::new(UnusedCredentialLogin),
+            sessions: ports,
+            origins: UiOriginPolicy::new(UI, std::iter::empty::<&str>()).unwrap(),
+            cookie: SessionCookieConfig {
+                name: "sessionId".into(),
+                secure: true,
+                same_site: "lax".into(),
+                maximum_age_seconds: 3600,
+                path: "/".into(),
+            },
+            impersonation_handoff_cookie_name: "probe-handoff".into(),
+        })
+        .unwrap()
+    }
+    async fn request(
+        router: &Router,
+        method: Method,
+        path: &str,
+        cookie: Option<&str>,
+        body: &str,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        router
+            .clone()
+            .oneshot(builder.body(Body::from(body.to_owned())).unwrap())
+            .await
+            .unwrap()
+    }
+    async fn begin(router: &Router, ports: &Ports) -> String {
+        let response = request(
+            router,
+            Method::GET,
+            "/v1/auth/login?redirect_uri=%2Fconsole%2Fprofile",
+            None,
+            "",
+        )
+        .await;
+        assert!(response.status().is_redirection());
+        ports
+            .authorization
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .state
+            .clone()
+    }
+    async fn complete(router: &Router, state: &str) -> axum::response::Response {
+        request(
+            router,
+            Method::GET,
+            &format!("/v1/auth/callback?code=probe-code&state={state}"),
+            None,
+            "",
+        )
+        .await
+    }
+    fn session_cookie(ports: &Ports) -> String {
+        format!(
+            "sessionId={}",
+            ports.sessions.lock().unwrap().keys().next().unwrap()
+        )
+    }
+    async fn observe(id: &str, mode: &'static str) -> Vec<Value> {
+        let ports = Arc::new(Ports::default());
+        let router = router(ports.clone());
+        let codes = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(Diagnostics(codes.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let response = match mode {
+            "login" => {
+                request(
+                    &router,
+                    Method::GET,
+                    "/v1/auth/login?redirect_uri=%2Fconsole%2Fprofile",
+                    None,
+                    "",
+                )
+                .await
+            }
+            "locale" => {
+                request(
+                    &router,
+                    Method::GET,
+                    "/v1/auth/login?ui_locales=en&kc_locale=de",
+                    None,
+                    "",
+                )
+                .await
+            }
+            "registration_disabled" => {
+                ports.set(mode);
+                request(&router, Method::GET, "/v1/auth/register", None, "").await
+            }
+            "state_save" | "authorization_url" => {
+                ports.set(mode);
+                request(&router, Method::GET, "/v1/auth/login", None, "").await
+            }
+            "missing_parameters" => {
+                request(&router, Method::GET, "/v1/auth/callback", None, "").await
+            }
+            "unknown_state" => complete(&router, "unknown-probe-state").await,
+            "anonymous" => request(&router, Method::GET, "/v1/auth/me", None, "").await,
+            _ => {
+                let state = begin(&router, &ports).await;
+                match mode {
+                    "expired" => {
+                        ports
+                            .states
+                            .lock()
+                            .unwrap()
+                            .get_mut(&state)
+                            .unwrap()
+                            .expires_at = Utc::now() - Duration::hours(1)
+                    }
+                    "missing_nonce" => {
+                        ports.states.lock().unwrap().get_mut(&state).unwrap().nonce = None
+                    }
+                    "replay" => {
+                        complete(&router, &state).await;
+                    }
+                    "authenticated" | "logout" | "after_logout" | "invalid_picture"
+                    | "session_get" | "profile_save" => {}
+                    _ => ports.set(mode),
+                }
+                let callback = complete(&router, &state).await;
+                match mode {
+                    "authenticated" => {
+                        request(
+                            &router,
+                            Method::GET,
+                            "/v1/auth/me",
+                            Some(&session_cookie(&ports)),
+                            "",
+                        )
+                        .await
+                    }
+                    "logout" => {
+                        request(
+                            &router,
+                            Method::POST,
+                            "/v1/auth/logout",
+                            Some(&session_cookie(&ports)),
+                            "",
+                        )
+                        .await
+                    }
+                    "after_logout" => {
+                        let cookie = session_cookie(&ports);
+                        request(&router, Method::POST, "/v1/auth/logout", Some(&cookie), "").await;
+                        request(&router, Method::GET, "/v1/auth/me", Some(&cookie), "").await
+                    }
+                    "invalid_picture" => {
+                        request(
+                            &router,
+                            Method::PATCH,
+                            "/v1/auth/me",
+                            Some(&session_cookie(&ports)),
+                            r#"{"picture":"http://image.probe.invalid/picture"}"#,
+                        )
+                        .await
+                    }
+                    "profile_save" => {
+                        ports.set("session_save");
+                        request(
+                            &router,
+                            Method::PATCH,
+                            "/v1/auth/me",
+                            Some(&session_cookie(&ports)),
+                            r#"{"picture":"https://image.probe.invalid/picture"}"#,
+                        )
+                        .await
+                    }
+                    "session_get" => {
+                        ports.set(mode);
+                        request(
+                            &router,
+                            Method::GET,
+                            "/v1/auth/me",
+                            Some(&session_cookie(&ports)),
+                            "",
+                        )
+                        .await
+                    }
+                    _ => callback,
+                }
+            }
+        };
+        let status = response.status().as_u16();
+        let headers = response.headers();
+        let text = |key| {
+            headers
+                .get(key)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        let location = text(header::LOCATION);
+        let cache = text(header::CACHE_CONTROL);
+        let cookie_attributes = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter(|value| value.starts_with("sessionId="))
+            .map(|value| {
+                let mut parts = value.split(';').skip(1).map(str::trim).collect::<Vec<_>>();
+                parts.sort_unstable();
+                parts.join(";")
+            })
+            .collect::<Vec<_>>();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(bytes.len() < 65536);
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        };
+        let public_body = if let Some(authenticated) = body.get("authenticated") {
+            let mut fields = body
+                .get("user")
+                .and_then(Value::as_object)
+                .map(|user| user.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            fields.sort();
+            json!({"authenticated":authenticated,"user_fields":fields})
+        } else {
+            body
+        };
+        let message = json!({"body":public_body,"location":location,"cache_control":cache,"session_cookie_attributes":cookie_attributes});
+        let encoded = serde_json::to_string(&message).unwrap();
+        for private in [
+            PRIVATE_DETAIL,
+            "probe-access-secret",
+            "probe-id-secret",
+            "probe-refresh-secret",
+        ] {
+            assert!(
+                !encoded.contains(private),
+                "private fixture material escaped HTTP projection"
+            );
+        }
+        if let Some(request) = ports.authorization.lock().unwrap().as_ref() {
+            assert!(
+                !encoded.contains(&request.state) && !encoded.contains(&request.nonce),
+                "one-time state escaped HTTP projection"
+            );
+        }
+        for session in ports.sessions.lock().unwrap().keys() {
+            assert!(
+                !encoded.contains(session),
+                "session identifier escaped HTTP projection"
+            );
+        }
+        let diagnostics = codes.lock().unwrap().clone();
+        [("public_status",json!(status)),("public_message",message),("safe_server_diagnostic",json!(diagnostics))].into_iter()
+            .map(|(dimension,value)|json!({"case_id":id,"dimension":dimension,"id":format!("{id}.{dimension}"),"operation_id":"auth.http-session","value":value})).collect()
+    }
+    pub(super) async fn observations() -> Vec<Value> {
+        let mut results = Vec::new();
+        for (id, mode) in [
+            ("auth-http-login", "login"),
+            ("auth-http-invalid-locale", "locale"),
+            ("auth-http-registration-disabled", "registration_disabled"),
+            ("auth-http-state-save-failure", "state_save"),
+            ("auth-http-authorization-failure", "authorization_url"),
+            ("auth-http-missing-parameters", "missing_parameters"),
+            ("auth-http-unknown-state", "unknown_state"),
+            ("auth-http-expired-state", "expired"),
+            ("auth-http-missing-nonce", "missing_nonce"),
+            ("auth-http-state-consume-failure", "state_take"),
+            ("auth-http-exchange-failure", "exchange"),
+            ("auth-http-missing-access", "missing_access"),
+            ("auth-http-missing-id", "missing_id"),
+            ("auth-http-token-validation-failure", "validate"),
+            ("auth-http-provision-failure", "provision"),
+            ("auth-http-session-save-failure", "session_save"),
+            ("auth-http-login-event-failure", "login_event"),
+            ("auth-http-session-event-failure", "session_event"),
+            ("auth-http-callback-success", "success"),
+            ("auth-http-callback-replay", "replay"),
+            ("auth-http-anonymous", "anonymous"),
+            ("auth-http-authenticated", "authenticated"),
+            ("auth-http-logout", "logout"),
+            ("auth-http-after-logout", "after_logout"),
+            ("auth-http-invalid-picture", "invalid_picture"),
+            ("auth-http-session-get-failure", "session_get"),
+            ("auth-http-profile-save-failure", "profile_save"),
+        ] {
+            results.extend(observe(id, mode).await);
+        }
+        results
+    }
 }
