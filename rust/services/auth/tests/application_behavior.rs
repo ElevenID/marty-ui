@@ -1033,3 +1033,70 @@ async fn enrollment_unavailable_sessions_cannot_create_state_or_authorization_re
         assert!(harness.oidc.authorization.lock().unwrap().is_none());
     }
 }
+
+#[tokio::test]
+async fn native_fixed_api_callback_and_console_return_preserve_pkce_and_replay_guard() {
+    let harness = harness_with_native(true, true);
+    let console_return = "https://console.elevenid.example/console/profile?tab=security";
+    let callback = "https://api.elevenid.example/v1/auth/callback";
+    let initiated = harness
+        .app
+        .initiate_login(
+            InitiateLoginCommand {
+                redirect_uri: Some(console_return.into()),
+                oidc_redirect_uri: Some(callback.into()),
+                ui_locales: None,
+                reauthenticate: true,
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    let stored = harness
+        .states
+        .0
+        .lock()
+        .unwrap()
+        .get(&initiated.state)
+        .cloned()
+        .unwrap();
+    assert_eq!(stored.redirect_uri, console_return);
+    assert_eq!(stored.oidc_redirect_uri.as_deref(), Some(callback));
+    assert_eq!(
+        harness
+            .oidc
+            .authorization
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .redirect_uri
+            .as_deref(),
+        Some(callback)
+    );
+    let command = marty_auth::NativeCallbackCommand {
+        callback: HandleCallbackCommand {
+            code: "synthetic-code".into(),
+            state: initiated.state.clone(),
+            ip_address: None,
+            user_agent: None,
+        },
+        native_access_token: "native-valid".into(),
+        origin: "https://authorization.example.invalid".into(),
+    };
+    let result = harness
+        .app
+        .handle_native_callback(command.clone(), now())
+        .await
+        .unwrap();
+    assert_eq!(result.redirect_uri, console_return);
+    let exchanges = harness.oidc.exchanges.lock().unwrap().clone();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0].redirect_uri.as_deref(), Some(callback));
+    assert_eq!(exchanges[0].code_verifier, stored.code_verifier);
+    assert!(matches!(
+        harness.app.handle_native_callback(command, now()).await,
+        Err(AuthApplicationError::InvalidState)
+    ));
+    assert_eq!(harness.oidc.exchanges.lock().unwrap().len(), 1);
+}

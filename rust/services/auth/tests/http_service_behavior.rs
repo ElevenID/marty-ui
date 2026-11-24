@@ -1164,3 +1164,89 @@ async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
         2
     );
 }
+
+#[tokio::test]
+async fn static_console_native_callback_keeps_authorization_origin_separate_from_console_return() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    app.native_enabled
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let destination = "https://secondary.example/console/profile?tab=security";
+    let response = request(&router, Method::GET,
+        "/v1/auth/login?redirect_uri=https%3A%2F%2Fsecondary.example%2Fconsole%2Fprofile%3Ftab%3Dsecurity",
+        &[("host", "api.example"), ("x-forwarded-host", "untrusted.example")], "").await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        app.initiated.lock().unwrap().last().cloned(),
+        Some((
+            false,
+            destination.into(),
+            "https://api.example/v1/auth/callback".into()
+        ))
+    );
+    *app.callback_redirect.lock().unwrap() = Some(destination.into());
+    let body = "code=fixture-code&state=synthetic-native-state&native_access_token=header.payload.signature";
+    for origin in [
+        "https://console.example",
+        "https://secondary.example",
+        "https://attacker.invalid",
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[
+                ("origin", origin),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    let headers = [
+        ("host", "api.example"),
+        ("origin", "https://authorization.example.invalid"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/callback?code=query",
+        &headers,
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 0);
+    let response = request(&router, Method::POST, "/v1/auth/callback", &headers, body).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], destination);
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 1);
+    let cookies = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(";");
+    assert!(
+        cookies.contains("sessionId=session-1;")
+            && cookies.contains("HttpOnly")
+            && cookies.contains("Secure")
+            && cookies.contains("SameSite=Lax")
+    );
+    assert!(!cookies.to_ascii_lowercase().contains("domain="));
+    assert!(!response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("native_access_token"));
+}
