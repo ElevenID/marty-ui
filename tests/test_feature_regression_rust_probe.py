@@ -59,6 +59,43 @@ EXPECTED_OPERATIONS = {
     "issuer-context-unavailable": "internal-application.approve",
 }
 
+# Expected values belong to this oracle, never to the executable subject.
+# Configuration functions expose no HTTP response; their real return values
+# provide the operator diagnostic projection instead.
+CONFIGURATION_RESULTS = {
+    "auth-missing-realm": ("auth.oidc-configuration", {
+        "result": "rejected", "error": "AUTH.CONFIGURATION: KEYCLOAK_REALM is required",
+    }),
+    "auth-invalid-provider": ("auth.oidc-configuration", {
+        "result": "rejected", "error": "AUTH.CONFIGURATION: OIDC_PROVIDER_MODE must be keycloak or external",
+    }),
+    "auth-pkce-s256": ("auth.pkce", {
+        "challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    }),
+    "flow-pool-two": ("flow.configuration", {
+        "result": "accepted", "database_max_connections": 2, "redis_database": 3,
+    }),
+    "flow-pool-zero": ("flow.configuration", {
+        "result": "rejected", "error": "FLOW.CONFIGURATION: FLOW_DATABASE_MAX_CONNECTIONS is invalid",
+    }),
+    "flow-missing-database": ("flow.configuration", {
+        "result": "rejected", "error": "FLOW.CONFIGURATION: DATABASE_URL is required",
+    }),
+    "flow-missing-redis": ("flow.configuration", {
+        "result": "rejected", "error": "FLOW.CONFIGURATION: REDIS_URL is required",
+    }),
+    "flow-invalid-redis-database": ("flow.configuration", {
+        "result": "rejected", "error": "FLOW.CONFIGURATION: REDIS_DB_FLOW is invalid",
+    }),
+}
+for case_id, (operation, result) in CONFIGURATION_RESULTS.items():
+    EXPECTED_OPERATIONS[case_id] = operation
+    EXPECTED_OBSERVATIONS.update({
+        (case_id, "public_status"): "not_exposed",
+        (case_id, "public_message"): "not_exposed",
+        (case_id, "safe_server_diagnostic"): result,
+    })
+
 
 def assert_expected_probe_output(raw: bytes) -> None:
     document = json.loads(raw)
@@ -124,6 +161,8 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "path": "../../../rust/services/issuance",
         "features": ["feature-regression-observer"],
     }
+    assert manifest["dependencies"]["marty-auth"] == {"path": "../../../rust/services/auth"}
+    assert manifest["dependencies"]["marty-flow"] == {"path": "../../../rust/services/flow"}
     production = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
     assert manifest["patch"]["crates-io"] == production["patch"]["crates-io"]
     assert manifest["profile"]["dev"] == {
@@ -156,6 +195,9 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "InternalApplicationService::new",
         "OrdinaryInternalApplicationApprover::new",
         "observe_internal_application_diagnostics",
+        "marty_auth::oidc_config_from_values",
+        "marty_auth::pkce_s256_challenge",
+        "marty_flow::FlowServiceConfig::from_values",
     ):
         assert production_call in subject
     assert "ordinary_issuer_context_dependency_unavailable_diagnostic" not in subject
@@ -164,6 +206,9 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "Application template not found",
         "Application repository is unavailable",
         "Issuer signing context is unavailable.",
+        "AUTH.CONFIGURATION:",
+        "FLOW.CONFIGURATION:",
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
     ):
         assert forbidden_expected_output not in subject
 

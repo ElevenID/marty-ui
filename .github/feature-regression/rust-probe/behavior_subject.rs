@@ -477,20 +477,102 @@ async fn document() -> String {
     )
     .await;
 
+    let mut observed = observations(vec![
+        success,
+        auth,
+        missing_template,
+        repository_failure,
+        issuer_failure,
+    ]);
+    observed.extend(configuration_observations());
     let root = BTreeMap::from([
-        (
-            "observations",
-            json!(observations(vec![
-                success,
-                auth,
-                missing_template,
-                repository_failure,
-                issuer_failure,
-            ])),
-        ),
+        ("observations", json!(observed)),
         ("schema", json!("elevenid.behavior-subject-output/v2")),
     ]);
-    serde_json::to_string(&root).expect("probe output is serializable")
+    // Production dependencies may enable serde_json's preserve_order feature.
+    // Canonical output must sort nested result objects as well as the root.
+    let mut document = serde_json::to_value(root).expect("probe output is JSON");
+    document.sort_all_objects();
+    serde_json::to_string(&document).expect("probe output is serializable")
+}
+
+// These library boundaries have no HTTP status or browser message. Record that
+// absence explicitly; the diagnostic value is projected from the real result.
+// Never replace the returned result with an expected contract fixture.
+fn configuration_case(id: &str, operation: &str, result: Value) -> Vec<Value> {
+    [
+        ("public_status", json!("not_exposed")),
+        ("public_message", json!("not_exposed")),
+        ("safe_server_diagnostic", result),
+    ]
+    .into_iter()
+    .map(|(dimension, value)| {
+        serde_json::to_value(BTreeMap::from([
+            ("case_id", json!(id)),
+            ("dimension", json!(dimension)),
+            ("id", json!(format!("{id}.{dimension}"))),
+            ("operation_id", json!(operation)),
+            ("value", value),
+        ]))
+        .expect("configuration observation is JSON")
+    })
+    .collect()
+}
+
+fn configuration_observations() -> Vec<Value> {
+    let mut observed = Vec::new();
+    for (id, values) in [
+        ("auth-missing-realm", BTreeMap::new()),
+        (
+            "auth-invalid-provider",
+            BTreeMap::from([("OIDC_PROVIDER_MODE".into(), "unsupported".into())]),
+        ),
+    ] {
+        let result = match marty_auth::oidc_config_from_values(values) {
+            Ok(_) => json!({"result": "accepted"}),
+            Err(error) => json!({"result": "rejected", "error": error.to_string()}),
+        };
+        observed.extend(configuration_case(id, "auth.oidc-configuration", result));
+    }
+    observed.extend(configuration_case(
+        "auth-pkce-s256",
+        "auth.pkce",
+        json!({"challenge": marty_auth::pkce_s256_challenge(
+            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        )}),
+    ));
+
+    let baseline = BTreeMap::from([
+        ("ENVIRONMENT".into(), "test".into()),
+        (
+            "DATABASE_URL".into(),
+            "postgresql://database.invalid/qualification".into(),
+        ),
+        ("REDIS_URL".into(), "redis://cache.invalid:6379/3".into()),
+        ("FLOW_DATABASE_MAX_CONNECTIONS".into(), "2".into()),
+    ]);
+    for (id, setting, value) in [
+        ("flow-pool-two", "FLOW_DATABASE_MAX_CONNECTIONS", Some("2")),
+        ("flow-pool-zero", "FLOW_DATABASE_MAX_CONNECTIONS", Some("0")),
+        ("flow-missing-database", "DATABASE_URL", None),
+        ("flow-missing-redis", "REDIS_URL", None),
+        ("flow-invalid-redis-database", "REDIS_DB_FLOW", Some("256")),
+    ] {
+        let mut values = baseline.clone();
+        if let Some(value) = value {
+            values.insert(setting.into(), value.into());
+        } else {
+            values.remove(setting);
+        }
+        let result = match marty_flow::FlowServiceConfig::from_values(values) {
+            Ok(config) => json!({"result": "accepted",
+                "database_max_connections": config.database_max_connections,
+                "redis_database": config.redis_database}),
+            Err(error) => json!({"result": "rejected", "error": error.to_string()}),
+        };
+        observed.extend(configuration_case(id, "flow.configuration", result));
+    }
+    observed
 }
 
 #[tokio::main(flavor = "current_thread")]
