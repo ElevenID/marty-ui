@@ -174,13 +174,13 @@ def prepare(
         encoding="utf-8",
     )
     redirects = [
-        "/console /_console-shell.html 200",
-        "/console/* /_console-shell.html 200",
+        "/console /_console-shell 200",
+        "/console/* /_console-shell 200",
     ]
     for route in PUBLIC_ROUTES:
-        redirects.append(f"{route} /_application-shell.html 200")
+        redirects.append(f"{route} /_application-shell 200")
         if not route.endswith("*"):
-            redirects.append(f"{route}/ /_application-shell.html 200")
+            redirects.append(f"{route}/ /_application-shell 200")
     (output / "_redirects").write_text(
         "\n".join(redirects) + "\n", encoding="utf-8", newline="\n"
     )

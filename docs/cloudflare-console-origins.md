@@ -135,6 +135,13 @@ the implicit global SPA fallback, so API, missing asset and locale paths are not
 rewritten into the application shell. Keep the explicit route list aligned with
 the application routers; its test checks the current absolute route declarations.
 
+Rewrite destinations use the extensionless `/_console-shell` and
+`/_application-shell` URLs. Targeting their `.html` filenames made Pages redirect
+the browser to the shell's clean URL, losing the requested application path.
+Live acceptance must check the final URL and query, not only a successful HTML
+body after following redirects. Browser routes should be served internally
+without sending the browser to either shell URL.
+
 The generated CSP preserves the production script/WASM, font, analytics and
 frame sources and adds the exact API connection and logout-form origin. Static
 responses use no-store headers while this deployment is being qualified. No

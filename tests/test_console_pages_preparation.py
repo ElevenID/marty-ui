@@ -81,7 +81,7 @@ class ConsolePagesTests(unittest.TestCase):
             self.assertNotIn("Access-Control-Allow-Origin", headers)
             self.assertIn("Cache-Control: no-store", headers)
             redirects = (output / "_redirects").read_text()
-            self.assertIn("/console/* /_console-shell.html 200", redirects)
+            self.assertIn("/console/* /_console-shell 200", redirects)
             self.assertEqual(
                 (output / "console/index.html").read_bytes(),
                 (output / "_console-shell.html").read_bytes(),
@@ -89,10 +89,14 @@ class ConsolePagesTests(unittest.TestCase):
             for line in redirects.splitlines():
                 route, target, status = line.split()
                 self.assertFalse(
+                    target.endswith(".html"),
+                    "Pages HTML canonicalization must not redirect the browser off its route",
+                )
+                self.assertFalse(
                     fnmatch.fnmatchcase(target, route),
                     "Rewrite target overlaps its source pattern",
                 )
-            self.assertIn("/auth/callback/ /_application-shell.html 200", redirects)
+            self.assertIn("/auth/callback/ /_application-shell 200", redirects)
             self.assertEqual(
                 (output / "index.html").read_bytes(),
                 (output / "_application-shell.html").read_bytes(),
