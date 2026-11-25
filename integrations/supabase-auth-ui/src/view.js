@@ -86,9 +86,13 @@ export function renderView(document, root, state, actions) {
     });
     content.append(form);
     if (actions.recover) {
-      content.append(button("Forgot your password?", "text-button", actions.recover));
-      content.append(button("Create an account", "text-button", actions.register));
-      content.append(button("Set up an authenticator", "text-button", actions.security));
+      const accountActions = element("div", "account-actions");
+      accountActions.append(
+        button("Forgot your password?", "text-button", actions.recover),
+        button("Create an account", "text-button", actions.register),
+        button("Set up an authenticator", "text-button", actions.security),
+      );
+      content.append(accountActions);
     } else content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
   } else if (state.phase === "checking") {
     heading.textContent = "Checking your account";
