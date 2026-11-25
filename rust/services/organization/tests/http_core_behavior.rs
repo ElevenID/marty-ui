@@ -4,12 +4,12 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
-    organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
-    AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
-    POLICY_HTTP_ROUTES, RBAC_HTTP_ROUTES, SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES,
-    SCIM_USER_MUTATION_HTTP_ROUTES,
+    migration::migrate_organization_schema, organization_core_router,
+    postgres::PostgresOrganizationStore, OrganizationApplication, OrganizationCache,
+    OrganizationHttpState, AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES,
+    MEMBERSHIP_API_HTTP_ROUTES, POLICY_HTTP_ROUTES, RBAC_HTTP_ROUTES,
+    SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES, SCIM_USER_MUTATION_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
@@ -124,8 +124,9 @@ fn router_with_auth(configured: bool) -> axum::Router {
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
-    let application = OrganizationApplication::new(PostgresOrganizationStore::new(pool), cache)
-        .expect("application composition");
+    let application =
+        OrganizationApplication::new(PostgresOrganizationStore::new(pool.clone()), cache)
+            .expect("application composition");
     organization_core_router(OrganizationHttpState {
         application: Arc::new(application),
         service_authenticator: Arc::new(
@@ -408,6 +409,9 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         .connect(&database_url)
         .await
         .expect("Organization PostgreSQL test database");
+    migrate_organization_schema(&pool)
+        .await
+        .expect("provision Organization schema");
     let cache = OrganizationCache::new(
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
@@ -425,7 +429,15 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
             .expect("application composition")
             .with_policy_validator(policy_validator),
     );
-    application.initialize().await.expect("native migrations");
+    application
+        .outbox()
+        .migrate()
+        .await
+        .expect("provision Organization outbox schema");
+    application
+        .initialize()
+        .await
+        .expect("validate Organization and outbox schemas");
     let router = organization_core_router(OrganizationHttpState {
         application: application.clone(),
         service_authenticator: Arc::new(

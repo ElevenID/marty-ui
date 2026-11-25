@@ -25,6 +25,37 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     marty_service_runtime::install_tls_crypto_provider();
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        let database_url = std::env::var("DATABASE_URL")?;
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await?;
+        match command.as_str() {
+            "migrate" => migrate_presentation_policy_schema(&pool).await?,
+            "verify-owned-schema" => validate_presentation_policy_schema(&pool).await?,
+            "bootstrap-builtins" => {
+                validate_presentation_policy_schema(&pool).await?;
+                let organization_id = std::env::var("MARTY_ORG_ID")
+                    .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+                    .parse::<uuid::Uuid>()?;
+                let store = PostgresPolicyStore::new(pool.clone());
+                reconcile_builtin_policies(&store, organization_id).await?;
+                drop(store);
+            }
+            _ => {
+                return Err(
+                    "supported commands: migrate, verify-owned-schema, bootstrap-builtins".into(),
+                )
+            }
+        }
+        pool.close().await;
+        return Ok(());
+    }
+    if !arguments.is_empty() {
+        return Err("supported commands: migrate, verify-owned-schema, bootstrap-builtins".into());
+    }
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -42,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&config.database_url)
         .await?;
     runtime.mark_healthy(PresentationPolicyDependency::Database)?;
-    migrate_presentation_policy_schema(&pool).await?;
+    // Runtime identity validates the pre-provisioned schema; it never migrates.
     validate_presentation_policy_schema(&pool).await?;
     runtime.mark_healthy(PresentationPolicyDependency::Schema)?;
 
@@ -74,7 +105,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 
     let store = Arc::new(PostgresPolicyStore::new(pool));
-    reconcile_builtin_policies(store.as_ref(), config.marty_organization_id).await?;
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));

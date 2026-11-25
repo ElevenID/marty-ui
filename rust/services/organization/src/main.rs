@@ -2,7 +2,11 @@ use marty_service_runtime::{shutdown_signal, wait_for_shutdown};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_organization::{
-    migration::{migrate_organization_schema, validate_organization_schema},
+    application::ORGANIZATION_OUTBOX_PARTITIONS,
+    migration::{
+        migrate_organization_schema, validate_organization_outbox_schema,
+        validate_organization_schema,
+    },
     organization_core_router,
     organization_proto::organization_service_server::OrganizationServiceServer,
     postgres::PostgresOrganizationStore,
@@ -12,7 +16,7 @@ use marty_organization::{
     ORGANIZATION_CEDAR_SCHEMA,
 };
 use mmf_data::{CacheBackend, CacheConfig, RedisCache};
-use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
+use mmf_messaging::{run_outbox_dispatcher, MessageTransport, PostgresOutboxStore};
 use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
@@ -41,15 +45,75 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
             if command == "migrate" {
                 migrate_organization_schema(&pool).await?;
+                let outbox = PostgresOutboxStore::new(
+                    pool.clone(),
+                    "organization",
+                    ORGANIZATION_OUTBOX_PARTITIONS,
+                )?;
+                outbox.migrate().await?;
+                drop(outbox);
+                validate_organization_outbox_schema(&pool).await?;
             } else {
                 validate_organization_schema(&pool).await?;
+                validate_organization_outbox_schema(&pool).await?;
+                let outbox = PostgresOutboxStore::new(
+                    pool.clone(),
+                    "organization",
+                    ORGANIZATION_OUTBOX_PARTITIONS,
+                )?;
+                outbox.health().await?;
+                drop(outbox);
             }
+            pool.close().await;
+            return Ok(());
+        }
+        if command == "bootstrap" {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let organization_id = std::env::var("MARTY_ORG_ID")
+                .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+                .parse::<uuid::Uuid>()?;
+            let organization_name =
+                std::env::var("MARTY_ORG_NAME").unwrap_or_else(|_| "Marty".into());
+            let organization_slug = marty_service_runtime::config::canonical_slug(
+                &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
+                "marty",
+            );
+            let admin_email = std::env::var("MARTY_ORG_ADMIN_EMAIL")
+                .ok()
+                .filter(|value| !value.trim().is_empty());
+            let reviewer_email = std::env::var("MARTY_ORG_REVIEWER_EMAIL")
+                .ok()
+                .filter(|value| !value.trim().is_empty());
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            validate_organization_schema(&pool).await?;
+            validate_organization_outbox_schema(&pool).await?;
+            let store = PostgresOrganizationStore::new(pool.clone());
+            let startup = reconcile_organization_startup(
+                &store,
+                organization_id,
+                &organization_name,
+                &organization_slug,
+                admin_email.as_deref(),
+                reviewer_email.as_deref(),
+                chrono::Utc::now(),
+            )
+            .await?;
+            info!(
+                default_organization_created = startup.default_organization_created,
+                organizations = startup.organizations_reconciled,
+                bootstrap_memberships = startup.bootstrap_memberships_reconciled,
+                "Organization catalog bootstrapped"
+            );
+            drop(store);
             pool.close().await;
             return Ok(());
         }
     }
     if !arguments.is_empty() {
-        return Err("unsupported Organization command".into());
+        return Err("supported commands: migrate, verify-owned-schema, bootstrap".into());
     }
 
     let config = OrganizationServiceConfig::from_env().map_err(|error| {
@@ -95,22 +159,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     application.outbox().health().await?;
     runtime.mark_healthy(OrganizationDependency::TransactionalOutbox)?;
 
-    let startup = reconcile_organization_startup(
-        application.store(),
-        config.marty_organization_id,
-        &config.marty_organization_name,
-        &config.marty_organization_slug,
-        config.marty_admin_email.as_deref(),
-        config.marty_reviewer_email.as_deref(),
-        chrono::Utc::now(),
-    )
-    .await?;
-    info!(
-        default_organization_created = startup.default_organization_created,
-        organizations = startup.organizations_reconciled,
-        bootstrap_memberships = startup.bootstrap_memberships_reconciled,
-        "Organization startup state reconciled"
-    );
+    // Organization records and bootstrap memberships are provisioned by the
+    // explicit operator command; runtime startup performs no catalog writes.
 
     let event_transport = Arc::new(
         EventStreamTransport::new(

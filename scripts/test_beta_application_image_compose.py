@@ -165,12 +165,18 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
                 str(ROOT / "scripts/compose_config_model.py")
             )
             environment = owner["environment_mapping"](service.get("environment", {}))
-            environment["SERVICE_NAME"] = (
-                "issuance_native" if name == "issuance" else name.replace("-", "_")
-            )
-            service["environment"] = environment
+            if name != "owner-migrations":
+                environment["SERVICE_NAME"] = (
+                    "issuance_native" if name == "issuance" else name.replace("-", "_")
+                )
+                service["environment"] = environment
         else:
             service["image"] = f"elevenid-local/{name}:{RELEASE}"
+    owner_migrations = expected["services"]["owner-migrations"]
+    owner_migrations["image"] = expected["services"]["credential-template"]["image"]
+    if mode == "official":
+        owner_migrations.pop("build", None)
+
     if "issuance" in names:
         alias = expected["services"]["issuance"]
         alias["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
@@ -423,11 +429,12 @@ def run(compose_command=None, powershell=None):
                     for name in names
                 }
             }
-            synthetic["services"]["issuance-migrations"] = {
-                "image": ISSUANCE_IMAGE,
-                "command": ["synthetic-never-run"],
-                "environment": {"UNCHANGED": "preserve"},
-            }
+            for name in ("issuance-migrations", "owner-migrations"):
+                synthetic["services"][name] = {
+                    "image": ISSUANCE_IMAGE,
+                    "command": ["synthetic-never-run"],
+                    "environment": {"UNCHANGED": "preserve"},
+                }
             synthetic_path = directory / "synthetic.json"
             synthetic_path.write_text(json.dumps(synthetic), encoding="utf-8")
             synthetic_base = render_binding(directory, compose_command, synthetic_path)

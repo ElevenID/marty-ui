@@ -33,7 +33,7 @@ PREFLIGHT = {
     "release": "v1.2.3",
     "source_sha": "b" * 40,
     "run_id": "123",
-    "service_count": 28,
+    "service_count": 29,
 }
 
 
@@ -90,13 +90,13 @@ def test_plan_is_exact_artifact_bound_and_excludes_optional_connectors() -> None
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
-    assert result["service_count"] == 28
-    assert result["default_service_count"] == 27
+    assert result["service_count"] == 29
+    assert result["default_service_count"] == 28
     assert result["beta_tunnel_service_count"] == 0
     assert result["kms_init_service_count"] == 1
     assert result["dependency_count"] == sum(map(len, EXPECTED_DEPENDENCIES.values()))
     layers = result["startup_layers"]
-    assert sum(map(len, layers)) == 28
+    assert sum(map(len, layers)) == 29
     assert "edge" in layers[0]
     assert not {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"} & EXPECTED_SERVICES
     assert not {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"} & EXPECTED_SECRET_NAMES
@@ -203,9 +203,14 @@ def test_source_compose_has_reviewed_full_dag() -> None:
     rendered = json.loads(completed.stdout)
     assert "depends_on" not in rendered["services"]["edge"]
     result = plan(rendered, PREFLIGHT, SECRET_ROOT)
-    assert result["service_count"] == 28
+    assert result["service_count"] == 29
     assert result["dependency_count"] > 30
-    assert "edge" in result["startup_layers"][0]
+    layers = result["startup_layers"]
+    assert "edge" in layers[0]
+    layer_index = {service: index for index, layer in enumerate(layers) for service in layer}
+    assert layer_index["db-migrate"] < layer_index["owner-migrations"]
+    for service in ("organization", "credential-template", "presentation-policy"):
+        assert layer_index["owner-migrations"] < layer_index[service]
     from run_selfhost_business_journey import disabled_optional_secrets
     assert {"passport_tenant_api_keys",
             "personalization_bureau_api_key"} <= disabled_optional_secrets(rendered)

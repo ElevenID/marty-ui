@@ -30,6 +30,7 @@ const ROOT_CERT_ENV: &str = "PGSSLROOTCERT";
 const DATABASE_SERVICES: &[&str] = &[
     "revocation-profile-migrate",
     "db-migrate",
+    "owner-migrations",
     "kms-initialize",
     "issuance-migrations",
     "auth",

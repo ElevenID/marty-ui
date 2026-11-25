@@ -49,7 +49,7 @@ def test_passkey_configuration_drift_remains_closed(rendered_models, owner, key)
 
 def test_customer_organization_name_reaches_managed_identity_and_runtime_owners():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
-    for owner in ("keycloak-configurator", "db-migrate", "organization", "auth",
+    for owner in ("keycloak-configurator", "db-migrate", "owner-migrations", "auth",
                   "issuance", "issuance-native"):
         assert model["services"][owner]["environment"].get("MARTY_ORG_NAME") == (
             "${MARTY_ORG_NAME:-Marty}"

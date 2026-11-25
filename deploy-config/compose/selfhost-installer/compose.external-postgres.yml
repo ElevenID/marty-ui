@@ -30,6 +30,8 @@ services:
       NOTIFICATION_DATABASE_MAX_CONNECTIONS: "1"
     depends_on:
       postgres: !reset null
+  owner-migrations:
+    environment: *external-postgres-environment
   kms-initialize:
     environment:
       <<: *external-postgres-environment

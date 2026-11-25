@@ -31,11 +31,13 @@ services:
       kms-initialize: *completed-job
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
+      owner-migrations: *completed-job
   credential-template:
     depends_on:
       kms-initialize: *completed-job
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
+      owner-migrations: *completed-job
   trust-profile:
     depends_on:
       kms-initialize: *completed-job
@@ -75,6 +77,7 @@ services:
       kms-initialize: *completed-job
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
+      owner-migrations: *completed-job
   deployment-profile:
     depends_on:
       kms-initialize: *completed-job
@@ -90,6 +93,7 @@ services:
       kms-initialize: *completed-job
       openbao-unseal: *usable-kms
       db-migrate: *completed-job
+      owner-migrations: *completed-job
   verification:
     depends_on:
       kms-initialize: *completed-job

@@ -293,9 +293,23 @@ def retired_provider_projection(value):
 
 
 def assert_models(
-    approved, actual, *, interpolated=False, issuer_did="",
-    ui_enabled_sections="public,console", bureau_api_key_file="",
-    passkeys_enabled="", passkey_rp_id="",
+    approved,
+    actual,
+    *,
+    interpolated=False,
+    issuer_did="",
+    ui_enabled_sections="public,console",
+    bureau_api_key_file="",
+    passkeys_enabled="",
+    passkey_rp_id="",
+    owner_org_id="",
+    owner_org_name="Marty",
+    owner_org_slug="marty",
+    owner_admin_email="",
+    owner_reviewer_email="",
+    owner_migration_profile="selfhost-production",
+    owner_public_domain="localhost",
+    owner_public_api_url="https://localhost",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = retired_provider_projection(deepcopy(approved))
@@ -360,6 +374,104 @@ def assert_models(
         assert key not in configurator_environment
         configurator_environment[key] = value if interpolated else "${" + key + ":-}"
 
+
+    # Admit the explicit catalog/policy operator job. It receives only the
+    # application database credential and a closed set of bootstrap settings;
+    # the service binaries and command order are pinned below.
+    owner = actual["services"].get("owner-migrations")
+    assert owner is not None
+    assert owner["entrypoint"] == ["/bin/sh", "-ec"]
+    assert owner["command"] == [
+        ". /app/load-secrets-env.sh\n"
+        "/usr/local/bin/marty-organization migrate\n"
+        "/usr/local/bin/marty-organization bootstrap\n"
+        "/usr/local/bin/marty-credential-template bootstrap\n"
+        "/usr/local/bin/marty-presentation-policy migrate\n"
+        "/usr/local/bin/marty-presentation-policy bootstrap-builtins\n"
+    ]
+    assert set(owner["build"]) == {"context", "dockerfile", "args"}
+    assert (ROOT / owner["build"]["context"]).resolve() == ROOT
+    assert owner["build"]["dockerfile"] == "services/Dockerfile"
+    assert owner["build"]["args"] == {"SERVICE_NAME": "credential-template"}
+    owner_environment = owner["environment"]
+    assert set(owner_environment) == {
+        "DATABASE_URL_TEMPLATE", "MARTY_DB_PASSWORD_FILE", "MARTY_ORG_ID",
+        "MARTY_ORG_NAME", "MARTY_ORG_SLUG", "MARTY_ORG_ADMIN_EMAIL",
+        "MARTY_ORG_REVIEWER_EMAIL", "MARTY_ISSUER_DID",
+        "MARTY_MIGRATION_PROFILE", "PUBLIC_DOMAIN", "PUBLIC_API_URL",
+    }
+    assert owner_environment["DATABASE_URL_TEMPLATE"] in {
+        "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+    }
+    assert owner_environment["MARTY_DB_PASSWORD_FILE"] == "/run/secrets/marty_db_password"
+    expected_owner_inputs = {
+        "MARTY_ORG_ID": owner_org_id or "00000000-0000-0000-0000-000000000001",
+        "MARTY_ORG_NAME": owner_org_name,
+        "MARTY_ORG_SLUG": owner_org_slug,
+        "MARTY_ORG_ADMIN_EMAIL": owner_admin_email,
+        "MARTY_ORG_REVIEWER_EMAIL": owner_reviewer_email,
+        "MARTY_ISSUER_DID": issuer_did,
+        "MARTY_MIGRATION_PROFILE": owner_migration_profile,
+        "PUBLIC_DOMAIN": owner_public_domain,
+        "PUBLIC_API_URL": owner_public_api_url,
+    }
+    for key, value in expected_owner_inputs.items():
+        if interpolated:
+            assert owner_environment[key] == value, (key, owner_environment[key], value)
+        else:
+            fallback = {
+                "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                "MARTY_ORG_NAME": "Marty",
+                "MARTY_ORG_SLUG": "marty",
+                "MARTY_ORG_ADMIN_EMAIL": "",
+                "MARTY_ORG_REVIEWER_EMAIL": "",
+                "MARTY_ISSUER_DID": "",
+                "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                "PUBLIC_DOMAIN": "localhost",
+                "PUBLIC_API_URL": "https://localhost",
+            }[key]
+            assert owner_environment[key] == "${" + key + ":-" + fallback + "}"
+    assert owner["secrets"] == [{
+        "source": "marty_db_password", "target": "/run/secrets/marty_db_password",
+    }]
+    assert owner["depends_on"] == {
+        "db-migrate": {"condition": "service_completed_successfully", "required": True},
+    }
+    assert owner["restart"] == "no"
+    assert owner["healthcheck"] == {"disable": True}
+    assert owner["mem_limit"] == (
+        "1073741824" if interpolated else "${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}"
+    )
+    assert set(owner) == {
+        "build", "command", "depends_on", "entrypoint", "environment",
+        "healthcheck", "mem_limit", "networks", "restart", "secrets", "volumes",
+    }
+    assert owner["networks"] == actual["services"]["postgres"]["networks"]
+    assert len(owner["volumes"]) == 1
+    mount = owner["volumes"][0]
+    assert mount["target"] == "/app/load-secrets-env.sh" and mount["read_only"] is True
+    assert mount["source"].endswith("/scripts/load-secrets-env.sh")
+    expected["services"]["owner-migrations"] = deepcopy(owner)
+    owner_ready = {"condition": "service_completed_successfully", "required": True}
+    for service in ("organization", "credential-template", "presentation-policy"):
+        dependencies = expected["services"][service]["depends_on"]
+        assert dependencies.pop("db-migrate") == owner_ready
+        dependencies["owner-migrations"] = owner_ready
+    flow_environment = expected["services"]["flow"]["environment"]
+    assert "MARTY_SCHEMA_STARTUP_MODE" not in flow_environment
+    flow_environment["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
+    expected["services"]["flow"]["depends_on"]["owner-migrations"] = {
+        "condition": "service_completed_successfully", "required": True,
+    }
+    assert actual["services"]["issuance-migrations"]["depends_on"] == {
+        "credential-template": {"condition": "service_healthy", "required": True},
+        "owner-migrations": {"condition": "service_completed_successfully", "required": True},
+        "organization": {"condition": "service_healthy", "required": True},
+    }
+    expected["services"]["issuance-migrations"]["depends_on"] = deepcopy(
+        actual["services"]["issuance-migrations"]["depends_on"]
+    )
 
     # Keep the frozen historical model; admit this exact policy change only.
     # Redis holds persistent identity records and replay markers, so cache-style
@@ -716,6 +828,18 @@ def interpolated_models():
                 bureau_api_key_file=values.get("PERSONALIZATION_BUREAU_API_KEY_FILE") or "",
                 passkeys_enabled=values.get("KEYCLOAK_PASSKEYS_ENABLED") or "",
                 passkey_rp_id=values.get("KEYCLOAK_PASSKEY_RP_ID") or "",
+                owner_org_id=values.get("MARTY_ORG_ID") or "",
+                owner_org_name=values.get("MARTY_ORG_NAME") or "Marty",
+                owner_org_slug=values.get("MARTY_ORG_SLUG") or "marty",
+                owner_admin_email=values.get("MARTY_ORG_ADMIN_EMAIL") or "",
+                owner_reviewer_email=values.get("MARTY_ORG_REVIEWER_EMAIL") or "",
+                owner_migration_profile=(
+                    values.get("MARTY_MIGRATION_PROFILE") or "selfhost-production"
+                ),
+                owner_public_domain=values.get("PUBLIC_DOMAIN") or "localhost",
+                owner_public_api_url=(
+                    values.get("PUBLIC_API_URL") or "https://localhost"
+                ),
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (

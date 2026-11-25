@@ -43,6 +43,7 @@ ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 ONE_SHOT_SERVICES = {
     "db-migrate",
+    "owner-migrations",
     "issuance-migrations",
     "keycloak-configurator",
     "openbao-init",

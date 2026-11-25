@@ -30,6 +30,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "  db-migrate: {build: '.'}\n"
         "  kms-initialize: {build: '.'}\n"
         "  gateway: {build: '.'}\n"
+        "  owner-migrations: {build: '.'}\n"
         "  issuance-migrations: {build: '.'}\n"
         "  issuance: {build: '.'}\n"
         "  ui: {image: 'nginx:alpine'}\n", encoding="utf-8")
@@ -38,6 +39,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         f"  db-migrate: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  kms-initialize: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n"
+        f"  owner-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  ui: {{image: '{PREFIX}/ui-selfhost:1.2.3'}}\n",
@@ -83,6 +85,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "db-migrate": {"image": f"{PREFIX}/db-migrate:1.2.3"},
         "kms-initialize": {"image": f"{PREFIX}/db-migrate:1.2.3"},
         "gateway": {"image": f"{PREFIX}/services:1.2.3"},
+        "owner-migrations": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance-migrations": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance": {"image": f"{PREFIX}/services:1.2.3"},
         "ui": {"image": f"{PREFIX}/ui-selfhost:1.2.3"},
@@ -116,6 +119,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result["openbao_didcomm_image"] == reference("openbao-didcomm", "7")
     assert result["services"]["keycloak"] == result["services"]["keycloak-configurator"] == reference("keycloak", "9")
     assert result["services"]["gateway"] == reference("services", "2")
+    assert result["services"]["owner-migrations"] == reference("services", "2")
     assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")
     assert result["services"]["ui"] == reference("ui-selfhost", "4")

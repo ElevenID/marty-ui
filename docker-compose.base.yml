@@ -358,6 +358,7 @@ services:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
@@ -394,6 +395,43 @@ services:
     networks:
       - marty-network
 
+  # Provision the credential catalog and built-in policies with an
+  # explicit operator identity before the read-only owner services start.
+  owner-migrations:
+    mem_limit: ${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        /usr/local/bin/marty-organization migrate
+        /usr/local/bin/marty-organization bootstrap
+        /usr/local/bin/marty-credential-template bootstrap
+        /usr/local/bin/marty-presentation-policy migrate
+        /usr/local/bin/marty-presentation-policy bootstrap-builtins
+    environment:
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-reviewer@marty.demo}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - marty-network
+
   # Run the native issuance migrator from the same Rust build as the API.
   issuance-migrations:
     mem_limit: ${MARTY_ISSUANCE_MIGRATIONS_MEMORY_LIMIT:-1g}
@@ -408,7 +446,7 @@ services:
       SERVICE_NAME: issuance_native
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       organization:
         condition: service_healthy
@@ -654,7 +692,7 @@ services:
       - "127.0.0.1:8002:8002"
       - "127.0.0.1:9002:9002"
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -692,7 +730,7 @@ services:
       - "127.0.0.1:8003:8003"
       - "127.0.0.1:9003:9003"
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       revocation-profile:
         condition: service_healthy
@@ -880,7 +918,7 @@ services:
       - "127.0.0.1:8009:8009"
       - "127.0.0.1:9009:9009"
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       issuance-native:
         condition: service_healthy
@@ -990,6 +1028,7 @@ services:
       <<: *native_issuance_grpc_auth
       ENVIRONMENT: development
       FLOW_SERVICE_PORT: "8011"
+      MARTY_SCHEMA_STARTUP_MODE: validate
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ORG_GRPC_TARGET: organization:9002

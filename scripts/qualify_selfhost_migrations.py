@@ -65,10 +65,28 @@ NATIVE_BINARIES = (
 
 
 def native_command(operation: str) -> str:
+    if operation == "migrate":
+        commands = (
+            ("marty-organization", "migrate"),
+            ("marty-organization", "bootstrap"),
+            ("marty-credential-template", "bootstrap"),
+            ("marty-presentation-policy", "migrate"),
+            ("marty-presentation-policy", "bootstrap-builtins"),
+            ("marty-flow", "migrate"),
+            ("marty-device-registration", "migrate"),
+            ("marty-issuance-service", "migrate"),
+        )
+    elif operation == "verify-owned-schema":
+        commands = tuple(
+            (binary, "verify-owned-schema")
+            for binary in NATIVE_BINARIES
+        ) + (("marty-presentation-policy", "verify-owned-schema"),)
+    else:
+        raise QualificationError("Unsupported native schema operation")
     return ". /app/load-secrets-env.sh; " + " && ".join(
-        ("exec " if index == len(NATIVE_BINARIES) - 1 else "")
-        + f"/usr/local/bin/{binary} {operation}"
-        for index, binary in enumerate(NATIVE_BINARIES)
+        ("exec " if index == len(commands) - 1 else "")
+        + f"/usr/local/bin/{binary} {command}"
+        for index, (binary, command) in enumerate(commands)
     )
 
 
@@ -161,7 +179,8 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
     env = migration.get("environment", {})
     require(set(env) == {
                 "ENVIRONMENT", "MARTY_DB_PASSWORD_FILE", "DATABASE_URL_TEMPLATE",
-                "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_SLUG",
+                "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_NAME",
+                "MARTY_ORG_REVIEWER_EMAIL", "MARTY_ORG_SLUG",
                 "MARTY_MIGRATION_PROFILE", "MARTY_KMS_BOOTSTRAP_ENABLED",
                 "REDIS_URL", "REDIS_DB_GATEWAY", "BAO_ADDR", "BAO_TOKEN_FILE",
                 "BAO_CACERT", "NOTIFICATION_OPENBAO_TOKEN_FILE",
@@ -183,7 +202,9 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
             and env.get("REDIS_URL") == "redis://redis:6379"
             and env.get("MARTY_ORG_ID") == ORG_ID
+            and env.get("MARTY_ORG_NAME") == "Marty"
             and env.get("MARTY_ORG_ADMIN_EMAIL") == "probe@migration.invalid"
+            and env.get("MARTY_ORG_REVIEWER_EMAIL") == "reviewer@migration.invalid"
             and env.get("MARTY_ORG_SLUG") == "marty"
             and env.get("PUBLIC_DOMAIN") == "migration.invalid"
             and env.get("PUBLIC_API_URL") == "https://migration.invalid"
@@ -211,6 +232,14 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and native["command"] == [native_command("migrate")]
             and native["environment"] == {
                 "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                "MARTY_ORG_ID": ORG_ID,
+                "MARTY_ORG_NAME": "Marty",
+                "MARTY_ORG_SLUG": "marty",
+                "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
+                "MARTY_ORG_REVIEWER_EMAIL": "reviewer@migration.invalid",
+                "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                "PUBLIC_DOMAIN": "migration.invalid",
+                "PUBLIC_API_URL": "https://migration.invalid",
                 "DATABASE_URL_TEMPLATE":
                     "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"}
             and native["secrets"] == [{

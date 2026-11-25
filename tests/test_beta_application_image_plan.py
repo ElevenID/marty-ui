@@ -48,6 +48,8 @@ def synthetic_base():
             "notification",
             "verification",
             "signing-keys",
+            "credential-template",
+            "owner-migrations",
             "issuance-migrations",
         )
     }
@@ -58,6 +60,15 @@ def synthetic_base():
         "context": ".", "dockerfile": "services/Dockerfile",
         "args": {"SERVICE_NAME": "issuance-native"},
     }
+    services["credential-template"]["build"] = {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "credential-template"},
+    }
+    services["owner-migrations"]["build"] = {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "credential-template"},
+    }
+    services["owner-migrations"]["entrypoint"] = ["/bin/sh", "-ec"]
     return {
         "services": services,
         "secrets": {"synthetic-key": {"file": "synthetic-file"}},
@@ -85,7 +96,7 @@ def test_beta_issuance_stays_rust_owned_even_with_retired_selector(gate, mode):
 @pytest.mark.parametrize("mode", ["local", "official"])
 def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
     base = synthetic_base()
-    names = [name for name in base["services"] if name != "issuance-migrations"]
+    names = [name for name in base["services"] if name not in {"issuance-migrations", "owner-migrations"}]
     actual = gate["expected_model"](base, names, mode)
     assert base == synthetic_base()
     migrator = deepcopy(base["services"]["issuance-migrations"])
@@ -160,7 +171,7 @@ def test_complete_model_comparison_rejects_worker_field_loss_without_private_out
 
 def test_comparison_rejects_swapped_selector_and_pinned_overlay_order(gate):
     base = synthetic_base()
-    names = [name for name in base["services"] if name != "issuance-migrations"]
+    names = [name for name in base["services"] if name not in {"issuance-migrations", "owner-migrations"}]
     official = gate["expected_model"](base, names, "official")
     wrong = deepcopy(official)
     wrong["services"]["signing-keys"]["environment"]["SERVICE_NAME"] = "verification"
@@ -532,6 +543,26 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
     assert len(profile_loops) == 1
     assert "$script:ComposeFiles += " + profile_append in profile_loops[0]["body"]
     assert attached[profile_append]["offset"] < new["offset"]
+    db_migration = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "migration-live.log" in item["text"]
+    )
+    owner_bootstrap = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "owner-migrations" in item["text"]
+    )
+    issuance_migration = next(
+        item for item in commands
+        if item["name"] == "Invoke-ComposeLogged"
+        and "issuance-migration-live.log" in item["text"]
+    )
+    assert db_migration["offset"] < owner_bootstrap["offset"] < issuance_migration["offset"]
+    assert '"DATABASE_URL=$liveDatabaseUrl"' in owner_bootstrap["text"]
+    assert '"MARTY_ORG_ID=$PilotOrganizationId"' in owner_bootstrap["text"]
+    assert '"MARTY_MIGRATION_PROFILE=beta"' in owner_bootstrap["text"]
+    assert '"PUBLIC_API_URL=$BetaOrigin"' in owner_bootstrap["text"]
     rehearsal = next(
         item
         for item in commands

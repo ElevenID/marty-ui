@@ -100,6 +100,8 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                                "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
                                "MARTY_ORG_ID":
                                    "00000000-0000-0000-0000-000000000001",
+                               "MARTY_ORG_NAME": "Marty",
+                               "MARTY_ORG_REVIEWER_EMAIL": "reviewer@migration.invalid",
                                "MARTY_ORG_SLUG": "marty",
                                "REDIS_URL": "redis://redis:6379",
                                "PUBLIC_DOMAIN": "migration.invalid",
@@ -118,6 +120,14 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                              "target": "/run/secrets/marty_db_password"}],
                 "environment": {
                     "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                    "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+                    "MARTY_ORG_NAME": "Marty",
+                    "MARTY_ORG_SLUG": "marty",
+                    "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
+                    "MARTY_ORG_REVIEWER_EMAIL": "reviewer@migration.invalid",
+                    "MARTY_MIGRATION_PROFILE": "selfhost-production",
+                    "PUBLIC_DOMAIN": "migration.invalid",
+                    "PUBLIC_API_URL": "https://migration.invalid",
                     "DATABASE_URL_TEMPLATE":
                         "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
                 },
@@ -433,6 +443,7 @@ def test_actual_compose_render_is_isolated(tmp_path: Path) -> None:
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
         "PROBE_SECRET_DIR": str(tmp_path),
+        "MARTY_DB_PASSWORD": "synthetic-host-value-must-not-bind",
     }
     import os
     completed = subprocess.run(["docker", "compose", "-f", str(COMPOSE),

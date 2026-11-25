@@ -302,6 +302,47 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Catalog and built-in policy provisioning is an explicit operator step.
+  # Runtime owner services validate their existing schemas and do not seed.
+  owner-migrations:
+    mem_limit: ${MARTY_OWNER_MIGRATIONS_MEMORY_LIMIT:-1g}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: credential-template
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        . /app/load-secrets-env.sh
+        /usr/local/bin/marty-organization migrate
+        /usr/local/bin/marty-organization bootstrap
+        /usr/local/bin/marty-credential-template bootstrap
+        /usr/local/bin/marty-presentation-policy migrate
+        /usr/local/bin/marty-presentation-policy bootstrap-builtins
+    environment:
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
+      MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-selfhost-production}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://localhost}
+    secrets:
+      - marty_db_password
+    volumes:
+      - ./scripts/load-secrets-env.sh:/app/load-secrets-env.sh:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: "no"
+
   # Explicit one-time KMS/DID provisioning. The ordinary migration and all
   # application restarts never mount or use the privileged bootstrap token.
   kms-initialize:
@@ -348,7 +389,7 @@ services:
     volumes:
       - ./scripts/load-secrets-env.sh:/app/load-secrets-env.sh:ro
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       organization:
         condition: service_healthy
@@ -604,7 +645,7 @@ services:
       - org_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -650,7 +691,7 @@ services:
       - openbao_tls_ca_cert
       - ct_tls_kms_token
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
@@ -986,7 +1027,7 @@ services:
       - pp_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
-      db-migrate:
+      owner-migrations:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
@@ -1123,6 +1164,7 @@ services:
       GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:-}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
+      MARTY_SCHEMA_STARTUP_MODE: validate
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
@@ -1171,6 +1213,8 @@ services:
       - sign_grant_mint_flow_wallet_token
       - passport_tenant_api_keys
     depends_on:
+      owner-migrations:
+        condition: service_completed_successfully
       db-migrate:
         condition: service_completed_successfully
       redis:

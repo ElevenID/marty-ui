@@ -77,6 +77,19 @@ function ConvertTo-BetaApplicationImageLines {
             "    command: []"
         }
     }
+    # The operator migration job uses the same immutable credential-template
+    # service artifact, but remains a one-shot dependency rather than a running
+    # application-service selector in the deployment inventory.
+    $credentialTemplate = @($Plan | Where-Object { $_.service -eq "credential-template" })
+    if ($credentialTemplate.Count -gt 1) { throw "Credential Template image plan is ambiguous" }
+    if ($credentialTemplate.Count -eq 1) {
+        "  owner-migrations:"
+        "    image: $($credentialTemplate[0].image_expression)"
+        if (-not $credentialTemplate[0].build_eligible) {
+            "    build: !reset null"
+        }
+    }
+
     $issuance = @($Plan | Where-Object { $_.service -eq "issuance" })
     if ($issuance.Count -gt 1) { throw "Issuance image plan is ambiguous" }
     if ($issuance.Count -eq 1) {

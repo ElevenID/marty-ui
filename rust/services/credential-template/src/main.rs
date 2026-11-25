@@ -61,8 +61,93 @@ async fn main() -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
     }
+    if matches!(arguments.as_slice(), [command] if command == "bootstrap") {
+        // Bootstrap needs only the catalog/migration inputs. Do not require
+        // runtime workload TLS certificates or serving credentials in this
+        // short-lived operator process.
+        let database_url = std::env::var("DATABASE_URL")?;
+        let organization_id = std::env::var("MARTY_ORG_ID")
+            .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+            .parse::<uuid::Uuid>()?;
+        let public_api_origin = url::Url::parse(
+            &std::env::var("PUBLIC_API_URL").unwrap_or_else(|_| "http://localhost".into()),
+        )?;
+        if !matches!(public_api_origin.scheme(), "http" | "https")
+            || public_api_origin.host_str().is_none()
+            || public_api_origin.path() != "/"
+            || !public_api_origin.username().is_empty()
+            || public_api_origin.password().is_some()
+            || public_api_origin.query().is_some()
+            || public_api_origin.fragment().is_some()
+        {
+            return Err("invalid PUBLIC_API_URL for Credential Template bootstrap".into());
+        }
+        let public_hostname = public_api_origin
+            .host_str()
+            .ok_or("PUBLIC_API_URL must include a hostname")?
+            .to_owned();
+        let authority = match public_api_origin.port() {
+            Some(port) => format!("{public_hostname}:{port}"),
+            None => public_hostname.clone(),
+        };
+        let authority = marty_service_runtime::config::configured_authority(
+            std::env::var("PUBLIC_DOMAIN").ok().as_deref(),
+            &[],
+            &authority,
+        );
+        let slug = marty_service_runtime::config::canonical_slug(
+            &std::env::var("MARTY_ORG_SLUG").unwrap_or_else(|_| "marty".into()),
+            "marty",
+        );
+        let issuer_did = marty_service_runtime::config::configured_did_web(
+            std::env::var("MARTY_ISSUER_DID").ok().as_deref(),
+            &authority,
+            &["orgs", &slug],
+        );
+        if !issuer_did.starts_with("did:") {
+            return Err("invalid MARTY_ISSUER_DID for Credential Template bootstrap".into());
+        }
+        let migration_profile = std::env::var("MARTY_MIGRATION_PROFILE")
+            .unwrap_or_else(|_| "dev".into())
+            .to_ascii_lowercase();
+        if !matches!(
+            migration_profile.as_str(),
+            "dev" | "beta" | "prod" | "production" | "selfhost-production" | "test"
+        ) {
+            return Err("invalid MARTY_MIGRATION_PROFILE for Credential Template bootstrap".into());
+        }
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await?;
+        migrate_credential_template_schema(&pool).await?;
+        validate_credential_template_schema(&pool).await?;
+        reconcile_credential_template_data(
+            &pool,
+            &CredentialTemplateDataReconciliationConfig {
+                marty_organization_id: organization_id.to_string(),
+                marty_issuer_did: issuer_did.clone(),
+                public_api_origin: public_api_origin.to_string(),
+                public_hostname,
+                selfhost_production: migration_profile == "selfhost-production",
+            },
+        )
+        .await?;
+        let store = PostgresCredentialTemplateStore::new(pool.clone());
+        seed_system_catalog(
+            &store,
+            chrono::Utc::now(),
+            &organization_id.to_string(),
+            public_api_origin.as_str(),
+            &issuer_did,
+        )
+        .await?;
+        drop(store);
+        pool.close().await;
+        return Ok(());
+    }
     if !arguments.is_empty() {
-        return Err("unsupported Credential Template command".into());
+        return Err("supported commands: migrate, verify-owned-schema, bootstrap".into());
     }
 
     let config = CredentialTemplateServiceConfig::from_env().map_err(|error| {
@@ -77,50 +162,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     runtime.mark_healthy(CredentialTemplateDependency::Database)?;
 
-    migrate_credential_template_schema(&pool).await?;
-    let public_hostname = config
-        .public_api_origin
-        .host_str()
-        .ok_or("PUBLIC_API_URL must include a hostname")?
-        .to_owned();
-    let reconciliation = reconcile_credential_template_data(
-        &pool,
-        &CredentialTemplateDataReconciliationConfig {
-            marty_organization_id: config.marty_organization_id.to_string(),
-            marty_issuer_did: config.marty_issuer_did.clone(),
-            public_api_origin: config.public_api_origin.to_string(),
-            public_hostname,
-            selfhost_production: config.migration_profile == "selfhost-production",
-        },
-    )
-    .await?;
-    info!(
-        public_vcts_repaired = reconciliation.public_vcts_repaired,
-        issuer_dids_repaired = reconciliation.issuer_dids_repaired,
-        revocation_profiles_repaired = reconciliation.revocation_profiles_repaired,
-        templates_deprecated = reconciliation.templates_deprecated,
-        selfhost_templates_archived = reconciliation.selfhost_templates_archived,
-        "Credential Template legacy data reconciled"
-    );
+    // Runtime identity is read-only: schema and catalog provisioning are
+    // explicit operator commands and never run during normal service startup.
+    validate_credential_template_schema(&pool).await?;
     runtime.mark_healthy(CredentialTemplateDependency::Schema)?;
     let store = Arc::new(PostgresCredentialTemplateStore::new(pool));
-    let seeded = seed_system_catalog(
-        &store,
-        chrono::Utc::now(),
-        &config.marty_organization_id.to_string(),
-        config.public_api_origin.as_str(),
-        &config.marty_issuer_did,
-    )
-    .await?;
-    info!(
-        wallets_inserted = seeded.wallets_inserted,
-        wallets_reconciled = seeded.wallets_reconciled,
-        destinations_inserted = seeded.destinations_inserted,
-        destinations_reconciled = seeded.destinations_reconciled,
-        login_badge_inserted = seeded.login_badge_inserted,
-        "Credential Template system catalog reconciled"
-    );
-    runtime.mark_healthy(CredentialTemplateDependency::SystemCatalog)?;
 
     let control_plane: Arc<dyn CredentialTemplateControlPlane> =
         if let (Some(org_ca), Some(rp_ca)) = (

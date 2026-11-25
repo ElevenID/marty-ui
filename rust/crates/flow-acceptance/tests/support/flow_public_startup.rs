@@ -38,7 +38,7 @@ struct Process {
     binary: Option<PathBuf>,
 }
 impl Process {
-    fn start(environment: &BTreeMap<String, String>, directory: &Path) -> Self {
+    fn binary() -> PathBuf {
         let binary = super::super::super::issuance_process::issuance_binary().with_file_name(
             if cfg!(windows) {
                 "marty-flow.exe"
@@ -50,6 +50,11 @@ impl Process {
             binary.is_file(),
             "Required same-build Flow binary must be built by the gate"
         );
+        binary
+    }
+
+    fn start(environment: &BTreeMap<String, String>, directory: &Path) -> Self {
+        let binary = Self::binary();
         let loaded = load_environment(environment, directory);
         // Git sh's exec on Windows can retain a separate native child. Start
         // the actual binary directly after the bounded loader has exited.
@@ -123,7 +128,8 @@ impl Process {
         let deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.check_output();
-            if let Some(status) = self.child.lock().unwrap().try_wait().unwrap() {
+            let status = self.child.lock().unwrap().try_wait().unwrap();
+            if let Some(status) = status {
                 let stderr = std::fs::read_to_string(self.directory.join("flow.stderr"))
                     .unwrap_or_else(|_| "Flow stderr unavailable".into());
                 panic!(
@@ -157,7 +163,8 @@ impl Process {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             self.check_output();
-            if let Some(status) = self.child.lock().unwrap().try_wait().unwrap() {
+            let status = self.child.lock().unwrap().try_wait().unwrap();
+            if let Some(status) = status {
                 assert!(!status.success());
                 return;
             }
@@ -357,10 +364,7 @@ pub(super) async fn run(database_url: &str, redis_url: &str) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(
-        !exists,
-        "Actual main, not fixture setup, must perform Flow migrations"
-    );
+    assert!(!exists, "Flow fixture must begin without its owner schema");
     let ports = Arc::new(Ports::default());
     let seeds = Arc::new(Seeds {
         next: AtomicUsize::new(0),
@@ -437,6 +441,41 @@ pub(super) async fn run(database_url: &str, redis_url: &str) {
         std::fs::read_to_string(rendered::root().join("scripts/load-secrets-env.sh")).unwrap();
     std::fs::write(directory.0.join("loader.sh"), source.replace("\r\n", "\n")).unwrap();
     drop((http_reservation, grpc_reservation));
+    assert_eq!(environment["MARTY_SCHEMA_STARTUP_MODE"], "validate");
+    let mut unprovisioned = Process::start(&environment, &directory.0);
+    unprovisioned.rejected().await;
+    unprovisioned.close().await;
+    let exists: bool = sqlx::query_scalar("SELECT to_regnamespace('flow_service') IS NOT NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !exists,
+        "Validation-only startup must not create Flow schema"
+    );
+
+    let binary = Process::binary();
+    for operation in ["migrate", "verify-owned-schema"] {
+        let mut command = Command::new(&binary);
+        command
+            .arg(operation)
+            .env_clear()
+            .env("DATABASE_URL", database_url)
+            .env("MARTY_ORG_ID", &environment["MARTY_ORG_ID"]);
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        let output =
+            bounded_fixture_command::run(&mut command, None, Duration::from_secs(120), 262144)
+                .expect("Flow operator schema command must finish within deadline");
+        assert!(
+            output.status.success(),
+            "Owned Flow operator command {operation} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(2048)
+                .collect::<String>()
+        );
+    }
     let mut process = Process::start(&environment, &directory.0);
     let client = reqwest::Client::builder()
         .no_proxy()
