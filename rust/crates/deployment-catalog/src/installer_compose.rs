@@ -605,6 +605,106 @@ mod tests {
         assert!(live_port_bindings(&wrong, "installer-ingress", &p, false).is_err());
     }
 
+    fn restarting_ingress_fixture() -> (tempfile::TempDir, InstallerState, ComposeSession, Value) {
+        let (root, state, mut session) = receipt_fixture();
+        session.inputs.ingress_listener = Some(crate::installer_hosting::Listener {
+            bind_address: "127.0.0.1".parse().unwrap(),
+            port: 18443,
+        });
+        let network = format!("{}_default", session.inputs.project);
+        let container = json!({
+            "Config": {"Labels": {
+                "com.docker.compose.service": "installer-ingress",
+                SETUP_LABEL: "runtime"
+            }},
+            "State": {"Status": "restarting", "Running": true, "Restarting": true},
+            "HostConfig": {
+                "Privileged": false,
+                "Init": true,
+                "SecurityOpt": ["no-new-privileges:true"],
+                "IpcMode": "private",
+                "NetworkMode": network,
+                "PortBindings": {"8443/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}]}
+            },
+            "NetworkSettings": {"Networks": {network: {}}, "Ports": {}},
+            "Mounts": []
+        });
+        (root, state, session, container)
+    }
+
+    #[test]
+    fn restarting_ingress_keeps_configured_binding_without_requiring_live_ports() {
+        let (root, _state, session, mut container) = restarting_ingress_fixture();
+        // Docker can retain Running=true during restart backoff while no
+        // listener is published. Admission must reach credential recovery.
+        for ports in [
+            json!({}),
+            Value::Null,
+            json!({"8443/tcp": null}),
+            container["HostConfig"]["PortBindings"].clone(),
+        ] {
+            container["NetworkSettings"]["Ports"] = ports;
+            session.live_policy(&container).unwrap();
+        }
+        assert!(!root.path().join("docker-invoked").exists());
+    }
+
+    #[test]
+    fn running_ingress_requires_live_ports_unless_restart_is_explicit() {
+        let (_root, _state, session, mut container) = restarting_ingress_fixture();
+        container["State"]["Status"] = json!("running");
+        for restarting in [json!(false), Value::Null, json!("true"), json!(0)] {
+            container["State"]["Restarting"] = restarting;
+            assert!(session.live_policy(&container).is_err());
+        }
+        container["State"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Restarting");
+        assert!(session.live_policy(&container).is_err());
+
+        container["State"]["Restarting"] = json!(false);
+        container["NetworkSettings"]["Ports"] = container["HostConfig"]["PortBindings"].clone();
+        session.live_policy(&container).unwrap();
+
+        container["State"] = json!({"Status": "exited", "Running": false, "Restarting": false});
+        container["NetworkSettings"]["Ports"] = json!({});
+        session.live_policy(&container).unwrap();
+    }
+
+    #[test]
+    fn restarting_ingress_rejects_changed_configured_or_live_ports() {
+        let (_root, _state, session, container) = restarting_ingress_fixture();
+        for (section, field) in [("HostConfig", "PortBindings"), ("NetworkSettings", "Ports")] {
+            for ports in [
+                json!({"8443/tcp": [{"HostIp": "0.0.0.0", "HostPort": "18443"}]}),
+                json!({"8443/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18444"}]}),
+                json!({"8200/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}]}),
+                json!({"8443/udp": [{"HostIp": "127.0.0.1", "HostPort": "18443"}]}),
+                json!({"8443/tcp": [
+                    {"HostIp": "127.0.0.1", "HostPort": "18443"},
+                    {"HostIp": "127.0.0.1", "HostPort": "18443"}
+                ]}),
+            ] {
+                let mut wrong = container.clone();
+                wrong[section][field] = ports;
+                assert!(session.live_policy(&wrong).is_err(), "{section}.{field}");
+            }
+        }
+        for ports in [json!({}), Value::Null, json!({"8443/tcp": null})] {
+            let mut wrong = container.clone();
+            wrong["HostConfig"]["PortBindings"] = ports;
+            assert!(session.live_policy(&wrong).is_err());
+        }
+    }
+
+    #[test]
+    fn restarting_ingress_still_enforces_host_security_policy() {
+        let (_root, _state, session, mut container) = restarting_ingress_fixture();
+        container["HostConfig"]["Privileged"] = json!(true);
+        assert!(session.live_policy(&container).is_err());
+    }
+
     #[test]
     fn binds_are_contained_existing_and_never_auto_created() {
         let root = tempfile::tempdir().unwrap();
@@ -2986,14 +3086,15 @@ impl ComposeSession {
             }
         }
         let role = text(&c["Config"]["Labels"]["com.docker.compose.service"])?;
-        // Docker retains configured port bindings after stop, while its live
-        // NetworkSettings ports can be null. Preserve stop/start admission.
+        // Docker retains configured port bindings after stop and during restart
+        // backoff, when Running may still be true but no live ports are published.
+        // Keep the configured listener exact while admitting lifecycle recovery.
         live_port_bindings(&host["PortBindings"], role, &self.inputs, true)?;
         live_port_bindings(
             &c["NetworkSettings"]["Ports"],
             role,
             &self.inputs,
-            c["State"]["Running"] == true,
+            c["State"]["Running"] == true && c["State"]["Restarting"] != true,
         )?;
         Ok(())
     }
