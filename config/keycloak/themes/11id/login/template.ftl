@@ -2,7 +2,8 @@
 <#macro registrationLayout bodyClass="" displayInfo=false displayMessage=true displayRequiredFields=false showAnotherWayIfPresent=true>
 <#local automaticReturn = message?has_content && ((message.type)!"") == "success" && pageRedirectUri?has_content && !(actionUri?has_content) && !(requiredActions?has_content) && !(skipLink??)>
 <!DOCTYPE html>
-<html<#if realm.internationalizationEnabled> lang="${locale.currentLanguageTag}"</#if>>
+<#assign documentLanguage = (locale.currentLanguageTag)!"en">
+<html lang="${documentLanguage?has_content?then(documentLanguage, 'en')}">
 <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />

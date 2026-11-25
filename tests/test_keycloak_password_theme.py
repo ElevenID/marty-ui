@@ -347,3 +347,16 @@ def test_native_otp_heading_and_hint_resolve_for_each_supported_locale(load_page
     page = load_page("otp", locale)
     assert "mfaVerificationTitle" not in page.locator("h1#kc-page-title").inner_text()
     assert "mfaAuthenticatorHint" not in page.locator(".elevenid-context-hint").inner_text()
+
+
+@pytest.mark.parametrize("scenario,locale,expected", [
+    ("login-no-i18n", "en", "en"),
+    ("login-no-i18n", "de", "de"),
+    ("login-missing-locale", "en", "en"),
+    ("login-empty-locale", "en", "en"),
+    ("login", "ja", "ja"),
+])
+def test_document_language_survives_disabled_or_missing_locale(load_page, scenario, locale, expected):
+    page = load_page(scenario, locale)
+    assert page.locator("html").get_attribute("lang") == expected
+    assert page.get_by_role("heading", level=1).count() == 1

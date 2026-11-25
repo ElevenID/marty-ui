@@ -26,12 +26,16 @@ label { display: block; font-size: 13px; font-weight: 650; margin-bottom: 8px; }
 input, select { display: block; width: 100%; min-height: 46px; border-radius: 8px; border: 1px solid #becdc5; background: #fff; color: #172c37; padding: 11px 13px; }
 input::placeholder { color: #84918a; }
 .code-input { letter-spacing: 9px; text-align: center; font-size: 24px; font-variant-numeric: tabular-nums; padding-left: 22px; }
+.enrollment-qr { display: block; width: 200px; max-width: 100%; height: auto; margin: 20px auto; }
+.setup-key { display: block; overflow-wrap: anywhere; padding: 12px; margin: 12px 0 20px; border: 1px solid #dce3df; border-radius: 8px; font-size: 13px; }
 .primary, .secondary { min-height: 46px; width: 100%; padding: 11px 16px; border-radius: 8px; font-size: 14px; font-weight: 650; line-height: 1.5; }
 .primary { border: 1px solid var(--elevenid-primary); background: var(--elevenid-primary); color: white; }
 .primary:hover:enabled { background: #145da7; }
 .secondary { border: 1px solid #cad6ce; background: white; color: #334c41; }
 .secondary:hover:enabled { background: #f2f6f3; }
 .actions { display: grid; gap: 10px; margin-top: 24px; }
+.account-actions { display: grid; gap: 4px; justify-items: stretch; margin-top: 12px; }
+.account-actions .text-button { min-height: 36px; text-align: left; }
 .text-button { padding: 5px 0; border: 0; background: none; color: #245948; font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
 .switch { text-align: center; margin: 22px 0 0; }
 .help { border-top: 1px solid #e8ece9; padding-top: 20px; margin: 24px 0 0; color: #69766f; font-size: 12px; line-height: 1.65; }

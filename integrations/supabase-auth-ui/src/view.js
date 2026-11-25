@@ -85,7 +85,15 @@ export function renderView(document, root, state, actions) {
       void actions.signIn(email.input.value, enteredPassword);
     });
     content.append(form);
-    content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
+    if (actions.recover) {
+      const accountActions = element("div", "account-actions");
+      accountActions.append(
+        button("Forgot your password?", "text-button", actions.recover),
+        button("Create an account", "text-button", actions.register),
+        button("Set up an authenticator", "text-button", actions.security),
+      );
+      content.append(accountActions);
+    } else content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
   } else if (state.phase === "checking") {
     heading.textContent = "Checking your account";
     intro("Verifying your sign-in and any required account verification.");
@@ -180,6 +188,7 @@ export function renderView(document, root, state, actions) {
     notice();
     if (!state.restartRequired && !["configuration", "request", "cancelled", "restart"].includes(state.error)) content.append(button("Start sign-in again", "secondary", actions.switchAccount, false));
     if (state.restartRequired && !["restart", "cancelled"].includes(state.error)) content.append(element("p", "help", "Return to your application and start a new sign-in. This authorization request cannot be reused."));
+    if (actions.security && ["mfa_incomplete", "mfa_unavailable"].includes(state.error)) content.append(button("Set up an authenticator", "secondary", actions.security, false));
   }
   root.setAttribute("aria-busy", String(state.busy));
   const previousPhase = root.dataset.phase;

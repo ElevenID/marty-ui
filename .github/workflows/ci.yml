@@ -265,6 +265,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
+      - name: Qualify the static Supabase authorization companion
+        working-directory: integrations/supabase-auth-ui
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun test
+          bun build.mjs --config public/config.example.json
+          bun build.mjs --config public/config.lifecycle.example.json
       - name: Bootstrap released UI dependencies
         working-directory: ui
         shell: bash
