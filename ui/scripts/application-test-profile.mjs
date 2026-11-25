@@ -2,6 +2,7 @@
 // UI test suite or an OIDC/host qualification; combined/website tests keep their
 // existing configuration and discovery rules.
 export const APPLICATION_TEST_CONFIG = 'vitest.application.config.ts';
+export const APPLICATION_TEST_ASSERTIONS = 323;
 
 export const APPLICATION_TEST_FILES = Object.freeze([
   'src/__tests__/startupRecovery.test.ts',

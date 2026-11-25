@@ -53,11 +53,14 @@ function allFiles(root, prefix = '') {
 // selected test/result parsers, output comparison and actual closed runtime
 // construction use the production consumer. All injected executions must stay
 // nonqualifying and remove their context, even when every assertion passes.
-function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false } = {}) {
-  const contractBytes = readFileSync(path.join(ROOT, historical ? 'contracts/application-source-export-history/initial-v1.json' : 'contracts/application-source-export.json'));
+function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false, previous = false } = {}) {
+  const contractPath = historical ? 'contracts/application-source-export-history/initial-v1.json'
+    : previous ? 'contracts/application-source-export-history/before-delegation-ux-states-v1.json'
+      : 'contracts/application-source-export.json';
+  const contractBytes = readFileSync(path.join(ROOT, contractPath));
   const sourceContract = JSON.parse(contractBytes);
   const selectedTests = sourceContract.test_profile.files;
-  const assertionCount = historical ? 296 : 321;
+  const assertionCount = historical ? 296 : previous ? 321 : 323;
   const temporary = mkdtempSync(path.join(os.tmpdir(), 'marty-package-consumer-test-'));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   const sourceBytes = new Map();
@@ -77,8 +80,8 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = 
   }
   for (const name of ['package.json', 'package-lock.json']) select(`ui/profiles/application/${name}`, `ui/${name}`);
   const routeContract = { version: 1, sha256: `sha256:${'b'.repeat(64)}` };
-  const testProfile = { config: APPLICATION_TEST_CONFIG, files: [...selectedTests],
-    shared_contracts: ['contracts/organization-domain-behavior.json'] };
+  const testProfile = structuredClone(sourceContract.test_profile);
+  assert.equal(testProfile.config, APPLICATION_TEST_CONFIG);
   const substitutions = ['ui/package.json', 'ui/package-lock.json'].map((name) => ({ path: name,
     baseline: record(name, readFileSync(path.join(ROOT, name))),
     selected: sourceFiles.get(`ui/profiles/application/${path.basename(name)}`) }));
@@ -195,7 +198,7 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
   assert.equal(result.fixture, true);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
-  assert.equal(result.tests.test_count, 321);
+  assert.equal(result.tests.test_count, 323);
   assert.equal(result.output_comparison.output_files, 88);
   assert.equal(result.output_comparison.mode_transformations.length, 54);
   assert.equal(result.runtime_comparison.payload_files, 92);
@@ -254,15 +257,21 @@ test('the approved historical package keeps its original 24-file, 296-assertion 
 
 test('release input validation keeps exact current and historical test profiles', async (t) => {
   const current = fixture(t);
+  const previous = fixture(t, { previous: true });
   const historical = fixture(t, { historical: true });
+  assert.deepEqual(current.manifest.test_profile.files, previous.manifest.test_profile.files);
+  assert.equal(current.manifest.test_profile.assertions, 323);
+  assert.equal(previous.manifest.test_profile.assertions, undefined);
   assert.deepEqual(current.manifest.test_profile.files.filter((name) => !historical.manifest.test_profile.files.includes(name)), [
     'src/components/console/agents/AgentTrustPages.test.tsx',
     'src/services/__tests__/agentTrustApi.test.ts',
   ]);
   assert.ok(historical.manifest.test_profile.files.every((name) => current.manifest.test_profile.files.includes(name)));
-  // The retained 296 cases plus the 13 administration/approval and 12 Gateway
-  // client/retry cases form the current 321-case profile; neither is a minimum.
-  for (const [input, assertions, otherAssertions] of [[current, 321, 296], [historical, 296, 321]]) {
+  // Retain the original 296 and agent-trust 321 profiles. The current profile
+  // adds two UX-state cases within the same 26 files; every count is exact.
+  for (const [input, assertions, otherAssertions] of [
+    [current, 323, [321, 296]], [previous, 321, [323, 296]], [historical, 296, [323, 321]],
+  ]) {
     const report = await input.run();
     assert.equal(report.status, 'fixture-passed', JSON.stringify(report.failure));
     assert.equal(report.fixture, true);
@@ -288,7 +297,7 @@ test('release input validation keeps exact current and historical test profiles'
       verified: { root: contextRoot, manifest: contextManifest, manifest_sha256: manifestSha256 } };
     assert.equal(consumer.tests.test_count, assertions);
     assert.doesNotThrow(() => validateApplicationReleaseConsumer(consumer, options));
-    for (const count of [otherAssertions, assertions - 1, assertions + 1]) {
+    for (const count of [...otherAssertions, assertions - 1, assertions + 1]) {
       const changed = structuredClone(consumer);
       changed.tests.test_count = count;
       assert.throws(() => validateApplicationReleaseConsumer(changed, options), /approved source test profile/);

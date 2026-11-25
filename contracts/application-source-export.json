@@ -5793,7 +5793,8 @@
     ],
     "shared_contracts": [
       "contracts/organization-domain-behavior.json"
-    ]
+    ],
+    "assertions": 323
   },
   "public_files": [
     ".well-known/ai-plugin.json",
