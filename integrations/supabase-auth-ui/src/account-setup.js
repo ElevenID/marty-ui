@@ -15,6 +15,8 @@ export const SETUP_MESSAGES = Object.freeze({
 });
 
 const STALE = Symbol("stale account setup");
+// Hosted Supabase QR SVGs can exceed 360 KiB; keep a bounded image payload.
+const MAX_TOTP_QR_LENGTH = 512 * 1024;
 const hash = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{16,512}$/.test(value);
 const uuid = (value) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
@@ -152,7 +154,8 @@ export class AccountSetupController {
         friendlyName: this.config.brand.slice(0,40)+" authenticator "+crypto.randomUUID().slice(0,8) }); this.check();
       const data = result.data, prefix = "data:image/svg+xml;utf-8,";
       if (result.error || !uuid(data?.id) || data.type !== "totp" || !/^[A-Z2-7]{16,256}$/.test(data.totp?.secret ?? "")
-          || typeof data.totp?.qr_code !== "string" || !data.totp.qr_code.startsWith(prefix) || data.totp.qr_code.length > 65_536) throw new Error("setup");
+          || typeof data.totp?.qr_code !== "string" || !data.totp.qr_code.startsWith(prefix)
+          || data.totp.qr_code.length > MAX_TOTP_QR_LENGTH) throw new Error("setup");
       this.#enrollment = { id: data.id, secret: data.totp.secret,
         qr: "data:image/svg+xml;charset=utf-8,"+encodeURIComponent(data.totp.qr_code.slice(prefix.length)) };
       this.emit({ phase: "enroll", busy: false, error: null, showKey: false });
