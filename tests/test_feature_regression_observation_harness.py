@@ -43,10 +43,12 @@ def capture() -> dict[str, object]:
     }
 
 
-def run_harness(document: dict[str, object], command: str = "emit") -> subprocess.CompletedProcess[bytes]:
+def run_harness(
+    document: dict[str, object], command: str = "emit", *, optimized: bool = False
+) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         [
-            sys.executable, str(HARNESS), command,
+            sys.executable, *(["-O"] if optimized else []), str(HARNESS), command,
             "--repository", "ElevenID/marty-ui", "--revision", REVISION,
             "--phase", "before",
         ],
@@ -81,3 +83,13 @@ def test_harness_rejects_capture_digest_mismatch() -> None:
     document = capture()
     document["observations"][0]["value"] = "unreviewed private value"
     assert run_harness(document).returncode != 0
+
+
+def test_harness_rejects_optimized_interpreter() -> None:
+    document = capture()
+    document["observations"][0]["value"] = "unreviewed private value"
+    subject = canonical({"schema": "elevenid.behavior-subject-output/v2", "observations": document["observations"]})
+    document["receipt"]["stdout_sha256"] = "sha256:" + hashlib.sha256(subject).hexdigest()
+    result = run_harness(document, optimized=True)
+    assert result.returncode != 0
+    assert result.stdout == b""

@@ -33,6 +33,8 @@ def _canonical(value: object) -> bytes:
 
 
 def _read_capture() -> list[dict[str, object]]:
+    if sys.flags.optimize:
+        raise ValueError("optimized Python disables the probe oracle")
     raw = sys.stdin.buffer.read(MAX_CAPTURE_BYTES + 1)
     if len(raw) > MAX_CAPTURE_BYTES:
         raise ValueError("capture exceeds bound")
