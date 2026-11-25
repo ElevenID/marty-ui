@@ -169,6 +169,22 @@ describe("initial authenticator enrollment", () => {
     h.controller.toggleSetupKey(); expect(h.controller.enrollmentDisplay().secret).toBe(SECRET);
     expect(JSON.stringify(h.states)).not.toContain(SECRET);
   });
+  test("accepts the SVG QR size returned by the hosted Supabase authenticator enrollment", async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><!--'+"x".repeat(362_632)+'--></svg>';
+    const h = setup({ enroll: () => ok({ id: factor().id, type: "totp",
+      totp: { secret: SECRET, qr_code: 'data:image/svg+xml;utf-8,'+svg } }) });
+    await enroll(h);
+    expect(h.controller.state.phase).toBe("enroll");
+    expect(h.controller.enrollmentDisplay().qr).toStartWith("data:image/svg+xml;charset=utf-8,%3Csvg");
+    expect(JSON.stringify(h.states)).not.toContain(SECRET);
+  });
+  test("refuses an oversized provider QR response", async () => {
+    const h = setup({ enroll: () => ok({ id: factor().id, type: "totp",
+      totp: { secret: SECRET, qr_code: 'data:image/svg+xml;utf-8,'+"x".repeat(512*1024+1) } }) });
+    await enroll(h);
+    expect(h.controller.state.phase).toBe("blocked");
+    expect(h.controller.enrollmentDisplay()).toBeNull();
+  });
   test("existing verified authenticator is preserved and returns to fresh application sign-in", async () => {
     const h = setup({ factors: [factor()], nextLevel: "aal2" });
     await enroll(h);
