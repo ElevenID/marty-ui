@@ -587,8 +587,8 @@ fn complete_immutable_files(
     expected: &BTreeMap<String, Fingerprint>,
     values: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
-    let before = DirectoryIdentity::observe(&files)?;
-    let existing = fs::file_names(&files, REFUSED)?;
+    let before = DirectoryIdentity::observe(files)?;
+    let existing = fs::file_names(files, REFUSED)?;
     require(
         *expected
             == values
@@ -604,11 +604,11 @@ fn complete_immutable_files(
     }
     for (name, bytes) in values {
         if !existing.contains(name) {
-            write_exclusive(&files, name, bytes, 0o444)?;
+            write_exclusive(files, name, bytes, 0o444)?;
         }
     }
     fs::require_directory_binding(path, files, REFUSED)?;
-    require(DirectoryIdentity::observe(&files)? == before)
+    require(DirectoryIdentity::observe(files)? == before)
 }
 
 fn stage_material(

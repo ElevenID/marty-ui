@@ -244,14 +244,6 @@ pub(crate) fn prepare_renewal(
     prepare_with(view, installation, openbao_ca)
 }
 
-/// Read-only preparation while the native caller already holds the lock.
-pub(crate) fn prepare_renewal_at(
-    installation: &Path,
-    openbao_ca: &[u8],
-) -> Result<RenewalMaterial> {
-    prepare_with(&InspectionAt::open(installation)?, installation, openbao_ca)
-}
-
 fn prepare_with(
     view: &impl RenewalInspection,
     installation: &Path,
@@ -712,18 +704,6 @@ fn admit_at(
         installation_ready: false,
     };
     Ok((files, receipt))
-}
-
-/// Historical admission uses the already bound qualification time. It verifies
-/// the original exact helper receipts and original output directory/file hashes;
-/// it does not make an expired generation usable or authorize activation today.
-pub(crate) fn verify_renewal_receipt(
-    view: &LockedInspection,
-    installation: &Path,
-    material: &RenewalMaterial,
-    receipt: &RenewalReceipt,
-) -> Result<BTreeMap<String, Vec<u8>>> {
-    verify_receipt_with(view, installation, material, receipt)
 }
 
 /// Historical verification for Compose admission under its caller's lock. The

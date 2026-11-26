@@ -550,8 +550,7 @@ mod tests;
 #[path = "installer_feature_identity_renewal.rs"]
 mod renewal;
 pub(crate) use renewal::{
-    admit_renewal_output, hold_renewal_output, prepare_renewal, prepare_renewal_at,
-    renewal_input_names, resume_renewal_output, validate_renewal_model, validate_renewal_model_at,
-    verify_renewal_receipt, verify_renewal_receipt_at, HeldRenewalOutput, RenewalMaterial,
-    RenewalOutputBinding, RenewalReceipt,
+    admit_renewal_output, hold_renewal_output, prepare_renewal, renewal_input_names,
+    resume_renewal_output, validate_renewal_model, validate_renewal_model_at,
+    verify_renewal_receipt_at, RenewalOutputBinding, RenewalReceipt,
 };

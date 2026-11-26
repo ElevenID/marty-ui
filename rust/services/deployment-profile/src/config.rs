@@ -71,7 +71,7 @@ impl DeploymentServiceConfig {
         if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
             return Err(invalid("DATABASE_URL"));
         }
-        let http_addr = value(&values, "DEPLOYMENT_PROFILE_HTTP_ADDR")
+        let http_addr: SocketAddr = value(&values, "DEPLOYMENT_PROFILE_HTTP_ADDR")
             .map(str::to_owned)
             .unwrap_or_else(|| {
                 format!(

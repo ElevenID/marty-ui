@@ -157,7 +157,7 @@ fn configured(
             files.insert(name, bytes);
         }
         agent.delegated_use = Some(DelegatedUse::Configured {
-            configuration: configuration.clone(),
+            configuration: Box::new(configuration.clone()),
         });
     }
     if let Some(public) = &input.public_verification {
@@ -934,7 +934,7 @@ fn completed_sessions(installation: &Path) -> Result<Vec<(SavedSession, SavedSes
                     installation,
                     &intent.parent_session,
                     &selected,
-                    &material,
+                    material,
                     &plan.model,
                 )?
                 && plan.configuration_sha256
@@ -959,7 +959,7 @@ fn completed_sessions(installation: &Path) -> Result<Vec<(SavedSession, SavedSes
                 require(native.configuration_sha256 == plan.configuration_sha256)?;
             }
         }
-        require_native_chain(installation, &material, &intent, &plan, &complete)?;
+        require_native_chain(installation, material, &intent, &plan, &complete)?;
         require(
             complete.session.schema == "elevenid.installer-compose-session/v1"
                 && complete.session.installation_id == material.installation_id.to_string()

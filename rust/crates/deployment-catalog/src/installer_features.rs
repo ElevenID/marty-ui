@@ -90,7 +90,7 @@ pub(crate) struct Approval {
 pub(crate) enum DelegatedUse {
     AwaitingOwnerConfiguration {},
     Configured {
-        configuration: DelegatedUseConfiguration,
+        configuration: Box<DelegatedUseConfiguration>,
     },
 }
 
@@ -574,9 +574,6 @@ impl Selection {
             || installation.join(DIRECTORY),
             |generation| generation.directory(installation),
         )
-    }
-    pub(crate) fn configuration(&self) -> &Configuration {
-        &self.configuration
     }
     pub(crate) fn profile_sha256(&self) -> Result<String> {
         if let Some(generation) = &self.generation {
