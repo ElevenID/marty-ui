@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
 import { getIdentityProvider } from '../identityProviderApi';
@@ -10,9 +10,19 @@ const provider = {
   account_url: 'https://identity.example/account', recovery_url: null,
 };
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => vi.stubEnv('VITE_API_URL', ''));
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe('identity provider capabilities', () => {
+  it('loads provider links from the configured API for a static console', async () => {
+    vi.stubEnv('VITE_API_URL', 'https://api.example');
+    server.use(http.get('https://api.example/v1/auth/provider', () => HttpResponse.json(provider)));
+    const fetch = vi.spyOn(window, 'fetch');
+    await expect(getIdentityProvider()).resolves.toEqual(provider);
+    expect(fetch).toHaveBeenCalledWith('https://api.example/v1/auth/provider', expect.objectContaining({
+      credentials: 'include', cache: 'no-store', redirect: 'error',
+    }));
+  });
   it('returns only the public capability contract without deriving permissions', async () => {
     server.use(http.get('*/v1/auth/provider', () => HttpResponse.json({
       ...provider, roles: ['admin'], client_secret: 'must-not-propagate',

@@ -44,6 +44,16 @@ let stage = 'startup';
 const apiResponses = [];
 const failures = [];
 const consoleErrors = [];
+const pendingRequests = new Map();
+function gatewayDiagnosticRoute(pathname) {
+  if (pathname === '/v1/auth/me') return 'auth-session';
+  const prefix = '/v1/flows/public/verification';
+  if (pathname === `${prefix}/catalog`) return 'verification-catalog';
+  if (pathname === `${prefix}/preview`) return 'verification-preview';
+  if (pathname === `${prefix}/sessions`) return 'verification-launch';
+  if (pathname.startsWith(`${prefix}/sessions/`)) return 'verification-session';
+  return 'other-gateway';
+}
 const artifactDir = path.join(root, '../rust/target/public-verification-browser');
 // A new output directory preserves earlier qualification artifacts and avoids
 // emptying any existing build or operator directory.
@@ -85,6 +95,8 @@ try {
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 500)); });
   page.on('response', response => {
     const url = new URL(response.url());
+    const pending = pendingRequests.get(response.request());
+    if (pending) pending.responseStatus = response.status();
     if (url.origin === gateway.origin && url.pathname.startsWith('/v1/flows/public/verification/')) {
       const headers = response.request().headers();
       if (['cookie', 'authorization', 'x-api-key', 'x-user-id', 'x-organization-id'].some(name => headers[name])) {
@@ -93,9 +105,20 @@ try {
       apiResponses.push({ method: response.request().method(), path: url.pathname, status: response.status() });
     }
   });
+  page.on('requestfinished', request => pendingRequests.delete(request));
+  page.on('requestfailed', request => pendingRequests.delete(request));
   await page.setRequestInterception(true);
   page.on('request', request => {
     const url = new URL(request.url());
+    // Keep only fixed location classes: fixture URLs can carry capabilities,
+    // so failure diagnostics must not publish raw URLs, headers or bodies.
+    pendingRequests.set(request, {
+      method: request.method(), type: request.resourceType(),
+      location: url.origin === origin ? 'application'
+        : url.origin === gateway.origin ? 'gateway' : 'external',
+      ...(url.origin === gateway.origin ? { route: gatewayDiagnosticRoute(url.pathname) } : {}),
+      responseStatus: null,
+    });
     if (url.origin === origin && /\/(?:@vite|@id|src)\//.test(url.pathname)) {
       failures.push('Production journey requested development source');
     }
@@ -168,6 +191,12 @@ try {
   console.error(`Browser qualification failed at ${stage}: ${error.message}`);
   if (page) {
     mkdirSync(artifactDir, { recursive: true });
+    const diagnostics = { stage, pendingRequests: [...pendingRequests.values()].slice(0, 24),
+      pendingRequestCount: pendingRequests.size, pageErrorCount: failures.length,
+      consoleErrorCount: consoleErrors.length, apiResponseCount: apiResponses.length,
+      documentReadyState: await page.evaluate(() => document.readyState).catch(() => 'unavailable') };
+    writeFileSync(path.join(artifactDir, 'diagnostics.json'), JSON.stringify(diagnostics, null, 2));
+    console.error(`Browser qualification diagnostics: ${JSON.stringify(diagnostics)}`);
     await page.screenshot({ path: path.join(artifactDir, 'failed.png'), fullPage: true }).catch(() => {});
     const text = await page.evaluate(() => document.body.innerText.slice(0, 3000)).catch(() => 'unavailable');
     writeFileSync(path.join(artifactDir, 'failed.json'), JSON.stringify({ stage, text, failures, consoleErrors, apiResponses }, null, 2));

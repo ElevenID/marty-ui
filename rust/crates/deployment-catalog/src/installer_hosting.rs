@@ -22,6 +22,10 @@ const REFUSED: &str =
     "hosting inputs are absent, changed or unsupported; preserve installation evidence";
 pub(crate) const RECORD: &str = "hosting-selection.json";
 pub(crate) const SOURCE: &str = "hosting-input.json";
+pub(crate) const EXTERNAL_APPLICATION_LAYER: &str =
+    "deploy-config/compose/selfhost-installer/compose.external-application.yml";
+pub(crate) const EXTERNAL_OIDC_APPLICATION_LAYER: &str =
+    "deploy-config/compose/selfhost-installer/compose.external-application-oidc.yml";
 pub(crate) const CONNECTOR_TOKEN: &str = "cloudflare_tunnel_token";
 const SCHEMA: &str = "elevenid.installation-hosting/v1";
 const SELECTION_SCHEMA: &str = "elevenid.installation-hosting-selection/v1";
@@ -96,12 +100,21 @@ enum WebSection {
 #[serde(deny_unknown_fields)]
 struct Web {
     enabled_sections: Vec<WebSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_application_origin: Option<PublicOrigin>,
 }
 
 impl Web {
     fn validate(&self) -> Result<()> {
         require(
-            self.enabled_sections.len() <= 2
+            self.external_application_origin
+                .as_ref()
+                .is_none_or(|origin| {
+                    self.enabled_sections.is_empty()
+                        && origin.dns_name().is_some()
+                        && !origin.is_loopback()
+                })
+                && self.enabled_sections.len() <= 2
                 && self
                     .enabled_sections
                     .iter()
@@ -267,6 +280,15 @@ impl Configuration {
     fn validate(&self) -> Result<()> {
         if let Some(web) = &self.web {
             web.validate()?;
+            if let Some(application) = &web.external_application_origin {
+                require(
+                    self.mode != Mode::Local
+                        && self.public_entry_origin.is_none()
+                        && self.public_origin.as_ref().is_some_and(|api| {
+                            api.dns_name().is_some() && !api.is_loopback() && api != application
+                        }),
+                )?;
+            }
         }
         // The transport/SAN parser supports IPv6, but the application's current
         // did:web authority contract does not. Refuse that public identity here
@@ -474,7 +496,7 @@ impl Prepared {
             .map(PublicOrigin::as_str)
             .unwrap_or("https://localhost:<selected-port>");
         format!(
-            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}; webpage sections {}",
+            "public origin {origin}; public entry origin {}; ingress listener {}; public TLS owner {}; connector {}; webpage sections {}; external application {}",
             self.configuration
                 .public_entry_origin
                 .as_ref()
@@ -491,7 +513,9 @@ impl Prepared {
             } else {
                 "none"
             },
-            self.configuration.web.as_ref().map_or("public,console", Web::environment_value)
+            self.configuration.web.as_ref().map_or("public,console", Web::environment_value),
+            self.configuration.web.as_ref().and_then(|web| web.external_application_origin.as_ref())
+                .map_or("none", PublicOrigin::as_str)
         )
     }
 }
@@ -638,6 +662,51 @@ pub(crate) fn resolve(state: &LockedInspection) -> Result<Selection> {
 }
 
 impl Selection {
+    pub(crate) fn external_application_origin(&self) -> Option<&PublicOrigin> {
+        self.configuration
+            .web
+            .as_ref()?
+            .external_application_origin
+            .as_ref()
+    }
+
+    pub(crate) fn validate_application_model(&self, model: &serde_json::Value) -> Result<()> {
+        let services = model["services"].as_object().ok_or(REFUSED)?;
+        // Infrastructure-only bootstrap does not create application owners.
+        let Some(auth) = services.get("auth") else {
+            return Ok(());
+        };
+        let Some(application) = self.external_application_origin() else {
+            return require(services.get("ui").is_some_and(serde_json::Value::is_object));
+        };
+        let api = self.configuration.public_origin.as_ref().ok_or(REFUSED)?;
+        require(
+            !services.contains_key("ui")
+                && model["services"]["edge"]["environment"]
+                    .as_object()
+                    .ok_or(REFUSED)?
+                    .get("UI_UPSTREAM")
+                    .is_none()
+                && model["services"]["gateway"]["environment"]["CORS_ORIGINS"]
+                    == application.as_str(),
+        )?;
+        for (name, value) in [
+            ("UI_BASE_URL", application.as_str().to_owned()),
+            ("UI_ADDITIONAL_BASE_URLS", String::new()),
+            ("AUTH_PUBLIC_API_ORIGIN", api.as_str().to_owned()),
+            (
+                "OIDC_REDIRECT_URI",
+                format!("{}/v1/auth/callback", api.as_str()),
+            ),
+            (
+                "OIDC_POST_LOGOUT_REDIRECT_URI",
+                format!("{}/", application.as_str()),
+            ),
+        ] {
+            require(auth["environment"][name] == value)?;
+        }
+        Ok(())
+    }
     pub(crate) fn source_sha256(&self) -> &str {
         &self.source_sha256
     }

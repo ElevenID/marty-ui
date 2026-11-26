@@ -1,10 +1,12 @@
+import { resolveApiUrl } from './authApiOrigin';
+
 /**
  * Preferences API Service
  *
  * Provides API calls for user console context preferences.
  */
 
-// Preferences endpoints go through nginx proxy
+// Preferences use the configured Gateway, including static Pages deployments.
 const PREFS_BASE_URL = '/v1/me/preferences';
 
 /**
@@ -42,7 +44,7 @@ function normalizePreferencesFromApi(raw) {
  */
 export async function getPreferences() {
   try {
-    const response = await fetch(PREFS_BASE_URL, {
+    const response = await fetch(resolveApiUrl(PREFS_BASE_URL, import.meta.env.VITE_API_URL), {
       method: 'GET',
       credentials: 'include', // Include cookies
       cache: 'no-store',
@@ -82,7 +84,7 @@ export async function updatePreferences(preferences) {
       payload.last_view_mode = toApiViewMode(payload.last_view_mode);
     }
 
-    const response = await fetch(PREFS_BASE_URL, {
+    const response = await fetch(resolveApiUrl(PREFS_BASE_URL, import.meta.env.VITE_API_URL), {
       method: 'PUT',
       credentials: 'include', // Include cookies
       headers: {

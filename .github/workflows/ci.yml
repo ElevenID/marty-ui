@@ -265,6 +265,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
+      - name: Qualify the static Supabase authorization companion
+        working-directory: integrations/supabase-auth-ui
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun test
+          bun build.mjs --config public/config.example.json
+          bun build.mjs --config public/config.lifecycle.example.json
       - name: Bootstrap released UI dependencies
         working-directory: ui
         shell: bash
@@ -589,10 +596,10 @@ jobs:
     needs: [changes, release-preflight]
     if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
-    # Cold image/browser setup plus the eight Rust preparation phases can use
-    # 35 minutes before the coordinated restore proof starts. Keep time for
-    # that complete proof and evidence cleanup, without skipping any gate.
-    timeout-minutes: 60
+    # A cold Keycloak build took 30 minutes and recovery fixtures were still
+    # compiling at the one-hour cap. Reserve bounded time for the complete
+    # coordinated restore proof and evidence cleanup; retain all probe deadlines.
+    timeout-minutes: 90
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -1876,6 +1883,17 @@ jobs:
           # The early host snapshot is never overwritten after long Docker/DB work.
           if test -f rust/target/cargo-timings/cargo-timing.html; then
             cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
+          fi
+      - name: Retain public browser failure diagnostics
+        if: always() && matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          diagnostics=rust/target/public-verification-browser/diagnostics.json
+          if [[ -e "$diagnostics" || -L "$diagnostics" ]]; then
+            [[ -f "$diagnostics" && ! -L "$diagnostics" ]]
+            mkdir -p "$RUNNER_TEMP/rust-build-evidence"
+            cp -- "$diagnostics" "$RUNNER_TEMP/rust-build-evidence/public-browser-diagnostics.json"
           fi
       - name: Upload Rust build evidence
         if: always()

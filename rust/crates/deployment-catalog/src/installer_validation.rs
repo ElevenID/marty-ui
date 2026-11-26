@@ -211,6 +211,7 @@ async fn public_checks(
     required: &[String],
     alias: Option<&str>,
     enabled_sections: &str,
+    external_application: Option<&str>,
 ) -> (Vec<bool>, Option<PageObservation>) {
     let Ok(client) = client(trust) else {
         return (vec![false; 7], None);
@@ -228,7 +229,11 @@ async fn public_checks(
         issuer.document,
         authorization.document,
     );
-    let (entry, page) = page::check(trust, alias, enabled_sections).await;
+    let (entry, page) = if let Some(origin) = external_application {
+        (page::check_external_application(trust, origin).await, None)
+    } else {
+        page::check(trust, alias, enabled_sections).await
+    };
     (
         vec![
             tls,
@@ -292,7 +297,15 @@ pub(crate) fn observe_locked(
             (observed, page) = rt.block_on(async {
                 tokio::time::timeout(
                     remaining,
-                    public_checks(trust, required, alias, hosting.enabled_web_sections()),
+                    public_checks(
+                        trust,
+                        required,
+                        alias,
+                        hosting.enabled_web_sections(),
+                        hosting
+                            .external_application_origin()
+                            .map(|origin| origin.as_str()),
+                    ),
                 )
                 .await
                 .unwrap_or_else(|_| (vec![false; 7], None))
@@ -334,7 +347,11 @@ pub(crate) fn observe_locked(
         "Required public services",
         "Credential issuer metadata",
         "Authorization metadata",
-        "Application entry document and main assets",
+        if hosting.external_application_origin().is_some() {
+            "External application routing (Pages assets and browser journey not checked)"
+        } else {
+            "Application entry document and main assets"
+        },
     ]
     .into_iter()
     .enumerate()

@@ -1,0 +1,9 @@
+# External application and external login provider share one environment reset.
+# Apply before compose.external-oidc.yml: Compose 5.6.1 preserves only the first
+# environment reset across these layers. Keep the managed-provider variant apart.
+services:
+  ui: !reset 'null'
+  edge:
+    environment:
+      UI_UPSTREAM: !reset 'null'
+      KEYCLOAK_UPSTREAM: !reset 'null'

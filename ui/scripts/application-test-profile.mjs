@@ -2,7 +2,7 @@
 // UI test suite or an OIDC/host qualification; combined/website tests keep their
 // existing configuration and discovery rules.
 export const APPLICATION_TEST_CONFIG = 'vitest.application.config.ts';
-export const APPLICATION_TEST_ASSERTIONS = 323;
+export const APPLICATION_TEST_ASSERTIONS = 392;
 
 export const APPLICATION_TEST_FILES = Object.freeze([
   'src/__tests__/startupRecovery.test.ts',
@@ -30,5 +30,9 @@ export const APPLICATION_TEST_FILES = Object.freeze([
   'src/components/console/agents/AgentTrustPages.test.tsx',
   'src/services/__tests__/agentTrustApi.test.ts',
   'src/services/__tests__/authApi.test.ts',
+  'src/services/__tests__/authApiOrigin.test.ts',
+  'src/services/__tests__/consoleApiOrigin.test.ts',
+  'src/services/__tests__/identityProviderApi.test.ts',
+  'src/services/__tests__/associationConsent.test.ts',
   'tests/application/surface-profile.test.tsx',
 ]);

@@ -11,14 +11,25 @@ const current=(change={})=>({kind:'current',record:{challenge_id:challengeId,sou
 const reply=(body:unknown,status=200)=>new Response(typeof body==='string'?body:JSON.stringify(body),
  {status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 let fetchMock:ReturnType<typeof vi.fn>;
-beforeEach(()=>{window.sessionStorage.clear();fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);});
-afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
+beforeEach(()=>{vi.stubEnv('VITE_API_URL','');window.sessionStorage.clear();fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);});
+afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();vi.unstubAllEnvs();});
 function queue(...values:unknown[]) {for(const value of values)fetchMock.mockResolvedValueOnce(reply(value));}
 function mutationReply(action='confirm') {
  const saved=JSON.parse(window.sessionStorage.getItem(key)!);
  return {operation_id:saved.operationId,challenge_id:challengeId,action,revision:2,phase:action==='deny'?'denied':'confirmed'};
 }
 describe('public Gateway learner consent',()=>{
+ it('inspects with the API session and selected Gateway under static hosting',async()=>{
+  vi.stubEnv('VITE_API_URL','https://api.example');
+  queue(principal(),current(),principal());
+  const result=await createAssociationConsentClient(scope).inspect();
+  expect(result.userId).toBe('learner-one');
+  expect(fetchMock.mock.calls.map(c=>c[0])).toEqual(['https://api.example/v1/auth/me',
+   `https://api.example/v1/organizations/${organizationId}/external-association-challenges/${challengeId}/inspect`,
+   'https://api.example/v1/auth/me']);
+  for(const [,options] of fetchMock.mock.calls)expect(options).toMatchObject({credentials:'include',redirect:'error',cache:'no-store'});
+  expect(window.sessionStorage.length).toBe(0);
+ });
  it('binds all consent actions to the reviewed actor before journaling or dispatch',async()=>{
   for(const action of ['confirm','deny','relink']) {
    fetchMock.mockReset();queue(principal('another-learner'));

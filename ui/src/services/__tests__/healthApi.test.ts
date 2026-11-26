@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSystemHealth } from '../healthApi';
+
+beforeEach(() => vi.stubEnv('VITE_API_URL', ''));
 
 const unknownServices = { issuer: 'unknown', verifier: 'unknown' };
 
@@ -9,7 +11,7 @@ function respond(body: unknown, status = 200) {
   return fetch;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('getSystemHealth', () => {
   it('reads the native readiness contract and leaves unreported verification unknown', async () => {

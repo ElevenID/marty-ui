@@ -65,6 +65,95 @@ fn selected_web_sections_are_validated_and_retained_with_hosting_evidence() {
 }
 
 #[test]
+fn external_application_is_journal_bound_and_its_model_cannot_reintroduce_local_ui() {
+    let root = private_root();
+    let mut configuration = direct();
+    configuration["web"] =
+        json!({"enabled_sections":[],"external_application_origin":"https://console.example.com"});
+    let mut state = state(root.path());
+    let prepared = prepare(Some(&input(root.path(), &configuration)), None).unwrap();
+    assert!(prepared
+        .host_impact()
+        .contains("external application https://console.example.com"));
+    let selected = select(prepared, &mut state).unwrap();
+    assert_eq!(
+        selected.external_application_origin().unwrap().as_str(),
+        "https://console.example.com"
+    );
+    assert_eq!(
+        state
+            .with_inspection(resolve)
+            .unwrap()
+            .external_application_origin(),
+        selected.external_application_origin()
+    );
+    let model = json!({"services":{
+        "auth":{"environment":{"UI_BASE_URL":"https://console.example.com","UI_ADDITIONAL_BASE_URLS":"",
+            "AUTH_PUBLIC_API_ORIGIN":"https://marty.example.com","OIDC_REDIRECT_URI":"https://marty.example.com/v1/auth/callback",
+            "OIDC_POST_LOGOUT_REDIRECT_URI":"https://console.example.com/"}},
+        "gateway":{"environment":{"CORS_ORIGINS":"https://console.example.com"}},"edge":{"environment":{}}
+    }});
+    selected.validate_application_model(&model).unwrap();
+    for fault in ["ui", "upstream", "cors", "callback", "ui-origin"] {
+        let mut changed = model.clone();
+        match fault {
+            "ui" => changed["services"]["ui"] = json!({"image":"nginx"}),
+            "upstream" => {
+                changed["services"]["edge"]["environment"]["UI_UPSTREAM"] = json!("ui:80")
+            }
+            "cors" => changed["services"]["gateway"]["environment"]["CORS_ORIGINS"] = json!("*"),
+            "callback" => {
+                changed["services"]["auth"]["environment"]["OIDC_REDIRECT_URI"] =
+                    json!("https://console.example.com/v1/auth/callback")
+            }
+            _ => {
+                changed["services"]["auth"]["environment"]["UI_BASE_URL"] =
+                    json!("https://untrusted.example")
+            }
+        }
+        assert!(
+            selected.validate_application_model(&changed).is_err(),
+            "{fault}"
+        );
+    }
+}
+
+#[test]
+fn external_application_rejects_local_pages_aliases_and_ambiguous_origins_before_recording() {
+    for fault in [
+        "local-pages",
+        "same-origin",
+        "loopback",
+        "ip",
+        "path",
+        "alias",
+        "local-mode",
+    ] {
+        let root = private_root();
+        let mut value = direct();
+        value["web"] = json!({"enabled_sections":[],"external_application_origin":"https://console.example.com"});
+        match fault {
+            "local-pages" => value["web"]["enabled_sections"] = json!(["console"]),
+            "same-origin" => {
+                value["web"]["external_application_origin"] = json!("https://marty.example.com")
+            }
+            "loopback" => value["web"]["external_application_origin"] = json!("https://localhost"),
+            "ip" => value["web"]["external_application_origin"] = json!("https://198.51.100.4"),
+            "path" => {
+                value["web"]["external_application_origin"] =
+                    json!("https://console.example.com/path")
+            }
+            "alias" => value["public_entry_origin"] = json!("https://198.51.100.4:8443"),
+            _ => value["mode"] = json!("local"),
+        }
+        assert!(
+            prepare(Some(&input(root.path(), &value)), None).is_err(),
+            "{fault}"
+        );
+    }
+}
+
+#[test]
 fn invalid_web_selection_is_refused_before_recording_or_provisioning() {
     for web in [
         json!({}),

@@ -1,5 +1,26 @@
 use super::*;
 
+#[test]
+fn external_application_routing_never_counts_wrong_redirects_or_session_cookies() {
+    let expected = "https://console.example.com/console";
+    for (status, location, cookie, valid) in [
+        (308, expected, false, true),
+        (302, expected, false, false),
+        (200, expected, false, false),
+        (308, "https://untrusted.example/console", false, false),
+        (308, expected, true, false),
+    ] {
+        let mut response = http::Response::builder()
+            .status(status)
+            .header("location", location);
+        if cookie {
+            response = response.header("set-cookie", "synthetic=value");
+        }
+        let response = reqwest::Response::from(response.body(Vec::<u8>::new()).unwrap());
+        assert_eq!(external_redirect_valid(&response, expected), valid);
+    }
+}
+
 fn built_page() -> String {
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

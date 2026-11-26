@@ -23,6 +23,11 @@ use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    logout_calls: Mutex<usize>,
+    local_logout: Mutex<bool>,
+    callback_redirect: Mutex<Option<String>>,
+    native_enabled: std::sync::atomic::AtomicBool,
+    native_callbacks: Mutex<usize>,
     management_returns: Mutex<Vec<String>>,
     email_enrollment: Mutex<bool>,
     enrollments: Mutex<Vec<(String, String, String)>>,
@@ -36,6 +41,18 @@ struct AppStub {
 
 #[async_trait]
 impl AuthHttpApplication for AppStub {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        self.native_enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then_some("https://authorization.example.invalid")
+    }
+    async fn native_callback(
+        &self,
+        command: marty_auth::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        *self.native_callbacks.lock().unwrap() += 1;
+        self.callback(command.callback).await
+    }
     fn provider_capabilities(&self) -> Result<marty_auth::OidcProviderCapabilities, PortError> {
         self.capabilities
             .lock()
@@ -100,12 +117,21 @@ impl AuthHttpApplication for AppStub {
         }
         Ok(HandleCallbackResult {
             session: self.session.lock().unwrap().clone().unwrap(),
-            redirect_uri: "/".into(),
+            redirect_uri: self
+                .callback_redirect
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| "/".into()),
             audit_warning: None,
         })
     }
 
     async fn logout(&self, _: &str) -> Result<Option<String>, PortError> {
+        *self.logout_calls.lock().unwrap() += 1;
+        if *self.local_logout.lock().unwrap() {
+            return Ok(None);
+        }
         Ok(Some("https://identity.example/logout".into()))
     }
 
@@ -255,7 +281,196 @@ fn session() -> Session {
     session
 }
 
+#[tokio::test]
+async fn static_console_login_binds_the_allowlisted_ui_return_to_a_fixed_api_callback() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    for (route, registration) in [("login", false), ("register", true)] {
+        let response = request(&router, Method::GET,
+            &format!("/v1/auth/{route}?redirect_uri=https%3A%2F%2Fsecondary.example%2Fconsole%2Fprofile%3Ftab%3Dsecurity"),
+            &[("host", "api.example"), ("x-forwarded-host", "untrusted.example"), ("x-forwarded-proto", "http")], "").await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            app.initiated.lock().unwrap().last().cloned(),
+            Some((
+                registration,
+                "https://secondary.example/console/profile?tab=security".into(),
+                "https://api.example/v1/auth/callback".into()
+            ))
+        );
+    }
+    *app.callback_redirect.lock().unwrap() = Some(app.initiated.lock().unwrap()[0].1.clone());
+    let response = request(
+        &router,
+        Method::GET,
+        "/v1/auth/callback?code=synthetic&state=synthetic",
+        &[("host", "api.example")],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "https://secondary.example/console/profile?tab=security"
+    );
+    assert!(response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| value.to_str().unwrap().starts_with("sessionId=session-1;")));
+}
+
+#[tokio::test]
+async fn static_console_account_changes_require_an_exact_allowed_browser_origin() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, sessions) = harness_with_origins(origins);
+    for origin in [
+        None,
+        Some("https://untrusted.example"),
+        Some("https://user@console.example"),
+        Some("https://console.example/"),
+        Some("null"),
+    ] {
+        let mut headers = vec![
+            ("host", "api.example"),
+            ("cookie", "sessionId=session-1"),
+            ("content-type", "application/json"),
+        ];
+        if let Some(origin) = origin {
+            headers.push(("origin", origin));
+        }
+        let response = request(
+            &router,
+            Method::PATCH,
+            "/v1/auth/me",
+            &headers,
+            r#"{"picture":"data:image/png;base64,YQ=="}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = request(&router, Method::POST, "/v1/auth/logout", &headers, "").await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert_eq!(*app.logout_calls.lock().unwrap(), 0);
+    assert!(sessions
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .user
+        .picture
+        .is_none());
+    let headers = [
+        ("host", "api.example"),
+        ("origin", "https://secondary.example"),
+        ("cookie", "sessionId=session-1"),
+        ("content-type", "application/json"),
+    ];
+    let response = request(
+        &router,
+        Method::PATCH,
+        "/v1/auth/me",
+        &headers,
+        r#"{"picture":"data:image/png;base64,YQ=="}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        sessions
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .user
+            .picture
+            .as_deref(),
+        Some("data:image/png;base64,YQ==")
+    );
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &headers,
+        r#"{"redirect_uri":"https://secondary.example/console/profile"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        app.enrollments.lock().unwrap()[0],
+        (
+            "session-1".into(),
+            "https://secondary.example/console/profile".into(),
+            "https://api.example/v1/auth/callback".into()
+        )
+    );
+}
+
+#[tokio::test]
+async fn static_console_local_logout_returns_to_the_console_and_clears_the_api_cookie() {
+    let origins = UiOriginPolicy::new("https://console.example", std::iter::empty::<&str>())
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    *app.local_logout.lock().unwrap() = true;
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/logout",
+        &[
+            ("host", "api.example"),
+            ("origin", "https://console.example"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "https://console.example/"
+    );
+    assert_eq!(*app.logout_calls.lock().unwrap(), 1);
+    assert!(response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .any(|value| {
+            let value = value.to_str().unwrap();
+            value.starts_with("sessionId=;")
+                && value.contains("Max-Age=0")
+                && value.contains("Secure")
+        }));
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/logout",
+        &[
+            ("host", "api.example"),
+            ("origin", "https://console.example"),
+            ("origin", "https://console.example"),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
+    harness_with_origins(
+        UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"]).unwrap(),
+    )
+}
+
+fn harness_with_origins(origins: UiOriginPolicy) -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
     let app = Arc::new(AppStub::default());
     *app.session.lock().unwrap() = Some(session());
     let sessions = Arc::new(Sessions::default());
@@ -264,8 +479,7 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
         application: app.clone(),
         credential_login: Arc::new(CredentialStub),
         sessions: sessions.clone(),
-        origins: UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"])
-            .unwrap(),
+        origins,
         cookie: SessionCookieConfig {
             name: "sessionId".into(),
             secure: true,
@@ -295,6 +509,117 @@ async fn request(
         .oneshot(request.body(Body::from(body.to_owned())).unwrap())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn native_callback_requires_exact_origin_closed_body_and_enabled_provider() {
+    let (router, app, _) = harness();
+    let body = "code=fixture-code&state=synthetic-native-state&native_access_token=header.payload.signature";
+    let headers = [
+        ("origin", "https://authorization.example.invalid"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    assert_eq!(
+        request(&router, Method::POST, "/v1/auth/callback", &headers, body)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    app.native_enabled
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for origin in [
+        "null",
+        "https://attacker.invalid",
+        "https://authorization.example.invalid/",
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[("origin", origin), headers[1]],
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[headers[1]],
+            body
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[headers[0], headers[0], headers[1]],
+            body
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    for invalid in [
+        format!("{body}&unexpected=value"),
+        format!("{body}&state=duplicate"),
+        body.replace("synthetic-native-state", "short"),
+        format!("{body}{}", "a".repeat(25_000)),
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &headers,
+            &invalid,
+        )
+        .await;
+        assert!(response.status().is_client_error());
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    assert_eq!(
+        request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback?code=query",
+            &headers,
+            body
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 0);
+    let response = request(&router, Method::POST, "/v1/auth/callback", &headers, body).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 1);
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
+    let cookie = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(";");
+    assert!(cookie.contains("HttpOnly") && cookie.contains("Secure"));
+    assert!(!response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("native_access_token"));
 }
 
 #[tokio::test]
@@ -392,7 +717,7 @@ async fn unsupported_registration_has_a_specific_public_error() {
 fn core_surface_is_the_exact_non_credential_route_subset() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
-    let expected = contract["http_routes"].as_array().unwrap()[..8]
+    let expected = contract["http_routes"].as_array().unwrap()[..9]
         .iter()
         .map(|route| {
             (
@@ -838,4 +1163,97 @@ async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
         logout.headers().get_all(header::SET_COOKIE).iter().count(),
         2
     );
+}
+
+#[tokio::test]
+async fn static_console_native_callback_keeps_authorization_origin_separate_from_console_return() {
+    let origins = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example")
+        .unwrap();
+    let (router, app, _) = harness_with_origins(origins);
+    app.native_enabled
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let destination = "https://secondary.example/console/profile?tab=security";
+    let response = request(&router, Method::GET,
+        "/v1/auth/login?redirect_uri=https%3A%2F%2Fsecondary.example%2Fconsole%2Fprofile%3Ftab%3Dsecurity",
+        &[("host", "api.example"), ("x-forwarded-host", "untrusted.example")], "").await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        app.initiated.lock().unwrap().last().cloned(),
+        Some((
+            false,
+            destination.into(),
+            "https://api.example/v1/auth/callback".into()
+        ))
+    );
+    *app.callback_redirect.lock().unwrap() = Some(destination.into());
+    let body = "code=fixture-code&state=synthetic-native-state&native_access_token=header.payload.signature";
+    for origin in [
+        "https://console.example",
+        "https://secondary.example",
+        "https://attacker.invalid",
+    ] {
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/callback",
+            &[
+                ("origin", origin),
+                ("content-type", "application/x-www-form-urlencoded"),
+            ],
+            body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    let headers = [
+        ("host", "api.example"),
+        ("origin", "https://authorization.example.invalid"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/callback?code=query",
+        &headers,
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 0);
+    let response = request(&router, Method::POST, "/v1/auth/callback", &headers, body).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], destination);
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
+    assert_eq!(*app.native_callbacks.lock().unwrap(), 1);
+    let session_cookies = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter(|value| value.starts_with("sessionId="))
+        .collect::<Vec<_>>();
+    assert_eq!(session_cookies.len(), 1);
+    let session_cookie = session_cookies[0];
+    assert!(session_cookie.starts_with("sessionId=session-1;"));
+    for attribute in ["HttpOnly", "Secure", "SameSite=Lax"] {
+        assert!(session_cookie
+            .split(';')
+            .map(str::trim)
+            .any(|value| value == attribute));
+    }
+    assert!(!session_cookie.to_ascii_lowercase().contains("domain="));
+    let location = response.headers()[header::LOCATION].to_str().unwrap();
+    for secret in [
+        "native_access_token",
+        "header.payload.signature",
+        "fixture-code",
+    ] {
+        assert!(!location.contains(secret));
+    }
 }

@@ -1,3 +1,5 @@
+import { resolveApiUrl } from './authApiOrigin';
+
 /**
  * Email Domain Matching API
  * 
@@ -12,7 +14,7 @@ const ONBOARDING_BASE_URL = '/api/onboarding';
  */
 export async function getDomainMatches() {
   try {
-    const response = await fetch(`${ONBOARDING_BASE_URL}/domain-matches`, {
+    const response = await fetch(`${resolveApiUrl(ONBOARDING_BASE_URL, import.meta.env.VITE_API_URL)}/domain-matches`, {
       method: 'GET',
       credentials: 'include',
       headers: {
@@ -39,7 +41,7 @@ export async function getDomainMatches() {
  */
 export async function joinDomainOrganization(organizationId) {
   try {
-    const response = await fetch(`${ONBOARDING_BASE_URL}/join-domain-org`, {
+    const response = await fetch(`${resolveApiUrl(ONBOARDING_BASE_URL, import.meta.env.VITE_API_URL)}/join-domain-org`, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -68,7 +70,7 @@ export async function joinDomainOrganization(organizationId) {
  */
 export async function setRoleIntent(intent) {
   try {
-    const response = await fetch(`${ONBOARDING_BASE_URL}/set-intent`, {
+    const response = await fetch(`${resolveApiUrl(ONBOARDING_BASE_URL, import.meta.env.VITE_API_URL)}/set-intent`, {
       method: 'POST',
       credentials: 'include',
       headers: {

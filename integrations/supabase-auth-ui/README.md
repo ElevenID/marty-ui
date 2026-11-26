@@ -1,7 +1,10 @@
 # Supabase authorization UI
 
 Static, framework-free email/password sign-in, enrolled TOTP verification and
-OAuth consent for explicitly registered ElevenID and Rifare clients.
+OAuth consent for explicitly registered ElevenID and Rifare clients. The opt-in
+v3 configuration also supplies signup, email confirmation, initial authenticator
+enrollment and password recovery pages; live delivery and
+provider settings require separate qualification.
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -16,6 +19,10 @@ language selector and provider forms through FreeMarker slots. The static build
 fills the content slot with the loading screen, then the browser renders the
 sign-in, TOTP and consent forms. The Helm chart packages the same theme files.
 
+The existing Fast Feedback CI lane installs the locked companion dependencies
+with hooks disabled, runs its full test suite and builds default and v3 examples.
+This is source verification; it does not configure or contact a live provider.
+
 The example is deliberately synthetic and uses reserved `.invalid` domains.
 The build makes no provider requests. `dist/` contains static assets, public
 configuration, Cloudflare `_headers` and exact consent-path rewrites. It has no
@@ -24,5 +31,7 @@ the local build and tests.
 
 Read the [operator guide](../../docs/supabase-auth-ui.md) for public configuration,
 provider/client registration, session behavior and the remaining hosted
-qualification gates. Registration, recovery and MFA enrollment are outside this
-companion's scope.
+qualification gates. These account pages have synthetic browser coverage;
+live email delivery, provider mutations and the installed application journey
+must still qualify before production use. Lost-authenticator recovery and
+replacement of existing verified factors are outside these setup pages.

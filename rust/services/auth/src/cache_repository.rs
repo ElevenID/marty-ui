@@ -214,6 +214,24 @@ impl SessionRepository for AuthCacheRepository {
 
 #[async_trait]
 impl PkceStateRepository for AuthCacheRepository {
+    async fn claim_native_authentication(
+        &self,
+        evidence: &crate::NativeAuthenticationEvidence,
+    ) -> Result<bool, PortError> {
+        use sha2::{Digest, Sha256};
+        let key = format!(
+            "{}native-session:{:x}",
+            self.keys.pkce_prefix,
+            Sha256::digest(format!(
+                "{}\n{}",
+                evidence.issuer, evidence.provider_session_id
+            ))
+        );
+        self.cache
+            .set_if_absent(&key, vec![1], Some(86_400), Self::now_ms())
+            .await
+            .map_err(|error| Self::data_error("claim native authentication", error))
+    }
     async fn save(&self, state: &PkceState) -> Result<(), PortError> {
         let bytes = serde_json::to_vec(state).map_err(|error| {
             PortError::new(

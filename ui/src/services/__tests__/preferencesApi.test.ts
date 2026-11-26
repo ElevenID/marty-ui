@@ -6,9 +6,10 @@ import { getPreferences } from '../preferencesApi'
 
 describe('preferencesApi', () => {
   beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', '');
     vi.clearAllMocks()
   })
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); })
 
   it('disables caching when loading console preferences', async () => {
     // MSW's HTTP transport cannot observe browser-only fetch cache/cookie options.

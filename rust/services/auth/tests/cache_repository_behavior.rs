@@ -92,6 +92,29 @@ async fn sessions_round_trip_and_user_index_operations_preserve_behavior() {
         .is_empty());
 }
 
+#[tokio::test]
+async fn native_provider_session_claim_is_shared_and_atomic_without_token_storage() {
+    let cache = Arc::new(MemoryCache::default());
+    let first = repository(cache.clone());
+    let second = repository(cache);
+    let evidence = marty_auth::NativeAuthenticationEvidence {
+        issuer: "https://project.example.invalid/auth/v1".into(),
+        subject: "subject".into(),
+        provider_session_id: "session".into(),
+        password_authenticated_at: 1,
+        factor_authenticated_at: 2,
+    };
+    let (left, right) = tokio::join!(
+        first.claim_native_authentication(&evidence),
+        second.claim_native_authentication(&evidence)
+    );
+    assert_ne!(left.unwrap(), right.unwrap());
+    assert!(!first.claim_native_authentication(&evidence).await.unwrap());
+    let mut other = evidence;
+    other.issuer = "https://other.example.invalid/auth/v1".into();
+    assert!(first.claim_native_authentication(&other).await.unwrap());
+}
+
 #[test]
 fn legacy_sessions_without_account_binding_remain_readable() {
     let mut encoded = serde_json::to_value(session("legacy-user")).expect("serialize session");
@@ -125,6 +148,7 @@ async fn pkce_state_is_consumed_atomically() {
     let now = Utc::now();
     let state = PkceState {
         authentication_freshness: None,
+        native_proof_origin: None,
         state: "state-1".to_owned(),
         code_verifier: "verifier".to_owned(),
         redirect_uri: "/console".to_owned(),

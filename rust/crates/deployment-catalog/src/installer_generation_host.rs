@@ -287,6 +287,8 @@ fn validate_delivery_using(
     validate: impl FnOnce(&File) -> Result<BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, String>> {
     require_directory_binding(parent, held)?;
+    let parent_watch =
+        crate::installer_custody_watch::CustodyWatch::directory(held).map_err(|_| REFUSAL)?;
     let expected = BTreeSet::from([
         "transfer-pending.json".into(),
         "output".into(),
@@ -296,6 +298,8 @@ fn validate_delivery_using(
     let parent_stamp = delivery_directory_stamp(held)?;
     validate_retained_entries(held, expected_host_uid)?;
     let delivered = open_child(held, "delivered", libc::O_RDONLY | libc::O_DIRECTORY)?;
+    let delivered_watch =
+        crate::installer_custody_watch::CustodyWatch::directory(&delivered).map_err(|_| REFUSAL)?;
     let m = delivered.metadata().map_err(|_| REFUSAL)?;
     require(m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o7777 == 0o700)?;
     let delivered_stamp = delivery_directory_stamp(&delivered)?;
@@ -309,6 +313,8 @@ fn validate_delivery_using(
     )?;
     validate_retained_entries(held, expected_host_uid)?;
     require_directory_binding(parent, held)?;
+    parent_watch.check().map_err(|_| REFUSAL)?;
+    delivered_watch.check().map_err(|_| REFUSAL)?;
     Ok(result)
 }
 

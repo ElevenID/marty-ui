@@ -36,7 +36,7 @@ fn require(value: bool) -> Result<()> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MetadataBinding {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner_uid: u32,
     owner_gid: u32,
@@ -47,7 +47,7 @@ struct MetadataBinding {
 }
 
 impl MetadataBinding {
-    fn observe(file: &File, directory: bool, mode: u32) -> Result<Self> {
+    fn observe(file: &File, directory: bool, mode: u32, anchor: &File) -> Result<Self> {
         let m = file.metadata().map_err(|_| REFUSED)?;
         require(
             m.is_dir() == directory
@@ -57,7 +57,7 @@ impl MetadataBinding {
                 && m.mode() & 0o7777 == mode,
         )?;
         Ok(Self {
-            device: m.dev(),
+            device: crate::installer_filesystem::DeviceBinding::under(anchor, &m, REFUSED)?,
             inode: m.ino(),
             owner_uid: m.uid(),
             owner_gid: m.gid(),
@@ -66,6 +66,14 @@ impl MetadataBinding {
             changed_seconds: (!directory).then_some(m.ctime()),
             changed_nanoseconds: (!directory).then_some(m.ctime_nsec()),
         })
+    }
+
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
     }
 }
 
@@ -84,8 +92,8 @@ fn require_child_binding(
         REFUSED,
     )?;
     require(
-        &MetadataBinding::observe(held, directory, mode)? == captured
-            && &MetadataBinding::observe(&current, directory, mode)? == captured,
+        &MetadataBinding::observe(held, directory, mode, parent)? == captured
+            && &MetadataBinding::observe(&current, directory, mode, parent)? == captured,
     )
 }
 
@@ -103,6 +111,22 @@ struct Receipt {
     seal_migration: bool,
     backup_observed: bool,
     installation_ready: bool,
+}
+impl Receipt {
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.outer.matches(observed.outer.clone())
+            || !self.projection.matches(observed.projection.clone())
+            || !self.initialization.matches(observed.initialization.clone())
+            || !self.key.matches(observed.key.clone())
+        {
+            return false;
+        }
+        observed.outer = self.outer.clone();
+        observed.projection = self.projection.clone();
+        observed.initialization = self.initialization.clone();
+        observed.key = self.key.clone();
+        observed == *self
+    }
 }
 
 fn observe(state: &LockedInspection, installation: &Path) -> Result<Receipt> {
@@ -126,10 +150,10 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Receipt> {
         schema: "elevenid.installer-openbao-static-seal/v1".into(),
         installation_id: state.journal().installation_id(),
         key_id: KEY_ID.into(),
-        outer: MetadataBinding::observe(&outer, true, 0o700)?,
-        projection: MetadataBinding::observe(&projection, true, 0o755)?,
-        initialization: MetadataBinding::observe(&initialization, true, 0o700)?,
-        key: MetadataBinding::observe(&key, false, 0o444)?,
+        outer: MetadataBinding::observe(&outer, true, 0o700, &outer)?,
+        projection: MetadataBinding::observe(&projection, true, 0o755, &outer)?,
+        initialization: MetadataBinding::observe(&initialization, true, 0o700, &outer)?,
+        key: MetadataBinding::observe(&key, false, 0o444, &projection)?,
         new_key_created: true,
         seal_migration: false,
         backup_observed: false,
@@ -158,7 +182,7 @@ pub(crate) fn verify(state: &LockedInspection, installation: &Path) -> Result<()
     let receipt: Receipt =
         serde_json::from_value(installer_json::decode(&bytes).map_err(|_| REFUSED)?)
             .map_err(|_| REFUSED)?;
-    require(receipt == observe(state, installation)?)
+    require(receipt.matches(observe(state, installation)?))
 }
 
 /// Called once by the live fresh-install writer, before OpenBao creation. It
@@ -518,7 +542,7 @@ mod tests {
         let projection =
             fs::open_child(&outer, "key", libc::O_RDONLY | libc::O_DIRECTORY, REFUSED).unwrap();
         let key = fs::open_child(&projection, "static.key", libc::O_PATH, REFUSED).unwrap();
-        let captured_key = MetadataBinding::observe(&key, false, 0o444).unwrap();
+        let captured_key = MetadataBinding::observe(&key, false, 0o444, &projection).unwrap();
         std::fs::rename(
             outer_path.join("key/static.key"),
             outer_path.join("saved.key"),
@@ -542,7 +566,7 @@ mod tests {
         for (name, mode) in [("key", 0o755), ("initialization", 0o700)] {
             let held =
                 fs::open_child(&outer, name, libc::O_RDONLY | libc::O_DIRECTORY, REFUSED).unwrap();
-            let captured = MetadataBinding::observe(&held, true, mode).unwrap();
+            let captured = MetadataBinding::observe(&held, true, mode, &outer).unwrap();
             std::fs::rename(
                 outer_path.join(name),
                 outer_path.join(format!("old-{name}")),
@@ -556,6 +580,49 @@ mod tests {
     }
 
     #[test]
+    fn persisted_seal_identity_preserves_key_metadata_and_legacy_device_binding() {
+        use crate::installer_filesystem::DeviceBinding;
+        let original = MetadataBinding {
+            device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+            inode: 127902,
+            owner_uid: 1000,
+            owner_gid: 1000,
+            mode: 0o444,
+            size: Some(32),
+            changed_seconds: Some(100),
+            changed_nanoseconds: Some(200),
+        };
+        let current = MetadataBinding {
+            device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..original.clone()
+        };
+        assert!(original.matches(current.clone()));
+        assert_ne!(original, current);
+        for (field, bad) in [
+            ("inode", 127903),
+            ("owner_uid", 1001),
+            ("owner_gid", 1001),
+            ("mode", 0o600),
+            ("size", 33),
+            ("changed_seconds", 101),
+            ("changed_nanoseconds", 201),
+        ] {
+            let mut value = serde_json::to_value(&current).unwrap();
+            value[field] = serde_json::json!(bad);
+            assert!(
+                !original.matches(serde_json::from_value(value).unwrap()),
+                "{field}"
+            );
+        }
+        let mut wrong = current.clone();
+        wrong.device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+        assert!(!original.matches(wrong));
+        let mut legacy = original;
+        legacy.device = DeviceBinding::Legacy(2160);
+        assert!(!legacy.matches(current));
+    }
+
+    #[test]
     fn in_place_key_change_cannot_match_an_earlier_snapshot() {
         let (_root, install, mut state) = fixture();
         state.advance(Phase::Verified).unwrap();
@@ -565,7 +632,7 @@ mod tests {
         let projection =
             fs::open_child(&outer, "key", libc::O_RDONLY | libc::O_DIRECTORY, REFUSED).unwrap();
         let held = fs::open_child(&projection, "static.key", libc::O_PATH, REFUSED).unwrap();
-        let captured = MetadataBinding::observe(&held, false, 0o444).unwrap();
+        let captured = MetadataBinding::observe(&held, false, 0o444, &projection).unwrap();
         let path = install.join("openbao-seal/key/static.key");
         std::thread::sleep(std::time::Duration::from_millis(2));
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();

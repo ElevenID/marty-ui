@@ -686,7 +686,6 @@ pub async fn run(
         for (path, method, origin) in [
             (format!("{base}/catalog"), "POST", origin),
             (format!("{base}/sessions"), "DELETE", origin),
-            ("/v1/flows/definitions".into(), "POST", origin),
             (
                 format!("{base}/sessions"),
                 "POST",
@@ -726,6 +725,41 @@ pub async fn run(
             .await
             .unwrap();
         assert!(!ambiguous.status().is_success());
+        // This fixture configures the same Origin for the console and public
+        // verification. Management transport is allowed, while management
+        // authority must still be established on the actual request below.
+        let management_preflight = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/v1/flows/definitions")
+                    .header("origin", origin)
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-headers", "content-type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(management_preflight.status().as_u16(), 204);
+        assert_eq!(
+            management_preflight.headers()["access-control-allow-origin"],
+            origin
+        );
+        assert_eq!(
+            management_preflight.headers()["access-control-allow-methods"],
+            "POST"
+        );
+        assert_eq!(
+            management_preflight.headers()["access-control-allow-headers"],
+            "content-type"
+        );
+        assert_eq!(
+            management_preflight.headers()["access-control-allow-credentials"],
+            "true"
+        );
+        assert!(!management_preflight.headers().contains_key("set-cookie"));
         assert_eq!(
             gateway.observed.load(std::sync::atomic::Ordering::SeqCst),
             0,
@@ -833,6 +867,29 @@ pub async fn run(
         .await;
         assert_eq!(status, 201, "{session}");
         let id = session["session_id"].as_str().unwrap();
+        let observed_before_management = gateway.observed.load(std::sync::atomic::Ordering::SeqCst);
+        for capability in [None, Some(key.as_str())] {
+            let mut request = Request::post("/v1/flows/definitions")
+                .header("origin", origin)
+                .header("content-type", "application/json");
+            if let Some(capability) = capability {
+                request = request.header("x-verification-session", capability);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 401);
+            assert_eq!(response.headers()["access-control-allow-origin"], origin);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            assert!(!response.headers().contains_key("set-cookie"));
+            assert_eq!(
+                gateway.observed.load(std::sync::atomic::Ordering::SeqCst),
+                observed_before_management,
+                "anonymous and public-session management requests must not reach Flow"
+            );
+        }
         let path = format!("{base}/sessions/{id}/example");
         let (status, result) =
             public_call(app, origin, "POST", &path, &key, Some(&json!({}))).await;

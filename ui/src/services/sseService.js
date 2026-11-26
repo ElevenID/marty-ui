@@ -1,3 +1,5 @@
+import { resolveApiUrl } from './authApiOrigin';
+
 /**
  * SSE (Server-Sent Events) Service
  * 
@@ -112,7 +114,7 @@ class SSEService {
   }
 
   _openConnection(sseUrl, generation) {
-    const source = new EventSource(sseUrl);
+    const source = new EventSource(resolveApiUrl(sseUrl, import.meta.env.VITE_API_URL), { withCredentials: true });
     this.eventSource = source;
     let openedAt = null;
     const isCurrent = () => this.connectionRequested

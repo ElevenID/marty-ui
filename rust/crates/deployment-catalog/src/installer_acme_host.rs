@@ -178,7 +178,7 @@ struct Intent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectionDirectory {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner: u32,
     group: u32,
@@ -206,11 +206,23 @@ impl ProjectionDirectory {
                 == installation.join(PROJECTION),
         )?;
         Ok(Self {
-            device: metadata.dev(),
+            device: crate::installer_filesystem::DeviceBinding::observe(&directory, REFUSED)?,
             inode: metadata.ino(),
             owner: metadata.uid(),
             group: metadata.gid(),
         })
+    }
+
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
+    }
+
+    fn require_unchanged(&self, observed: Self) -> Result<()> {
+        require(*self == observed)
     }
 }
 
@@ -1342,10 +1354,10 @@ fn inspect_retained_setup(
         require(value(&prepared.inputs.prior)? == value(&Some(&prepared.receipt))?)
     })?;
     checked(Check::Projection, || {
-        require(
-            prepared.projection
-                == ProjectionDirectory::observe(state, &prepared.inputs.installation)?,
-        )
+        require(prepared.projection.matches(ProjectionDirectory::observe(
+            state,
+            &prepared.inputs.installation,
+        )?))
     })?;
     checked(Check::AuthorityDigests, || {
         require(
@@ -1720,6 +1732,13 @@ fn drive(
     providers: CredentialProviders,
     staging_roots: Option<&[u8]>,
 ) -> Result<AcmeHostOutcome> {
+    let projection = state.with_inspection(|view| {
+        checkpoint(Check::Projection, || {
+            let current = ProjectionDirectory::observe(view, context.installation)?;
+            require(prepared.projection.matches(current.clone()))?;
+            Ok(current)
+        })
+    })?;
     checkpoint(Check::StagingTrust, || {
         require(
             roots(configuration.parameters().environment(), staging_roots)?
@@ -1745,9 +1764,7 @@ fn drive(
     drop(runtime);
     state.with_inspection(|view| {
         checkpoint(Check::Projection, || {
-            require(
-                prepared.projection == ProjectionDirectory::observe(view, context.installation)?,
-            )
+            projection.require_unchanged(ProjectionDirectory::observe(view, context.installation)?)
         })?;
         load_prepared(view).map(|_| ())
     })?;
@@ -1858,6 +1875,7 @@ fn renew_with_authority(
 ) -> Result<EnrolmentOutcome> {
     let current_inputs = authority.inputs();
     let (intent, prepared, configuration) = load_retained_setup(state.inspection(), false)?;
+    let projection = ProjectionDirectory::observe(state.inspection(), context.installation)?;
     require(
         configuration.parameters().environment() == AcmeEnvironment::Production
             && intent.bundle == context.bundle
@@ -1865,8 +1883,7 @@ fn renew_with_authority(
             && intent.operator_sha256 == context.operator_sha256
             && value(&intent.infrastructure)? == value(context.infrastructure)?
             && current_inputs.installation == context.installation
-            && prepared.projection
-                == ProjectionDirectory::observe(state.inspection(), context.installation)?,
+            && prepared.projection.matches(projection.clone()),
     )?;
     let retained_key = intent.ingress_key.bind(intent.installation_id)?;
     authority.require_current(
@@ -1911,10 +1928,10 @@ fn renew_with_authority(
         permit,
     )?;
     drop(runtime);
-    require(
-        prepared.projection
-            == ProjectionDirectory::observe(state.inspection(), context.installation)?,
-    )?;
+    projection.require_unchanged(ProjectionDirectory::observe(
+        state.inspection(),
+        context.installation,
+    )?)?;
     authority.require_current(
         context,
         state.inspection(),

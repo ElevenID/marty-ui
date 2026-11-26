@@ -308,6 +308,34 @@ pub(crate) fn render_selected(
             format!("{},{}", p.origin, additional),
         );
     }
+    if let Some(application) = hosting.and_then(|selection| selection.external_application_origin())
+    {
+        require(
+            hosting
+                .and_then(|selection| selection.requested_origin())
+                .is_some_and(|origin| origin.as_str() == p.origin),
+        )?;
+        require(
+            values
+                .get("UI_ADDITIONAL_BASE_URLS")
+                .is_none_or(String::is_empty),
+        )?;
+        for (key, value) in [
+            ("UI_BASE_URL", application.as_str().to_owned()),
+            ("AUTH_PUBLIC_API_ORIGIN", p.origin.clone()),
+            (
+                "OIDC_REDIRECT_URI",
+                format!("{}/v1/auth/callback", p.origin),
+            ),
+            (
+                "OIDC_POST_LOGOUT_REDIRECT_URI",
+                format!("{}/", application.as_str()),
+            ),
+            ("CORS_ORIGINS", application.as_str().to_owned()),
+        ] {
+            values.insert(key.into(), value);
+        }
+    }
     if let Some(foundation) = foundation {
         foundation.apply_environment(&mut values)?;
     }
@@ -579,6 +607,93 @@ mod tests {
             .any(|line| line.starts_with("KEYCLOAK_")
                 || line.starts_with("MARTY_KEYCLOAK_KMS_IMAGE=")));
         assert!(text.contains("OIDC_REDIRECT_URI='https://localhost:18443/v1/auth/callback'\n"));
+    }
+
+    #[test]
+    fn external_application_environment_separates_browser_and_api_identity() {
+        use crate::{
+            installer_hosting,
+            installer_state::{Identity, InstallerState, Phase},
+        };
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("hosting.json");
+        std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+            "schema":"elevenid.installation-hosting/v1","mode":"external-proxy",
+            "public_origin":"https://api.example.com",
+            "listener":{"bind_address":"127.0.0.1","port":18443},
+            "tls":{"termination":"marty-keyless","certificate_source":"managed-ca"},
+            "web":{"enabled_sections":[],"external_application_origin":"https://console.example.com"}
+        })).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut state = InstallerState::create(
+            &root.path().join("installation"),
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        let selection = installer_hosting::select(
+            installer_hosting::prepare(Some(&path), None).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        let mut parameters = parameters();
+        parameters.origin = "https://api.example.com".into();
+        let result = render_selected(
+            EXAMPLE,
+            COMPOSE,
+            &tls(),
+            &parameters,
+            &images(),
+            None,
+            Some(&selection),
+            None,
+            None,
+        )
+        .unwrap();
+        let values: BTreeMap<_, _> = std::str::from_utf8(&result.env_bytes)
+            .unwrap()
+            .lines()
+            .map(|line| line.split_once('=').unwrap())
+            .map(|(key, value)| (key.to_owned(), value.trim_matches('\'').to_owned()))
+            .collect();
+        for (key, expected) in [
+            ("PUBLIC_API_URL", "https://api.example.com"),
+            ("ISSUER_BASE_URL", "https://api.example.com"),
+            ("UI_BASE_URL", "https://console.example.com"),
+            ("AUTH_PUBLIC_API_ORIGIN", "https://api.example.com"),
+            (
+                "OIDC_REDIRECT_URI",
+                "https://api.example.com/v1/auth/callback",
+            ),
+            (
+                "OIDC_POST_LOGOUT_REDIRECT_URI",
+                "https://console.example.com/",
+            ),
+            ("CORS_ORIGINS", "https://console.example.com"),
+            ("UI_ENABLED_SECTIONS", "none"),
+        ] {
+            assert_eq!(values.get(key).map(String::as_str), Some(expected), "{key}");
+        }
+        parameters.origin = "https://unbound.example.com".into();
+        assert!(render_selected(
+            EXAMPLE,
+            COMPOSE,
+            &tls(),
+            &parameters,
+            &images(),
+            None,
+            Some(&selection),
+            None,
+            None
+        )
+        .is_err());
     }
     #[test]
     fn public_origin_propagates_to_urls_oidc_and_cors_without_reusing_443_as_listener() {

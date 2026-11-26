@@ -10,6 +10,7 @@ use crate::{ImpersonationContext, PortError, Session};
 pub struct UiOriginPolicy {
     primary: String,
     allowed: BTreeSet<String>,
+    api_callback: Option<String>,
 }
 
 impl UiOriginPolicy {
@@ -24,7 +25,89 @@ impl UiOriginPolicy {
                 normalize_origin(candidate.as_ref()).ok_or_else(invalid_origin_configuration)?,
             );
         }
-        Ok(Self { primary, allowed })
+        Ok(Self {
+            primary,
+            allowed,
+            api_callback: None,
+        })
+    }
+
+    /// Pin the provider callback to the API while the browser returns to the UI.
+    /// Existing same-origin/alias deployments retain their selected callback.
+    pub fn with_api_callback_origin(mut self, origin: &str) -> Result<Self, PortError> {
+        self.api_callback = Some(api_callback_url(origin)?);
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn oidc_callback_url(&self, selected_ui_origin: &str) -> String {
+        self.api_callback
+            .clone()
+            .unwrap_or_else(|| oidc_callback_url(selected_ui_origin))
+    }
+
+    #[must_use]
+    pub fn local_logout_redirect(&self) -> String {
+        if self.api_callback.is_some() {
+            format!("{}/", self.primary)
+        } else {
+            "/".into()
+        }
+    }
+
+    #[must_use]
+    pub fn requires_browser_origin(&self) -> bool {
+        self.api_callback.is_some()
+    }
+
+    #[must_use]
+    pub fn accepts_browser_origin(&self, origin: Option<&str>, selected_ui_origin: &str) -> bool {
+        origin.is_some_and(|origin| {
+            if self.api_callback.is_some() {
+                self.allowed.contains(origin)
+            } else {
+                origin == selected_ui_origin
+            }
+        })
+    }
+
+    /// A fixed API callback cannot recover the UI host from callback headers.
+    /// Bind an allowlisted UI origin into the existing one-time PKCE return URI.
+    #[must_use]
+    pub fn login_redirect_uri(&self, requested: Option<&str>, selected_ui_origin: &str) -> String {
+        if self.api_callback.is_some() {
+            self.ui_redirect_url(requested, selected_ui_origin)
+        } else {
+            sanitize_redirect_uri(requested, selected_ui_origin)
+        }
+    }
+
+    #[must_use]
+    pub fn ui_redirect_url(&self, requested: Option<&str>, selected_ui_origin: &str) -> String {
+        if self.api_callback.is_none() {
+            return build_ui_redirect_url(requested, selected_ui_origin);
+        }
+        let requested = requested.filter(|value| {
+            if value.bytes().any(|byte| byte <= 32 || byte == 127) || value.contains('\\') {
+                return false;
+            }
+            if value.starts_with('/') {
+                return !value.starts_with("//");
+            }
+            Url::parse(value).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+        });
+        let bound_origin = requested.and_then(|requested| {
+            let url = Url::parse(requested).ok()?;
+            self.allowed.get(&url.origin().ascii_serialization())
+        });
+        build_ui_redirect_url(
+            requested,
+            bound_origin.map_or(selected_ui_origin, String::as_str),
+        )
     }
 
     #[must_use]
@@ -65,6 +148,36 @@ impl UiOriginPolicy {
     pub fn primary(&self) -> &str {
         &self.primary
     }
+}
+
+pub(crate) fn api_callback_url(origin: &str) -> Result<String, PortError> {
+    let invalid = || {
+        PortError::new(
+            "auth_api_origin_configuration_invalid",
+            "AUTH_PUBLIC_API_ORIGIN must be an uncredentialed HTTPS origin (HTTP only on loopback)",
+        )
+    };
+    if origin.len() > 2048 || origin.bytes().any(|byte| byte <= 32 || byte == 127) {
+        return Err(invalid());
+    }
+    let url = Url::parse(origin).map_err(|_| invalid())?;
+    let loopback = match url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(oidc_callback_url(&url.origin().ascii_serialization()))
 }
 
 #[must_use]

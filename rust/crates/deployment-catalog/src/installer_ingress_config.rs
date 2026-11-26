@@ -34,11 +34,30 @@ pub(crate) fn render_selected(
     origin: &str,
     managed_keycloak: bool,
 ) -> Result<String> {
+    render_for_application(template, origin, managed_keycloak, None)
+}
+
+pub(crate) fn render_for_application(
+    template: &str,
+    origin: &str,
+    managed_keycloak: bool,
+    external_application: Option<&str>,
+) -> Result<String> {
     let text = normalized(template)?;
     if text != normalized(TEMPLATE)? {
         return Err(REFUSED.into());
     }
     let origin = PublicOrigin::parse(origin).map_err(|_| REFUSED)?;
+    let application = external_application
+        .map(PublicOrigin::parse)
+        .transpose()
+        .map_err(|_| REFUSED)?;
+    if application
+        .as_ref()
+        .is_some_and(|app| app == &origin || app.dns_name().is_none() || app.is_loopback())
+    {
+        return Err(REFUSED.into());
+    }
     let port_text = origin.port().to_string();
     let authority = origin.authority();
     let server_name = match origin.ip_address() {
@@ -50,9 +69,35 @@ pub(crate) fn render_selected(
     let mut proxies = 0;
     let mut skipped_keycloak_routes = 0;
     let mut skipping_keycloak_route = false;
+    let mut application_routes = 0;
+    let mut skipping_application_route = false;
     for line in text.lines() {
         let trimmed = line.trim_start();
         let indent = &line[..line.len() - trimmed.len()];
+        if let Some(application) = &application {
+            if trimmed.starts_with("set $console_disabled ") {
+                continue;
+            }
+            if matches!(
+                trimmed,
+                "location = /.well-known/ai-plugin.json {"
+                    | "location = /console {"
+                    | "location ^~ /console/ {"
+                    | "location / {"
+            ) {
+                skipping_application_route = true;
+                application_routes += 1;
+                output.push_str(&format!("{line}\n{indent}    if ($request_method !~ \"^(GET|HEAD)$\") {{ return 405; }}\n{indent}    return 308 \"{}$request_uri\";\n", application.as_str()));
+            }
+            if skipping_application_route {
+                if trimmed == "}" {
+                    skipping_application_route = false;
+                    output.push_str(line);
+                    output.push('\n');
+                }
+                continue;
+            }
+        }
         if !managed_keycloak {
             // The exact authenticated template above has two flat provider
             // routes. Remove only those blocks, leaving application assets and
@@ -125,6 +170,11 @@ pub(crate) fn render_selected(
     if proxies == 0
         || hosts != proxies
         || output.contains("${")
+        || (application.is_some()
+            && (application_routes != 4
+                || skipping_application_route
+                || output.contains("ui:80")
+                || output.contains("$ui_upstream")))
         || (!managed_keycloak
             && (skipping_keycloak_route
                 || skipped_keycloak_routes != 2
@@ -139,6 +189,51 @@ pub(crate) fn render_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_application_replaces_every_ui_upstream_with_a_bounded_handoff() {
+        let output = render_for_application(
+            TEMPLATE,
+            "https://api.example.com",
+            false,
+            Some("https://console.example.com"),
+        )
+        .unwrap();
+        assert!(!output.contains("ui:80"));
+        assert!(!output.contains("$ui_upstream"));
+        assert!(!output.contains("$console_disabled"));
+        assert_eq!(
+            output
+                .matches("return 308 \"https://console.example.com$request_uri\";")
+                .count(),
+            4
+        );
+        assert_eq!(
+            output
+                .matches("if ($request_method !~ \"^(GET|HEAD)$\") { return 405; }")
+                .count(),
+            4
+        );
+        for route in [
+            "location /v1/ {",
+            "location /api/ {",
+            "location = /edge-healthz {",
+            "location /.well-known/ {",
+        ] {
+            assert!(output.contains(route), "{route}");
+        }
+        assert!(!output.contains("keycloak:8080"));
+        assert!(render_for_application(
+            TEMPLATE,
+            "https://api.example.com",
+            false,
+            Some("https://api.example.com")
+        )
+        .is_err());
+        // Explicit local qualification can capture the actual renderer output.
+        if let Ok(path) = std::env::var("MARTY_TEST_INGRESS_OUTPUT") {
+            std::fs::write(path, &output).unwrap();
+        }
+    }
     fn route_lines(text: &str) -> Vec<&str> {
         text.lines()
             .map(str::trim)

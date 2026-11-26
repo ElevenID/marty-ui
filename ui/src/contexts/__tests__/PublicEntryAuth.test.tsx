@@ -19,6 +19,7 @@ function AuthProbe() {
 }
 
 beforeEach(() => {
+  vi.stubEnv('VITE_API_URL', '');
   (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
   (window as any).__MARTY_RUNTIME_CONFIG__ = {
     hosting: { canonicalOrigin: canonical, publicEntryOrigins: [alias] },
@@ -26,6 +27,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   delete (window as any).__MARTY_RUNTIME_CONFIG__;
   (globalThis as any).jsdom.reconfigure({ url: originalUrl });

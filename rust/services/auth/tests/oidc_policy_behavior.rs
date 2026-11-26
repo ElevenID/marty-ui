@@ -19,6 +19,37 @@ fn external() -> BTreeMap<String, String> {
 }
 
 #[test]
+fn explicit_api_callback_origin_binds_full_and_metadata_only_oidc_configuration() {
+    let mut values = external();
+    values.remove("OIDC_REDIRECT_URI");
+    values.insert("UI_BASE_URL".into(), "https://console.example".into());
+    values.insert(
+        "AUTH_PUBLIC_API_ORIGIN".into(),
+        "https://api.example/".into(),
+    );
+    assert_eq!(
+        oidc_config_from_values(values.clone())
+            .unwrap()
+            .redirect_uri,
+        "https://api.example/v1/auth/callback"
+    );
+    assert!(oidc_preflight_config_from_values(values.clone()).is_ok());
+    values.insert(
+        "OIDC_REDIRECT_URI".into(),
+        "https://console.example/v1/auth/callback".into(),
+    );
+    assert!(oidc_config_from_values(values.clone()).is_err());
+    assert!(oidc_preflight_config_from_values(values.clone()).is_err());
+    values.insert(
+        "OIDC_REDIRECT_URI".into(),
+        "https://api.example/v1/auth/callback".into(),
+    );
+    assert!(oidc_config_from_values(values.clone()).is_ok());
+    values.insert("AUTH_PUBLIC_API_ORIGIN".into(), "http://api.example".into());
+    assert!(oidc_config_from_values(values).is_err());
+}
+
+#[test]
 fn oidc_only_configuration_needs_no_database_and_preserves_legacy_defaults() {
     let values = external();
     let config = oidc_config_from_values(values.clone()).unwrap();

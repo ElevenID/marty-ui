@@ -95,6 +95,9 @@ impl AuthConnections {
 
         let oidc = Arc::new(
             KeycloakOidcProvider::with_reqwest(config.oidc.clone())
+                .and_then(|provider| {
+                    provider.with_native_authentication(config.supabase_native.clone())
+                })
                 .map_err(|error| AuthConnectionError::Oidc(error.to_string()))?,
         );
         oidc.health_check()

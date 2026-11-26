@@ -217,6 +217,7 @@ fn completed_fixture(
         .unwrap();
     let pull = PullIntent {
         schema: "elevenid.rootless-storage-canary-pull-intent/v1".into(),
+        filesystem: None,
         installation_id: state.journal().installation_id(),
         canary_id,
         source_sha: state.journal().identity().source_sha.clone(),
@@ -231,6 +232,7 @@ fn completed_fixture(
     let marker = format!("marty-rootless-canary/v1:{canary_id}\n").into_bytes();
     let intent = Intent {
         schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+        filesystem: None,
         pull_intent_sha256: sha(&pull_bytes),
         installation_id: state.journal().installation_id(),
         canary_id,

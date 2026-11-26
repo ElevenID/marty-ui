@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { resolveApiBaseUrl } from '../services/authApiOrigin';
 import { Box, Typography, Paper, Grid, Card, CardContent, Divider, Chip, Button, Collapse, Alert, AlertTitle, Stack, Link as MuiLink } from '@mui/material';
 import { SEOHead } from './seo';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -21,7 +22,7 @@ function ApiDocumentation() {
   const [redocError, setRedocError] = useState(null);
   const [specUrlInUse, setSpecUrlInUse] = useState(null);
   // Use the same first-party API base as the application transport.
-  const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const apiBaseUrl = resolveApiBaseUrl(import.meta.env.VITE_API_URL);
   const gatewayOpenApiUrl = `${apiBaseUrl}/openapi.json`;
 
   useEffect(() => {

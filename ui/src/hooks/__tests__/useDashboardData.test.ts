@@ -120,6 +120,7 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 
 describe('useDashboardData', () => {
   beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', '')
     vi.clearAllMocks()
     vi.useFakeTimers()
 
@@ -169,6 +170,7 @@ describe('useDashboardData', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllEnvs()
     vi.unstubAllGlobals()
     vi.useRealTimers()
     vi.restoreAllMocks()

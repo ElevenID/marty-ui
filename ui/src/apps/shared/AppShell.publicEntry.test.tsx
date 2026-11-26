@@ -28,10 +28,12 @@ function shell() {
   </BrandingContext.Provider></AuthProvider></MemoryRouter>);
 }
 beforeEach(() => {
+  vi.stubEnv('VITE_API_URL', '');
   (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
   (window as any).__MARTY_RUNTIME_CONFIG__ = { hosting: { canonicalOrigin: canonical, publicEntryOrigins: [alias] } };
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   delete (window as any).__MARTY_RUNTIME_CONFIG__;
   (globalThis as any).jsdom.reconfigure({ url: original });

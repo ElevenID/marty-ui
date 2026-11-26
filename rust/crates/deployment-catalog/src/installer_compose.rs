@@ -55,6 +55,40 @@ mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
+    #[test]
+    fn retained_directory_bytes_and_hash_are_not_rebound_by_comparison() {
+        use crate::installer_filesystem::DeviceBinding;
+        use sha2::{Digest, Sha256};
+
+        let bytes = br#"{"dev":2160,"ino":127902,"uid":100099,"gid":100999,"mode":448}"#;
+        let legacy: PrivateDirectoryIdentity = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&legacy).unwrap(), bytes);
+        let legacy_hash = Sha256::digest(bytes);
+        let current = PrivateDirectoryIdentity {
+            dev: DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..legacy.clone()
+        };
+        assert!(!legacy.matches(current.clone()));
+        assert_eq!(
+            Sha256::digest(serde_json::to_vec(&legacy).unwrap()),
+            legacy_hash
+        );
+
+        let retained = PrivateDirectoryIdentity {
+            dev: DeviceBinding::ext4_for_test(2160, [7; 16]),
+            ..legacy
+        };
+        let retained_bytes = serde_json::to_vec(&retained).unwrap();
+        let retained_hash = Sha256::digest(&retained_bytes);
+        assert!(retained.matches(current.clone()));
+        assert_ne!(serde_json::to_vec(&current).unwrap(), retained_bytes);
+        assert_eq!(serde_json::to_vec(&retained).unwrap(), retained_bytes);
+        assert_eq!(
+            Sha256::digest(serde_json::to_vec(&retained).unwrap()),
+            retained_hash
+        );
+    }
+
     fn inputs(root: &Path) -> ComposeInputs {
         ComposeInputs {
             installation: root.into(),
@@ -323,7 +357,7 @@ mod tests {
             installation_ready: false,
         });
         let directory = PrivateDirectoryIdentity {
-            dev: 1,
+            dev: crate::installer_filesystem::DeviceBinding::Legacy(1),
             ino: 2,
             uid: unsafe { libc::geteuid() }.saturating_add(1),
             gid: 3,
@@ -338,11 +372,60 @@ mod tests {
             directory: directory.clone(),
         };
         validate_openbao_custody(&record, &p, &directory).unwrap();
+        let stable = PrivateDirectoryIdentity {
+            dev: crate::installer_filesystem::DeviceBinding::ext4_for_test(2160, [7; 16]),
+            ..directory.clone()
+        };
+        let rebooted = PrivateDirectoryIdentity {
+            dev: crate::installer_filesystem::DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..stable.clone()
+        };
+        record.directory = stable.clone();
+        validate_openbao_custody(&record, &p, &rebooted).unwrap();
+        record.engine_id = "other".into();
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &rebooted),
+            Err(REFUSED.into())
+        );
+        record.engine_id = "engine".into();
+        for (field, changed) in [("ino", 999), ("uid", 999), ("gid", 999), ("mode", 0o755)] {
+            let mut altered = serde_json::to_value(&rebooted).unwrap();
+            altered[field] = json!(changed);
+            let altered = serde_json::from_value(altered).unwrap();
+            assert!(
+                validate_openbao_custody(&record, &p, &altered).is_err(),
+                "{field}"
+            );
+        }
+        let wrong_filesystem = PrivateDirectoryIdentity {
+            dev: crate::installer_filesystem::DeviceBinding::ext4_for_test(2160, [8; 16]),
+            ..stable
+        };
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &wrong_filesystem),
+            Err(REFUSED.into()),
+            "a changed UUID is not the legacy device-number diagnosis"
+        );
+        let downgraded = PrivateDirectoryIdentity {
+            dev: crate::installer_filesystem::DeviceBinding::Legacy(2160),
+            ..rebooted.clone()
+        };
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &downgraded),
+            Err(REFUSED.into())
+        );
+        record.directory.dev = crate::installer_filesystem::DeviceBinding::Legacy(2160);
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &rebooted),
+            Err(OPENBAO_DEVICE_IDENTITY_CHANGED.into())
+        );
+        record.directory = directory.clone();
         // A kernel can assign the same retained filesystem a new device number
         // after a cold boot. A v1 receipt has no stable filesystem identifier,
         // so this remains a refusal, with a distinct bounded diagnosis.
         let mut renumbered = directory.clone();
-        renumbered.dev += 1;
+        renumbered.dev =
+            crate::installer_filesystem::DeviceBinding::Legacy(directory.dev.device() + 1);
         assert_eq!(
             validate_openbao_custody(&record, &p, &renumbered),
             Err(OPENBAO_DEVICE_IDENTITY_CHANGED.into())
@@ -1877,9 +1960,16 @@ pub(crate) fn bound_ingress_listener(
         )?;
         // Startup exposure is part of the exact hosting selection, not an
         // inherited process environment or an editable Compose override.
-        match model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS") {
-            Some(value) => require(value.as_str() == Some(selection.enabled_web_sections()))?,
-            None => require(!selection.has_web_selection())?,
+        match (
+            selection.external_application_origin(),
+            model["services"]["ui"]["environment"].get("UI_ENABLED_SECTIONS"),
+        ) {
+            (Some(_), None) => require(model["services"].get("ui").is_none())?,
+            (Some(_), Some(_)) => return Err(REFUSED.into()),
+            (None, Some(value)) => {
+                require(value.as_str() == Some(selection.enabled_web_sections()))?
+            }
+            (None, None) => require(!selection.has_web_selection())?,
         }
         let configured_entry = service["environment"]
             .get("OIDF_EDGE_PUBLIC_ENTRY_ORIGIN")
@@ -1928,18 +2018,51 @@ pub(crate) fn bound_ingress_listener(
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateDirectoryIdentity {
-    dev: u64,
+    dev: crate::installer_filesystem::DeviceBinding,
     ino: u64,
     uid: u32,
     gid: u32,
     mode: u32,
 }
+impl PrivateDirectoryIdentity {
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.dev.matches(observed.dev) {
+            return false;
+        }
+        observed.dev = self.dev;
+        observed == *self
+    }
+}
 fn private_directory(path: &Path) -> Result<PrivateDirectoryIdentity> {
     require(path.canonicalize().map_err(|_| REFUSED)? == path)?;
-    let m = fs::symlink_metadata(path).map_err(|_| REFUSED)?;
+    let parent_path = path.parent().ok_or(REFUSED)?;
+    let parent = crate::installer_host_fs::directory(parent_path, REFUSED)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(REFUSED)?;
+    let held = crate::installer_host_fs::open_child(
+        &parent,
+        name,
+        libc::O_PATH | libc::O_DIRECTORY,
+        REFUSED,
+    )?;
+    let m = held.metadata().map_err(|_| REFUSED)?;
     require(m.is_dir() && m.mode() & 0o7777 == 0o700 && m.dev() != 0 && m.ino() != 0)?;
+    let dev = crate::installer_filesystem::DeviceBinding::under(&parent, &m, REFUSED)?;
+    crate::installer_host_fs::require_directory_binding(parent_path, &parent, REFUSED)?;
+    let current = fs::symlink_metadata(path).map_err(|_| REFUSED)?;
+    require(
+        (
+            current.dev(),
+            current.ino(),
+            current.uid(),
+            current.gid(),
+            current.mode(),
+        ) == (m.dev(), m.ino(), m.uid(), m.gid(), m.mode()),
+    )?;
     Ok(PrivateDirectoryIdentity {
-        dev: m.dev(),
+        dev,
         ino: m.ino(),
         uid: m.uid(),
         gid: m.gid(),
@@ -1991,7 +2114,7 @@ pub(crate) fn record_openbao_custody(
         before.is_dir()
             && before.uid() == unsafe { libc::geteuid() }
             && before.mode() & 0o7777 == 0o700
-            && before.dev() == directory.dev
+            && before.dev() == directory.dev.device()
             && before.ino() == directory.ino,
     )?;
     let bytes = serde_json::to_vec(&OpenBaoCustody {
@@ -2076,17 +2199,23 @@ fn validate_openbao_custody(
             })
             && record.directory.uid != unsafe { libc::geteuid() },
     )?;
-    if observed.dev != record.directory.dev
+    if record.directory.matches(observed.clone()) {
+        return Ok(());
+    }
+    if matches!(
+        record.directory.dev,
+        crate::installer_filesystem::DeviceBinding::Legacy(_)
+    ) && observed.dev.device() != record.directory.dev.device()
         && observed.ino == record.directory.ino
         && observed.uid == record.directory.uid
         && observed.gid == record.directory.gid
         && observed.mode == record.directory.mode
     {
-        // Never infer historical filesystem identity from today's mount. A
-        // device-only difference diagnoses a v1 limitation, not rebind authority.
+        // Never infer historical filesystem identity from today's mount. This
+        // diagnosis applies only to a legacy numeric binding that still refuses.
         return Err(OPENBAO_DEVICE_IDENTITY_CHANGED.into());
     }
-    require(observed == &record.directory)
+    Err(REFUSED.into())
 }
 fn mount_policy(source: &str, readonly: bool, p: &ComposeInputs, check_file: bool) -> Result<()> {
     let path = Path::new(source);
@@ -2543,6 +2672,7 @@ impl ComposeSession {
         let foundation = crate::installer_foundation::for_inputs(&inputs)?;
         let external_oidc = crate::installer_oidc::for_inputs(&inputs)?;
         let external_postgres = crate::installer_postgres::for_inputs(&inputs)?;
+        let hosting = crate::installer_hosting::for_inputs(&inputs)?;
         crate::installer_settings::for_inputs(&inputs)?;
         for root in inputs
             .writable_bind_roots
@@ -2636,6 +2766,9 @@ impl ComposeSession {
         }
         if let Some(selection) = external_postgres {
             selection.validate_model(&model)?;
+        }
+        if let Some(selection) = hosting {
+            selection.validate_application_model(&model)?;
         }
         if cleanup_only {
             validate_failed_runtime_cleanup(session.inputs.prior.as_ref().ok_or(REFUSED)?, &model)?;

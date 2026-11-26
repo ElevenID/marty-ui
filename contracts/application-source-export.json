@@ -3513,8 +3513,36 @@
       ]
     },
     {
+      "source": "ui/src/services/__tests__/associationConsent.test.ts",
+      "path": "ui/src/services/__tests__/associationConsent.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
       "source": "ui/src/services/__tests__/authApi.test.ts",
       "path": "ui/src/services/__tests__/authApi.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/services/__tests__/authApiOrigin.test.ts",
+      "path": "ui/src/services/__tests__/authApiOrigin.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/services/__tests__/consoleApiOrigin.test.ts",
+      "path": "ui/src/services/__tests__/consoleApiOrigin.test.ts",
+      "roles": [
+        "selected-application-test"
+      ]
+    },
+    {
+      "source": "ui/src/services/__tests__/identityProviderApi.test.ts",
+      "path": "ui/src/services/__tests__/identityProviderApi.test.ts",
       "roles": [
         "selected-application-test"
       ]
@@ -3578,6 +3606,13 @@
     {
       "source": "ui/src/services/authApi.js",
       "path": "ui/src/services/authApi.js",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/services/authApiOrigin.js",
+      "path": "ui/src/services/authApiOrigin.js",
       "roles": [
         "application-or-shared-source"
       ]
@@ -4095,7 +4130,7 @@
     "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
     "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
     "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
-    "unselected-test": "Not in the exact 26-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-test": "Not in the exact 30-file selected suite and not imported by selected test/setup or retained source closure.",
     "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
     "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
   },
@@ -5525,10 +5560,6 @@
       "role": "unselected-test"
     },
     {
-      "source": "ui/src/services/__tests__/associationConsent.test.ts",
-      "role": "unselected-test"
-    },
-    {
       "source": "ui/src/services/__tests__/auditApi.test.ts",
       "role": "unselected-test"
     },
@@ -5582,10 +5613,6 @@
     },
     {
       "source": "ui/src/services/__tests__/idempotency.scope.test.ts",
-      "role": "unselected-test"
-    },
-    {
-      "source": "ui/src/services/__tests__/identityProviderApi.test.ts",
       "role": "unselected-test"
     },
     {
@@ -5789,12 +5816,16 @@
       "src/components/console/agents/AgentTrustPages.test.tsx",
       "src/services/__tests__/agentTrustApi.test.ts",
       "src/services/__tests__/authApi.test.ts",
+      "src/services/__tests__/authApiOrigin.test.ts",
+      "src/services/__tests__/consoleApiOrigin.test.ts",
+      "src/services/__tests__/identityProviderApi.test.ts",
+      "src/services/__tests__/associationConsent.test.ts",
       "tests/application/surface-profile.test.tsx"
     ],
     "shared_contracts": [
       "contracts/organization-domain-behavior.json"
     ],
-    "assertions": 323
+    "assertions": 392
   },
   "public_files": [
     ".well-known/ai-plugin.json",

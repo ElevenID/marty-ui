@@ -94,6 +94,91 @@ fn redirect_and_origin_selection_match_the_language_neutral_contract() {
 }
 
 #[test]
+fn fixed_api_callback_preserves_only_allowlisted_console_return_origins() {
+    let policy = UiOriginPolicy::new("https://console.example", ["https://secondary.example"])
+        .unwrap()
+        .with_api_callback_origin("https://api.example/")
+        .unwrap();
+    for selected in ["https://console.example", "https://secondary.example"] {
+        assert_eq!(
+            policy.oidc_callback_url(selected),
+            "https://api.example/v1/auth/callback"
+        );
+    }
+    let bound = policy.login_redirect_uri(
+        Some("https://secondary.example/console/profile?tab=security"),
+        policy.primary(),
+    );
+    assert_eq!(
+        bound,
+        "https://secondary.example/console/profile?tab=security"
+    );
+    assert_eq!(
+        policy.ui_redirect_url(Some(&bound), policy.primary()),
+        bound
+    );
+    assert_eq!(
+        policy.login_redirect_uri(Some("/"), policy.primary()),
+        "https://console.example/console"
+    );
+    assert_eq!(policy.local_logout_redirect(), "https://console.example/");
+    assert_eq!(
+        policy.ui_redirect_url(
+            Some("https://untrusted.example/console/profile?token=discard"),
+            policy.primary()
+        ),
+        "https://console.example/console/profile"
+    );
+    for invalid in [
+        "//untrusted.example",
+        "javascript:alert(1)",
+        "https://user:pass@console.example/console",
+        "https://console.example/\\untrusted",
+        "/console\r\nlocation:bad",
+    ] {
+        assert_eq!(
+            policy.ui_redirect_url(Some(invalid), policy.primary()),
+            "https://console.example/console"
+        );
+    }
+}
+
+#[test]
+fn api_callback_origin_rejects_credential_and_transport_ambiguity() {
+    for invalid in [
+        "http://api.example",
+        "https://api.example/path",
+        "https://api.example?query=value",
+        "https://api.example#fragment",
+        "https://user:pass@api.example",
+        "//api.example",
+        " https://api.example",
+    ] {
+        assert!(
+            UiOriginPolicy::new("https://console.example", std::iter::empty::<&str>())
+                .unwrap()
+                .with_api_callback_origin(invalid)
+                .is_err(),
+            "{invalid}"
+        );
+    }
+    for origin in [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://[::1]:8000",
+    ] {
+        let policy = UiOriginPolicy::new("http://localhost:3000", std::iter::empty::<&str>())
+            .unwrap()
+            .with_api_callback_origin(origin)
+            .unwrap();
+        assert_eq!(
+            policy.oidc_callback_url(policy.primary()),
+            format!("{origin}/v1/auth/callback")
+        );
+    }
+}
+
+#[test]
 fn impersonation_context_matches_the_language_neutral_contract() {
     for case in fixture().impersonation_cases {
         let now = Utc::now();

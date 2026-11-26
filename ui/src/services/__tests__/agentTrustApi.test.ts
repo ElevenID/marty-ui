@@ -30,8 +30,9 @@ function response(value: unknown, status = 200) {
 }
 describe('agent trust Gateway client bindings and retry policy', () => {
   const transport = vi.fn();
-  beforeEach(() => { transport.mockReset(); vi.stubGlobal('fetch', transport); });
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.stubEnv('VITE_API_URL', ''); transport.mockReset(); vi.stubGlobal('fetch', transport); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
   it('sends an exact revision and no caller-supplied identity headers', async () => {
     transport.mockResolvedValue(response({ ...identity, revision: 2, status: 'SUSPENDED' }));

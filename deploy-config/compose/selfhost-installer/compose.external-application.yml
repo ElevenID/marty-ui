@@ -1,0 +1,7 @@
+# Only the journal-bound external application hosting selection admits this layer.
+# The API/keyless edge stays local; browser application assets are hosted elsewhere.
+services:
+  ui: !reset 'null'
+  edge:
+    environment:
+      UI_UPSTREAM: !reset 'null'

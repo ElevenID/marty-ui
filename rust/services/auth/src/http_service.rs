@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, OriginalUri, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Form, Json, Router,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -15,14 +15,14 @@ use serde_json::{json, Value};
 use tracing::warn;
 
 use crate::{
-    build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
-    render_credential_login_error_page, sanitize_redirect_uri, validate_ui_locales,
-    AuthApplication, AuthApplicationError, CredentialCallbackContext, CredentialCallbackError,
-    CredentialCallbackHeaders, CredentialCallbackResult, CredentialHttpError,
-    CredentialLoginCompletion, CredentialLoginErrorPage, CredentialLoginHttpService,
-    CredentialStateError, CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult,
-    InitiateLoginCommand, OidcProviderCapabilities, PasskeyEnrollmentStart, PortError, Session,
-    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
+    build_session_impersonation, build_ui_redirect_url, render_credential_login_error_page,
+    validate_ui_locales, AuthApplication, AuthApplicationError, CredentialCallbackContext,
+    CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
+    CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
+    CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
+    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, OidcProviderCapabilities,
+    PasskeyEnrollmentStart, PortError, Session, SessionRepository, UiOriginPolicy,
+    CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
@@ -31,6 +31,7 @@ pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/auth/register"),
     ("POST", "/v1/auth/passkeys/enroll"),
     ("GET", "/v1/auth/callback"),
+    ("POST", "/v1/auth/callback"),
     ("POST", "/v1/auth/logout"),
     ("GET", "/v1/auth/me"),
     ("PATCH", "/v1/auth/me"),
@@ -85,6 +86,18 @@ impl SessionCookieConfig {
 
 #[async_trait]
 pub trait AuthHttpApplication: Send + Sync {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        None
+    }
+    async fn native_callback(
+        &self,
+        _command: crate::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        Err(PortError::new(
+            "native_authentication_unsupported",
+            "Native authentication is not configured",
+        ))
+    }
     fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         Err(PortError::new(
             "oidc_capabilities_unavailable",
@@ -126,6 +139,17 @@ pub trait AuthHttpApplication: Send + Sync {
 
 #[async_trait]
 impl AuthHttpApplication for AuthApplication {
+    fn native_authentication_origin(&self) -> Option<&str> {
+        AuthApplication::native_authentication_origin(self)
+    }
+    async fn native_callback(
+        &self,
+        command: crate::NativeCallbackCommand,
+    ) -> Result<HandleCallbackResult, PortError> {
+        self.handle_native_callback(command, Utc::now())
+            .await
+            .map_err(application_error)
+    }
     fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
         AuthApplication::provider_capabilities(self)
     }
@@ -243,7 +267,13 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
         .route("/v1/auth/passkeys/enroll", post(enroll_passkey))
-        .route("/v1/auth/callback", get(callback))
+        .route(
+            "/v1/auth/callback",
+            get(callback)
+                .post(native_callback)
+                .layer(DefaultBodyLimit::max(24 * 1024))
+                .layer(middleware::map_response(credential_login_no_store)),
+        )
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/me", get(me).patch(update_me))
         .route(
@@ -312,7 +342,9 @@ async fn start_passkey_enrollment(
     }
     let ui_base = request_ui_base(&state.origins, headers);
     if headers.get_all(header::ORIGIN).iter().count() != 1
-        || header_text(headers, header::ORIGIN) != Some(ui_base)
+        || !state
+            .origins
+            .accepts_browser_origin(header_text(headers, header::ORIGIN), ui_base)
     {
         return detail(
             StatusCode::FORBIDDEN,
@@ -333,10 +365,16 @@ async fn start_passkey_enrollment(
             "Passkey enrollment is unavailable for this account session",
         );
     }
-    let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    let redirect = state
+        .origins
+        .login_redirect_uri(query.redirect_uri.as_deref(), ui_base);
     match state
         .application
-        .enroll_passkey(session_id, redirect, oidc_callback_url(ui_base))
+        .enroll_passkey(
+            session_id,
+            redirect,
+            state.origins.oidc_callback_url(ui_base),
+        )
         .await
     {
         Ok(PasskeyEnrollmentStart::Authorization(start)) => {
@@ -377,7 +415,9 @@ async fn initiate(
     registration: bool,
 ) -> Response {
     let ui_base = request_ui_base(&state.origins, &headers);
-    let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    let redirect = state
+        .origins
+        .login_redirect_uri(query.redirect_uri.as_deref(), ui_base);
     if query.ui_locales.is_some() && query.kc_locale.is_some() {
         return detail(
             StatusCode::BAD_REQUEST,
@@ -404,7 +444,7 @@ async fn initiate(
         .initiate(
             registration,
             redirect,
-            oidc_callback_url(ui_base),
+            state.origins.oidc_callback_url(ui_base),
             locales,
             query.reauthenticate,
         )
@@ -473,6 +513,79 @@ async fn callback(
             user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
         })
         .await;
+    complete_callback(&state, &headers, result).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCallbackForm {
+    code: String,
+    state: String,
+    native_access_token: String,
+}
+
+async fn native_callback(
+    State(state): State<AuthHttpState>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Form(body): Form<NativeCallbackForm>,
+) -> Response {
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if state.application.native_authentication_origin().is_none()
+        || origin != state.application.native_authentication_origin()
+        || headers.get_all(header::ORIGIN).iter().count() != 1
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Native callback origin is not allowed",
+        );
+    }
+    if uri.query().is_some()
+        || body.code.is_empty()
+        || body.code.len() > 2048
+        || !body
+            .code
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+        || !(16..=128).contains(&body.state.len())
+        || !body
+            .state
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        || body.native_access_token.is_empty()
+        || body.native_access_token.len() > 16_384
+    {
+        return detail(StatusCode::BAD_REQUEST, "Native callback body is invalid");
+    }
+    let result = state
+        .application
+        .native_callback(crate::NativeCallbackCommand {
+            callback: HandleCallbackCommand {
+                code: body.code,
+                state: body.state,
+                ip_address: client_ip(&headers),
+                user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
+            },
+            native_access_token: body.native_access_token,
+            origin: origin.unwrap_or_default().into(),
+        })
+        .await;
+    let mut response = complete_callback(&state, &headers, result).await;
+    if response.status() == StatusCode::FOUND {
+        *response.status_mut() = StatusCode::SEE_OTHER;
+    }
+    no_store(&mut response);
+    response
+}
+
+async fn complete_callback(
+    state: &AuthHttpState,
+    headers: &HeaderMap,
+    result: Result<HandleCallbackResult, PortError>,
+) -> Response {
+    let ui_base = request_ui_base(&state.origins, headers);
     let mut result = match result {
         Ok(result) => result,
         Err(error) => {
@@ -487,15 +600,18 @@ async fn callback(
     };
     if let Some(impersonation) = build_session_impersonation(
         &result.session,
-        cookie(&headers, &state.impersonation_handoff_cookie_name),
+        cookie(headers, &state.impersonation_handoff_cookie_name),
     ) {
         result.session.user.impersonation = Some(impersonation);
         if state.sessions.save(&result.session).await.is_err() {
             return detail(StatusCode::SERVICE_UNAVAILABLE, "Session store unavailable");
         }
     }
-    let mut response =
-        redirect_response(&build_ui_redirect_url(Some(&result.redirect_uri), ui_base));
+    let mut response = redirect_response(
+        &state
+            .origins
+            .ui_redirect_url(Some(&result.redirect_uri), ui_base),
+    );
     set_session_cookie(&mut response, &state.cookie, &result.session.session_id);
     delete_cookie(
         &mut response,
@@ -508,10 +624,17 @@ async fn callback(
 }
 
 async fn logout(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response {
+    if state.origins.requires_browser_origin() && !browser_origin_allowed(&state.origins, &headers)
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Account changes require an allowed application origin",
+        );
+    }
     let location = if let Some(session_id) = cookie(&headers, &state.cookie.name) {
         match state.application.logout(session_id).await {
             Ok(Some(location)) => location,
-            Ok(None) => "/".into(),
+            Ok(None) => state.origins.local_logout_redirect(),
             Err(_) => {
                 return detail(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -520,7 +643,7 @@ async fn logout(State(state): State<AuthHttpState>, headers: HeaderMap) -> Respo
             }
         }
     } else {
-        "/".into()
+        state.origins.local_logout_redirect()
     };
     let mut response = redirect_response(&location);
     delete_cookie(
@@ -578,6 +701,13 @@ async fn update_me(
     headers: HeaderMap,
     Json(body): Json<UpdateMeRequest>,
 ) -> Response {
+    if state.origins.requires_browser_origin() && !browser_origin_allowed(&state.origins, &headers)
+    {
+        return detail(
+            StatusCode::FORBIDDEN,
+            "Account changes require an allowed application origin",
+        );
+    }
     let Some(session_id) = cookie(&headers, &state.cookie.name) else {
         return detail(StatusCode::UNAUTHORIZED, "Not authenticated");
     };
@@ -610,6 +740,14 @@ async fn update_me(
             ),
         ),
     )
+}
+
+fn browser_origin_allowed(origins: &UiOriginPolicy, headers: &HeaderMap) -> bool {
+    headers.get_all(header::ORIGIN).iter().count() == 1
+        && origins.accepts_browser_origin(
+            header_text(headers, header::ORIGIN),
+            request_ui_base(origins, headers),
+        )
 }
 
 async fn credential_login_styles() -> Response {
@@ -941,6 +1079,10 @@ fn application_error(error: AuthApplicationError) -> PortError {
             "consume OIDC state" => "auth_oidc_state_consume_failed",
             "exchange OIDC code" => "auth_oidc_code_exchange_failed",
             "validate OIDC tokens" => "auth_oidc_token_validation_failed",
+            "validate native proof policy" => "auth_native_proof_policy_failed",
+            "validate native authentication" => "auth_native_authentication_validation_failed",
+            "claim native authentication" => "auth_native_authentication_claim_failed",
+            "revoke bootstrap provider sessions" => "auth_native_bootstrap_revocation_failed",
             "provision authenticated user" => "auth_user_provisioning_failed",
             "save authenticated session" => "auth_session_save_failed",
             "publish authentication event" => "auth_login_event_publish_failed",
@@ -972,6 +1114,10 @@ mod application_error_tests {
             port("consume OIDC state"),
             port("exchange OIDC code"),
             port("validate OIDC tokens"),
+            port("validate native proof policy"),
+            port("validate native authentication"),
+            port("claim native authentication"),
+            port("revoke bootstrap provider sessions"),
             port("provision authenticated user"),
             port("save authenticated session"),
             port("publish authentication event"),

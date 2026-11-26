@@ -488,10 +488,13 @@ fn start_inner(
     if state.validate_applicant_storage()? != group.host_gid() {
         return Err("applicant state group changed".into());
     }
-    let nginx = crate::installer_ingress_config::render_selected(
+    let nginx = crate::installer_ingress_config::render_for_application(
         &bundle_text(bundle, "docker/nginx-selfhost.prod.conf.template", 131072)?,
         &origin,
         foundation.is_none() && external_oidc.is_none(),
+        hosting
+            .external_application_origin()
+            .map(PublicOrigin::as_str),
     )?;
     state.write_evidence("installer-nginx.conf", nginx.as_bytes())?;
     state.write_evidence("application-intent.json",&serde_json::to_vec(&json!({"schema":"elevenid.installer-application-intent/v2",
@@ -617,6 +620,19 @@ fn start_inner(
             .files
             .push(bundle_bound(bundle, crate::installer_foundation::LAYER)?);
     }
+    // One authenticated reset owns both upstream removals when login is also
+    // external. It must precede the provider layer; separate later environment
+    // resets leave UI_UPSTREAM intact with the installed Compose 5.6.1.
+    let external_application_layer = hosting.external_application_origin().map(|_| {
+        if external_oidc.is_some() {
+            crate::installer_hosting::EXTERNAL_OIDC_APPLICATION_LAYER
+        } else {
+            crate::installer_hosting::EXTERNAL_APPLICATION_LAYER
+        }
+    });
+    if let Some(layer) = external_application_layer {
+        inputs.files.push(bundle_bound(bundle, layer)?);
+    }
     if external_oidc.is_some() {
         inputs
             .files
@@ -683,6 +699,9 @@ fn start_inner(
                 .files
                 .push(bundle_bound(bundle, &format!("{LAYERS}/{file}"))?);
         }
+    }
+    if let Some(layer) = external_application_layer {
+        maintenance_inputs.files.push(bundle_bound(bundle, layer)?);
     }
     if external_oidc.is_some() {
         // The runtime layer restores managed provider readiness dependencies.
