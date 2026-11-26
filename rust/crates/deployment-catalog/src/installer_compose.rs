@@ -36,6 +36,7 @@ const MAX_FILE: u64 = 2 * 1024 * 1024;
 pub(crate) const MAX_BOUND_INPUTS: usize = 24;
 const MAX_WAIT: u64 = 720;
 const REFUSED: &str = "Compose installation policy refused the operation";
+pub(crate) const OPENBAO_DEVICE_IDENTITY_CHANGED: &str = "OpenBao private state filesystem device differs from its retained custody receipt; preserve the original owner and evidence; do not rewrite the receipt or retry lifecycle resume without an authenticated recovery path";
 const UNCERTAIN: &str = "Compose operation failed or was interrupted; inspect retained project evidence before recovery; no automatic retry was performed";
 const SETUP_LABEL: &str = "com.elevenid.installer.phase";
 const OPENBAO_CUSTODY: &str = "compose-openbao-private-inputs.json";
@@ -337,11 +338,51 @@ mod tests {
             directory: directory.clone(),
         };
         validate_openbao_custody(&record, &p, &directory).unwrap();
+        // A kernel can assign the same retained filesystem a new device number
+        // after a cold boot. A v1 receipt has no stable filesystem identifier,
+        // so this remains a refusal, with a distinct bounded diagnosis.
+        let mut renumbered = directory.clone();
+        renumbered.dev += 1;
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &renumbered),
+            Err(OPENBAO_DEVICE_IDENTITY_CHANGED.into())
+        );
+        for changed in [
+            PrivateDirectoryIdentity {
+                ino: renumbered.ino + 1,
+                ..renumbered.clone()
+            },
+            PrivateDirectoryIdentity {
+                uid: renumbered.uid + 1,
+                ..renumbered.clone()
+            },
+            PrivateDirectoryIdentity {
+                gid: renumbered.gid + 1,
+                ..renumbered.clone()
+            },
+            PrivateDirectoryIdentity {
+                mode: 0o755,
+                ..renumbered.clone()
+            },
+        ] {
+            assert_eq!(
+                validate_openbao_custody(&record, &p, &changed),
+                Err(REFUSED.into())
+            );
+        }
         record.engine_id = "other".into();
         assert!(validate_openbao_custody(&record, &p, &directory).is_err());
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &renumbered),
+            Err(REFUSED.into())
+        );
         record.engine_id = "engine".into();
         record.directory.ino += 1;
         assert!(validate_openbao_custody(&record, &p, &directory).is_err());
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &renumbered),
+            Err(REFUSED.into())
+        );
         record.directory = directory.clone();
         record.tls_container_id = "f".repeat(64);
         assert!(validate_openbao_custody(&record, &p, &directory).is_err());
@@ -360,6 +401,10 @@ mod tests {
             .unwrap()
             .completed_without_restart = false;
         assert!(validate_openbao_custody(&record, &p, &directory).is_err());
+        assert_eq!(
+            validate_openbao_custody(&record, &p, &renumbered),
+            Err(REFUSED.into())
+        );
     }
 
     #[test]
@@ -2029,9 +2074,19 @@ fn validate_openbao_custody(
                         .as_ref()
                         .is_some_and(|e| e.completed_without_restart)
             })
-            && record.directory.uid != unsafe { libc::geteuid() }
-            && observed == &record.directory,
-    )
+            && record.directory.uid != unsafe { libc::geteuid() },
+    )?;
+    if observed.dev != record.directory.dev
+        && observed.ino == record.directory.ino
+        && observed.uid == record.directory.uid
+        && observed.gid == record.directory.gid
+        && observed.mode == record.directory.mode
+    {
+        // Never infer historical filesystem identity from today's mount. A
+        // device-only difference diagnoses a v1 limitation, not rebind authority.
+        return Err(OPENBAO_DEVICE_IDENTITY_CHANGED.into());
+    }
+    require(observed == &record.directory)
 }
 fn mount_policy(source: &str, readonly: bool, p: &ComposeInputs, check_file: bool) -> Result<()> {
     let path = Path::new(source);

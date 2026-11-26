@@ -66,6 +66,7 @@ pub(super) enum Reason {
     ResourceSetChanged,
     NativeStateChanged,
     RepairSelection,
+    OpenbaoFilesystemDeviceChanged,
     OperationBoundary,
 }
 
@@ -108,6 +109,7 @@ impl Reason {
             Self::ResourceSetChanged => "resource_set_changed",
             Self::NativeStateChanged => "native_state_changed",
             Self::RepairSelection => "repair_selection",
+            Self::OpenbaoFilesystemDeviceChanged => "openbao_filesystem_device_changed",
             Self::OperationBoundary => "operation_boundary",
         }
     }
@@ -134,6 +136,11 @@ impl Failure {
     fn reason(&self) -> Reason {
         match self {
             Self::Guard(reason) => *reason,
+            Self::Operation(error)
+                if error == crate::installer_compose::OPENBAO_DEVICE_IDENTITY_CHANGED =>
+            {
+                Reason::OpenbaoFilesystemDeviceChanged
+            }
             Self::Operation(_) => Reason::OperationBoundary,
         }
     }
