@@ -1282,7 +1282,8 @@ mod tests {
             application.prior = Some(receipt);
             selection.append_layers(&mut application, &bundle).unwrap();
             assert!(!application.files.iter().any(|file| {
-                file.path.ends_with("feature-profile/compose.identities.yml")
+                file.path
+                    .ends_with("feature-profile/compose.identities.yml")
             }));
             session.inputs = application.clone();
             session.live_policy(&container).unwrap();
@@ -1296,7 +1297,8 @@ mod tests {
                     .files
                     .iter()
                     .filter(|file| {
-                        file.path.ends_with("feature-profile/compose.identities.yml")
+                        file.path
+                            .ends_with("feature-profile/compose.identities.yml")
                     })
                     .count(),
                 1

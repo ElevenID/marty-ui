@@ -694,9 +694,11 @@ impl Selection {
         // Every later observation must keep this exact selected owner root,
         // even when the next job does not render the feature helper itself.
         if self.identity_selection()?.is_some() {
-            inputs
-                .writable_bind_roots
-                .insert(inputs.installation.join(crate::installer_feature_identity::OUTPUT_DIRECTORY));
+            inputs.writable_bind_roots.insert(
+                inputs
+                    .installation
+                    .join(crate::installer_feature_identity::OUTPUT_DIRECTORY),
+            );
         }
         Ok(())
     }
