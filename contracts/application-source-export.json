@@ -4130,7 +4130,7 @@
     "unadvertised-storybook-tooling": "No Storybook command in exact profile; preview statically imports accepted-omitted i18nTestSetup.js/marketing data. Story source and its shared fixture dependency stay retained.",
     "unselected-package-manager-lock": "Reviewed application profile has npm lock only; no application Bun lock exists.",
     "unselected-package-support": "Not referenced by selected source, build, test, runtime or license boundary; exact path retained in platform repository.",
-    "unselected-test": "Not in the exact 26-file selected suite and not imported by selected test/setup or retained source closure.",
+    "unselected-test": "Not in the exact 30-file selected suite and not imported by selected test/setup or retained source closure.",
     "unselected-tooling": "Outside selected build/postinstall/test helper closure; original file preserved in platform repository.",
     "unused-test-support": "Read only by the unselected CertParser.test.ts (lines 8-11 and 56); no selected test/setup or retained source import/read. PkijsCertParser.js remains retained."
   },
@@ -5824,7 +5824,8 @@
     ],
     "shared_contracts": [
       "contracts/organization-domain-behavior.json"
-    ]
+    ],
+    "assertions": 392
   },
   "public_files": [
     ".well-known/ai-plugin.json",

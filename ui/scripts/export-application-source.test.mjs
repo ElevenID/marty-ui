@@ -107,7 +107,7 @@ function protocolBaseline(plan) {
         output_files_identical: true, public_resources_identical: true, output_inventory_sha256: inventory,
         output_files: files.length, public_resources: publicResources.length } },
     tests: { selected_files: plan.test_profile.files,
-      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 390, report_sha256: digest('Synthetic protocol fixture') } },
+      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 392, report_sha256: digest('Synthetic protocol fixture') } },
     output: { files, inventory_sha256: inventory, public_resources: publicResources },
     resources: { result: { schema: 'marty.application-resource-smoke/v1', status: 'passed', preview: { closed: true },
       qualification: { resources_served: true }, public_resources: publicResources } },
@@ -179,8 +179,14 @@ test('historical source-map selection preserves its exact inventory and rejects 
       sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad' },
     { path: 'before-static-auth-origins-v1.json', files: 581, assertions: 321,
       sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41' },
+    { path: 'before-delegation-ux-states-v1.json', files: 581, assertions: 321,
+      sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41' },
+    { path: 'main-delegation-ux-states-v1.json', files: 581, assertions: 323,
+      sha256: 'sha256:75a421eae97dc83221f52ee8b90c6898cd1247cfd3f662ddf5ede88b6a6c2749' },
     { path: 'before-full-console-transport-v1.json', files: 585, assertions: 383,
       sha256: 'sha256:9ab4ba2ea5f71d517f46fc5821c185b5a3fd64a8cc9442ab33f8fe14f35f1ca7' },
+    { path: 'before-main-ux-integration-v1.json', files: 586, assertions: 390,
+      sha256: 'sha256:056ec105dd008be974f443259858f622f02967f539975ac1245507315eac8b94' },
   ]) {
   const legacyBytes = readFileSync(path.join(ROOT, 'contracts/application-source-export-history', accepted.path));
   const legacyContract = parseApplicationSourceJson(legacyBytes);

@@ -270,6 +270,28 @@ fn failure_records_are_independent_and_do_not_include_underlying_error_text() {
 }
 
 #[test]
+fn openbao_device_refusal_has_an_exact_public_code_without_relaxing_evidence() {
+    let (_parent, path, mut state, _checkpoint) = fixture();
+    let mut trace = Trace::new(&state, true);
+    trace.stage = "open_session";
+    let invocation = trace.health_invocation_id;
+    let fixed = crate::installer_compose::OPENBAO_DEVICE_IDENTITY_CHANGED;
+    let message = trace.failure(&mut state, Failure::Operation(fixed.into()));
+    assert!(message.starts_with(fixed));
+    let report = retained(&path, invocation);
+    assert_eq!(report["reason"], "openbao_filesystem_device_changed");
+    assert_eq!(report["stage"], "open_session");
+    assert!(report["resources_before"].is_null());
+    assert!(report["native_before"].is_null());
+    assert!(!report.to_string().contains(fixed));
+    // Classification recognizes only the source-owned constant. Untrusted
+    // suffixes or similar text cannot enter the diagnostic record.
+    let decorated = Failure::Operation(format!("{fixed}; credential-secret"));
+    assert_eq!(decorated.reason(), Reason::OperationBoundary);
+    state.require_unchanged().unwrap();
+}
+
+#[test]
 fn invocation_identity_accepts_only_exact_ids_and_this_installations_units() {
     let installation = uuid::Uuid::new_v4();
     let id = uuid::Uuid::new_v4().simple().to_string();
