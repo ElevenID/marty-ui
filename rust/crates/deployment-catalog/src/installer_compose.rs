@@ -1055,6 +1055,12 @@ mod tests {
     }
 
     fn receipt_fixture() -> (tempfile::TempDir, InstallerState, ComposeSession) {
+        receipt_fixture_with_profile(RuntimeProfile::Rootful)
+    }
+
+    fn receipt_fixture_with_profile(
+        profile: RuntimeProfile,
+    ) -> (tempfile::TempDir, InstallerState, ComposeSession) {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let executable = root.path().join("docker-fixture");
@@ -1067,10 +1073,16 @@ mod tests {
         // Receipt-only fixture: no socket is opened and this executable must
         // never run. The synthetic binding works for root and non-root tests.
         let binding = RuntimeBinding {
-            docker_host: "unix:///var/run/docker.sock".into(),
+            docker_host: if profile == RuntimeProfile::Rootless {
+                format!("unix:///run/user/{}/docker.sock", unsafe {
+                    libc::geteuid()
+                })
+            } else {
+                "unix:///var/run/docker.sock".into()
+            },
             engine_id: "test-engine".into(),
             openbao_port: 18443,
-            profile: RuntimeProfile::Rootful,
+            profile,
         };
         let installation = root.path().join("installation");
         let mut state = InstallerState::create_with_runtime(
@@ -1106,6 +1118,235 @@ mod tests {
             runtime_recovery_roles: None,
         };
         (root, state, session)
+    }
+
+    #[test]
+    fn selected_feature_helper_output_survives_setup_and_retained_runtime_handoffs() {
+        use crate::{installer_application, installer_features as features};
+
+        for selected_identity in [None, Some(false), Some(true)] {
+            let (root, mut state, mut session) =
+                receipt_fixture_with_profile(RuntimeProfile::Rootless);
+            state
+                .advance(crate::installer_state::Phase::Verified)
+                .unwrap();
+            let installation = session.inputs.installation.clone();
+            let bundle = installation.join("bundle");
+            let layer = |name: &str| {
+                let path = bundle.join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::copy(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../..")
+                        .join(name),
+                    &path,
+                )
+                .unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+                installer_application::bundle_bound(&bundle, name).unwrap()
+            };
+            for name in [
+                "docker-compose.selfhost.openbao.yml",
+                "deploy-config/compose/selfhost-installer/compose.bootstrap.yml",
+            ] {
+                layer(name);
+            }
+            if let Some(with_identity) = selected_identity {
+                let mut configuration = json!({
+                    "schema":"elevenid.installer-feature-profile/v1",
+                    "agent_trust":{
+                        "organization_id":"00000000-0000-4000-8000-000000000001",
+                        "enrollment":{"audience":"https://api.example.test",
+                            "policy_profile":"urn:marty:managed-key-enrollment-policy:v1",
+                            "policy_revision":1},
+                        "approval":{"profile":"urn:marty:organization-approval:v1",
+                            "version":"1.0.0",
+                            "status_ref":"https://api.example.test/v1/delegation/status"}
+                    }
+                });
+                if with_identity {
+                    configuration["agent_trust"]["delegated_use"] =
+                        json!({"activation":"awaiting_owner_configuration"});
+                }
+                let source = root.path().join("feature-profile.json");
+                bound(&source, &serde_json::to_vec(&configuration).unwrap());
+                features::select(features::prepare(Some(&source), true).unwrap(), &mut state)
+                    .unwrap();
+            }
+            let image = session.inputs.approved_images.first().unwrap().clone();
+            let images = ["gateway", "openbao_didcomm_image"]
+                .into_iter()
+                .map(|role| (role.to_owned(), image.clone()))
+                .collect();
+            let bootstrap = installer_application::bootstrap_inputs(
+                &installation,
+                &bundle,
+                &mut state,
+                &images,
+                "fixture-nonce",
+            )
+            .unwrap();
+            let output = installation.join(crate::installer_feature_identity::OUTPUT_DIRECTORY);
+            fs::create_dir(&output).unwrap();
+            let helper = ContainerIdentity {
+                read_only: true,
+                cap_drop: BTreeSet::from(["ALL".into()]),
+                memory_limit: 536870912,
+                ..identity("installer-feature-identities", true, &image)
+            };
+            let receipt = ComposeReceipt {
+                schema: "elevenid.installer-compose-operation/v1".into(),
+                project: bootstrap.project.clone(),
+                engine_id: session.binding.engine_id.clone(),
+                operation: "setup-installer-feature-identities".into(),
+                configuration_sha256: "d".repeat(64),
+                input_files: BTreeMap::new(),
+                command_succeeded: true,
+                client_exit_code: Some(0),
+                failure_class: None,
+                observation_validated: true,
+                resources: Some(ProjectResources {
+                    containers: BTreeMap::from([(helper.service.clone(), helper)]),
+                    ..ProjectResources::default()
+                }),
+                status: Vec::new(),
+                installation_ready: false,
+            };
+            session.inputs = installer_application::job_inputs(
+                &bootstrap,
+                receipt.clone(),
+                "installer-ingress-provision",
+            );
+            assert_eq!(session.inputs.services, ["installer-ingress-provision"]);
+            assert!(session
+                .inputs
+                .prior
+                .as_ref()
+                .unwrap()
+                .resources
+                .as_ref()
+                .unwrap()
+                .containers
+                .contains_key("installer-feature-identities"));
+            let network = format!("{}_default", bootstrap.project);
+            let mut container = setup_inspection();
+            container["Config"] = json!({"Labels":{
+                "com.docker.compose.service":"installer-feature-identities",
+                SETUP_LABEL:"setup"
+            }});
+            container["HostConfig"] = json!({
+                "Privileged":false,"Init":true,"ReadonlyRootfs":true,
+                "SecurityOpt":["no-new-privileges:true"],"IpcMode":"private",
+                "NetworkMode":network,"PortBindings":{},"CapDrop":["ALL"]
+            });
+            container["NetworkSettings"] = json!({"Networks":{network:{}},"Ports":{}});
+            container["Mounts"] =
+                json!([{"Type":"bind","Source":output,"Destination":"/output","RW":true}]);
+            // This is the completed helper mount inspected before the next
+            // setup intent is written. A present directory grants no authority.
+            assert_eq!(
+                session.live_policy(&container).is_ok(),
+                selected_identity == Some(true)
+            );
+            assert!(!root.path().join("docker-invoked").exists());
+            if selected_identity != Some(true) {
+                continue;
+            }
+            for source in [
+                installation.join("feature-identity-output-other"),
+                root.path().join("foreign/feature-identity-output"),
+                installation.clone(),
+            ] {
+                let mut wrong = container.clone();
+                wrong["Mounts"][0]["Source"] = json!(source);
+                assert!(session.live_policy(&wrong).is_err());
+            }
+            let mut readonly_only = session.inputs.clone();
+            readonly_only.writable_bind_roots.remove(&output);
+            readonly_only.readonly_bind_roots.insert(output.clone());
+            session.inputs = readonly_only;
+            assert!(session.live_policy(&container).is_err());
+
+            // Application inputs clone the shared bootstrap roots; the saved
+            // maintenance union must also retain the signed setup definition.
+            let selection = state.with_inspection(features::load).unwrap().unwrap();
+            for name in selection.layers().into_iter().chain([
+                "deploy-config/compose/selfhost-installer/feature-profile/compose.runtime.yml",
+                "deploy-config/compose/selfhost-installer/feature-profile/compose.agent-runtime.yml",
+                "deploy-config/compose/selfhost-installer/feature-profile/compose.identities.yml",
+            ]) {
+                layer(name);
+            }
+            let mut application = bootstrap.clone();
+            application.services = vec!["app".into()];
+            application.prior = Some(receipt);
+            selection.append_layers(&mut application, &bundle).unwrap();
+            assert!(!application.files.iter().any(|file| {
+                file.path
+                    .ends_with("feature-profile/compose.identities.yml")
+            }));
+            session.inputs = application.clone();
+            session.live_policy(&container).unwrap();
+            let mut maintenance = application;
+            maintenance.files = vec![layer(
+                "deploy-config/compose/selfhost-installer/compose.runtime.yml",
+            )];
+            selection.append_layers(&mut maintenance, &bundle).unwrap();
+            assert_eq!(
+                maintenance
+                    .files
+                    .iter()
+                    .filter(|file| {
+                        file.path
+                            .ends_with("feature-profile/compose.identities.yml")
+                    })
+                    .count(),
+                1
+            );
+            session.inputs = maintenance;
+            session.live_policy(&container).unwrap();
+            let mut retained = model(&session.inputs);
+            retained["services"]["installer-feature-identities"] = json!({
+                "image":image,"init":true,"mem_limit":536870912,"restart":"no",
+                "read_only":true,"cap_drop":["ALL"],
+                "security_opt":["no-new-privileges:true"],
+                "labels":{SETUP_LABEL:"setup"},
+                "volumes":[{"type":"bind","source":output,"target":"/output",
+                    "read_only":false,"bind":{"create_host_path":false}}]
+            });
+            session
+                .inputs
+                .prior
+                .as_mut()
+                .unwrap()
+                .resources
+                .as_mut()
+                .unwrap()
+                .containers
+                .insert("app".into(), identity("app", false, &image));
+            assert_eq!(
+                ModelAdmission::RetainedRuntime
+                    .admit(&retained, &session.inputs)
+                    .unwrap(),
+                Some(BTreeSet::from(["app".into()]))
+            );
+            let mut missing = retained.clone();
+            missing["services"]
+                .as_object_mut()
+                .unwrap()
+                .remove("installer-feature-identities");
+            assert!(ModelAdmission::RetainedRuntime
+                .admit(&missing, &session.inputs)
+                .is_err());
+            session
+                .inputs
+                .services
+                .push("installer-feature-identities".into());
+            assert!(ModelAdmission::RetainedRuntime
+                .admit(&retained, &session.inputs)
+                .is_err());
+            assert!(!root.path().join("docker-invoked").exists());
+        }
     }
 
     #[test]

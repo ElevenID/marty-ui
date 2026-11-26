@@ -72,7 +72,7 @@ fn complete_selection(installation: &Path) -> features::Selection {
     .unwrap()
 }
 
-fn complete_profile(installation: &Path, cloudflare: bool) -> ComposeInputs {
+fn complete_profile(installation: &Path, cloudflare: bool, renewed: bool) -> ComposeInputs {
     let bundle = installation.join("bundle");
     let mut inputs = ComposeInputs {
         installation: installation.into(),
@@ -124,10 +124,23 @@ fn complete_profile(installation: &Path, cloudflare: bool) -> ComposeInputs {
         &bundle,
         &format!("deploy-config/compose/selfhost-installer/{base_layer}"),
     ));
-    inputs.files.push(layer(
+    let identity_layer = layer(
         &bundle,
-        &format!("{}compose.identities-renew.yml", features::LAYER_ROOT),
-    ));
+        &format!(
+            "{}{}",
+            features::LAYER_ROOT,
+            if renewed {
+                "compose.identities-renew.yml"
+            } else {
+                "compose.identities.yml"
+            }
+        ),
+    );
+    if renewed {
+        // The renewal owner replaces the initial helper definition before
+        // this shared projection. Do not re-add the initial setup definition.
+        inputs.files.push(identity_layer);
+    }
     // The real feature layer projection must preserve this mandatory final
     // override; it cannot silently append a signed/default image after it.
     let development_layer =
@@ -187,6 +200,19 @@ fn complete_profile(installation: &Path, cloudflare: bool) -> ComposeInputs {
     }
     selection.append_layers(&mut inputs, &bundle).unwrap();
     assert_eq!(inputs.files.last().unwrap().path, development_layer.path);
+    for (name, expected) in [
+        ("compose.identities.yml", usize::from(!renewed)),
+        ("compose.identities-renew.yml", usize::from(renewed)),
+    ] {
+        assert_eq!(
+            inputs
+                .files
+                .iter()
+                .filter(|file| file.path == bundle.join(format!("{}{name}", features::LAYER_ROOT)))
+                .count(),
+            expected
+        );
+    }
     for name in [
         features::SOURCE,
         features::RECORD,
@@ -243,10 +269,15 @@ fn complete_profile(installation: &Path, cloudflare: bool) -> ComposeInputs {
 
 #[test]
 fn complete_feature_profile_fits_closed_layer_and_evidence_boundaries() {
-    for (cloudflare, file_count, input_count) in [(true, 26, 34), (false, 27, 24)] {
+    for (cloudflare, renewed, file_count, input_count) in [
+        (true, false, 26, 34),
+        (true, true, 26, 34),
+        (false, false, 27, 24),
+        (false, true, 27, 24),
+    ] {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let inputs = complete_profile(root.path(), cloudflare);
+        let inputs = complete_profile(root.path(), cloudflare, renewed);
         assert_eq!(inputs.files.len(), file_count);
         assert_eq!(inputs.bound_inputs.len(), input_count);
         assert_eq!(
