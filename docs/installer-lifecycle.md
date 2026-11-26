@@ -50,6 +50,41 @@ copy the selected generation owner's `automatic_renewal_supported` observation, 
 all-mode renewal support. OpenBao listener TLS recovery has its separate retained
 local-control authority and does not establish application-credential recovery.
 
+## Filesystem identity across cold boots
+
+Fresh installations can retain the full ext4 filesystem UUID in a versioned
+`elevenid.installer-filesystem/v2` binding. The operator reads that public
+metadata through an already-held descriptor; it does not open block devices,
+change the UUID, read private key bytes, or request additional privilege.
+The binding covers retained OpenBao state and seal metadata, local-control
+directories, credential projections, ACME identity and preparation records,
+and unused credential-generation preparations. Files or directories must still
+have their original inode, owner, group, permissions and other recorded metadata.
+A private child observed through its accessible parent must be on that same
+current filesystem.
+
+The completed rootless canary uses a v2 pull intent and intent containing the
+UUID captured before its original execution. Its read-only historical validator
+checks the original and current mount relationships, exact directory identities,
+helper results and complete evidence chain. It does not replay the helpers or
+grant ownership restoration or deletion authority. Active canary operations,
+interrupted canary recovery, purge/creation records and all within-process
+descriptor comparisons retain exact device and mount checks.
+
+Old numeric device bindings and v1 canary intents retain their original strict
+device checks. Reading them does not rewrite them or infer an earlier UUID from
+today's filesystem. Older operators reject the new versioned records. There is
+no supported in-place conversion of an existing installation or substitution of
+its retained operator. Preserve an older installation's data and evidence if a
+device change prevents its owner from resuming.
+
+Other filesystems, and ext4 kernels that explicitly report the UUID ioctl as
+unsupported, retain the original numeric device format. They do not acquire a
+claim of restart-safe filesystem identity. Permission, I/O and malformed UUID
+errors refuse capture; a retained v2 binding always refuses a missing or
+unsupported current UUID. These source checks remain distinct from qualifying
+an actual cold boot, credential renewal, backup restore or browser journey.
+
 ## Export and install
 
 Run the retained operator as the existing non-root installation owner:

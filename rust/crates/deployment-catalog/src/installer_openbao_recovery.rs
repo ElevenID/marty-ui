@@ -77,23 +77,30 @@ fn clock(value: u64) -> Result<String> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DirectoryBinding {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner_uid: u32,
     owner_gid: u32,
     mode: u32,
 }
 impl DirectoryBinding {
-    fn observe(file: &File) -> Result<Self> {
+    fn observe(file: &File, anchor: &File) -> Result<Self> {
         let m = file.metadata().map_err(|_| REFUSED)?;
         require(m.is_dir() && m.mode() & 0o7777 == 0o700)?;
         Ok(Self {
-            device: m.dev(),
+            device: crate::installer_filesystem::DeviceBinding::under(anchor, &m, REFUSED)?,
             inode: m.ino(),
             owner_uid: m.uid(),
             owner_gid: m.gid(),
             mode: m.mode() & 0o7777,
         })
+    }
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,10 +193,10 @@ fn authority(view: &LockedInspection, installation: &Path) -> Result<Authority> 
     let identity = fs::directory(&identity_path, REFUSED)?;
     let created = installer_json::decode(&view.read_evidence("openbao-control-created.json")?)
         .map_err(|_| REFUSED)?;
-    let outer = DirectoryBinding::observe(&control)?;
-    let identity_binding = DirectoryBinding::observe(&identity)?;
+    let outer = DirectoryBinding::observe(&control, &control)?;
+    let identity_binding = DirectoryBinding::observe(&identity, &identity)?;
     let bound = |value: &Value, m: &DirectoryBinding| {
-        value["device"] == m.device
+        crate::installer_filesystem::DeviceBinding::matches_json(&value["device"], m.device)
             && value["inode"] == m.inode
             && value["owner_uid"] == m.owner_uid
             && value["owner_gid"] == m.owner_gid
@@ -214,14 +221,21 @@ fn authority(view: &LockedInspection, installation: &Path) -> Result<Authority> 
         libc::O_PATH | libc::O_DIRECTORY,
         REFUSED,
     )?;
+    let socket_binding = DirectoryBinding::observe(&socket, &control)?;
+    let mapped_binding = DirectoryBinding::observe(&mapped, view.installation_directory())?;
     require(
-        DirectoryBinding::observe(&socket)? == observation.socket_directory
-            && DirectoryBinding::observe(&mapped)? == observation.openbao_state_directory
+        observation.socket_directory.matches(socket_binding.clone())
+            && observation
+                .openbao_state_directory
+                .matches(mapped_binding.clone())
             && observation.socket_directory.owner_uid
                 == observation.openbao_state_directory.owner_uid
             && observation.socket_directory.owner_gid
                 == observation.openbao_state_directory.owner_gid
-            && created["children"]["socket"]["device"] == observation.socket_directory.device
+            && crate::installer_filesystem::DeviceBinding::matches_json(
+                &created["children"]["socket"]["device"],
+                socket_binding.device,
+            )
             && created["children"]["socket"]["inode"] == observation.socket_directory.inode
             && created["children"]["socket"]["mode"] == 0o700
             && created["children"]["socket"]["owner_uid"] == outer.owner_uid
@@ -275,18 +289,24 @@ fn authority(view: &LockedInspection, installation: &Path) -> Result<Authority> 
     fs::require_directory_binding(&control_path, &control, REFUSED)?;
     fs::require_directory_binding(&identity_path, &identity, REFUSED)?;
     require(
-        DirectoryBinding::observe(&fs::open_child(
-            &control,
-            "socket",
-            libc::O_PATH | libc::O_DIRECTORY,
-            REFUSED,
-        )?)? == observation.socket_directory
-            && DirectoryBinding::observe(&fs::open_child(
-                view.installation_directory(),
-                "openbao-state",
+        DirectoryBinding::observe(
+            &fs::open_child(
+                &control,
+                "socket",
                 libc::O_PATH | libc::O_DIRECTORY,
                 REFUSED,
-            )?)? == observation.openbao_state_directory
+            )?,
+            &control,
+        )? == socket_binding
+            && DirectoryBinding::observe(
+                &fs::open_child(
+                    view.installation_directory(),
+                    "openbao-state",
+                    libc::O_PATH | libc::O_DIRECTORY,
+                    REFUSED,
+                )?,
+                view.installation_directory(),
+            )? == mapped_binding
             && fs::read_entry(&identity, "enrollment-result.json", 0o600, false, REFUSED)?
                 == result_bytes
             && fs::read_entry(&identity, "enrollment-pending.json", 0o600, false, REFUSED)?

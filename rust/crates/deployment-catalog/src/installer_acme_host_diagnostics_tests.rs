@@ -1,4 +1,39 @@
 use super::*;
+
+#[test]
+fn prepared_projection_retains_inode_and_owner_checks_after_device_renumbering() {
+    use crate::installer_filesystem::DeviceBinding;
+    let saved = ProjectionDirectory {
+        device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+        inode: 10,
+        owner: 1000,
+        group: 1000,
+    };
+    let current = ProjectionDirectory {
+        device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+        ..saved.clone()
+    };
+    assert!(saved.matches(current.clone()));
+    current.require_unchanged(current.clone()).unwrap();
+    assert!(
+        current.require_unchanged(saved.clone()).is_err(),
+        "a subsequent live device change is not a second process admission"
+    );
+    for (field, bad) in [("inode", 11), ("owner", 1001), ("group", 1001)] {
+        let mut changed = serde_json::to_value(&current).unwrap();
+        changed[field] = serde_json::json!(bad);
+        assert!(
+            !saved.matches(serde_json::from_value(changed).unwrap()),
+            "{field}"
+        );
+    }
+    let mut wrong = current.clone();
+    wrong.device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+    assert!(!saved.matches(wrong));
+    let mut legacy = saved;
+    legacy.device = DeviceBinding::Legacy(2160);
+    assert!(!legacy.matches(current));
+}
 use serde_json::json;
 
 #[test]
@@ -130,7 +165,7 @@ fn prepared_serialization_fixture() -> Prepared {
         environment: AcmeEnvironment::Production,
         evidence_sha256: BTreeMap::new(),
         projection: ProjectionDirectory {
-            device: 1,
+            device: crate::installer_filesystem::DeviceBinding::Legacy(1),
             inode: 2,
             owner: 1001,
             group: 1001,

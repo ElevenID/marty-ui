@@ -33,7 +33,7 @@ fn require(value: bool) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner: u32,
     group: u32,
@@ -45,7 +45,13 @@ struct Entry {
 }
 
 impl Entry {
-    fn observe(file: &File, directory: bool, mode: u32, length: Option<u64>) -> Result<Self> {
+    fn observe(
+        file: &File,
+        directory: bool,
+        mode: u32,
+        length: Option<u64>,
+        anchor: &File,
+    ) -> Result<Self> {
         let metadata = file.metadata().map_err(|_| REFUSED)?;
         require(
             metadata.uid() == unsafe { libc::geteuid() }
@@ -57,7 +63,7 @@ impl Entry {
                 },
         )?;
         Ok(Self {
-            device: metadata.dev(),
+            device: crate::installer_filesystem::DeviceBinding::under(anchor, &metadata, REFUSED)?,
             inode: metadata.ino(),
             owner: metadata.uid(),
             group: metadata.gid(),
@@ -67,6 +73,13 @@ impl Entry {
             changed_seconds: (!directory).then_some(metadata.ctime()),
             changed_nanoseconds: (!directory).then_some(metadata.ctime_nsec()),
         })
+    }
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
     }
 }
 
@@ -93,6 +106,20 @@ struct Preparation {
     application_started: bool,
     deletion_authorized: bool,
     installation_ready: bool,
+}
+impl Preparation {
+    fn matches(&self, mut observed: Self) -> bool {
+        if self.entries.keys().ne(observed.entries.keys())
+            || self
+                .entries
+                .iter()
+                .any(|(name, expected)| !expected.matches(observed.entries[name].clone()))
+        {
+            return false;
+        }
+        observed.entries = self.entries.clone();
+        observed == *self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,12 +292,19 @@ fn entries(state: &LockedInspection) -> Result<BTreeMap<String, Entry>> {
     for (path, directory, mode, length) in &paths {
         observed.insert(
             path.clone(),
-            Entry::observe(&open(path)?, *directory, *mode, *length)?,
+            Entry::observe(&open(path)?, *directory, *mode, *length, root)?,
         );
     }
     for (path, directory, mode, length) in &paths {
         require(
-            observed.get(path) == Some(&Entry::observe(&open(path)?, *directory, *mode, *length)?),
+            observed.get(path)
+                == Some(&Entry::observe(
+                    &open(path)?,
+                    *directory,
+                    *mode,
+                    *length,
+                    root,
+                )?),
         )?;
     }
     if let Some(settings) = &settings {
@@ -322,7 +356,7 @@ fn verify_external_oidc_secret(state: &LockedInspection) -> Result<u64> {
     )?;
     let length = file.metadata().map_err(|_| REFUSED)?.len();
     require(length <= 65536)?;
-    let before = Entry::observe(&file, false, 0o444, Some(length))?;
+    let before = Entry::observe(&file, false, 0o444, Some(length), &secrets)?;
     let mut bytes = Vec::new();
     (&file)
         .take(65537)
@@ -330,7 +364,7 @@ fn verify_external_oidc_secret(state: &LockedInspection) -> Result<u64> {
         .map_err(|_| REFUSED)?;
     require(
         bytes.len() as u64 == length
-            && before == Entry::observe(&file, false, 0o444, Some(length))?,
+            && before == Entry::observe(&file, false, 0o444, Some(length), &secrets)?,
     )?;
     selected.verify_imported(&BTreeMap::from([(
         "external_oidc_client_secret".into(),
@@ -438,7 +472,7 @@ pub(crate) fn verify(state: &LockedInspection, installation: &Path) -> Result<()
     let preparation: Preparation =
         serde_json::from_value(installer_json::decode(&bytes).map_err(|_| REFUSED)?)
             .map_err(|_| REFUSED)?;
-    require(preparation == observe(state, installation)?)
+    require(preparation.matches(observe(state, installation)?))
 }
 
 /// The active generation owns live application storage after first startup.
@@ -1003,7 +1037,8 @@ mod tests {
         std::fs::write(&file_path, [b'x'; 69]).unwrap();
         std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o444)).unwrap();
         let held = File::open(&file_path).unwrap();
-        let original = Entry::observe(&held, false, 0o444, Some(69)).unwrap();
+        let anchor = File::open(root.path()).unwrap();
+        let original = Entry::observe(&held, false, 0o444, Some(69), &anchor).unwrap();
         assert!(!serde_json::to_string(&original)
             .unwrap()
             .contains(&"x".repeat(69)));
@@ -1012,9 +1047,70 @@ mod tests {
         std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert_ne!(
             original,
-            Entry::observe(&File::open(&file_path).unwrap(), false, 0o444, Some(69)).unwrap()
+            Entry::observe(
+                &File::open(&file_path).unwrap(),
+                false,
+                0o444,
+                Some(69),
+                &anchor
+            )
+            .unwrap()
         );
         std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(Entry::observe(&File::open(&file_path).unwrap(), false, 0o444, Some(69)).is_err());
+        assert!(Entry::observe(
+            &File::open(&file_path).unwrap(),
+            false,
+            0o444,
+            Some(69),
+            &anchor
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn prepared_entry_device_transition_keeps_every_metadata_constraint() {
+        use crate::installer_filesystem::DeviceBinding;
+        let saved = Entry {
+            device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+            inode: 10,
+            owner: 1000,
+            group: 1000,
+            mode: 0o444,
+            directory: false,
+            length: Some(69),
+            changed_seconds: Some(100),
+            changed_nanoseconds: Some(200),
+        };
+        let current = Entry {
+            device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..saved.clone()
+        };
+        assert!(saved.matches(current.clone()));
+        assert_ne!(saved, current);
+        for (field, bad) in [
+            ("inode", 11),
+            ("owner", 1001),
+            ("group", 1001),
+            ("mode", 0o644),
+            ("length", 70),
+            ("changed_seconds", 101),
+            ("changed_nanoseconds", 201),
+        ] {
+            let mut changed = serde_json::to_value(&current).unwrap();
+            changed[field] = serde_json::json!(bad);
+            assert!(
+                !saved.matches(serde_json::from_value(changed).unwrap()),
+                "{field}"
+            );
+        }
+        let mut wrong = current.clone();
+        wrong.directory = true;
+        assert!(!saved.matches(wrong));
+        let mut wrong = current.clone();
+        wrong.device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+        assert!(!saved.matches(wrong));
+        let mut legacy = saved;
+        legacy.device = DeviceBinding::Legacy(2160);
+        assert!(!legacy.matches(current));
     }
 }

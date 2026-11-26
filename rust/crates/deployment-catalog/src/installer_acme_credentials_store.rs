@@ -18,6 +18,45 @@ const MAX_UNCERTAINTIES: usize = 32;
 const IDENTITY_NAME: &str = "identity.json";
 const CURRENT_NAME: &str = "refresh-current.json";
 
+#[cfg(test)]
+#[test]
+fn credential_storage_identity_preserves_legacy_and_metadata_checks_after_device_renumbering() {
+    use crate::installer_filesystem::DeviceBinding;
+    let saved = ObjectIdentity {
+        device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+        inode: 10,
+        owner: 1000,
+        group: 1000,
+        mode: 0o600,
+    };
+    let current = ObjectIdentity {
+        device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+        ..saved.clone()
+    };
+    assert!(saved.matches(current.clone()));
+    current.require_observation(current.clone()).unwrap();
+    assert!(current.require_observation(saved.clone()).is_err());
+    for (field, bad) in [
+        ("inode", 11),
+        ("owner", 1001),
+        ("group", 1001),
+        ("mode", 0o644),
+    ] {
+        let mut changed = serde_json::to_value(&current).unwrap();
+        changed[field] = json!(bad);
+        assert!(
+            !saved.matches(serde_json::from_value(changed).unwrap()),
+            "{field}"
+        );
+    }
+    let mut wrong = current.clone();
+    wrong.device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+    assert!(!saved.matches(wrong));
+    let mut legacy = saved;
+    legacy.device = DeviceBinding::Legacy(2160);
+    assert!(!legacy.matches(current));
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SecretIdentity {
@@ -78,7 +117,7 @@ impl SecretIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ObjectIdentity {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner: u32,
     group: u32,
@@ -97,7 +136,7 @@ impl ObjectIdentity {
                 },
         )?;
         Ok(Self {
-            device: meta.dev(),
+            device: crate::installer_filesystem::DeviceBinding::observe(file, REFUSED)?,
             inode: meta.ino(),
             owner: meta.uid(),
             group: meta.gid(),
@@ -105,7 +144,22 @@ impl ObjectIdentity {
         })
     }
     fn require_file(&self, file: &File, directory: bool) -> Result<()> {
-        require(Self::observe(file, directory)? == *self)
+        self.require_observation(Self::observe(file, directory)?)
+    }
+    fn require_observation(&self, observed: Self) -> Result<()> {
+        require(*self == observed)
+    }
+    fn admit_file(&self, file: &File, directory: bool) -> Result<Self> {
+        let observed = Self::observe(file, directory)?;
+        require(self.matches(observed.clone()))?;
+        Ok(observed)
+    }
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +308,14 @@ pub(super) struct IdentityStorage {
     installation_path: PathBuf,
     installation: File,
     directory: File,
-    installed: InstalledIdentity,
+    current: CurrentIdentity,
+}
+/// Captured once at process admission, never serialized into retained evidence.
+/// Every subsequent named/held descriptor check uses exact raw-device equality.
+struct CurrentIdentity {
+    directory: ObjectIdentity,
+    account: PurposeIdentity,
+    csr: PurposeIdentity,
 }
 impl IdentityStorage {
     pub(super) fn require_initialized(
@@ -281,16 +342,30 @@ impl IdentityStorage {
             .try_clone()
             .map_err(|_| REFUSED)?;
         let directory = child(&root, &plan.directory(), true)?;
-        installed.directory.require_file(&directory, true)?;
+        let current_directory = installed.directory.admit_file(&directory, true)?;
         require(
             installer_host_fs::file_names(&directory, REFUSED)?
                 == BTreeSet::from(["account".into(), "csr".into()]),
         )?;
+        let admit_purpose = |name: &str, expected: &PurposeIdentity| -> Result<PurposeIdentity> {
+            let folder = child(&directory, name, true)?;
+            Ok(PurposeIdentity {
+                directory: expected.directory.admit_file(&folder, true)?,
+                identity: expected
+                    .identity
+                    .admit_file(&child(&folder, IDENTITY_NAME, false)?, false)?,
+            })
+        };
+        let current = CurrentIdentity {
+            directory: current_directory,
+            account: admit_purpose("account", &installed.account)?,
+            csr: admit_purpose("csr", &installed.csr)?,
+        };
         let storage = Self {
             installation_path: installation.into(),
             installation: root,
             directory,
-            installed: installed.clone(),
+            current,
         };
         // Opening or restoring observes existing records, never changes them.
         storage.lock(plan, purpose)?;
@@ -304,14 +379,12 @@ impl IdentityStorage {
             REFUSED,
         )?;
         let directory = child(&self.installation, &plan.directory(), true)?;
-        self.installed.directory.require_file(&directory, true)?;
-        self.installed
-            .directory
-            .require_file(&self.directory, true)?;
+        self.current.directory.require_file(&directory, true)?;
+        self.current.directory.require_file(&self.directory, true)?;
         let file = child(&directory, purpose.name(), true)?;
         let binding = match purpose {
-            Purpose::Account => &self.installed.account,
-            Purpose::Csr => &self.installed.csr,
+            Purpose::Account => &self.current.account,
+            Purpose::Csr => &self.current.csr,
         };
         binding.directory.require_file(&file, true)?;
         // A fresh open file description is essential: dup'd flock handles could

@@ -1,5 +1,6 @@
 //! Linux installer filesystem invariants; callers retain stage-specific refusal messages.
 #![cfg(target_os = "linux")]
+use crate::installer_filesystem::DeviceBinding;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -86,9 +87,9 @@ pub(crate) fn directory(path: &Path, refusal: &str) -> Result<File> {
 #[serde(deny_unknown_fields)]
 pub(crate) struct CredentialProjection {
     pub directory: PathBuf,
-    parent_device: u64,
+    parent_device: DeviceBinding,
     parent_inode: u64,
-    device: u64,
+    device: DeviceBinding,
     inode: u64,
     owner: u32,
 }
@@ -148,16 +149,32 @@ impl CredentialProjection {
         let parent_metadata = parent.metadata().map_err(|_| refusal)?;
         Ok(Self {
             directory: path.into(),
-            parent_device: parent_metadata.dev(),
+            parent_device: DeviceBinding::observe(&parent, refusal)?,
             parent_inode: parent_metadata.ino(),
-            device: metadata.dev(),
+            device: DeviceBinding::observe(&leaf, refusal)?,
             inode: metadata.ino(),
             owner: metadata.uid(),
         })
     }
 
     pub(crate) fn verify(&self, refusal: &str) -> Result<()> {
-        require(Self::observe(&self.directory, refusal)? == *self, refusal)
+        require(
+            self.matches(Self::observe(&self.directory, refusal)?),
+            refusal,
+        )
+    }
+
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.parent_device.matches(observed.parent_device)
+            || !self.device.matches(observed.device)
+        {
+            return false;
+        }
+        // Only normalize the two already-validated device observations in a
+        // temporary value; every other field and the retained bytes stay exact.
+        observed.parent_device = self.parent_device;
+        observed.device = self.device;
+        observed == *self
     }
 }
 
@@ -587,5 +604,48 @@ mod tests {
             require_directory_binding(&path, &held, REFUSAL).unwrap_err(),
             REFUSAL
         );
+    }
+
+    #[test]
+    fn credential_projection_retains_both_parent_and_child_identity_across_device_renumbering() {
+        let saved = CredentialProjection {
+            directory: "/private/aws-identity".into(),
+            parent_device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+            parent_inode: 10,
+            device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+            inode: 11,
+            owner: 1000,
+        };
+        let current = CredentialProjection {
+            parent_device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+            device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..saved.clone()
+        };
+        assert!(saved.matches(current.clone()));
+        assert_ne!(saved, current);
+        for field in ["parent_device", "device"] {
+            let mut changed = serde_json::to_value(&current).unwrap();
+            changed[field] =
+                serde_json::to_value(DeviceBinding::ext4_for_test(2160, [8; 16])).unwrap();
+            assert!(
+                !saved.matches(serde_json::from_value(changed).unwrap()),
+                "{field}"
+            );
+            let mut legacy = serde_json::to_value(&saved).unwrap();
+            legacy[field] = serde_json::json!(2160);
+            let legacy: CredentialProjection = serde_json::from_value(legacy).unwrap();
+            assert!(!legacy.matches(current.clone()));
+        }
+        for (field, bad) in [("parent_inode", 12), ("inode", 12), ("owner", 1001)] {
+            let mut changed = serde_json::to_value(&current).unwrap();
+            changed[field] = serde_json::json!(bad);
+            assert!(
+                !saved.matches(serde_json::from_value(changed).unwrap()),
+                "{field}"
+            );
+        }
+        let mut renamed = current;
+        renamed.directory = "/private/replacement".into();
+        assert!(!saved.matches(renamed));
     }
 }

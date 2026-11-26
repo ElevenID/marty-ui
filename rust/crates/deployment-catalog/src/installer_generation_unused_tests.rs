@@ -3,6 +3,109 @@
 use super::*;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
+#[test]
+fn unused_preparation_survives_device_renumbering_without_adopting_different_files() {
+    use crate::installer_filesystem::DeviceBinding;
+    let node = Node {
+        device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+        inode: 10,
+        uid: 1000,
+        gid: 1000,
+        mode: 0o100444,
+        links: 1,
+        length: 12,
+        modified_at: 100,
+        modified_ns: 200,
+        changed_at: 300,
+        changed_ns: 400,
+    };
+    let saved = Preparation {
+        evidence_sha256: BTreeMap::from([("plan".into(), "a".repeat(64))]),
+        current: Some(PreparedDirectory {
+            node: node.clone(),
+            files: BTreeMap::from([(
+                "secret".into(),
+                PreparedFile {
+                    node: Node {
+                        inode: 11,
+                        ..node.clone()
+                    },
+                    sha256: "b".repeat(64),
+                },
+            )]),
+        }),
+        identity: None,
+        transfer: Some(Node {
+            inode: 12,
+            ..node.clone()
+        }),
+    };
+    let mut current = saved.clone();
+    let rebooted = DeviceBinding::ext4_for_test(2096, [7; 16]);
+    current.current.as_mut().unwrap().node.device = rebooted;
+    current
+        .current
+        .as_mut()
+        .unwrap()
+        .files
+        .get_mut("secret")
+        .unwrap()
+        .node
+        .device = rebooted;
+    current.transfer.as_mut().unwrap().device = rebooted;
+    assert!(saved.matches(current.clone()));
+    assert_ne!(saved, current);
+    for (field, bad) in [
+        ("inode", 99),
+        ("uid", 1001),
+        ("gid", 1001),
+        ("mode", 0o100600),
+        ("links", 2),
+        ("length", 13),
+        ("modified_at", 101),
+        ("modified_ns", 201),
+        ("changed_at", 301),
+        ("changed_ns", 401),
+    ] {
+        let mut changed = serde_json::to_value(&current).unwrap();
+        changed["current"]["files"]["secret"]["node"][field] = json!(bad);
+        assert!(
+            !saved.matches(serde_json::from_value(changed).unwrap()),
+            "{field}"
+        );
+    }
+    let mut wrong = current.clone();
+    wrong
+        .current
+        .as_mut()
+        .unwrap()
+        .files
+        .get_mut("secret")
+        .unwrap()
+        .sha256 = "c".repeat(64);
+    assert!(!saved.matches(wrong));
+    let mut wrong = current.clone();
+    wrong.current.as_mut().unwrap().files.clear();
+    assert!(!saved.matches(wrong));
+    let mut wrong = current.clone();
+    wrong.transfer.as_mut().unwrap().device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+    assert!(!saved.matches(wrong));
+    let mut wrong = current.clone();
+    wrong.evidence_sha256.insert("plan".into(), "c".repeat(64));
+    assert!(!saved.matches(wrong));
+    let mut legacy = saved;
+    legacy
+        .current
+        .as_mut()
+        .unwrap()
+        .files
+        .get_mut("secret")
+        .unwrap()
+        .node
+        .device = DeviceBinding::Legacy(2160);
+    assert!(!legacy.matches(current));
+}
+
 fn private(path: &Path) {
     std::fs::create_dir(path).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();

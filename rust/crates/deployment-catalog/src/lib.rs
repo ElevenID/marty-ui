@@ -43,6 +43,8 @@ mod installer_custody_watch;
 pub(crate) mod installer_development_image;
 pub mod installer_doctor;
 pub mod installer_fetch;
+#[cfg(target_os = "linux")]
+mod installer_filesystem;
 pub(crate) mod installer_foundation;
 pub(crate) mod installer_foundation_registration;
 pub mod installer_generation;

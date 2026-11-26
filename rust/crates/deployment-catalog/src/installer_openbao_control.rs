@@ -108,7 +108,7 @@ fn require_intent(bytes: &[u8], result: &EnrollmentReceipt) -> Result<()> {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct DirectoryBinding {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     owner_uid: u32,
     owner_gid: u32,
@@ -116,11 +116,11 @@ struct DirectoryBinding {
 }
 
 impl DirectoryBinding {
-    fn observe(file: &File) -> Result<Self> {
+    fn observe(file: &File, anchor: &File) -> Result<Self> {
         let metadata = file.metadata().map_err(|_| REFUSED)?;
         require(metadata.is_dir() && metadata.mode() & 0o7777 == 0o700)?;
         Ok(Self {
-            device: metadata.dev(),
+            device: crate::installer_filesystem::DeviceBinding::under(anchor, &metadata, REFUSED)?,
             inode: metadata.ino(),
             owner_uid: metadata.uid(),
             owner_gid: metadata.gid(),
@@ -134,7 +134,7 @@ fn mapped_directory(parent: &File, name: &str) -> Result<(File, DirectoryBinding
     // TLS initialization. O_PATH observes the directory itself without opening
     // its contents, following links, or changing its owner or permissions.
     let file = fs::open_child(parent, name, libc::O_PATH | libc::O_DIRECTORY, REFUSED)?;
-    let binding = DirectoryBinding::observe(&file)?;
+    let binding = DirectoryBinding::observe(&file, parent)?;
     Ok((file, binding))
 }
 
@@ -146,7 +146,7 @@ fn require_socket_creation(
 ) -> Result<()> {
     let before: DirectoryBinding = serde_json::from_value(created.clone()).map_err(|_| REFUSED)?;
     require(
-        before.device == socket.device
+        before.device.matches(socket.device)
             && before.inode == socket.inode
             && before.mode == 0o700
             && socket.mode == 0o700
@@ -165,7 +165,7 @@ fn require_mapped_binding(
     original: DirectoryBinding,
 ) -> Result<()> {
     require(
-        DirectoryBinding::observe(held)? == original
+        DirectoryBinding::observe(held, parent)? == original
             && mapped_directory(parent, name)?.1 == original,
     )
 }
@@ -267,21 +267,23 @@ pub(crate) fn record_enrollment(
                 .map_err(|_| REFUSED)?,
         ))
     })?;
-    let bound = |expected: &Value, observed: &std::fs::Metadata| {
-        expected["device"] == observed.dev()
-            && expected["inode"] == observed.ino()
-            && expected["owner_uid"] == observed.uid()
-            && expected["owner_gid"] == observed.gid()
+    let bound = |expected: &Value, observed: &DirectoryBinding| {
+        crate::installer_filesystem::DeviceBinding::matches_json(
+            &expected["device"],
+            observed.device,
+        ) && expected["inode"] == observed.inode
+            && expected["owner_uid"] == observed.owner_uid
+            && expected["owner_gid"] == observed.owner_gid
             && expected["mode"] == 0o700
     };
     require(
         created["schema"] == "elevenid.installer-openbao-control-created/v1"
             && created["installation_id"] == owner
             && created["enrolled"] == false
-            && bound(&created, &control.metadata().map_err(|_| REFUSED)?)
+            && bound(&created, &DirectoryBinding::observe(&control, &control)?)
             && bound(
                 &created["children"]["identity"],
-                &identity.metadata().map_err(|_| REFUSED)?,
+                &DirectoryBinding::observe(&identity, &identity)?,
             ),
     )?;
     let (socket, socket_binding) = mapped_directory(&control, "socket")?;
@@ -289,7 +291,7 @@ pub(crate) fn record_enrollment(
         mapped_directory(&installation_directory, "openbao-state")?;
     require_socket_creation(
         &created["children"]["socket"],
-        DirectoryBinding::observe(&control)?,
+        DirectoryBinding::observe(&control, &control)?,
         socket_binding,
         state_binding,
     )?;
@@ -457,7 +459,7 @@ mod tests {
     #[test]
     fn socket_creation_requires_original_inode_and_current_mapped_state_owner() {
         let operator = DirectoryBinding {
-            device: 7,
+            device: crate::installer_filesystem::DeviceBinding::Legacy(7),
             inode: 10,
             owner_uid: 1000,
             owner_gid: 1000,
@@ -478,9 +480,29 @@ mod tests {
         };
         let created = serde_json::to_value(before).unwrap();
         require_socket_creation(&created, operator, socket, state).unwrap();
+        let stable_before = DirectoryBinding {
+            device: crate::installer_filesystem::DeviceBinding::ext4_for_test(2160, [7; 16]),
+            ..before
+        };
+        let rebooted_socket = DirectoryBinding {
+            device: crate::installer_filesystem::DeviceBinding::ext4_for_test(2096, [7; 16]),
+            ..socket
+        };
+        let stable_created = serde_json::to_value(stable_before).unwrap();
+        require_socket_creation(&stable_created, operator, rebooted_socket, state).unwrap();
+        let wrong_filesystem = DirectoryBinding {
+            device: crate::installer_filesystem::DeviceBinding::ext4_for_test(2160, [8; 16]),
+            ..socket
+        };
+        assert!(
+            require_socket_creation(&stable_created, operator, wrong_filesystem, state).is_err()
+        );
+        let mut legacy = stable_created;
+        legacy["device"] = json!(2160);
+        assert!(require_socket_creation(&legacy, operator, rebooted_socket, state).is_err());
         for bad in [
             DirectoryBinding {
-                device: 8,
+                device: crate::installer_filesystem::DeviceBinding::Legacy(8),
                 ..socket
             },
             DirectoryBinding {
