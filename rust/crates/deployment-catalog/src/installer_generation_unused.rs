@@ -20,7 +20,7 @@ enum Source {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Node {
-    device: u64,
+    device: crate::installer_filesystem::DeviceBinding,
     inode: u64,
     uid: u32,
     gid: u32,
@@ -37,7 +37,7 @@ impl Node {
         let value = file.metadata().map_err(|_| REFUSED)?;
         require(value.uid() == unsafe { libc::geteuid() })?;
         Ok(Self {
-            device: value.dev(),
+            device: crate::installer_filesystem::DeviceBinding::observe(file, REFUSED)?,
             inode: value.ino(),
             uid: value.uid(),
             gid: value.gid(),
@@ -50,6 +50,13 @@ impl Node {
             changed_ns: value.ctime_nsec(),
         })
     }
+    fn matches(&self, mut observed: Self) -> bool {
+        if !self.device.matches(observed.device) {
+            return false;
+        }
+        observed.device = self.device;
+        observed == *self
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,11 +64,26 @@ struct PreparedFile {
     node: Node,
     sha256: String,
 }
+impl PreparedFile {
+    fn matches(&self, observed: &Self) -> bool {
+        self.sha256 == observed.sha256 && self.node.matches(observed.node.clone())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PreparedDirectory {
     node: Node,
     files: BTreeMap<String, PreparedFile>,
+}
+impl PreparedDirectory {
+    fn matches(&self, observed: &Self) -> bool {
+        self.node.matches(observed.node.clone())
+            && self.files.keys().eq(observed.files.keys())
+            && self
+                .files
+                .iter()
+                .all(|(name, expected)| expected.matches(&observed.files[name]))
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +92,26 @@ struct Preparation {
     current: Option<PreparedDirectory>,
     identity: Option<PreparedDirectory>,
     transfer: Option<Node>,
+}
+impl Preparation {
+    fn matches(&self, observed: Self) -> bool {
+        let directory = |expected: &Option<PreparedDirectory>,
+                         current: &Option<PreparedDirectory>| {
+            match (expected, current) {
+                (Some(expected), Some(current)) => expected.matches(current),
+                (None, None) => true,
+                _ => false,
+            }
+        };
+        self.evidence_sha256 == observed.evidence_sha256
+            && directory(&self.current, &observed.current)
+            && directory(&self.identity, &observed.identity)
+            && match (&self.transfer, observed.transfer) {
+                (Some(expected), Some(current)) => expected.matches(current),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -606,9 +648,14 @@ fn require_record(
             && optional(installation, &value.scope().record("supersession-intent"))?.is_none()
             && optional(installation, &value.scope().record("supersession-baseline"))?.is_none(),
     )?;
-    require(
-        value.preparation == snapshot(installation, previous, binding, &saved, &plan, incoming)?,
-    )?;
+    require(value.preparation.matches(snapshot(
+        installation,
+        previous,
+        binding,
+        &saved,
+        &plan,
+        incoming,
+    )?))?;
     let receipt = native(installation, &value.observation)?;
     require(
         receipt.operation.starts_with(&format!(

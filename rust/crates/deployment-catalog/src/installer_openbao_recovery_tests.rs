@@ -10,6 +10,43 @@ const CLUSTER: &str = "33333333-3333-4333-8333-333333333333";
 const ISSUER: &str = "44444444-4444-4444-8444-444444444444";
 const NEXT: &str = "55555555-5555-4555-8555-555555555555";
 
+#[test]
+fn persisted_control_directory_can_cross_a_reboot_but_not_an_identity_change() {
+    use crate::installer_filesystem::DeviceBinding;
+    let saved = DirectoryBinding {
+        device: DeviceBinding::ext4_for_test(2160, [7; 16]),
+        inode: 127902,
+        owner_uid: 100099,
+        owner_gid: 100999,
+        mode: 0o700,
+    };
+    let current = DirectoryBinding {
+        device: DeviceBinding::ext4_for_test(2096, [7; 16]),
+        ..saved.clone()
+    };
+    assert!(saved.matches(current.clone()));
+    assert_ne!(saved, current);
+    for (field, bad) in [
+        ("inode", 127903),
+        ("owner_uid", 1000),
+        ("owner_gid", 1000),
+        ("mode", 0o755),
+    ] {
+        let mut value = serde_json::to_value(&current).unwrap();
+        value[field] = serde_json::json!(bad);
+        assert!(
+            !saved.matches(serde_json::from_value(value).unwrap()),
+            "{field}"
+        );
+    }
+    let mut wrong = current.clone();
+    wrong.device = DeviceBinding::ext4_for_test(2160, [8; 16]);
+    assert!(!saved.matches(wrong));
+    let mut legacy = saved;
+    legacy.device = DeviceBinding::Legacy(2160);
+    assert!(!legacy.matches(current));
+}
+
 struct Fixture {
     directory: tempfile::TempDir,
     authority: Authority,
@@ -108,7 +145,7 @@ fn fixture() -> Fixture {
             .unwrap(),
     );
     let directory_binding = DirectoryBinding {
-        device: 1,
+        device: crate::installer_filesystem::DeviceBinding::Legacy(1),
         inode: 2,
         owner_uid: 0,
         owner_gid: 0,

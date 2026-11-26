@@ -92,6 +92,7 @@ impl MockCreate {
         let evidence = File::open(installation.join("evidence")).unwrap();
         let intent = Intent {
             schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+            filesystem: None,
             pull_intent_sha256: "9".repeat(64),
             installation_id: state.journal().installation_id(),
             canary_id,

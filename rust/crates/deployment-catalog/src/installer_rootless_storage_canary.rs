@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
+    installer_filesystem::DeviceBinding,
     installer_runtime::DockerRunner,
     installer_state::{ExecutionScope, InstallerState, LockedInspection, LockedMaintenance, Phase},
 };
@@ -267,6 +268,8 @@ struct Intent {
     marker_sha256: String,
     host_uid: u32,
     host_gid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filesystem: Option<DeviceBinding>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -282,12 +285,36 @@ struct PullIntent {
     image: String,
     root: Stamp,
     evidence: Stamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filesystem: Option<DeviceBinding>,
 }
+
+fn intent_schema(filesystem: Option<DeviceBinding>) -> &'static str {
+    if filesystem.is_some() {
+        "elevenid.rootless-storage-canary-intent/v2"
+    } else {
+        "elevenid.rootless-storage-canary-intent/v1"
+    }
+}
+fn pull_schema(filesystem: Option<DeviceBinding>) -> &'static str {
+    if filesystem.is_some() {
+        "elevenid.rootless-storage-canary-pull-intent/v2"
+    } else {
+        "elevenid.rootless-storage-canary-pull-intent/v1"
+    }
+}
+fn valid_filesystem(filesystem: Option<DeviceBinding>, root: &Stamp) -> bool {
+    filesystem.is_none_or(|value| value.stable().is_some() && value.device() == root.dev)
+}
+
 fn verify_pull_intent(bytes: &[u8], intent: &Intent, docker_host: &str) -> Result<()> {
     let pull: PullIntent = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
     require(
         encoded(&pull)? == bytes
-            && pull.schema == "elevenid.rootless-storage-canary-pull-intent/v1"
+            && pull.schema == pull_schema(pull.filesystem)
+            && intent.schema == intent_schema(intent.filesystem)
+            && pull.filesystem == intent.filesystem
+            && valid_filesystem(pull.filesystem, &pull.root)
             && sha(bytes) == intent.pull_intent_sha256
             && pull.installation_id == intent.installation_id
             && pull.canary_id == intent.canary_id
@@ -1223,7 +1250,8 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
     let intent: Intent = serde_json::from_slice(&intent_bytes).map_err(|_| REFUSED)?;
     require(
         encoded(&intent)? == intent_bytes
-            && intent.schema == "elevenid.rootless-storage-canary-intent/v1"
+            && intent.schema == intent_schema(intent.filesystem)
+            && valid_filesystem(intent.filesystem, &intent.root)
             && intent.installation_id == journal.installation_id()
             && intent.source_sha == journal.identity().source_sha
             && intent.inventory_sha256 == journal.identity().inventory_sha256
@@ -1541,9 +1569,44 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
     }
 }
 
-/// Observe the completed storage qualification from the held installation.
-/// This is historical evidence for a signed candidate's preparation boundary;
-/// it never runs Docker, repairs ownership, grants deletion, or admits a release.
+/// Compare only completed historical evidence. Active canary restoration and
+/// cleanup continue to use the original exact device/mount stamps.
+fn require_completed_stamps(
+    original: [&Stamp; 4],
+    current: [&Stamp; 4],
+    filesystem: Option<DeviceBinding>,
+    observed_filesystem: Option<DeviceBinding>,
+) -> Result<()> {
+    let Some(filesystem) = filesystem else {
+        // Historical intent records do not contain a stable anchor. Neither
+        // today's UUID nor a successful historical canary supplies one for them.
+        return require(original == current);
+    };
+    let observed = observed_filesystem.ok_or(REFUSED)?;
+    require(
+        filesystem.stable().is_some()
+            && observed.stable().is_some()
+            && original[0].mount != 0
+            && current[0].mount != 0
+            && filesystem.device() == original[0].dev
+            && observed.device() == current[0].dev
+            && filesystem.matches(observed),
+    )?;
+    for (before, after) in original.iter().zip(current.iter()) {
+        require(
+            before.dev == original[0].dev
+                && before.mount == original[0].mount
+                && after.dev == current[0].dev
+                && after.mount == current[0].mount
+                && (before.ino, before.uid, before.gid, before.mode)
+                    == (after.ino, after.uid, after.gid, after.mode),
+        )?;
+    }
+    Ok(())
+}
+
+/// Observe completed qualification without Docker, ownership changes, deletion
+/// authority or release admission. Retained bytes and their hashes stay intact.
 pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<String, String>> {
     let journal = view.journal();
     require(journal.phase() == Phase::Provisioning)?;
@@ -1591,7 +1654,8 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
     let intent: Intent = serde_json::from_slice(intent_bytes).map_err(|_| REFUSED)?;
     require(
         encoded(&intent)? == *intent_bytes
-            && intent.schema == "elevenid.rootless-storage-canary-intent/v1"
+            && intent.schema == intent_schema(intent.filesystem)
+            && valid_filesystem(intent.filesystem, &intent.root)
             && intent.installation_id == journal.installation_id()
             && intent.source_sha == journal.identity().source_sha
             && intent.inventory_sha256 == journal.identity().inventory_sha256
@@ -1619,13 +1683,27 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
     let evidence = open_dir(root, "evidence")?;
     let parent = open_dir(&evidence, &intent.parent_name)?;
     let child = open_dir(&parent, "child")?;
+    let current_root = stamp(root)?;
+    let current_evidence = stamp(&evidence)?;
+    let current_parent = stamp(&parent)?;
     let restored = stamp(&child)?;
+    let current_filesystem = intent
+        .filesystem
+        .map(|_| DeviceBinding::observe(root, REFUSED))
+        .transpose()?;
+    require_completed_stamps(
+        [
+            &intent.root,
+            &intent.evidence,
+            &created.parent,
+            &created.child,
+        ],
+        [&current_root, &current_evidence, &current_parent, &restored],
+        intent.filesystem,
+        current_filesystem,
+    )?;
     require(
-        stamp(root)? == intent.root
-            && stamp(&evidence)? == intent.evidence
-            && stamp(&parent)? == created.parent
-            && restored == created.child
-            && restored.uid == intent.host_uid
+        restored.uid == intent.host_uid
             && restored.gid == intent.host_gid
             && read_file(&parent, "request.json", 4096)? == request_bytes(&intent)?,
     )?;
@@ -1662,7 +1740,7 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
             && records[RESULT]
                 == encoded(&json!({
                     "schema":"elevenid.rootless-storage-canary-result/v1",
-                    "intent_sha256":sha(intent_bytes),"restored_child":restored,
+                    "intent_sha256":sha(intent_bytes),"restored_child":created.child,
                     "host_traversal_restored":true,"deletion_authorized":false,"installation_ready":false
                 }))?
             && records[REMOVE_INTENT] == removal_intent_bytes(intent_bytes, &transition, &restore)?
@@ -1775,15 +1853,19 @@ pub(crate) fn qualify_installation(
     let canary_id = uuid::Uuid::new_v4();
     let parent_name = format!("rootless-canary-{}", canary_id.simple());
     let marker = format!("marty-rootless-canary/v1:{canary_id}\n").into_bytes();
-    let (root, evidence) = state.with_inspection(|view| {
+    let (root, evidence, filesystem) = state.with_inspection(|view| {
         view.require_path_binding(installation)?;
         let root = view.installation_directory();
         let evidence = open_dir(root, "evidence")?;
-        Ok((stamp(root)?, stamp(&evidence)?))
+        Ok((
+            stamp(root)?,
+            stamp(&evidence)?,
+            DeviceBinding::observe(root, REFUSED)?.stable(),
+        ))
     })?;
     let journal = state.journal();
     let pull_intent = PullIntent {
-        schema: "elevenid.rootless-storage-canary-pull-intent/v1".into(),
+        schema: pull_schema(filesystem).into(),
         installation_id: journal.installation_id(),
         canary_id,
         source_sha: journal.identity().source_sha.clone(),
@@ -1793,13 +1875,14 @@ pub(crate) fn qualify_installation(
         image: reference.clone(),
         root: root.clone(),
         evidence: evidence.clone(),
+        filesystem,
     };
     let pull_intent_bytes = encoded(&pull_intent)?;
     persist(state, PULL_INTENT, &pull_intent_bytes)?;
     let (image_id, environment) = image(&docker, reference, true)?;
     let journal = state.journal();
     let intent = Intent {
-        schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+        schema: intent_schema(filesystem).into(),
         pull_intent_sha256: sha(&pull_intent_bytes),
         installation_id: journal.installation_id(),
         canary_id,
@@ -1815,6 +1898,7 @@ pub(crate) fn qualify_installation(
         marker_sha256: sha(&marker),
         host_uid: unsafe { libc::geteuid() },
         host_gid: unsafe { libc::getegid() },
+        filesystem,
     };
     require(intent.host_uid != 0 && intent.host_gid != 0 && intent.root.uid == intent.host_uid)?;
     let intent_bytes = encoded(&intent)?;
@@ -2000,6 +2084,7 @@ mod tests {
         };
         let mut intent = Intent {
             schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+            filesystem: None,
             pull_intent_sha256: "9".repeat(64),
             installation_id,
             canary_id,
@@ -2021,6 +2106,7 @@ mod tests {
         };
         let pull = PullIntent {
             schema: "elevenid.rootless-storage-canary-pull-intent/v1".into(),
+            filesystem: None,
             installation_id,
             canary_id,
             source_sha: intent.source_sha.clone(),
@@ -2034,6 +2120,27 @@ mod tests {
         let pull_bytes = encoded(&pull).unwrap();
         intent.pull_intent_sha256 = sha(&pull_bytes);
         verify_pull_intent(&pull_bytes, &intent, &pull.docker_host).unwrap();
+        assert!(!String::from_utf8(pull_bytes.clone())
+            .unwrap()
+            .contains("filesystem"));
+        let mut versioned_pull = pull.clone();
+        versioned_pull.filesystem = Some(DeviceBinding::ext4_for_test(stamp.dev, [7; 16]));
+        versioned_pull.schema = pull_schema(versioned_pull.filesystem).into();
+        let versioned_bytes = encoded(&versioned_pull).unwrap();
+        let mut versioned_intent = intent.clone();
+        versioned_intent.filesystem = versioned_pull.filesystem;
+        versioned_intent.schema = intent_schema(versioned_intent.filesystem).into();
+        versioned_intent.pull_intent_sha256 = sha(&versioned_bytes);
+        verify_pull_intent(&versioned_bytes, &versioned_intent, &pull.docker_host).unwrap();
+        versioned_intent.filesystem = None;
+        assert!(
+            verify_pull_intent(&versioned_bytes, &versioned_intent, &pull.docker_host).is_err()
+        );
+        versioned_intent.filesystem = versioned_pull.filesystem;
+        versioned_pull.filesystem = None;
+        let missing = encoded(&versioned_pull).unwrap();
+        versioned_intent.pull_intent_sha256 = sha(&missing);
+        assert!(verify_pull_intent(&missing, &versioned_intent, &pull.docker_host).is_err());
         assert!(verify_pull_intent(&pull_bytes, &intent, "unix:///var/run/docker.sock").is_err());
         let mut altered_pull = pull.clone();
         altered_pull.engine_id = uuid::Uuid::new_v4().to_string();
@@ -2289,6 +2396,88 @@ mod tests {
     }
 
     #[test]
+    fn completed_canary_reboot_comparison_preserves_mount_graph_and_all_legacy_fields() {
+        let original: [Stamp; 4] = std::array::from_fn(|index| Stamp {
+            dev: 2160,
+            ino: 10 + index as u64,
+            uid: 1000,
+            gid: 1000,
+            mode: 0o700,
+            mount: 44,
+        });
+        let current: [Stamp; 4] = std::array::from_fn(|index| Stamp {
+            dev: 2096,
+            mount: 28,
+            ..original[index].clone()
+        });
+        let saved = Some(DeviceBinding::ext4_for_test(2160, [7; 16]));
+        let observed = Some(DeviceBinding::ext4_for_test(2096, [7; 16]));
+        let retained_bytes = encoded(&original).unwrap();
+        let retained_hash = sha(&retained_bytes);
+        let check = |old: &[Stamp; 4], new: &[Stamp; 4], saved, observed| {
+            require_completed_stamps(
+                std::array::from_fn(|i| &old[i]),
+                std::array::from_fn(|i| &new[i]),
+                saved,
+                observed,
+            )
+        };
+        check(&original, &current, saved, observed).unwrap();
+        assert_ne!(encoded(&current).unwrap(), retained_bytes);
+        assert_eq!(encoded(&original).unwrap(), retained_bytes);
+        assert_eq!(sha(&encoded(&original).unwrap()), retained_hash);
+        check(&original, &original, None, None).unwrap();
+        assert!(check(&original, &current, None, observed).is_err());
+        assert!(check(&original, &current, saved, None).is_err());
+        assert!(check(
+            &original,
+            &current,
+            saved,
+            Some(DeviceBinding::Legacy(2096))
+        )
+        .is_err());
+        assert!(check(
+            &original,
+            &current,
+            saved,
+            Some(DeviceBinding::ext4_for_test(2096, [8; 16]))
+        )
+        .is_err());
+        for index in 0..4 {
+            for (field, bad) in [
+                ("dev", 33),
+                ("mount", 33),
+                ("ino", 33),
+                ("uid", 33),
+                ("gid", 33),
+                ("mode", 0o755),
+            ] {
+                let mut changed = current.clone();
+                let mut value = serde_json::to_value(&changed[index]).unwrap();
+                value[field] = json!(bad);
+                changed[index] = serde_json::from_value(value).unwrap();
+                assert!(
+                    check(&original, &changed, saved, observed).is_err(),
+                    "current {index} {field}"
+                );
+            }
+        }
+        for index in 1..4 {
+            let mut changed = original.clone();
+            changed[index].mount += 1;
+            assert!(
+                check(&changed, &current, saved, observed).is_err(),
+                "historical nested mount {index}"
+            );
+        }
+        let mut invalid = original.clone();
+        for value in &mut invalid {
+            value.mount = 0;
+        }
+        assert!(check(&invalid, &current, saved, observed).is_err());
+    }
+
+    #[test]
     fn recovered_owner_is_synced_and_rebound_before_restored_receipt() {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -2308,6 +2497,7 @@ mod tests {
         let child_stamp = stamp(&child).unwrap();
         let intent = Intent {
             schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+            filesystem: None,
             pull_intent_sha256: "a".repeat(64),
             installation_id: uuid::Uuid::new_v4(),
             canary_id,
@@ -2336,6 +2526,19 @@ mod tests {
         assert_eq!(
             restored_child(&parent, &intent, &created, &marker).unwrap(),
             child_stamp
+        );
+        let mut previous_boot = created.clone();
+        previous_boot.child.dev += 1;
+        previous_boot.child.mount += 1;
+        let mut stable_intent = intent.clone();
+        stable_intent.filesystem = Some(DeviceBinding::ext4_for_test(
+            previous_boot.child.dev,
+            [7; 16],
+        ));
+        stable_intent.schema = intent_schema(stable_intent.filesystem).into();
+        assert!(
+            restored_child(&parent, &stable_intent, &previous_boot, &marker).is_err(),
+            "stable completed proof must not grant active ownership-restoration authority"
         );
         fs::rename(
             temp.path().join("parent/child"),

@@ -1547,7 +1547,7 @@ impl InstallerState {
             observed.insert(
                 entry.into(),
                 serde_json::json!({
-                    "device": metadata.dev(), "inode": metadata.ino(),
+                    "device": crate::installer_filesystem::DeviceBinding::observe(&child, "OpenBao control metadata unavailable")?, "inode": metadata.ino(),
                     "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
                 }),
             );
@@ -1562,7 +1562,7 @@ impl InstallerState {
         let receipt = serde_json::to_vec(&serde_json::json!({
             "schema": "elevenid.installer-openbao-control-created/v1",
             "installation_id": self.journal.installation_id(),
-            "device": metadata.dev(), "inode": metadata.ino(),
+            "device": crate::installer_filesystem::DeviceBinding::observe(&control, "OpenBao control metadata unavailable")?, "inode": metadata.ino(),
             "owner_uid": metadata.uid(), "owner_gid": metadata.gid(), "mode": 0o700,
             "children": observed, "enrolled": false,
         }))
