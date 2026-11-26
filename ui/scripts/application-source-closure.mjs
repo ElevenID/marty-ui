@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
 import { validateWebsiteSourceOwnership } from './website-source-ownership.mjs';
 import { validateWebSurfaceContract } from '../src/application/routing/webSurfaceContract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_ASSERTIONS, APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import { applicationSourceTestPolicy } from './export-application-source.mjs';
 import { APPLICATION_INSTALL_INPUTS, installApplicationDependencies } from './application-dependency-install.mjs';
 import {
@@ -176,7 +176,8 @@ export function planApplicationSourceClosure({ repositoryRoot = DEFAULT_ROOT, fr
     source: { commit: sourceSha, working_tree_dirty: status.length > 0, git_status: status,
       input_inventory_sha256: identity(files), files, extra_inputs: [...extraInputs] },
     route_contract: { version: routes.schema_version, sha256: digest(canonicalJson(routes)) },
-    test_profile: { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES], shared_contracts: [...TEST_CONTRACTS] },
+    test_profile: { config: APPLICATION_TEST_CONFIG, files: [...APPLICATION_TEST_FILES], shared_contracts: [...TEST_CONTRACTS],
+      assertions: APPLICATION_TEST_ASSERTIONS },
     ...(dependencyProfile === 'application' ? { dependency_profile: validateApplicationDependencyProfile({ repositoryRoot: root }) } : {}),
     boundary: {
       website_roster: ownership.modules.slice().sort(),

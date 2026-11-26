@@ -145,12 +145,31 @@ describe('optional agent administration and explicit approval', () => {
     expect(screen.queryByRole('button', { name: 'Suspend access' })).not.toBeInTheDocument();
     expect(api.changeAgentIdentity).toHaveBeenCalledTimes(1);
   });
-  it('does not enable registration before the current inventory can be inspected', async () => {
+  it('distinguishes a failed directory read from a verified empty directory', async () => {
     api.listAgentIdentities.mockRejectedValueOnce({ code: 'unavailable' });
-    renderWithRouter(<App />, { initialEntries: ['/console/org/agents'] });
+    const { user } = renderWithRouter(<App />, { initialEntries: ['/console/org/agents'] });
     await screen.findByText(/The service is unavailable/);
     expect(screen.getByRole('button', { name: 'Register identity' })).toBeDisabled();
     expect(api.registerAgentIdentity).not.toHaveBeenCalled();
+    expect(screen.queryByRole('table', { name: 'Agent identity directory' })).not.toBeInTheDocument();
+    expect(screen.queryByText('No agent identities are listed.')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 identities')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
+    api.listAgentIdentities.mockResolvedValueOnce({ items: [], total: 0 });
+    await user.click(screen.getByRole('button', { name: 'Reload current state' }));
+    await screen.findByText('No agent identities are listed.');
+    expect(screen.getByText('0 identities')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Register identity' })).toBeEnabled();
+    expect(screen.queryByText(/The service is unavailable/)).not.toBeInTheDocument();
+  });
+  it('explains missing approval access without starting a review for a view-only user', () => {
+    state.permissions.delete('delegation-grant:approve');
+    renderWithRouter(<App />, { initialEntries: [approvalPath] });
+    expect(screen.getByText(/Ask an organization owner or administrator to review your approval access/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load exact terms' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm exact terms' })).not.toBeInTheDocument();
+    expect(api.reviewDelegation).not.toHaveBeenCalled();
+    expect(api.confirmDelegation).not.toHaveBeenCalled();
   });
   it('rejects another approver and clears an older review before a failed replacement', async () => {
     const { user } = renderWithRouter(<App />, { initialEntries: [approvalPath] });
@@ -196,6 +215,29 @@ describe('optional agent administration and explicit approval', () => {
     await user.click(screen.getByRole('button', { name: 'Check original confirmation' }));
     await waitFor(() => expect(api.confirmDelegation).toHaveBeenCalledTimes(1));
     expect(api.confirmDelegation.mock.calls[0][2]).toBe(confirmationId);
+  });
+  it('shows withdrawal as the current consent state while retaining the original confirmation record', async () => {
+    api.withdrawDelegation.mockImplementation(async (_org, id, confirmationId) => ({
+      grant_id: id, confirmation_id: confirmationId, withdrawn_at: new Date().toISOString(), recovered: false,
+    }));
+    const { user } = renderWithRouter(<App />, { initialEntries: [approvalPath] });
+    await user.click(screen.getByRole('button', { name: 'Load exact terms' }));
+    await screen.findByText('Authority being approved');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: 'Confirm exact terms' }));
+    await screen.findByText(/was recorded at/);
+    const recoveryKey = `elevenid.delegation-approval.v1:${state.org}:${state.user}:${grant.id}:${grant.revision}:${grant.terms_digest}`;
+    const originalIntent = window.sessionStorage.getItem(recoveryKey);
+    const confirmationId = api.confirmDelegation.mock.calls[0][2];
+    await user.click(screen.getByRole('button', { name: 'Withdraw this consent' }));
+    await screen.findByText(/Consent was withdrawn at/);
+    expect(screen.queryByText(/was recorded at/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Withdraw.*consent/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check original confirmation' })).not.toBeInTheDocument();
+    expect(api.withdrawDelegation).toHaveBeenCalledExactlyOnceWith(state.org, grant.id, confirmationId);
+    expect(api.confirmDelegation).toHaveBeenCalledTimes(1);
+    expect(originalIntent).not.toBeNull();
+    expect(window.sessionStorage.getItem(recoveryKey)).toBe(originalIntent);
   });
   it('can deliberately withdraw the original journaled consent after old-session recovery is denied', async () => {
     const r = review(); const confirmationId = '0175b3bb-95bd-4b0d-a3cb-c4eb4d6a75c1';
