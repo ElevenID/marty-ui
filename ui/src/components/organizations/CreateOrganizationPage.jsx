@@ -8,6 +8,7 @@ import OrgConsoleUnavailable from '../console/OrgConsoleUnavailable';
 import CreateOrganizationForm from './CreateOrganizationForm';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 import { isOrganizationCreationEnabled } from '../../utils/runtimeConfig';
+import { safeConsoleNavigationDestination } from '../../application/routing/safeNavigation';
 
 const SHOULD_LOG_CREATE_ORG_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
 
@@ -94,7 +95,7 @@ function CreateOrganizationPage() {
       requestGeneration.current += 1;
     };
   }, []);
-  const returnTo = searchParams.get('returnTo');
+  const returnTo = safeConsoleNavigationDestination(searchParams.get('returnTo'));
 
   const handleCreateOrganization = async (payload) => {
     if (!active.current) return;

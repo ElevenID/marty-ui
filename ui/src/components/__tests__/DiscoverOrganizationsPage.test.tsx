@@ -246,4 +246,42 @@ describe('DiscoverOrganizationsPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Details', exact: true }));
     expect(navigate).toHaveBeenCalledWith('/console/organizations/join?orgId=School%20%2F%20One');
   });
+
+  it.each(['details', 'code'] as const)('keeps the requested console destination when discovery continues by %s', async method => {
+    const destination = '/console/org/delegation-grants/grant-1/approve?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+    discover.mockResolvedValue([organization('School / One')]);
+    const { user } = renderWithRouter(<DiscoverOrganizationsPage joinPath="/console/organizations/join" />, {
+      initialEntries: ['/console/organizations/discover?' + new URLSearchParams({ returnTo: destination })],
+    });
+    await screen.findByRole('heading', { name: 'School / One' });
+    if (method === 'details') {
+      await user.click(screen.getByRole('button', { name: 'Details', exact: true }));
+    } else {
+      await user.click(screen.getByRole('button', { name: 'Use Join Code' }));
+      await user.type(screen.getByRole('textbox', { name: 'Join code' }), 'ABCD1234');
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+    }
+    const prefix = method === 'details' ? 'orgId=School%20%2F%20One' : 'mode=code&code=ABCD1234';
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(`/console/organizations/join?${prefix}&returnTo=${encodeURIComponent(destination)}`);
+  });
+
+  it('retains an onboarding destination while discovery asks for sign-in', async () => {
+    auth.isAuthenticated = false;
+    auth.user = null;
+    const destination = '/console/org/agents?filter=pending#directory';
+    const entry = '/console/organizations/discover?' + new URLSearchParams({ returnTo: destination });
+    const { user } = renderWithRouter(<DiscoverOrganizationsPage />, { initialEntries: [entry] });
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(login).toHaveBeenCalledExactlyOnceWith(entry);
+    expect(discover).not.toHaveBeenCalled();
+  });
+
+  it('does not pass an unsafe destination from discovery into the join flow', async () => {
+    discover.mockResolvedValue([organization('School')]);
+    const { user } = renderWithRouter(<DiscoverOrganizationsPage joinPath="/console/organizations/join" />, {
+      initialEntries: ['/console/organizations/discover?' + new URLSearchParams({ returnTo: '//unrelated.example/console/org' })],
+    });
+    await user.click(await screen.findByRole('button', { name: 'Details', exact: true }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/console/organizations/join?orgId=School');
+  });
 });

@@ -466,4 +466,71 @@ describe('JoinOrganizationPage', () => {
     await user.click(screen.getByRole('button', { name: 'Discover More Organizations' }));
     expect(mockNavigate).toHaveBeenCalledWith('/console/organizations/discover');
   });
+
+  it.each(['code', 'open', 'invitation'] as const)('resumes the approval destination after a successful %s join', async flow => {
+    configureFlow(flow);
+    const destination = '/console/org/delegation-grants/grant-1/approve?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+    mockSearchParams().set('returnTo', destination);
+    const view = render(<JoinOrganizationPage />);
+    if (flow === 'code') await view.user.type(screen.getByPlaceholderText('Enter 8-character join code'), 'ABCD1234');
+    const label = flow === 'code' ? 'Join via Code' : flow === 'open' ? 'Join Organization' : 'Accept invitation';
+    const button = await screen.findByRole('button', { name: label });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await act(async () => { fireEvent.click(button); });
+    expect(screen.getByText('You joined Acme')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Go to Organization Console' }));
+    expect(mockRedirectBrowser).toHaveBeenCalledExactlyOnceWith(destination, { replace: false });
+    mockRedirectBrowser.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(mockRedirectBrowser).toHaveBeenCalledExactlyOnceWith(destination, { replace: false });
+  });
+
+  it.each(['https://unrelated.example/console/org', '/console/org/setup'])('uses the ordinary join fallback for invalid returnTo %s', async destination => {
+    configureFlow('open');
+    mockSearchParams().set('returnTo', destination);
+    render(<JoinOrganizationPage />);
+    const button = await screen.findByRole('button', { name: 'Join Organization' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await act(async () => { fireEvent.click(button); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(mockRedirectBrowser).toHaveBeenCalledExactlyOnceWith('/console', { replace: false });
+  });
+
+  it('keeps the nested approval returnTo through sign-in before joining', async () => {
+    const login = vi.fn();
+    mockUseAuth.mockReturnValue({ isAuthenticated: false, isLoading: false, login });
+    const destination = '/console/org/delegation-grants/grant-1/approve?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+    const params = new URLSearchParams({ mode: 'code', returnTo: destination });
+    mockSearchParams.mockReturnValue(params);
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, pathname: '/console/organizations/join', search: `?${params}` },
+    });
+    const { user } = render(<JoinOrganizationPage />);
+    await user.type(screen.getByPlaceholderText('Enter 8-character join code'), 'ABCD1234');
+    await user.click(screen.getByRole('button', { name: 'Join via Code' }));
+    expect(login).toHaveBeenCalledExactlyOnceWith(`/console/organizations/join?${params}`);
+    expect(mockJoinByCode).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending membership', 'invitation error'] as const)('keeps the approval destination when discovery follows %s', async outcome => {
+    configureFlow(outcome === 'pending membership' ? 'code' : 'invitation');
+    const destination = '/console/org/delegation-grants/grant-1/approve?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+    mockSearchParams().set('returnTo', destination);
+    if (outcome === 'pending membership') {
+      mockJoinByCode.mockResolvedValue({ organization: { id: 'org-1', name: 'Acme' }, membership: { status: 'pending' } });
+    } else {
+      mockValidateOrganizationInvitation.mockResolvedValue({ valid: false, message: 'Invitation expired' });
+    }
+    const { user } = render(<JoinOrganizationPage discoverPath="/console/organizations/discover" />);
+    if (outcome === 'pending membership') {
+      await user.type(screen.getByPlaceholderText('Enter 8-character join code'), 'ABCD1234');
+      await user.click(screen.getByRole('button', { name: 'Join via Code' }));
+    }
+    const label = outcome === 'pending membership' ? 'Discover More Organizations' : 'Discover Organizations';
+    await user.click(await screen.findByRole('button', { name: label }));
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith(`/console/organizations/discover?returnTo=${encodeURIComponent(destination)}`);
+    expect(mockRedirectBrowser).not.toHaveBeenCalled();
+  });
+
 });

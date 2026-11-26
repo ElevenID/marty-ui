@@ -150,8 +150,9 @@ describe('CreateOrganizationPage', () => {
     });
   });
 
-  it('honors returnTo after creation', async () => {
-    mockSearchParams.mockReturnValue(new URLSearchParams('returnTo=/console/org/settings'));
+  it('honors the full returnTo query and hash after creation', async () => {
+    const destination = '/console/org/delegation-grants/grant-1/approve?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+    mockSearchParams.mockReturnValue(new URLSearchParams({ returnTo: destination }));
     const { user } = render(<CreateOrganizationPage />);
 
     await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
@@ -159,7 +160,7 @@ describe('CreateOrganizationPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create Organization' }));
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/console/org/settings');
+      expect(mockNavigate).toHaveBeenCalledWith(destination);
     });
   });
 
@@ -241,5 +242,14 @@ describe('CreateOrganizationPage', () => {
     expect(screen.getByText('Organization service unavailable')).toBeInTheDocument();
     expect(screen.getByText('Message ID: msg-503')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create Organization' })).not.toBeInTheDocument();
+  });
+
+  it('uses the organization console fallback for an unsafe direct creation returnTo', async () => {
+    mockSearchParams.mockReturnValue(new URLSearchParams({ returnTo: 'https://unrelated.example/console/org' }));
+    const { user } = render(<CreateOrganizationPage />);
+    await user.type(screen.getByLabelText('Organization Slug'), 'acme-travel');
+    await user.type(screen.getByLabelText('Display Name'), 'Acme Travel');
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/console/org'));
   });
 });

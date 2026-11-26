@@ -43,6 +43,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../../hooks/useAuth';
 import { getErrorMessage, isAuthError } from '../../services/api';
 import { discoverOrganizations } from '../../services/organizationsApi';
+import { safeConsoleNavigationDestination } from '../../application/routing/safeNavigation';
 
 function DiscoveryFrame({ children }) {
   return (
@@ -68,8 +69,9 @@ function DiscoverySignIn({ onSignIn, message = 'Sign in to discover and join org
   );
 }
 
-function DiscoveryContent({ joinPath, onSignIn }) {
+function DiscoveryContent({ joinPath, onSignIn, returnTo }) {
   const navigate = useNavigate();
+  const returnQuery = returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : '';
   
   const [searchQuery, setSearchQuery] = useState('');
   const [orgTypeFilter, setOrgTypeFilter] = useState('');
@@ -137,7 +139,7 @@ function DiscoveryContent({ joinPath, onSignIn }) {
     setJoinCodeDialog(false);
     const code = joinCode.trim().toUpperCase();
     setJoinCode('');
-    navigate(`${joinPath}?mode=code&code=${encodeURIComponent(code)}`);
+    navigate(`${joinPath}?mode=code&code=${encodeURIComponent(code)}${returnQuery}`);
     setJoiningCode(false);
   };
 
@@ -184,7 +186,7 @@ function DiscoveryContent({ joinPath, onSignIn }) {
    * Open the canonical join/details flow for the selected organization.
    */
   const handleViewOrganization = (org) => {
-    navigate(`${joinPath}?orgId=${encodeURIComponent(org.id)}`);
+    navigate(`${joinPath}?orgId=${encodeURIComponent(org.id)}${returnQuery}`);
   };
 
   if (error && isAuthError(error)) {
@@ -475,6 +477,7 @@ function DiscoveryContent({ joinPath, onSignIn }) {
 export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) {
   const { user, isAuthenticated, isLoading, login } = useAuth();
   const location = useLocation();
+  const returnTo = safeConsoleNavigationDestination(new URLSearchParams(location.search).get('returnTo'));
   const onSignIn = () => login(`${location.pathname}${location.search}${location.hash}`);
 
   if (isLoading) {
@@ -492,7 +495,7 @@ export function DiscoverOrganizationsPage({ joinPath = '/organizations/join' }) 
 
   // A new account must not inherit another account's results or expired session.
   const principalId = user?.user_id || user?.sub || user?.id || 'authenticated';
-  return <DiscoveryContent key={principalId} joinPath={joinPath} onSignIn={onSignIn} />;
+  return <DiscoveryContent key={principalId} joinPath={joinPath} onSignIn={onSignIn} returnTo={returnTo} />;
 }
 
 export default DiscoverOrganizationsPage;
