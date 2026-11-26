@@ -82,7 +82,7 @@ function Directory({ organizationId, can }) {
     {error && !dialog && <Alert severity="error">{agentTrustErrorMessage(error)}</Alert>}
     {uncertainMutation && !dialog && <Alert severity="warning">The previous change may have been recorded. Reload and inspect the current identities before making another change.</Alert>}
     <Button variant="outlined" disabled={busy || loading} onClick={() => { setHistory(null); setReload(value => value + 1); }}>Reload current state</Button>
-    {!loading && <Paper variant="outlined" sx={{ overflowX: 'auto' }}><Table aria-label="Agent identity directory">
+    {stateVerified && !loading && <Paper variant="outlined" sx={{ overflowX: 'auto' }}><Table aria-label="Agent identity directory">
       <TableHead><TableRow><TableCell>Identity</TableCell><TableCell>Access eligibility</TableCell><TableCell>Owner at registration</TableCell><TableCell>Runtime activity</TableCell><TableCell>Actions</TableCell></TableRow></TableHead>
       <TableBody>{page.items.map(identity => <TableRow key={identity.id}>
         <TableCell><Typography fontWeight={600}>{identity.metadata.display_name}</Typography><Typography variant="body2">{identity.kind === 'EXTERNAL' ? 'External principal' : 'Managed inventory'}</Typography><Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>{identity.principal.id}</Typography></TableCell>
@@ -97,7 +97,7 @@ function Directory({ organizationId, can }) {
         </Stack></TableCell>
       </TableRow>)}{!page.items.length && <TableRow><TableCell colSpan={5}>No agent identities are listed.</TableCell></TableRow>}</TableBody>
     </Table></Paper>}
-    <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}><Button disabled={loading || busy || uncertainMutation || offset === 0} onClick={() => setOffset(value => Math.max(0, value - 50))}>Previous</Button><Typography>{page.total} identities</Typography><Button disabled={loading || busy || uncertainMutation || offset + page.items.length >= page.total} onClick={() => setOffset(value => value + 50)}>Next</Button></Stack>
+    {stateVerified && <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}><Button disabled={loading || busy || uncertainMutation || offset === 0} onClick={() => setOffset(value => Math.max(0, value - 50))}>Previous</Button><Typography>{page.total} identities</Typography><Button disabled={loading || busy || uncertainMutation || offset + page.items.length >= page.total} onClick={() => setOffset(value => value + 50)}>Next</Button></Stack>}
     {history && <Paper variant="outlined" sx={{ p: 2, overflowWrap: 'anywhere' }}>
       <Typography variant="h6" component="h2">{history.identity.metadata.display_name}: administrative history</Typography>
       <Typography>Source issuer: {history.identity.issuer}</Typography><Typography>Source subject: {history.identity.subject}</Typography>

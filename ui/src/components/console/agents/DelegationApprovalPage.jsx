@@ -88,6 +88,7 @@ function Approval({ organizationId, actorId, grant, canApprove, canView }) {
     {error && <Alert severity="error">{agentTrustErrorMessage(error)}</Alert>}
     {storageError && <Alert severity="error">The original confirmation record cannot be preserved or read in this browser. Approval is unavailable. Inspect the grant before starting another approval.</Alert>}
     {journal && !confirmed && !withdrawn && <Alert severity="info">A confirmation was already requested for these exact terms. Check that original request to recover its result.</Alert>}
+    {!canApprove && !journal && !storageError && <Alert severity="info">You do not have permission to approve delegated authority in this organization. Ask an organization owner or administrator to review your approval access.</Alert>}
     {!journal && !storageError && canApprove && <Button variant="outlined" disabled={busy} onClick={reviewTerms}>Load exact terms</Button>}
     {review && <Paper variant="outlined" sx={{ p: 2, overflowWrap: 'anywhere' }}>
       <Stack spacing={1.5}>
@@ -117,7 +118,7 @@ function Approval({ organizationId, actorId, grant, canApprove, canView }) {
       <Button variant="contained" disabled={!checked || busy || expired || !canApprove || !canView || storageError} onClick={() => submitConfirmation(false)}>Confirm exact terms</Button>
     </>}
     {journal && !confirmed && !withdrawn && <Button variant="contained" disabled={busy || !canView || storageError} onClick={() => submitConfirmation(true)}>Check original confirmation</Button>}
-    {confirmed && <Alert severity="success">
+    {confirmed && !withdrawn && <Alert severity="success">
       Confirmation {confirmed.confirmation_id} was recorded at {confirmed.confirmed_at}. Its original validity ends at {confirmed.valid_until}.
       {confirmed.recovered && ' This is the original recorded result; recovery does not renew authority.'}
     </Alert>}

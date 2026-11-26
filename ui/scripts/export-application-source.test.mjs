@@ -107,7 +107,7 @@ function protocolBaseline(plan) {
         output_files_identical: true, public_resources_identical: true, output_inventory_sha256: inventory,
         output_files: files.length, public_resources: publicResources.length } },
     tests: { selected_files: plan.test_profile.files,
-      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 321, report_sha256: digest('Synthetic protocol fixture') } },
+      result: { completed_files: [...plan.test_profile.files].sort(), test_count: 323, report_sha256: digest('Synthetic protocol fixture') } },
     output: { files, inventory_sha256: inventory, public_resources: publicResources },
     resources: { result: { schema: 'marty.application-resource-smoke/v1', status: 'passed', preview: { closed: true },
       qualification: { resources_served: true }, public_resources: publicResources } },

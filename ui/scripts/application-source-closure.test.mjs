@@ -15,7 +15,7 @@ import {
   compareApplicationProfileBaseline,
 } from './application-source-closure.mjs';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
+import { APPLICATION_TEST_ASSERTIONS, APPLICATION_TEST_CONFIG, APPLICATION_TEST_FILES } from './application-test-profile.mjs';
 import {
   APPLICATION_ASSET_OMISSIONS, APPLICATION_RETAINED_PUBLIC_FILES,
   APPLICATION_LOCALES, APPLICATION_LOCALE_NAMESPACES, APPLICATION_RESOURCE_MIME_TYPES,
@@ -238,6 +238,7 @@ test('the plan separates the original website roster from the 72-input applicati
   assert.deepEqual(plan.test_profile.files, [...APPLICATION_TEST_FILES]);
   assert.deepEqual(plan.test_profile.shared_contracts, ['contracts/organization-domain-behavior.json']);
   assert.equal(plan.test_profile.files.length, 26);
+  assert.equal(plan.test_profile.assertions, APPLICATION_TEST_ASSERTIONS);
   assert.ok(plan.boundary.retained.includes('contracts/organization-domain-behavior.json'));
   assert.ok(plan.boundary.retained.includes('ui/package-lock.json'));
 });
