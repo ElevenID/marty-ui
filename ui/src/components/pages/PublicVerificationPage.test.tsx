@@ -125,4 +125,78 @@ describe('public verification experience', () => {
     expect(screen.queryByRole('button',{name:'Resume verification'})).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      name: 'the exact unavailable catalog response',
+      reply: () => new Response(JSON.stringify({ error: 'public_verification_unavailable', error_description: 'Private upstream diagnostic', message_id: id }), { status: 404, headers: { 'content-type': 'application/json' } }),
+      severity: 'Info',
+      message: 'This verification demonstration is not available on this site.',
+      attempts: 1,
+    },
+    {
+      name: 'a different not-found error',
+      reply: () => new Response(JSON.stringify({ error: 'not_found', error_description: 'Private upstream diagnostic' }), { status: 404, headers: { 'content-type': 'application/json' } }),
+      severity: 'Warning',
+      message: 'We couldn’t load the verification demonstration. Try again.',
+      attempts: 1,
+    },
+    {
+      name: 'an HTML not-found response',
+      reply: () => new Response('<html>Private upstream diagnostic</html>', { status: 404, headers: { 'content-type': 'text/html' } }),
+      severity: 'Warning',
+      message: 'We couldn’t load the verification demonstration. Try again.',
+      attempts: 1,
+    },
+    {
+      name: 'an unavailable code with a service-failure status',
+      reply: () => new Response(JSON.stringify({ error: 'public_verification_unavailable', error_description: 'Private upstream diagnostic' }), { status: 503, headers: { 'content-type': 'application/json' } }),
+      severity: 'Warning',
+      message: 'We couldn’t load the verification demonstration. Try again.',
+      attempts: 4,
+    },
+    {
+      name: 'a failed network request',
+      reply: () => { throw new TypeError('Private upstream diagnostic'); },
+      severity: 'Warning',
+      message: 'We couldn’t load the verification demonstration. Try again.',
+      attempts: 4,
+    },
+  ])('distinguishes $name without starting a session or losing recovery', async ({ reply, severity, message, attempts }) => {
+    const saved = JSON.stringify({
+      key: 'A'.repeat(43), id, savedAt: Date.now(), accessExpiresAt: Date.now() + 1_200_000,
+      selection: { catalog_revision: revision, scenario_id: 'age', choice_id: 'over-18', example_id: 'fictional-adult', consent: true },
+    }, null, 2);
+    sessionStorage.setItem('marty.public-verification.v1', saved);
+    const fetch = vi.fn(async (url: string, options: RequestInit = {}) => {
+      const request = new URL(String(url), window.location.origin);
+      if (request.pathname !== '/v1/flows/public/verification/catalog' || request.search || options.method !== 'GET') {
+        throw new Error('Unexpected public verification request');
+      }
+      return reply();
+    });
+    vi.stubGlobal('fetch', fetch);
+    render(<PublicVerificationPage />);
+
+    // Keep the real SDK's bounded GET retries; no request reaches a network transport.
+    expect(await screen.findByRole('button', { name: 'Try again' }, { timeout: 15_000 })).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(message);
+    expect(screen.getByRole('alert')).toHaveClass(`MuiAlert-standard${severity}`);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Private upstream diagnostic/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Verify example|Create wallet request|Resume verification|Cancel/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open compatible wallet' })).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Wallet verification request')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Verification result' })).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(attempts);
+    for (const [url, options = {}] of fetch.mock.calls) {
+      expect(new URL(String(url), window.location.origin).pathname).toBe('/v1/flows/public/verification/catalog');
+      expect(options.method).toBe('GET');
+      expect(options.credentials).toBe('omit');
+      expect(options.body).toBeUndefined();
+      expect(new Headers(options.headers).has('x-verification-session')).toBe(false);
+    }
+    expect(sessionStorage.getItem('marty.public-verification.v1')).toBe(saved);
+  });
+
 });
