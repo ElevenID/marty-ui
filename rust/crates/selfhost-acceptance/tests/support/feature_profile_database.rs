@@ -216,7 +216,7 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
         Authority {
             mode: AuthorityMode::Managed,
             issuer: organization_principal(uuid::Uuid::from_u128(1)),
-            status_ref: "urn:marty:test:native-feature-status".into(),
+            status_ref: "https://authority.invalid/native-feature-status".into(),
             source_profile: None,
             source_evidence_ref: None,
             source_evidence_digest: None,
