@@ -1,8 +1,8 @@
-// A bounded application routing/authentication/startup suite. This is not the complete
+// A bounded application routing/authentication/startup and owner-configuration suite. This is not the complete
 // UI test suite or an OIDC/host qualification; combined/website tests keep their
 // existing configuration and discovery rules.
 export const APPLICATION_TEST_CONFIG = 'vitest.application.config.ts';
-export const APPLICATION_TEST_ASSERTIONS = 392;
+export const APPLICATION_TEST_ASSERTIONS = 414;
 
 export const APPLICATION_TEST_FILES = Object.freeze([
   'src/__tests__/startupRecovery.test.ts',
@@ -28,7 +28,9 @@ export const APPLICATION_TEST_FILES = Object.freeze([
   'src/components/navigation/SidebarNavigation.test.tsx',
   'src/components/navigation/SidebarNavigationApplicant.test.tsx',
   'src/components/console/agents/AgentTrustPages.test.tsx',
+  'src/components/console/trust/__tests__/WalletTrustProfiles.owner.test.tsx',
   'src/services/__tests__/agentTrustApi.test.ts',
+  'src/services/__tests__/walletTrustConfiguration.test.ts',
   'src/services/__tests__/authApi.test.ts',
   'src/services/__tests__/authApiOrigin.test.ts',
   'src/services/__tests__/consoleApiOrigin.test.ts',

@@ -204,6 +204,18 @@ function normalizePublicTrustSource(source = {}) {
   const normalized = {
     source_type: normalizeTrustSourceType(source.source_type),
   };
+  if (['REGISTERED_VERIFIER', 'MANAGED_FLOW_VERIFIER'].includes(normalized.source_type)) {
+    const field = normalized.source_type === 'REGISTERED_VERIFIER' ? 'registered_verifier' : 'managed_flow_verifier';
+    const other = field === 'registered_verifier' ? 'managed_flow_verifier' : 'registered_verifier';
+    const registration = source[field];
+    if (!isObject(registration) || Object.hasOwn(source, other)) {
+      throw walletInput('Use only the public registration matching the verifier source type.');
+    }
+    validateWalletPublicKeys([registration.public_jwk], { verifier: true, requestKeyId: registration.request_key_id });
+    for (const field of ['id', 'enabled', normalized.source_type === 'REGISTERED_VERIFIER' ? 'registered_verifier' : 'managed_flow_verifier']) {
+      if (source[field] !== undefined) normalized[field] = source[field];
+    }
+  }
   if (source.url) normalized.url = String(source.url).trim();
   if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
   if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
@@ -218,7 +230,9 @@ function normalizePublicTrustSource(source = {}) {
     );
   }
   if (Array.isArray(source.purposes)) normalized.purposes = [...source.purposes];
-  if (source.description) normalized.description = String(source.description).trim();
+  if (['REGISTERED_VERIFIER', 'MANAGED_FLOW_VERIFIER'].includes(normalized.source_type)
+    && source.description !== undefined) normalized.description = source.description;
+  else if (source.description) normalized.description = String(source.description).trim();
   if (source.registry_sync) {
     normalized.registry_sync = {
       protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
@@ -968,16 +982,18 @@ export async function listTrustProfiles(params = {}) {
 /**
  * Get a specific trust profile by ID
  */
-export async function getTrustProfile(id) {
-  const result = await get(`${TRUST_PROFILE_BASE}/${id}`);
+export async function getTrustProfile(id, options = {}) {
+  const path = `${TRUST_PROFILE_BASE}/${encodeURIComponent(id)}`;
+  const result = await runTrustIssuerRequest(() => (options.singleAttemptReads
+    ? getWithRetryConfig(path, {}, { maxRetries: 0 }) : get(path)), options);
   return normalizeTrustProfile(result);
 }
 
 /**
  * Update a trust profile
  */
-export async function updateTrustProfile(id, data) {
-  const result = await patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePatch(data));
+export async function updateTrustProfile(id, data, options = {}) {
+  const result = await runTrustIssuerRequest(() => patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePatch(data)), options);
   return normalizeTrustProfile(result);
 }
 
@@ -1011,7 +1027,10 @@ export async function listTrustProfileIssuers(profileId, organizationId, options
     // Match the native offset contract. The entity inventory is not paginated.
     const limit = 100;
     for (let offset = 0; ; offset += limit) {
-      const result = await runTrustIssuerRequest(() => get(profilePath, { params: { offset, limit } }), options);
+      const requestOptions = { params: { offset, limit } };
+      const result = await runTrustIssuerRequest(() => (options.singleAttemptReads
+        ? getWithRetryConfig(profilePath, requestOptions, { maxRetries: 0 })
+        : get(profilePath, requestOptions)), options);
       requireCurrentTrustIssuer(options);
       const page = requireDirectArray(result, 'Trust Profile Issuer');
       if (page.length > limit || !Number.isSafeInteger(offset)) {
@@ -1030,7 +1049,7 @@ export async function listTrustProfileIssuers(profileId, organizationId, options
   };
   const [relationships, entities] = await Promise.all([
     loadRelationships(),
-    runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId), options),
+    runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId, options), options),
   ]);
   requireCurrentTrustIssuer(options);
   const entitiesById = issuerEntitiesById(entities);
@@ -1097,6 +1116,266 @@ export async function addTrustProfileIssuer(profileId, organizationId, data, opt
   ), options);
   requireCurrentTrustIssuer(options);
   return composeTrustProfileIssuer(relationship, issuerEntity, profileId, scopedOrganizationId);
+}
+
+// These are fixed owner operations for the paired-wallet editor. The ordinary
+// browser transport supplies the authenticated session; a form never supplies
+// identity headers, service credentials, or a caller-selected API endpoint.
+const CREDENTIAL_GRANTS = 'marty_credential_authorizations_v1';
+const ISSUANCE_GRANTS = 'marty_wallet_issuance_authorizations_v1';
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const canonicalWalletJson = (value) => Array.isArray(value) ? value.map(canonicalWalletJson)
+  : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalWalletJson(value[key])])) : value;
+const sameWalletJson = (left, right) => JSON.stringify(canonicalWalletJson(left)) === JSON.stringify(canonicalWalletJson(right));
+// Trust Profile's public serializer removes object-null properties recursively,
+// while retaining null array entries. Bind the full saved metadata to that wire
+// projection rather than mistaking omitted optional endpoints for a failed save.
+const walletOwnerProjection = (value) => Array.isArray(value) ? value.map(walletOwnerProjection)
+  : isObject(value) ? Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null)
+    .map(([key, item]) => [key, walletOwnerProjection(item)])) : value;
+const boundedText = (value, maximum = 2048) => typeof value === 'string' && value.length > 0
+  && value.length <= maximum && value.trim() === value && [...value].every((character) => {
+    const point = character.codePointAt(0);
+    return point >= 32 && (point < 127 || point > 159);
+  });
+
+function walletInput(message) {
+  const error = new Error(message);
+  error.code = 'WALLET_TRUST_INPUT';
+  return error;
+}
+
+function httpsIdentifier(value, allowQuery = false) {
+  try {
+    const url = new URL(value);
+    return boundedText(value) && !value.includes('*') && url.protocol === 'https:'
+      && Boolean(url.hostname) && !url.username && !url.password && !url.hash
+      && (allowQuery || !url.search);
+  } catch { return false; }
+}
+
+function absoluteIdentifier(value) {
+  try { return boundedText(value) && Boolean(new URL(value).protocol); } catch { return false; }
+}
+
+/** Reject private material before dispatch. Cryptographic key admission follows
+ * in validateWalletSigningKeys; the runtime owner still decides current trust. */
+export function validateWalletPublicKeys(keys, { verifier = false, requestKeyId } = {}) {
+  if (!Array.isArray(keys) || keys.length < 1 || keys.length > 32) {
+    throw walletInput('Provide between one and 32 public signing keys.');
+  }
+  const seen = new Set();
+  for (const key of keys) {
+    const allowed = ['kty', 'crv', 'x', 'y', 'kid', 'alg', 'use', 'key_ops'];
+    if (!isObject(key) || Object.keys(key).some((name) => !allowed.includes(name))) {
+      throw walletInput('Import public signing keys only. Private key material and unknown key fields are not accepted.');
+    }
+    const algorithm = key.kty === 'EC' && key.crv === 'P-256' ? 'ES256'
+      : key.kty === 'OKP' && key.crv === 'Ed25519' && !verifier ? 'EdDSA' : null;
+    // A 32-byte coordinate has 43 base64url characters; its final two bits are zero.
+    const coordinate = (value) => typeof value === 'string'
+      && /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(value);
+    if (!algorithm || !coordinate(key.x) || (key.kty === 'EC' && !coordinate(key.y))
+      || (key.kty === 'OKP' && key.y !== undefined)
+      || (key.alg !== undefined && key.alg !== algorithm)
+      || (key.kid !== undefined && (!boundedText(key.kid) || (requestKeyId && key.kid !== requestKeyId)))
+      || (key.use !== undefined && key.use !== 'sig')
+      || (key.key_ops !== undefined && JSON.stringify(key.key_ops) !== '["verify"]')
+      || (key.use !== undefined && key.key_ops !== undefined)
+      || (!verifier && key.use !== 'sig' && JSON.stringify(key.key_ops) !== '["verify"]')
+      || JSON.stringify(key).length > 2048) {
+      throw walletInput('Use a supported public signing key with the matching key identifier and signing or verification usage.');
+    }
+    const identity = JSON.stringify([key.kty, key.crv, key.x, key.y]);
+    if (seen.has(identity)) throw walletInput('A public signing key was entered more than once.');
+    seen.add(identity);
+  }
+  return keys;
+}
+
+export async function validateWalletSigningKeys(keys, options = {}) {
+  validateWalletPublicKeys(keys, options);
+  if (!globalThis.crypto?.subtle) throw walletInput('This browser cannot validate public signing keys. Use a browser with Web Crypto support over HTTPS.');
+  for (const key of keys) {
+    try {
+      await globalThis.crypto.subtle.importKey('jwk', key,
+        key.kty === 'EC' ? { name: 'ECDSA', namedCurve: 'P-256' } : { name: 'Ed25519' }, false, ['verify']);
+    } catch {
+      throw walletInput('The public signing key is invalid or is not supported by this browser. Import the key returned by its actual owner.');
+    }
+  }
+  return keys;
+}
+
+export function buildManagedWalletVerifierSource(input, existingId) {
+  const registration = input.managed_flow_verifier;
+  if (!isObject(registration) || !/^[A-Za-z0-9_-]{1,128}$/.test(registration.producer_id || '')
+    || !httpsIdentifier(registration.public_base_url) || registration.public_base_url.endsWith('/')
+    || new URL(registration.public_base_url).href.replace(/\/$/, '') !== registration.public_base_url
+    || !/^did:(web|jwk|key):[^\s?#/]+$/.test(registration.verifier_did || '')
+    || !boundedText(registration.request_key_id)
+    || !registration.request_key_id.startsWith(`${registration.verifier_did}#`)
+    || registration.request_key_id.length === registration.verifier_did.length + 1) {
+    throw walletInput('Enter the configured Flow producer, its exact HTTPS address, verifier DID and matching request key identifier.');
+  }
+  const wholeSecondUtc = (value) => typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+    && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value.replace('Z', '.000Z');
+  if (!wholeSecondUtc(registration.valid_from) || !wholeSecondUtc(registration.valid_until)
+    || Date.parse(registration.valid_until) <= Date.parse(registration.valid_from)) {
+    throw walletInput('Enter the actual key validity as whole-second UTC times, with the end after the start.');
+  }
+  validateWalletPublicKeys([registration.public_jwk], { verifier: true, requestKeyId: registration.request_key_id });
+  return {
+    ...(existingId ? { id: existingId } : {}),
+    source_type: 'MANAGED_FLOW_VERIFIER',
+    purposes: ['PRESENTATION_VERIFIER'],
+    enabled: input.enabled === true,
+    managed_flow_verifier: registration,
+  };
+}
+
+export function walletIssuerGrants(credentialTypes, issuanceAuthorizations) {
+  if (!Array.isArray(credentialTypes) || credentialTypes.length < 1 || credentialTypes.length > 128
+    || credentialTypes.some((vct) => !absoluteIdentifier(vct))
+    || new Set(credentialTypes).size !== credentialTypes.length) {
+    throw walletInput('Enter one to 128 distinct credential type identifiers, using their complete URI.');
+  }
+  if (!Array.isArray(issuanceAuthorizations) || issuanceAuthorizations.length > 128) {
+    throw walletInput('The issuance service list is invalid.');
+  }
+  const seen = new Set();
+  const grants = issuanceAuthorizations.map((grant) => {
+    const allowed = ['credential_issuer', 'credential_configuration_id', 'format', 'vct', 'authorization_server', 'token_endpoint'];
+    if (!isObject(grant) || Object.keys(grant).some((name) => !allowed.includes(name))
+      || !httpsIdentifier(grant.credential_issuer) || !boundedText(grant.credential_configuration_id, 256)
+      || !['dc+sd-jwt', 'vc+sd-jwt'].includes(grant.format) || !credentialTypes.includes(grant.vct)
+      || ((grant.authorization_server != null || grant.token_endpoint != null)
+        && (!httpsIdentifier(grant.authorization_server) || !httpsIdentifier(grant.token_endpoint, true)))) {
+      throw walletInput('Each issuance service needs its exact HTTPS identifier, configuration, supported format and an accepted credential type. Authorization server and token endpoint must be supplied together.');
+    }
+    const normalized = Object.fromEntries(allowed.map((name) => [name, grant[name] ?? null]));
+    const identity = JSON.stringify(normalized);
+    if (seen.has(identity)) throw walletInput('An issuance service grant was entered more than once.');
+    seen.add(identity);
+    return normalized;
+  });
+  return {
+    [CREDENTIAL_GRANTS]: credentialTypes.map((vct) => ({ format: 'SD_JWT_VC', vct })),
+    [ISSUANCE_GRANTS]: grants,
+  };
+}
+
+export function walletIssuerProfileSupported(profile) {
+  return profile?.profile_type === 'CUSTOM' && profile.trust_sources?.length === 0
+    && Array.isArray(profile.revocation_services?.enabled_methods) && profile.revocation_services.enabled_methods.length === 0
+    && !profile.revocation_policy?.check_ocsp && !profile.revocation_policy?.check_crl && !profile.revocation_policy?.check_status_list
+    && !profile.revocation_profile_id && !profile.verification_policy_set_id && !profile.compatible_compliance_codes?.length
+    && !Object.keys(profile.system_issuer_overrides || {}).length && !Object.keys(profile.validation_rules?.extensions || {}).length
+    && !profile.time_policy?.require_freshness && !profile.time_policy?.credential_freshness_hours
+    && (profile.trusted_assertion_formats == null || profile.trusted_assertion_formats.includes('JWT'));
+}
+
+function requireWalletProfile(profile, profileId, organizationId) {
+  if (profile?.id !== profileId || profile.organization_id !== organizationId
+    || !walletIssuerProfileSupported(profile) || JSON.stringify(profile.trust_purposes) !== '["CREDENTIAL_ISSUER"]'
+    || !['draft', 'active', 'suspended'].includes(profile.status)
+    || (profile.allowed_issuers != null && !Array.isArray(profile.allowed_issuers))) {
+    throw malformedTrustIssuer('Reload the selected organization’s dedicated wallet issuer profile before saving.');
+  }
+}
+
+/** Save a reviewed issuer, its exact grants, then the profile review state.
+ * Each existing object is reread and matched before writes. No write is replayed
+ * after an uncertain result; callers must reload to recover partial progress. */
+export async function saveWalletIssuerTrust(profileId, organizationId, input, options = {}) {
+  const organization = requireOrganizationId({ organization_id: organizationId });
+  const keys = await validateWalletSigningKeys(input.verification_keys);
+  const grants = walletIssuerGrants(input.credential_types, input.issuance_authorizations);
+  if (!boundedText(input.issuer?.issuer_id) || !boundedText(input.issuer?.display_name, 255)) {
+    throw walletInput('Enter the issuer identifier and display name.');
+  }
+  const scopedOptions = { ...options, singleAttemptReads: true };
+  const run = (operation) => runTrustIssuerRequest(operation, scopedOptions);
+  const read = (path) => run(() => getWithRetryConfig(path, {}, { maxRetries: 0 }));
+  const profile = normalizeTrustProfile(await read(`${TRUST_PROFILE_BASE}/${encodeURIComponent(profileId)}`));
+  requireWalletProfile(profile, profileId, organization);
+  if (!input.profile_updated_at || profile.updated_at !== input.profile_updated_at) {
+    throw walletInput('The profile changed. Reload its latest configuration before saving.');
+  }
+  const relationships = await listTrustProfileIssuers(profileId, organization, scopedOptions);
+  requireCurrentTrustIssuer(scopedOptions);
+  let issuer = input.issuer.id ? await read(`${ISSUER_ENTITY_BASE}/${encodeURIComponent(input.issuer.id)}`) : null;
+  if (issuer) {
+    requireIssuerEntity(issuer, organization, input.issuer.issuer_id, true);
+    if (issuer.id !== input.issuer.id || !input.issuer.updated_at || issuer.updated_at !== input.issuer.updated_at
+      || issuer.revoked_at || !isObject(issuer.metadata)) {
+      throw walletInput('The issuer changed or is revoked. Reload before configuring its public keys.');
+    }
+  }
+  let relationship = issuer ? relationships.find((row) => row.issuer_id === issuer.id) : null;
+  if ((relationship?.id || null) !== (input.relationship?.id || null)
+    || (relationship && (relationship.updated_at !== input.relationship.updated_at || !isObject(relationship.metadata)
+      || relationship.relationship_status !== 'TRUSTED' || relationship.trust_level === 0))) {
+    throw walletInput('The issuer relationship changed or is not trusted. Reload and review it before saving.');
+  }
+  let dispatchedWrite = false;
+  try {
+    const existingIssuerId = issuer?.id;
+    const existingRelationshipId = relationship?.id;
+    const issuerBody = {
+      metadata: { ...(issuer?.metadata || {}), verification_keys: keys },
+      compliance_status: ['COMPLIANT', 'ACCREDITED'].includes(issuer?.compliance_status) ? issuer.compliance_status : 'COMPLIANT',
+    };
+    dispatchedWrite = true;
+    issuer = issuer
+      ? await run(() => patch(`${ISSUER_ENTITY_BASE}/${encodeURIComponent(issuer.id)}`, { organization_id: organization, ...issuerBody }))
+      : await run(() => post(ISSUER_ENTITY_BASE, {
+        organization_id: organization, issuer_id: input.issuer.issuer_id,
+        display_name: input.issuer.display_name, issuer_type: 'ORGANIZATION', ...issuerBody,
+      }));
+    requireIssuerEntity(issuer, organization, input.issuer.issuer_id, true);
+    if (existingIssuerId && issuer.id !== existingIssuerId) {
+      throw malformedTrustIssuer('The issuer update response changed identity. Reload before continuing.');
+    }
+    if (!sameWalletJson(issuer.metadata, walletOwnerProjection(issuerBody.metadata)) || issuer.compliance_status !== issuerBody.compliance_status) {
+      throw malformedTrustIssuer('The saved public issuer keys could not be confirmed. Reload before continuing.');
+    }
+    const metadata = { ...(relationship?.metadata || {}), ...grants };
+    const relationshipPath = `${TRUST_PROFILE_BASE}/${encodeURIComponent(profileId)}/issuers`;
+    relationship = relationship
+      ? await run(() => patch(`${relationshipPath}/${encodeURIComponent(issuer.id)}`, { metadata }))
+      : await run(() => post(relationshipPath, {
+        issuer_id: issuer.id, trust_level: 100, relationship_status: 'TRUSTED',
+        cascade_revocation_policy: 'NOTIFY_ONLY', metadata,
+      }));
+    const composed = composeTrustProfileIssuer(relationship, issuer, profileId, organization);
+    if (existingRelationshipId && relationship.id !== existingRelationshipId) {
+      throw malformedTrustIssuer('The relationship update response changed identity. Reload before continuing.');
+    }
+    if (!sameWalletJson(relationship.metadata, walletOwnerProjection(metadata))) {
+      throw malformedTrustIssuer('The saved credential and issuance grants could not be confirmed. Reload before continuing.');
+    }
+    const beforeReview = normalizeTrustProfile(await read(`${TRUST_PROFILE_BASE}/${encodeURIComponent(profileId)}`));
+    requireWalletProfile(beforeReview, profileId, organization);
+    if (beforeReview.updated_at !== profile.updated_at) {
+      throw walletInput('The profile changed while issuer settings were saved. Reload before completing its review.');
+    }
+    const allowed = profile.allowed_issuers == null ? null
+      : [...new Set([...profile.allowed_issuers, issuer.issuer_id])];
+    const updated = await updateTrustProfile(profileId, {
+      compliance_status: 'COMPLIANT', allowed_issuers: allowed,
+    }, scopedOptions);
+    requireWalletProfile(updated, profileId, organization);
+    if (updated.compliance_status !== 'COMPLIANT' || !sameWalletJson(updated.allowed_issuers ?? null, allowed)) {
+      throw malformedTrustIssuer('The profile review response is incomplete. Reload to inspect the saved state.');
+    }
+    return { profile: updated, issuer, relationship: composed };
+  } catch (error) {
+    requireCurrentTrustIssuer(scopedOptions);
+    if (dispatchedWrite) error.walletReloadRequired = true;
+    throw error;
+  }
 }
 
 // ── Revocation Profile API ────────────────────────────────────────────────

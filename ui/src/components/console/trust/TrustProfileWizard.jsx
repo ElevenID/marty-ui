@@ -5,7 +5,7 @@
  * Defines trusted issuers and validation rules for credential verification.
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useNavigate, useLocation, Link as RouterLink } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -21,6 +21,10 @@ import {
   Alert,
   Link,
   LinearProgress,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -41,6 +45,7 @@ import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
 import ReviewStep from './steps/ReviewStep';
+import WalletTrustProfileCreate from './WalletTrustProfileCreate';
 import {
   getAllowedAlgorithmsForFramework,
   getSupportedFormatsForFramework,
@@ -60,7 +65,7 @@ const hasTrustConfiguration = (data) => (
   || data.allow_all_issuers === true
 );
 
-const TrustProfileWizardContent = ({ organizationId, canActivate, canViewProfile, canViewIssuers, canCreateIssuers }) => {
+const TrustProfileWizardContent = ({ organizationId, canActivate, canViewProfile, canViewIssuers, canCreateIssuers, onBusyChange }) => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const effectiveOrganizationId = organizationId;
@@ -258,10 +263,12 @@ const TrustProfileWizardContent = ({ organizationId, canActivate, canViewProfile
     validateStep,
     onSubmit: async (data) => {
       submissionPending.current = true;
+      onBusyChange?.(true);
       try {
         return await handleSubmit(data);
       } finally {
         submissionPending.current = false;
+        onBusyChange?.(false);
       }
     },
     onComplete: () => {
@@ -456,6 +463,26 @@ const TrustProfileWizardContent = ({ organizationId, canActivate, canViewProfile
   );
 };
 
+function TrustProfileCreation(props) {
+  const [purpose, setPurpose] = useState('general');
+  const [busy, setBusy] = useState(false);
+  return <>
+    <Box sx={{ maxWidth: 900, mx: 'auto', mt: 3, px: 3 }}>
+      <FormControl fullWidth disabled={busy}>
+        <InputLabel id="trust-configuration-purpose">Trust configuration</InputLabel>
+        <Select labelId="trust-configuration-purpose" label="Trust configuration" value={purpose}
+          onChange={(event) => setPurpose(event.target.value)}>
+          <MenuItem value="general">Credential and framework trust</MenuItem>
+          <MenuItem value="CREDENTIAL_ISSUER" disabled={!props.canViewProfile || !props.canEditProfile}>Paired wallet credential issuers</MenuItem>
+          <MenuItem value="PRESENTATION_VERIFIER" disabled={!props.canViewProfile || !props.canEditProfile}>Paired wallet verifiers</MenuItem>
+        </Select>
+      </FormControl>
+    </Box>
+    {purpose === 'general' ? <TrustProfileWizardContent {...props} onBusyChange={setBusy} />
+      : <WalletTrustProfileCreate key={purpose} organizationId={props.organizationId} purpose={purpose} onBusyChange={setBusy} />}
+  </>;
+}
+
 function TrustProfileWizard() {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
@@ -466,6 +493,7 @@ function TrustProfileWizard() {
   const canCreate = can('trust-profile', 'create');
   const canActivate = can('trust-profile', 'activate');
   const canViewProfile = can('trust-profile', 'view');
+  const canEditProfile = can('trust-profile', 'edit');
   const canViewIssuers = can('trusted-issuer', 'view');
   const canCreateIssuers = can('trusted-issuer', 'create');
 
@@ -474,12 +502,13 @@ function TrustProfileWizard() {
     return <Alert severity="info">{t('trust.trustProfileWizard.selectOrganization')}</Alert>;
   }
   if (!canCreate) return <Alert severity="error">{t('trust.trustProfileWizard.createDenied')}</Alert>;
-  return <TrustProfileWizardContent
+  return <TrustProfileCreation
     key={JSON.stringify([activeOrgId, principalId, isAuthenticated, location.key, location.pathname,
-      location.search, location.hash, canCreate, canActivate, canViewProfile, canViewIssuers, canCreateIssuers])}
+      location.search, location.hash, canCreate, canActivate, canViewProfile, canEditProfile, canViewIssuers, canCreateIssuers])}
     organizationId={activeOrgId}
     canActivate={canActivate}
     canViewProfile={canViewProfile}
+    canEditProfile={canEditProfile}
     canViewIssuers={canViewIssuers}
     canCreateIssuers={canCreateIssuers}
   />;

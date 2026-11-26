@@ -16,9 +16,11 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 describe('identity provider capabilities', () => {
   it('loads provider links from the configured API for a static console', async () => {
     vi.stubEnv('VITE_API_URL', 'https://api.example');
-    server.use(http.get('https://api.example/v1/auth/provider', () => HttpResponse.json(provider)));
-    const fetch = vi.spyOn(window, 'fetch');
+    const fetch = vi.spyOn(window, 'fetch')
+      .mockRejectedValue(new Error('Unexpected provider transport request'))
+      .mockResolvedValueOnce(HttpResponse.json(provider));
     await expect(getIdentityProvider()).resolves.toEqual(provider);
+    expect(fetch).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith('https://api.example/v1/auth/provider', expect.objectContaining({
       credentials: 'include', cache: 'no-store', redirect: 'error',
     }));

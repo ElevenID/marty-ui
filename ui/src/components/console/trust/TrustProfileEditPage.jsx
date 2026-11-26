@@ -37,6 +37,7 @@ import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { getTrustProfile, updateTrustProfile } from '../../../services/presentationPolicyApi';
+import ManagedWalletProfileEditor from './ManagedWalletProfileEditor';
 import {
   TRUST_PROFILE_SUPPORTED_FORMATS,
   getSupportedFormatsForFramework,
@@ -118,6 +119,20 @@ function TrustProfileEditContent({ id, organizationId }) {
   const [initialForm, setInitialForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [walletSaving, setWalletSaving] = useState(false);
+  const walletBusy = useRef(false);
+  const [savedWalletProfile, setSavedWalletProfile] = useState(null);
+  const walletBusyChanged = useCallback((value) => { walletBusy.current = value; setWalletSaving(value); }, []);
+  const walletProfileSaved = useCallback((result) => {
+    const checked = validateProfile(result, true);
+    setSavedWalletProfile(checked);
+    const values = {
+      name: checked.name, description: checked.description || '',
+      framework_type: (checked.framework || checked.profile_type).toLowerCase(),
+      supported_formats: checked.supported_formats, status: checked.status.toLowerCase(),
+    };
+    setForm(values); setInitialForm(values);
+  }, [validateProfile]);
 
   // Seed form state once profile is loaded
   useEffect(() => {
@@ -164,7 +179,7 @@ function TrustProfileEditContent({ id, organizationId }) {
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!form?.name?.trim() || saveBusy.current) return;
+    if (!form?.name?.trim() || saveBusy.current || walletBusy.current) return;
     const action = startAction();
     if (!isCurrentView(action)) return;
     saveBusy.current = true;
@@ -233,6 +248,11 @@ function TrustProfileEditContent({ id, organizationId }) {
   ];
   const supportedFormatsLabel = t('wizards.trustProfile.basicsStep.fields.supportedFormats', 'Supported Credential Formats').replace(/\s*\*$/, '');
   const formatSelectionLocked = isFrameworkFormatSelectionLocked(form.framework_type);
+  const walletProfile = savedWalletProfile || profile;
+  const isWalletProfile = walletProfile.profile_type === 'CUSTOM' && walletProfile.trust_purposes?.length === 1
+    && ['CREDENTIAL_ISSUER', 'PRESENTATION_VERIFIER'].includes(walletProfile.trust_purposes[0]);
+  const basicChanges = Object.entries(form).some(([key, value]) => key !== 'status'
+    && JSON.stringify(value) !== JSON.stringify(initialForm?.[key]));
 
   return (
     <Box>
@@ -248,7 +268,7 @@ function TrustProfileEditContent({ id, organizationId }) {
           {t('trust.breadcrumbs.trustProfiles', 'Trust Profiles')}
         </Link>
         <Link component={RouterLink} to={`/console/org/trust/profiles/${id}`} underline="hover" color="inherit">
-          {profile.name}
+          {walletProfile.name}
         </Link>
         <Typography color="text.primary">
           {t('trust.trustProfileEdit.breadcrumbEdit', 'Edit')}
@@ -271,12 +291,18 @@ function TrustProfileEditContent({ id, organizationId }) {
         </Alert>
       )}
 
+      {isWalletProfile && <>
+        {basicChanges && <Alert severity="info" sx={{ mb: 2 }}>Save or discard the basic profile changes before configuring wallet trust.</Alert>}
+        <ManagedWalletProfileEditor profile={walletProfile} organizationId={organizationId} disabled={saving || basicChanges}
+          onBusyChange={walletBusyChanged} onProfileSaved={walletProfileSaved} />
+      </>}
+
       <Paper sx={{ p: 3, mb: 3 }}>
         {/* Name */}
         <TextField
           fullWidth
           required
-          disabled={saving}
+          disabled={saving || walletSaving}
           label={t('wizards.trustProfile.basicsStep.fields.name', 'Profile Name')}
           value={form.name}
           onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
@@ -288,7 +314,7 @@ function TrustProfileEditContent({ id, organizationId }) {
         {/* Description */}
         <TextField
           fullWidth
-          disabled={saving}
+          disabled={saving || walletSaving}
           multiline
           rows={3}
           label={t('wizards.trustProfile.basicsStep.fields.description', 'Description')}
@@ -300,7 +326,7 @@ function TrustProfileEditContent({ id, organizationId }) {
         />
 
         {/* Framework Type */}
-        <FormControl fullWidth disabled={saving} sx={{ mb: 3 }} data-testid="edit.trustProfile.frameworkTypeField">
+        <FormControl fullWidth disabled={saving || walletSaving} sx={{ mb: 3 }} data-testid="edit.trustProfile.frameworkTypeField">
           <InputLabel>{t('wizards.trustProfile.basicsStep.fields.frameworkType', 'Framework Type')}</InputLabel>
           <Select
             value={form.framework_type}
@@ -339,7 +365,7 @@ function TrustProfileEditContent({ id, organizationId }) {
                   <Checkbox
                     checked={(form.supported_formats || []).includes(fmt.value)}
                     onChange={() => handleFormatToggle(fmt.value)}
-                    disabled={formatSelectionLocked || saving}
+                    disabled={formatSelectionLocked || saving || walletSaving}
                     slotProps={{ input: { 'data-testid': `edit.trustProfile.format.${fmt.value}` } }}
                   />
                 }
@@ -380,7 +406,7 @@ function TrustProfileEditContent({ id, organizationId }) {
           variant="contained"
           startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
           onClick={handleSave}
-          disabled={saving || !form.name?.trim()}
+          disabled={saving || walletSaving || !form.name?.trim()}
           data-testid="edit.trustProfile.save"
         >
           {saving
@@ -391,7 +417,7 @@ function TrustProfileEditContent({ id, organizationId }) {
           variant="outlined"
           startIcon={<ArrowBackIcon />}
           onClick={() => navigate(`/console/org/trust/profiles/${id}`)}
-          disabled={saving}
+          disabled={saving || walletSaving}
         >
           {t('trust.trustProfileEdit.cancel', 'Cancel')}
         </Button>

@@ -55,7 +55,8 @@ function allFiles(root, prefix = '') {
 // nonqualifying and remove their context, even when every assertion passes.
 function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false } = {}) {
   const profile = {
-    current: ['contracts/application-source-export.json', 392],
+    current: ['contracts/application-source-export.json', 414],
+    'before-managed-wallet-setup': ['contracts/application-source-export-history/before-managed-wallet-setup-v1.json', 392],
     initial: ['contracts/application-source-export-history/initial-v1.json', 296],
     'before-delegation-ux-states': ['contracts/application-source-export-history/before-delegation-ux-states-v1.json', 321],
     'before-static-auth-origins': ['contracts/application-source-export-history/before-static-auth-origins-v1.json', 321],
@@ -205,7 +206,7 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
   assert.equal(result.fixture, true);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
-  assert.equal(result.tests.test_count, 392);
+  assert.equal(result.tests.test_count, 414);
   assert.equal(result.output_comparison.output_files, 88);
   assert.equal(result.output_comparison.mode_transformations.length, 54);
   assert.equal(result.runtime_comparison.payload_files, 92);
@@ -270,16 +271,20 @@ test('release input validation keeps exact current and historical test profiles'
   const beforeConsole = fixture(t, { historical: 'before-full-console-transport' });
   const mainUx = fixture(t, { historical: 'main-delegation-ux-states' });
   const nativeAuth = fixture(t, { historical: 'before-main-ux-integration' });
-  assert.deepEqual(current.manifest.test_profile.files, nativeAuth.manifest.test_profile.files);
+  const beforeWallet = fixture(t, { historical: 'before-managed-wallet-setup' });
+  assert.deepEqual(beforeWallet.manifest.test_profile.files, nativeAuth.manifest.test_profile.files);
   assert.deepEqual(mainUx.manifest.test_profile.files, previous.manifest.test_profile.files);
   assert.deepEqual(previous.manifest.test_profile, predecessor.manifest.test_profile);
-  assert.equal(current.manifest.test_profile.assertions, 392);
+  assert.equal(current.manifest.test_profile.assertions, 414);
+  assert.equal(beforeWallet.manifest.test_profile.assertions, 392);
   assert.equal(mainUx.manifest.test_profile.assertions, 323);
   assert.equal(nativeAuth.manifest.test_profile.assertions, undefined);
   assert.equal(previous.manifest.test_profile.assertions, undefined);
   assert.deepEqual(current.manifest.test_profile.files.filter((name) => !historical.manifest.test_profile.files.includes(name)), [
     'src/components/console/agents/AgentTrustPages.test.tsx',
+    'src/components/console/trust/__tests__/WalletTrustProfiles.owner.test.tsx',
     'src/services/__tests__/agentTrustApi.test.ts',
+    'src/services/__tests__/walletTrustConfiguration.test.ts',
     'src/services/__tests__/authApiOrigin.test.ts',
     'src/services/__tests__/consoleApiOrigin.test.ts',
     'src/services/__tests__/identityProviderApi.test.ts',
@@ -288,12 +293,20 @@ test('release input validation keeps exact current and historical test profiles'
   assert.ok(historical.manifest.test_profile.files.every((name) => current.manifest.test_profile.files.includes(name)));
   assert.equal(predecessor.manifest.test_profile.files.length, 26);
   assert.equal(beforeConsole.manifest.test_profile.files.length, 29);
+  assert.equal(beforeWallet.manifest.test_profile.files.length, 30);
+  assert.equal(current.manifest.test_profile.files.length, 32);
+  assert.deepEqual(current.manifest.test_profile.files.filter((name) => !beforeWallet.manifest.test_profile.files.includes(name)), [
+    'src/components/console/trust/__tests__/WalletTrustProfiles.owner.test.tsx',
+    'src/services/__tests__/walletTrustConfiguration.test.ts',
+  ]);
   assert.deepEqual(current.manifest.test_profile.files.filter((name) => !beforeConsole.manifest.test_profile.files.includes(name)), [
+    'src/components/console/trust/__tests__/WalletTrustProfiles.owner.test.tsx',
+    'src/services/__tests__/walletTrustConfiguration.test.ts',
     'src/services/__tests__/consoleApiOrigin.test.ts',
   ]);
-  // Preserve both branches' immutable profiles. Adding two UX-state cases to
-  // the native-auth suite must not change any earlier package's exact policy.
-  const profiles = [[current, 392], [nativeAuth, 390], [beforeConsole, 383], [mainUx, 323],
+  // The current owner-configuration suite has its own exact policy. Every
+  // historical package keeps its original inventory and assertion count.
+  const profiles = [[current, 414], [beforeWallet, 392], [nativeAuth, 390], [beforeConsole, 383], [mainUx, 323],
     [previous, 321], [predecessor, 321], [historical, 296]];
   for (const [input, assertions] of profiles) {
     const otherAssertions = [...new Set(profiles.map(([, count]) => count))].filter((count) => count !== assertions);
