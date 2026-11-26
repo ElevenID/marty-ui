@@ -20,6 +20,9 @@ function ApiDocumentation() {
   const [showGuide, setShowGuide] = useState(true);
   const [redocError, setRedocError] = useState(null);
   const [specUrlInUse, setSpecUrlInUse] = useState(null);
+  // Use the same first-party API base as the application transport.
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const gatewayOpenApiUrl = `${apiBaseUrl}/openapi.json`;
 
   useEffect(() => {
     let mounted = true;
@@ -30,7 +33,7 @@ function ApiDocumentation() {
     ];
     const openApiCandidates = [
       import.meta.env.VITE_OPENAPI_URL,
-      '/openapi.json',
+      gatewayOpenApiUrl,
     ].filter(Boolean);
 
     const isOpenApiReachable = async (url) => {
@@ -147,7 +150,7 @@ function ApiDocumentation() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [gatewayOpenApiUrl]);
 
   return (
     <Box sx={{ 
@@ -334,13 +337,13 @@ function ApiDocumentation() {
               You can open the API schema directly using the link below, or try loading this page again later.
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <Button variant="outlined" size="small" component="a" href="/openapi.json" target="_blank" rel="noopener noreferrer">
+              <Button variant="outlined" size="small" component="a" href={gatewayOpenApiUrl} target="_blank" rel="noopener noreferrer">
                 Try /openapi.json
               </Button>
-              <Button variant="outlined" size="small" component="a" href="/v1/protocol-support" target="_blank" rel="noopener noreferrer">
+              <Button variant="outlined" size="small" component="a" href={`${apiBaseUrl}/v1/protocol-support`} target="_blank" rel="noopener noreferrer">
                 Protocol support catalog
               </Button>
-              <Button variant="outlined" size="small" component="a" href="/redoc" target="_blank" rel="noopener noreferrer">
+              <Button variant="outlined" size="small" component="a" href={`${apiBaseUrl}/redoc`} target="_blank" rel="noopener noreferrer">
                 Gateway ReDoc
               </Button>
             </Stack>

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
+import { HelmetProvider } from 'react-helmet-async';
 import { renderWithoutRouter, screen } from '@test/utils';
 
 import PublicRoutes from './PublicRoutes';
@@ -8,6 +9,8 @@ const originalUrl = window.location.href;
 afterEach(() => {
   delete (window as any).__MARTY_RUNTIME_CONFIG__;
   (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 const {
@@ -58,10 +61,6 @@ vi.mock('../../components/pages/PublicVerificationPage', () => ({ default: () =>
 
 vi.mock('../../components/ApplyPage', () => ({
   default: () => <div data-testid="apply-page">Apply page</div>,
-}));
-
-vi.mock('../../components/ApiDocumentation', () => ({
-  default: () => <div data-testid="api-docs">API docs</div>,
 }));
 
 vi.mock('../../components/pages/MyOrganizationsPage', () => ({
@@ -224,7 +223,7 @@ describe('PublicRoutes', () => {
     expect(screen.getByTestId('public-root')).toBeInTheDocument();
   });
 
-  it('routes /docs/quickstart to API docs instead of the public fallback', () => {
+  it('routes /docs/quickstart to API docs with recovery links on the configured API', async () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
       isAdministrator: false,
@@ -234,14 +233,33 @@ describe('PublicRoutes', () => {
     });
     mockGetPublicLoginFallback.mockReturnValue('/');
 
-    renderWithoutRouter(
-      <MemoryRouter initialEntries={['/docs/quickstart']}>
-        <PublicRoutes />
-      </MemoryRouter>,
-    );
+    for (const apiOrigin of ['https://api.elevenid.test/', '']) {
+      vi.stubEnv('VITE_API_URL', apiOrigin);
+      vi.stubEnv('VITE_OPENAPI_URL', '');
+      const apiBase = apiOrigin.replace(/\/$/, '');
+      const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+      vi.stubGlobal('fetch', fetch);
+      const { unmount } = renderWithoutRouter(
+        <HelmetProvider>
+          <MemoryRouter initialEntries={['/docs/quickstart']}>
+            <PublicRoutes />
+          </MemoryRouter>
+        </HelmetProvider>,
+      );
 
-    expect(screen.getByTestId('api-docs')).toBeInTheDocument();
-    expect(screen.queryByTestId('public-root')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Verifiable Credential API Documentation' })).toBeInTheDocument();
+      expect(screen.queryByTestId('public-root')).not.toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent('The API schema could not be reached.');
+      expect(fetch).toHaveBeenCalledWith(`${apiBase}/openapi.json`, expect.objectContaining({ method: 'GET' }));
+      for (const [name, path] of [
+        ['Try /openapi.json', '/openapi.json'],
+        ['Protocol support catalog', '/v1/protocol-support'],
+        ['Gateway ReDoc', '/redoc'],
+      ]) {
+        expect(screen.getByRole('link', { name })).toHaveAttribute('href', `${apiBase}${path}`);
+      }
+      unmount();
+    }
   });
   it('serves verification directly without login or organization membership', () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: false, isAdministrator: false, isVendor: false, isApplicant: false, login: vi.fn() });

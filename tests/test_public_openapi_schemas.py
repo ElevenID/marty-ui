@@ -375,9 +375,9 @@ def test_ai_consumer_page_uses_gateway_discovery_instead_of_unverified_cli_claim
     docs = (ROOT / "ui/src/components/ApiDocumentation.jsx").read_text()
     assert '/v1/protocol-support' in page
     assert '/openapi.json' in page
-    assert 'href="/v1/protocol-support"' in docs
-    assert 'href="/openapi.json"' in docs
-    assert 'href="/redoc"' in docs
+    assert 'href={`${apiBaseUrl}/v1/protocol-support`}' in docs
+    assert 'href={gatewayOpenApiUrl}' in docs
+    assert 'href={`${apiBaseUrl}/redoc`}' in docs
     assert 'localhost:8000/docs' not in docs
     for unverified_claim in (
         '@elevenid/marty-cli',
