@@ -1738,7 +1738,10 @@ fn exact_secrets(service: &Value, expected: &[&str]) -> Result<()> {
             .ok_or(REFUSED)?;
         require(
             names.insert(source)
-                && (secret.is_string() || secret["target"].is_null() || secret["target"] == source),
+                && (secret.is_string()
+                    || secret["target"].is_null()
+                    || secret["target"] == source
+                    || secret["target"] == format!("/run/secrets/{source}")),
         )?;
     }
     require(names == expected.iter().copied().collect())
