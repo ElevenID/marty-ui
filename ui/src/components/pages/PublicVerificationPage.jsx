@@ -159,7 +159,7 @@ export default function PublicVerificationPage() {
   }
   async function cancel() {
     if (!recovery?.id || operation.current) return;
-    operation.current = true; setBusy(true);
+    operation.current = true; setBusy(true); setError('');
     const version = generation.current;
     try { const current = await api.cancel(recovery.id, recovery.key); if (version === generation.current) setSession(current); }
     catch (cause) { if (version === generation.current) setError(failure(cause)); }

@@ -47,12 +47,18 @@ describe('public verification experience', () => {
     expect(sessionStorage.getItem('marty.public-verification.v1')).toBeNull();
   });
 
-  it('reconciles an uncertain launch with the same capability and does not create a session on reload', async () => {
-    const current = session(); let attempts = 0;
+  it('keeps the same capability through uncertain launch, reload, and cancellation retry', async () => {
+    const current = session(); let attempts = 0; let cancelAttempts = 0;
     const fetch = vi.fn(async (url: string) => {
       if (String(url).endsWith('/catalog')) return response(catalog);
       if (String(url).endsWith('/sessions') && ++attempts === 1) throw new TypeError('connection lost');
       if (String(url).endsWith('/example')) return response({ ...current, example_status: 'input_rejected' });
+      if (String(url).endsWith('/cancel')) {
+        if (++cancelAttempts === 1) throw new TypeError('connection lost');
+        return response({ ...current, status: 'cancelled' });
+      }
+      // Polling cannot independently clear the failed cancellation warning.
+      if (String(url).endsWith(`/sessions/${id}`)) throw new TypeError('connection lost');
       return response(current);
     });
     installFetch(fetch); const user = userEvent.setup();
@@ -72,6 +78,18 @@ describe('public verification experience', () => {
     expect(launches).toHaveLength(2);
     expect(new Headers((launches[0] as any)[1].headers).get('x-verification-session')).toBe(saved.key);
     expect(new Headers((launches[1] as any)[1].headers).get('x-verification-session')).toBe(saved.key);
+    await user.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(await screen.findByText(/could not confirm the result/)).toBeInTheDocument();
+    expect(screen.queryByText('Verification cancelled', { exact: true })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(await screen.findByText('Verification cancelled', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/could not confirm the result/)).not.toBeInTheDocument();
+    const cancellations = fetch.mock.calls.filter(([url]) => String(url).endsWith('/cancel'));
+    expect(cancellations).toHaveLength(2);
+    for (const request of cancellations) {
+      expect(new Headers((request as any)[1].headers).get('x-verification-session')).toBe(saved.key);
+    }
+    expect(JSON.parse(sessionStorage.getItem('marty.public-verification.v1')!)).toMatchObject({ key: saved.key, id });
   });
   it('does not restore an old result after the visitor changes the recovered request', async () => {
     const current = session();
