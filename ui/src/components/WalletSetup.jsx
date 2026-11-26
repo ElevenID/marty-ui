@@ -37,6 +37,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
+import { usePermissions } from '../hooks/usePermissions';
+import { useConsole } from '../contexts/ConsoleContext';
+import { publicEntryHref } from '../application/routing/publicEntry';
 import { listTrustProfiles } from '../services/presentationPolicyApi';
 import {
   buildPairingState,
@@ -59,6 +62,9 @@ import {
 const WalletSetup = () => {
   const branding = useBranding();
   const { user, organizationId } = useAuth();
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const { mode, activeOrgId } = useConsole();
+  const { can, isLoading: permissionsLoading, error: permissionsError } = usePermissions();
   // State
   const [activeStep, setActiveStep] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -73,10 +79,21 @@ const WalletSetup = () => {
   const [trustProfiles, setTrustProfiles] = useState([]);
   const [trustProfileId, setTrustProfileId] = useState('');
   const [verifierTrustProfileId, setVerifierTrustProfileId] = useState('');
-  const [profileOrganizationId, setProfileOrganizationId] = useState(null);
+  const [profileLoad, setProfileLoad] = useState({ organizationId: null, principalId: null, status: 'loading' });
+  const [profileReload, setProfileReload] = useState(0);
   const pairingRequestId = useRef(0);
-  const currentScope = useRef({ organizationId, trustProfileId, verifierTrustProfileId });
-  currentScope.current = { organizationId, trustProfileId, verifierTrustProfileId };
+  const currentScope = useRef({ organizationId, principalId, trustProfileId, verifierTrustProfileId, profileReload });
+  currentScope.current = { organizationId, principalId, trustProfileId, verifierTrustProfileId, profileReload };
+  const hasProfileScope = Boolean(organizationId && principalId);
+  const profileScopeCurrent = profileLoad.organizationId === organizationId && profileLoad.principalId === principalId;
+  const profilesReady = hasProfileScope && profileScopeCurrent && profileLoad.status === 'ready';
+  const profilesLoading = hasProfileScope && (!profileScopeCurrent || profileLoad.status === 'loading');
+  const profilesFailed = hasProfileScope && profileScopeCurrent && profileLoad.status === 'error';
+  const issuerProfiles = trustProfiles.filter((profile) => !Array.isArray(profile.trust_purposes)
+    || profile.trust_purposes.includes('CREDENTIAL_ISSUER'));
+  const canManageTrustProfiles = mode === 'org' && activeOrgId === organizationId && !permissionsLoading && !permissionsError
+    && can('trust-profile', 'view')
+    && (can('trust-profile', 'create') || can('trust-profile', 'edit') || can('trust-profile', 'activate'));
 
   // Wallet connection state
   const [walletConnected, setWalletConnected] = useState(false);
@@ -94,10 +111,11 @@ const WalletSetup = () => {
   }, []);
 
   const generatePairingCode = useCallback(async () => {
-    if (!organizationId || !trustProfileId || profileOrganizationId !== organizationId) return;
+    if (!profilesReady || !trustProfileId) return;
     const requestId = ++pairingRequestId.current;
     const isCurrent = () => requestId === pairingRequestId.current &&
       currentScope.current.organizationId === organizationId &&
+      currentScope.current.principalId === principalId &&
       currentScope.current.trustProfileId === trustProfileId &&
       currentScope.current.verifierTrustProfileId === verifierTrustProfileId;
     setLoading(true);
@@ -123,43 +141,55 @@ const WalletSetup = () => {
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [organizationId, trustProfileId, verifierTrustProfileId, profileOrganizationId, clearPairingPresentation]);
+  }, [organizationId, principalId, trustProfileId, verifierTrustProfileId, profilesReady, clearPairingPresentation]);
+
+  const reloadProfiles = () => {
+    pairingRequestId.current += 1;
+    setLoading(false);
+    clearPairingPresentation();
+    setProfileLoad({ organizationId, principalId, status: 'loading' });
+    setProfileReload((value) => value + 1);
+  };
 
   useEffect(() => {
     let current = true;
+    const isCurrent = () => current && currentScope.current.organizationId === organizationId
+      && currentScope.current.principalId === principalId && currentScope.current.profileReload === profileReload;
     pairingRequestId.current += 1;
     setLoading(false);
     setTrustProfiles([]);
     setTrustProfileId('');
     setVerifierTrustProfileId('');
-    setProfileOrganizationId(null);
+    setProfileLoad({ organizationId, principalId, status: organizationId && principalId ? 'loading' : 'idle' });
     clearPairingPresentation();
     setActiveStep(0);
     setWalletDeviceId(null);
     setSuccess(null);
-    if (organizationId) {
+    setError(null);
+    if (organizationId && principalId) {
       listTrustProfiles({ organization_id: organizationId })
         .then((profiles) => {
-          if (!current) return;
+          if (!isCurrent()) return;
           const eligible = profiles.filter((profile) => profile.status === 'active');
           setTrustProfiles(eligible);
-          setProfileOrganizationId(organizationId);
+          setProfileLoad({ organizationId, principalId, status: 'ready' });
           const issuers = eligible.filter((profile) => !Array.isArray(profile.trust_purposes)
             || profile.trust_purposes.includes('CREDENTIAL_ISSUER'));
           if (issuers.length === 1) setTrustProfileId(issuers[0].id);
         })
-        .catch(() => { if (current) setError('Could not load Trust Profiles for wallet pairing'); });
+        .catch(() => { if (isCurrent()) setProfileLoad({ organizationId, principalId, status: 'error' }); });
     }
     return () => { current = false; };
-  }, [organizationId, clearPairingPresentation]);
+  }, [organizationId, principalId, profileReload, clearPairingPresentation]);
 
   const checkWalletStatus = useCallback(async () => {
     if (!pairingId || activeStep !== 0) return;
     const requestId = pairingRequestId.current;
-    const { organizationId: requestOrganizationId, trustProfileId: requestTrustProfileId,
+    const { organizationId: requestOrganizationId, principalId: requestPrincipalId, trustProfileId: requestTrustProfileId,
       verifierTrustProfileId: requestVerifierProfileId } = currentScope.current;
     const isCurrent = () => requestId === pairingRequestId.current &&
       currentScope.current.organizationId === requestOrganizationId &&
+      currentScope.current.principalId === requestPrincipalId &&
       currentScope.current.trustProfileId === requestTrustProfileId &&
       currentScope.current.verifierTrustProfileId === requestVerifierProfileId;
     try {
@@ -217,8 +247,8 @@ const WalletSetup = () => {
   }, [checkNotificationPermission]);
 
   useEffect(() => {
-    if (trustProfileId && profileOrganizationId === organizationId) generatePairingCode();
-  }, [trustProfileId, profileOrganizationId, organizationId, generatePairingCode]);
+    if (trustProfileId && profilesReady) generatePairingCode();
+  }, [trustProfileId, profilesReady, generatePairingCode]);
 
   // Countdown timer for QR code expiry
   useEffect(() => {
@@ -307,15 +337,53 @@ const WalletSetup = () => {
             </StepLabel>
             <StepContent>
               <Typography color="text.secondary" paragraph>
-                Open the {branding.authenticatorName} app and scan this QR code to pair your wallet.
+                Choose an active issuer Trust Profile, then scan the pairing code with the {branding.authenticatorName} app.
               </Typography>
+
+              {!hasProfileScope && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  <Typography>Select an organization to load wallet Trust Profiles.</Typography>
+                  <Button component="a" href={publicEntryHref('/console/organizations')} sx={{ mt: 1 }}>
+                    Open my organizations
+                  </Button>
+                </Alert>
+              )}
+              {profilesLoading && (
+                <Box role="status" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <CircularProgress size={20} />
+                  <Typography>Loading Trust Profiles…</Typography>
+                </Box>
+              )}
+              {profilesFailed && (
+                <Alert severity="error" sx={{ mb: 2 }} data-testid="wallet-profiles-error">
+                  Could not load Trust Profiles for wallet pairing. Reload profiles to try again.
+                </Alert>
+              )}
+              {profilesReady && issuerProfiles.length === 0 && (
+                <Alert severity="info" sx={{ mb: 2 }} data-testid="wallet-profiles-empty">
+                  <Typography>No active issuer Trust Profiles are available for this organization.</Typography>
+                  <Typography variant="body2" sx={{ mt: 1 }}>
+                    {canManageTrustProfiles
+                      ? 'Configure and activate a credential issuer Trust Profile, then reload profiles here to pair your wallet.'
+                      : 'Open your organizations to select this organization and check your access, or ask its administrator to activate an issuer Trust Profile. Then return here and reload profiles.'}
+                  </Typography>
+                  <Button
+                    component="a"
+                    href={publicEntryHref(canManageTrustProfiles ? '/console/org/trust/profiles' : '/console/organizations')}
+                    sx={{ mt: 1 }}
+                  >
+                    {canManageTrustProfiles ? 'Set up Trust Profiles' : 'Open my organizations'}
+                  </Button>
+                </Alert>
+              )}
 
               <FormControl fullWidth sx={{ mb: 2 }}>
                 <InputLabel id="wallet-trust-profile-label">Trust Profile</InputLabel>
                 <Select
                   labelId="wallet-trust-profile-label"
                   label="Trust Profile"
-                  value={trustProfileId}
+                  value={profilesReady ? trustProfileId : ''}
+                  disabled={!profilesReady || issuerProfiles.length === 0}
                   onChange={(event) => {
                     pairingRequestId.current += 1;
                     setLoading(false);
@@ -325,8 +393,7 @@ const WalletSetup = () => {
                   }}
                   data-testid="wallet-trust-profile-select"
                 >
-                  {trustProfiles.filter((profile) => !Array.isArray(profile.trust_purposes)
-                    || profile.trust_purposes.includes('CREDENTIAL_ISSUER')).map((profile) => (
+                  {profilesReady && issuerProfiles.map((profile) => (
                     <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.id}</MenuItem>
                   ))}
                 </Select>
@@ -337,7 +404,8 @@ const WalletSetup = () => {
                 <Select
                   labelId="wallet-verifier-profile-label"
                   label="Verifier Trust Profile (optional)"
-                  value={verifierTrustProfileId}
+                  value={profilesReady ? verifierTrustProfileId : ''}
+                  disabled={!profilesReady || issuerProfiles.length === 0}
                   onChange={(event) => {
                     pairingRequestId.current += 1;
                     setLoading(false);
@@ -347,7 +415,7 @@ const WalletSetup = () => {
                   data-testid="wallet-verifier-profile-select"
                 >
                   <MenuItem value="">No verifier profile selected</MenuItem>
-                  {trustProfiles.filter((profile) => profile.id !== trustProfileId
+                  {profilesReady && trustProfiles.filter((profile) => profile.id !== trustProfileId
                     && Array.isArray(profile.trust_purposes)
                     && profile.trust_purposes.includes('PRESENTATION_VERIFIER')).map((profile) => (
                     <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.id}</MenuItem>
@@ -358,7 +426,7 @@ const WalletSetup = () => {
                 Choose the trust profile used to authenticate presentation requests to your wallet.
               </Typography>
 
-              <Card sx={{ maxWidth: 320, mx: 'auto', mb: 2 }}>
+              {profilesReady && issuerProfiles.length > 0 && <Card sx={{ maxWidth: 320, mx: 'auto', mb: 2 }}>
                 <CardContent sx={{ textAlign: 'center' }}>
                   {loading ? (
                     <CircularProgress data-testid="qr-loading" />
@@ -382,14 +450,22 @@ const WalletSetup = () => {
                     <Typography color="text.secondary">Select an active Trust Profile to generate a pairing code.</Typography>
                   )}
                 </CardContent>
-              </Card>
+              </Card>}
 
-              <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<RefreshIcon />}
+                  onClick={reloadProfiles}
+                  disabled={!hasProfileScope || profilesLoading}
+                >
+                  Reload profiles
+                </Button>
                 <Button
                   variant="outlined"
                   startIcon={<RefreshIcon />}
                   onClick={generatePairingCode}
-                  disabled={loading || !trustProfileId || profileOrganizationId !== organizationId}
+                  disabled={loading || !trustProfileId || !profilesReady}
                   data-testid="refresh-qr-button"
                 >
                   Refresh QR
