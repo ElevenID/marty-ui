@@ -180,7 +180,7 @@ describe('public verification experience', () => {
     // Keep the real SDK's bounded GET retries; no request reaches a network transport.
     expect(await screen.findByRole('button', { name: 'Try again' }, { timeout: 15_000 })).toBeEnabled();
     expect(screen.getByRole('alert')).toHaveTextContent(message);
-    expect(screen.getByRole('alert')).toHaveClass(`MuiAlert-standard${severity}`);
+    expect(screen.getByRole('alert')).toHaveClass(`MuiAlert-color${severity}`);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.queryByText(/Private upstream diagnostic/)).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
