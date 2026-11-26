@@ -377,9 +377,10 @@ async fn qualify_template_row_locks(owner: &PgPool, canonical: &PgPool) {
     let template = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO credential_template_service.credential_templates
-         (id,organization_id,name,credential_type,vct,created_at,updated_at)
+         (id,organization_id,name,credential_type,vct,compliance_profile_id,created_at,updated_at)
          VALUES ($1,$2,'Restricted issuance fixture','NativeFeatureCredential',
-           'https://issuer.invalid/native-feature',clock_timestamp(),clock_timestamp())",
+           'https://issuer.invalid/native-feature','10000000-0000-0000-0000-000000000001',
+           clock_timestamp(),clock_timestamp())",
     )
     .bind(&template)
     .bind(&organization)
@@ -444,11 +445,12 @@ async fn qualify_template_row_locks(owner: &PgPool, canonical: &PgPool) {
     });
     sqlx::query(
         "INSERT INTO credential_template_service.credential_templates
-         (id,organization_id,name,credential_type,vct,status,credential_payload_format,
+         (id,organization_id,name,credential_type,vct,compliance_profile_id,status,credential_payload_format,
           issuance_protocol,supported_formats,validity_rules,issuer_did,
           verification_prerequisite,created_at,updated_at)
          VALUES ($1,$2,'Guarded restricted issuance fixture','NativeFeatureCredential',
-          'https://issuer.invalid/native-feature','prerequisite1_active','SD_JWT_VC',
+          'https://issuer.invalid/native-feature','10000000-0000-0000-0000-000000000001',
+          'prerequisite1_active','SD_JWT_VC',
           'OID4VCI_PRE_AUTH','[\"SD_JWT_VC\"]','{\"renewable\":false}',
           'did:web:issuer.invalid',$3,clock_timestamp(),clock_timestamp())",
     )
