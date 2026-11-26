@@ -43,7 +43,7 @@ fn complete_selection(installation: &Path) -> features::Selection {
         "agent_trust":{
             "organization_id":"00000000-0000-4000-8000-000000000001",
             "enrollment":{"audience":"https://api.example.test","policy_profile":"urn:marty:managed-key-enrollment-policy:v1","policy_revision":1},
-            "approval":{"profile":"urn:marty:organization-approval:v1","version":"1","status_ref":"https://api.example.test/v1/delegation/status"},
+            "approval":{"profile":"urn:marty:organization-approval:v1","version":"1.0.0","status_ref":"https://api.example.test/v1/delegation/status"},
             "delegated_use":{"activation":"configured","configuration":{
                 "deployment_profile_id":"00000000-0000-4000-8000-000000000002",
                 "delegation_policy_id":"00000000-0000-4000-8000-000000000003",

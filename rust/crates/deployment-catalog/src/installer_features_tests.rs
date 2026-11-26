@@ -19,7 +19,7 @@ fn config() -> Configuration {
     serde_json::from_value(json!({"schema":SCHEMA,"agent_trust":{
         "organization_id":"00000000-0000-4000-8000-000000000001",
         "enrollment":{"audience":"https://api.example.test","policy_profile":"urn:marty:managed-key-enrollment-policy:v1","policy_revision":1},
-        "approval":{"profile":"urn:marty:organization-approval:v1","version":"1","status_ref":"https://api.example.test/v1/delegation/status"},
+        "approval":{"profile":"urn:marty:organization-approval:v1","version":"1.0.0","status_ref":"https://api.example.test/v1/delegation/status"},
         "delegated_use":{"activation":"awaiting_owner_configuration"}
     }})).unwrap()
 }
@@ -94,7 +94,7 @@ fn selection_is_once_only_rootless_and_source_hash_bound() {
     );
     assert!(select(prepare(Some(&input), true).unwrap(), &mut state).is_err());
     let mut changed = config();
-    changed.agent_trust.as_mut().unwrap().approval.version = "2".into();
+    changed.agent_trust.as_mut().unwrap().approval.version = "2.0.0".into();
     write(
         &path.join("evidence").join(SOURCE),
         &serde_json::to_vec(&changed).unwrap(),
@@ -173,6 +173,46 @@ fn profile_rejects_secret_text_shell_interpolation_and_unsafe_authorities() {
 }
 
 #[test]
+fn approval_versions_are_validated_before_profile_selection() {
+    let root = root();
+    for version in [
+        "0.0.0".to_owned(),
+        "1.0.0".to_owned(),
+        "2.0.0".to_owned(),
+        "12.34.56".to_owned(),
+        format!("1.{}.0", "9".repeat(60)),
+    ] {
+        let mut configuration = config();
+        configuration.agent_trust.as_mut().unwrap().approval.version = version.clone();
+        let path = source(root.path(), &configuration);
+        assert!(prepare(Some(&path), true).is_ok(), "{version}");
+    }
+    for version in [
+        "".to_owned(),
+        "1".to_owned(),
+        "1.0".to_owned(),
+        "1.0.0.0".to_owned(),
+        ".0.0".to_owned(),
+        "1..0".to_owned(),
+        "1.0.".to_owned(),
+        "01.0.0".to_owned(),
+        "1.00.0".to_owned(),
+        "1.0.00".to_owned(),
+        "v1.0.0".to_owned(),
+        "1.0.0-rc.1".to_owned(),
+        "1.0.0+build".to_owned(),
+        "1.0.0 ".to_owned(),
+        "1.0.\u{ff10}".to_owned(),
+        format!("1.{}.0", "9".repeat(61)),
+    ] {
+        let mut configuration = config();
+        configuration.agent_trust.as_mut().unwrap().approval.version = version.clone();
+        let path = source(root.path(), &configuration);
+        assert!(prepare(Some(&path), true).is_err(), "{version}");
+    }
+}
+
+#[test]
 fn operator_source_is_private_regular_single_link_and_not_followed() {
     let root = root();
     let input = source(root.path(), &config());
@@ -211,9 +251,10 @@ fn pending_delegated_use_never_selects_a_runtime_or_claims_governed_configuratio
 }
 
 fn approval_mounts(installation: &Path) -> Value {
-    json!({"volumes":["approval_runtime","approval_consent","approval_authority","approval_organization"].into_iter()
+    let volumes = ["approval_runtime","approval_consent","approval_authority","approval_organization"].into_iter()
         .map(|name|format!("feature_{name}_database_url")).chain(["feature_postgres_ca".into()])
-        .map(|name|json!({"type":"bind","source":installation.join(DIRECTORY).join(&name),"target":format!("/run/feature-profile/{name}"),"read_only":true,"bind":{"create_host_path":false}})).collect::<Vec<_>>()})
+        .map(|name|json!({"type":"bind","source":installation.join(DIRECTORY).join(&name),"target":format!("/run/feature-profile/{name}"),"read_only":true,"bind":{"create_host_path":false}})).collect::<Vec<_>>();
+    json!({"volumes": volumes})
 }
 
 #[test]

@@ -240,6 +240,21 @@ fn decode<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T> {
         .map_err(|_| REFUSED.into())
 }
 
+// This pin is consumed by both delegated-authority hosts. Match their consent
+// version contract before recording a profile that those services cannot load.
+fn approval_version(value: &str) -> bool {
+    if value.len() > 64 {
+        return false;
+    }
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && (part.len() == 1 || !part.starts_with('0'))
+                && part.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 impl AgentTrust {
     fn validate(&self) -> Result<()> {
         require(
@@ -248,12 +263,7 @@ impl AgentTrust {
                 && uri(&self.enrollment.policy_profile)
                 && self.enrollment.policy_revision > 0
                 && uri(&self.approval.profile)
-                && scalar(&self.approval.version, 64)
-                && self
-                    .approval
-                    .version
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                && approval_version(&self.approval.version)
                 && https(&self.approval.status_ref, false),
         )?;
         if let Some(DelegatedUse::Configured { configuration }) = &self.delegated_use {
