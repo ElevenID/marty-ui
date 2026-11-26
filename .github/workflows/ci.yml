@@ -1249,13 +1249,14 @@ jobs:
           source ../scripts/ci/rust_contract_execution.sh
           # Qualify the managed deployment's major, not the rolling runner's
           # pg_config default. PostgreSQL 18 has a different constraint catalog.
-          # The runner already trusts PGDG; do not add a repository or key.
-          # Package installation must not create/start a system cluster.
+          # Package installation must not create/start a system cluster. If the
+          # image removed PGDG after its own build, authenticate a temporary,
+          # source-scoped PGDG entry without changing existing sources or trust.
           MARTY_TEST_POSTGRES_BIN_DIR=/usr/lib/postgresql/15/bin
           if [[ ! -x "$MARTY_TEST_POSTGRES_BIN_DIR/postgres" ]]; then
             cluster_configuration=/etc/postgresql-common/createcluster.conf
             service_policy=/usr/sbin/policy-rc.d
-            test -f "$cluster_configuration" && test ! -L "$cluster_configuration"
+            [[ -f "$cluster_configuration" && ! -L "$cluster_configuration" ]]
             test ! -L "$service_policy"
             clusters_before="$(pg_lsclusters --no-header)"
             if grep -Eq '^[[:space:]]*15[[:space:]]' <<< "$clusters_before"; then
@@ -1270,6 +1271,9 @@ jobs:
               sudo cp --preserve=all -- "$service_policy" "$setup_backup/policy-rc.d"
               service_policy_existed=true
             fi
+            pgdg_source=/etc/apt/sources.list.d/marty-native-feature-pgdg.sources
+            pgdg_key=/usr/share/keyrings/marty-native-feature-pgdg.asc
+            pgdg_added=false
             restore_postgres_setup() {
               local restore_status=0
               sudo cp --preserve=all -- "$setup_backup/createcluster.conf" "$cluster_configuration" || restore_status=1
@@ -1278,8 +1282,12 @@ jobs:
               else
                 sudo rm -f -- "$service_policy" || restore_status=1
               fi
+              if [[ "$pgdg_added" == true ]]; then
+                sudo rm -f -- "$pgdg_source" "$pgdg_key" || restore_status=1
+              fi
               if [[ "$restore_status" == 0 ]]; then
-                sudo rm -f -- "$setup_backup/createcluster.conf" "$setup_backup/policy-rc.d"
+                sudo rm -f -- "$setup_backup/createcluster.conf" "$setup_backup/policy-rc.d" "$setup_backup/pgdg.asc"
+                rm -rf -- "$setup_backup/gnupg"
                 rmdir -- "$setup_backup"
               fi
               return "$restore_status"
@@ -1289,6 +1297,40 @@ jobs:
             sudo chmod 0755 "$service_policy"
             printf '\ncreate_main_cluster = false\n' | sudo tee -a "$cluster_configuration" >/dev/null
             sudo apt-get update -qq
+            pg15_available=true
+            for database_package in postgresql-15 postgresql-client-15; do
+              candidate="$(LC_ALL=C apt-cache policy "$database_package" | awk '/^[[:space:]]*Candidate:/ {print $2}')"
+              if [[ -z "$candidate" || "$candidate" == '(none)' ]]; then
+                pg15_available=false
+              fi
+            done
+            if [[ "$pg15_available" == false ]]; then
+              runner_release="$(. /etc/os-release; printf '%s:%s:%s' "$ID" "$VERSION_ID" "$VERSION_CODENAME")"
+              [[ "$runner_release" == ubuntu:26.04:resolute ]]
+              [[ "$(dpkg --print-architecture)" == amd64 ]]
+              [[ ! -e "$pgdg_source" && ! -L "$pgdg_source" ]]
+              [[ ! -e "$pgdg_key" && ! -L "$pgdg_key" ]]
+              curl --fail --silent --show-error --location \
+                --proto '=https' --proto-redir '=https' \
+                https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+                --output "$setup_backup/pgdg.asc"
+              mkdir -m 0700 "$setup_backup/gnupg"
+              fingerprint="$(gpg --batch --no-options --homedir "$setup_backup/gnupg" \
+                --with-colons --show-keys "$setup_backup/pgdg.asc" | \
+                awk -F: '$1 == "sec" {invalid=1} $1 == "pub" {count++; primary=1; next} primary && $1 == "fpr" {print $10; primary=0} END {if (count != 1 || invalid) exit 1}')"
+              [[ "$fingerprint" == B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 ]]
+              pgdg_added=true
+              sudo install -m 0644 -- "$setup_backup/pgdg.asc" "$pgdg_key"
+              printf '%s\n' \
+                'Types: deb' \
+                'URIs: https://apt.postgresql.org/pub/repos/apt' \
+                'Suites: resolute-pgdg' \
+                'Architectures: amd64' \
+                'Components: main' \
+                "Signed-By: $pgdg_key" | sudo tee "$pgdg_source" >/dev/null
+              sudo chmod 0644 "$pgdg_source"
+              sudo apt-get update -qq
+            fi
             sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y \
               --no-install-recommends --no-upgrade --no-remove postgresql-15 postgresql-client-15
             [[ "$(pg_lsclusters --no-header)" == "$clusters_before" ]] || {
