@@ -193,7 +193,7 @@ jobs:
         run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Initialize production-focused analysis
         if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
-        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea
         with:
           languages: rust
           build-mode: none
@@ -203,7 +203,7 @@ jobs:
           config-file: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}
       - name: Analyze Rust
         if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
-        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea
         with:
           category: /language:rust
           upload-database: false
