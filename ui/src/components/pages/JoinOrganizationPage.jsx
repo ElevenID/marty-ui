@@ -10,6 +10,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
+import { safeConsoleNavigationDestination } from '../../application/routing/safeNavigation';
 import {
   Box,
   Container,
@@ -95,6 +96,10 @@ function JoinOrganizationContent({
   const orgIdFromQuery = searchParams.get('orgId');
   const modeFromQuery = searchParams.get('mode');
   const inviteToken = searchParams.get('inviteToken');
+  const returnTo = safeConsoleNavigationDestination(searchParams.get('returnTo'));
+  const discoverContinuationPath = returnTo
+    ? `${discoverPath}?returnTo=${encodeURIComponent(returnTo)}`
+    : discoverPath;
 
   const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -117,7 +122,7 @@ function JoinOrganizationContent({
   const scheduleConsoleRedirect = (action) => {
     clearTimeout(redirectTimer.current);
     redirectTimer.current = setTimeout(() => {
-      if (action.isCurrent()) redirectBrowser('/console', { replace: false });
+      if (action.isCurrent()) redirectBrowser(returnTo || '/console', { replace: false });
     }, 1200);
   };
 
@@ -401,7 +406,7 @@ function JoinOrganizationContent({
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {error || 'Please contact your organization administrator for a new invitation.'}
               </Typography>
-              <Button variant="outlined" onClick={() => navigate(discoverPath)}>
+              <Button variant="outlined" onClick={() => navigate(discoverContinuationPath)}>
                 Discover Organizations
               </Button>
             </Box>
@@ -423,7 +428,7 @@ function JoinOrganizationContent({
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
               Your organization context is now active. Redirecting to your workspace…
             </Typography>
-            <Button variant="contained" onClick={() => redirectBrowser('/console', { replace: false })}>
+            <Button variant="contained" onClick={() => redirectBrowser(returnTo || '/console', { replace: false })}>
               Go to Organization Console
             </Button>
           </CardContent>
@@ -448,7 +453,7 @@ function JoinOrganizationContent({
               <Button variant="outlined" onClick={() => navigate(managePath)}>
                 View My Organizations
               </Button>
-              <Button variant="contained" onClick={() => navigate(discoverPath)}>
+              <Button variant="contained" onClick={() => navigate(discoverContinuationPath)}>
                 Discover More Organizations
               </Button>
             </Stack>

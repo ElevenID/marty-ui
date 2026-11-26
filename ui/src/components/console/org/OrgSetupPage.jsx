@@ -30,7 +30,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
-import { useNavigate, Navigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, Navigate, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import { getMyOrganizations } from '../../../services/organizationsApi';
@@ -41,6 +41,7 @@ import {
 } from '../../../application/session/authSession';
 import { ENABLE_ORGANIZATION_CREATION } from '@ui-public-config';
 import { isOrganizationCreationEnabled } from '../../../utils/runtimeConfig';
+import { safeConsoleNavigationDestination } from '../../../application/routing/safeNavigation';
 
 function logOrgSetupError(message, error) {
   if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
@@ -56,6 +57,7 @@ export function OrgSetupPage() {
   const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const {
     activeOrgId,
@@ -66,14 +68,19 @@ export function OrgSetupPage() {
     isOrgBootstrapRequired,
     reloadConsoleState,
   } = useConsole();
-  const returnTo = searchParams.get('returnTo');
+  const from = location.state?.from;
+  const returnTo = safeConsoleNavigationDestination(searchParams.get('returnTo'))
+    || safeConsoleNavigationDestination(from?.pathname ? `${from.pathname}${from.search || ''}${from.hash || ''}` : null);
   const createOnlyMode = searchParams.get('intent') === 'create';
-  const createOrganizationPath = (() => {
-    const params = new URLSearchParams();
+  const continuationPath = (path, search = '') => {
+    const params = new URLSearchParams(search);
     if (returnTo) params.set('returnTo', returnTo);
     const query = params.toString();
-    return query ? `/console/organizations/create?${query}` : '/console/organizations/create';
-  })();
+    return query ? `${path}?${query}` : path;
+  };
+  const createOrganizationPath = continuationPath('/console/organizations/create');
+  const discoverOrganizationsPath = continuationPath('/console/organizations/discover');
+  const joinOrganizationPath = continuationPath('/console/organizations/join', 'mode=code');
   
   const { data: organizations = [], loading, error } = useAsyncData(
     () => getMyOrganizations(),
@@ -222,14 +229,14 @@ export function OrgSetupPage() {
               <Button
                 variant="outlined"
                 startIcon={<SearchIcon />}
-                onClick={() => navigate('/console/organizations/discover')}
+                onClick={() => navigate(discoverOrganizationsPath)}
               >
                 Discover Organizations
               </Button>
               <Button
                 variant="outlined"
                 startIcon={<CodeIcon />}
-                onClick={() => navigate('/console/organizations/join?mode=code')}
+                onClick={() => navigate(joinOrganizationPath)}
               >
                 Use Join Code
               </Button>
@@ -373,14 +380,14 @@ export function OrgSetupPage() {
               <Button
                 variant="outlined"
                 startIcon={<SearchIcon />}
-                onClick={() => navigate('/console/organizations/discover')}
+                onClick={() => navigate(discoverOrganizationsPath)}
               >
                 Discover Organizations
               </Button>
               <Button
                 variant="outlined"
                 startIcon={<CodeIcon />}
-                onClick={() => navigate('/console/organizations/join?mode=code')}
+                onClick={() => navigate(joinOrganizationPath)}
               >
                 Use Join Code
               </Button>

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@test/utils';
+import { act, render, renderWithoutRouter, screen } from '@test/utils';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 import OrgSetupPage from './OrgSetupPage';
+import { OrgConsoleRoute } from '../../ProtectedRoute';
+import { safeConsoleNavigationDestination } from '../../../application/routing/safeNavigation';
 
 const {
   mockNavigate,
@@ -189,5 +192,69 @@ describe('OrgSetupPage', () => {
     });
 
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  const approvalDestination = '/console/org/delegation-grants/11111111-1111-4111-8111-111111111111/approve'
+    + '?revision=3&terms_digest=sha256%3A' + 'a'.repeat(64) + '#exact-terms';
+
+  function renderFromProtectedDestination() {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true, isLoading: false, user: { user_id: 'owner-a' } });
+    mockGetMyOrganizations.mockResolvedValue([{
+      id: 'marty-org', display_name: 'Marty',
+      membership: { status: 'active', has_org_console_access: true, roles: [{ name: 'owner' }] },
+    }]);
+    return renderWithoutRouter(
+      <MemoryRouter initialEntries={[approvalDestination]}>
+        <Routes>
+          <Route path="/console/org/setup" element={<OrgSetupPage />} />
+          <Route path="/console/org/*" element={<OrgConsoleRoute><div>Requested console page</div></OrgConsoleRoute>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('resumes the exact approval destination handed off by the real organization guard', async () => {
+    const { user } = renderFromProtectedDestination();
+    await user.click(await screen.findByRole('button', { name: 'Open Org Console' }));
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith(approvalDestination);
+  });
+
+  it.each([
+    ['Create Organization', '/console/organizations/create', ''],
+    ['Discover Organizations', '/console/organizations/discover', ''],
+    ['Use Join Code', '/console/organizations/join', 'mode=code'],
+  ])('carries the guarded approval destination through %s', async (label, path, search) => {
+    const { user } = renderFromProtectedDestination();
+    await user.click(await screen.findByRole('button', { name: label }));
+    const params = new URLSearchParams(search);
+    params.set('returnTo', approvalDestination);
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith(`${path}?${params}`);
+  });
+
+  it.each([
+    ['/console/org/settings?tab=trust#keys', '/console/org/settings?tab=trust#keys'],
+    ['https://unrelated.example/console/org', null],
+    ['/console/org/setup?returnTo=/console/org/setup', null],
+  ])('uses a valid explicit returnTo before the guard state and ignores %s when unsafe', async (returnTo, expected) => {
+    mockSearchParams.mockReturnValue(new URLSearchParams({ returnTo: returnTo! }));
+    const { user } = renderFromProtectedDestination();
+    await user.click(await screen.findByRole('button', { name: 'Open Org Console' }));
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith(expected || approvalDestination);
+  });
+
+  it.each([
+    'https://unrelated.example/console/org', '//unrelated.example/console/org',
+    '/console-extra/org', '/organizations', '/console/../../outside',
+    '/console\\org', '/console/org\n/settings', '/console/org/setup',
+    '/console/ORG/setup/?intent=create',
+    '/console/org/%73etup', '/console/%6frg/setup?returnTo=/console/org', '/console/org/%',
+  ])('rejects non-console, unsafe or recursive onboarding destinations: %s', destination => {
+    expect(safeConsoleNavigationDestination(destination)).toBeNull();
+  });
+
+  it('normalizes a same-origin destination and keeps the console root query and hash', () => {
+    const location = new URL('https://console.example/console/org/setup');
+    expect(safeConsoleNavigationDestination('https://console.example' + approvalDestination, location)).toBe(approvalDestination);
+    expect(safeConsoleNavigationDestination('/console?tab=recent#activity', location)).toBe('/console?tab=recent#activity');
   });
 });
