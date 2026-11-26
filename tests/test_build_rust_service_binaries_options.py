@@ -28,21 +28,28 @@ class CanonicalNativeBuildOptionsTests(unittest.TestCase):
             return result.returncode, [call.splitlines() for call in calls]
 
     def test_default_forwards_only_safe_offline_telemetry_options(self):
-        code, (arguments, delegated_use) = self.invoke("default", "--offline", "-j1", "--message-format=json")
+        code, (arguments, authority, delegated_use) = self.invoke("default", "--offline", "-j1", "--message-format=json")
         self.assertEqual(code, 0)
         self.assertEqual(arguments[:5], ["build", "--locked", "--release", "--offline", "-j1"])
         self.assertIn("--message-format=json", arguments)
-        self.assertEqual(arguments.count("--bin"), 29)
+        self.assertEqual(arguments.count("--bin"), 30)
         self.assertIn("marty-acme-http01", arguments)
+        self.assertIn("marty-feature-identity-bootstrap", arguments)
+        self.assertEqual(authority, ["build", "--locked", "--release", "--offline", "-j1", "--message-format=json",
+                                    "-p", "marty-delegated-authority", "--bin", "marty-delegation-approval",
+                                    "--bin", "marty-delegation-commands"])
         self.assertEqual(delegated_use, ["build", "--locked", "--release", "--offline", "-j1", "--message-format=json",
                                          "-p", "marty-delegated-use", "--bin", "marty-delegated-use"])
 
     def test_default_without_options_still_builds_same_set(self):
-        code, (arguments, delegated_use) = self.invoke("default")
+        code, (arguments, authority, delegated_use) = self.invoke("default")
         self.assertEqual(code, 0)
         self.assertEqual(arguments[:3], ["build", "--locked", "--release"])
-        self.assertEqual(arguments.count("--bin"), 29)
+        self.assertEqual(arguments.count("--bin"), 30)
         self.assertIn("marty-acme-http01", arguments)
+        self.assertIn("marty-feature-identity-bootstrap", arguments)
+        self.assertEqual(authority, ["build", "--locked", "--release", "-p", "marty-delegated-authority",
+                                    "--bin", "marty-delegation-approval", "--bin", "marty-delegation-commands"])
         self.assertEqual(delegated_use, ["build", "--locked", "--release",
                                          "-p", "marty-delegated-use", "--bin", "marty-delegated-use"])
 

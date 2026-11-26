@@ -222,6 +222,27 @@ impl HttpManagedDelegatedReceiptSigner {
         )
     }
 
+    /// Trust only the explicitly selected public workload CA. Normal HTTPS
+    /// name/chain checks, origin pinning and distinct signing grants remain.
+    pub fn with_trusted_ca(
+        signing_keys_origin: &str,
+        read_credential: String,
+        sign_credential: String,
+        key: ManagedDelegatedReceiptKey,
+        minter: GrantMinter,
+        trusted_ca: &[u8],
+    ) -> Result<Self, Error> {
+        Self::build_with_ca(
+            signing_keys_origin,
+            read_credential,
+            sign_credential,
+            key,
+            Arc::new(minter),
+            false,
+            Some(trusted_ca),
+        )
+    }
+
     fn build(
         origin: &str,
         read_credential: String,
@@ -229,6 +250,26 @@ impl HttpManagedDelegatedReceiptSigner {
         key: ManagedDelegatedReceiptKey,
         minter: Arc<dyn GrantMinting>,
         test_loopback: bool,
+    ) -> Result<Self, Error> {
+        Self::build_with_ca(
+            origin,
+            read_credential,
+            sign_credential,
+            key,
+            minter,
+            test_loopback,
+            None,
+        )
+    }
+
+    fn build_with_ca(
+        origin: &str,
+        read_credential: String,
+        sign_credential: String,
+        key: ManagedDelegatedReceiptKey,
+        minter: Arc<dyn GrantMinting>,
+        test_loopback: bool,
+        trusted_ca: Option<&[u8]>,
     ) -> Result<Self, Error> {
         let base_url = reqwest::Url::parse(origin).map_err(|_| DelegatedReceiptSigningError)?;
         let scheme_ok = base_url.scheme() == "https"
@@ -239,6 +280,7 @@ impl HttpManagedDelegatedReceiptSigner {
                     Some("127.0.0.1" | "[::1]" | "localhost")
                 ));
         if !scheme_ok
+            || (trusted_ca.is_some() && base_url.scheme() != "https")
             || base_url.host_str().is_none()
             || base_url.path() != "/"
             || !base_url.username().is_empty()
@@ -251,14 +293,31 @@ impl HttpManagedDelegatedReceiptSigner {
         {
             return Err(DelegatedReceiptSigningError);
         }
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(HTTP_TIMEOUT)
             .timeout(HTTP_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
-            .no_proxy()
-            .build()
-            .map_err(|_| DelegatedReceiptSigningError)?;
+            .no_proxy();
+        if let Some(pem) = trusted_ca {
+            let text = std::str::from_utf8(pem).map_err(|_| DelegatedReceiptSigningError)?;
+            if pem.is_empty()
+                || pem.len() > 65_536
+                || !pem.is_ascii()
+                || pem.contains(&0)
+                || text.contains("PRIVATE KEY")
+                || !text.trim().starts_with("-----BEGIN CERTIFICATE-----")
+                || !text.trim().ends_with("-----END CERTIFICATE-----")
+                || text.matches("-----BEGIN CERTIFICATE-----").count() != 1
+                || text.matches("-----END CERTIFICATE-----").count() != 1
+            {
+                return Err(DelegatedReceiptSigningError);
+            }
+            let certificate =
+                reqwest::Certificate::from_pem(pem).map_err(|_| DelegatedReceiptSigningError)?;
+            builder = builder.tls_certs_only([certificate]).https_only(true);
+        }
+        let client = builder.build().map_err(|_| DelegatedReceiptSigningError)?;
         Ok(Self {
             client,
             base_url,

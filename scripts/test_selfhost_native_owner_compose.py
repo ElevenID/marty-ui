@@ -97,6 +97,12 @@ CONFIG_META = {"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"}
 # Baseline self-hosting keeps the executable's existing five-connection default.
 # See docs/installer-external-postgres.md and test_external_postgres_compose.py.
 EXTERNAL_POSTGRES_ONLY = {"ISSUANCE_DATABASE_MAX_CONNECTIONS"}
+# The typed native feature profile bounds the separately authenticated producer
+# pools; the baseline keeps both features disabled and these inputs unbound.
+FEATURE_PROFILE_POOL_INPUTS = {
+    "ISSUANCE_EXTERNAL_ASSOCIATION_POOL_MAX_CONNECTIONS",
+    "ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS",
+}
 ALTERNATE_TLS_PROVIDER_INPUTS = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_PROVIDER",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_REGION",
@@ -183,11 +189,13 @@ def assert_input_inventory():
         | PREREQUISITE_OPT_IN_ONLY
         | CONFIG_META
         | EXTERNAL_POSTGRES_ONLY
+        | FEATURE_PROFILE_POOL_INPUTS
         | ALTERNATE_TLS_PROVIDER_INPUTS
         | UNFORWARDED
     )
     actual_omitted = inputs - set(native)
     assert EXTERNAL_POSTGRES_ONLY.isdisjoint(set(native) | set(legacy))
+    assert FEATURE_PROFILE_POOL_INPUTS.isdisjoint(set(native) | set(legacy))
     assert actual_omitted == expected_omitted, (
         "Update the exhaustive self-host native configuration inventory: "
         f"unexpected={sorted(actual_omitted - expected_omitted)!r}, "

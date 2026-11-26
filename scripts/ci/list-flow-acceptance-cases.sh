@@ -4,6 +4,8 @@ set -euo pipefail
 [[ $# == 1 && -x "$1" ]] || exit 2
 flow_tests=$("$1" --list)
 expected_flow_tests=$(printf '%s\n' \
+  'managed_http_provider_tls::native_flow_clients_use_only_selected_ca_and_verify_hostnames: test' \
+  'managed_http_provider_tls::selected_ca_cannot_enable_plaintext_or_accept_key_material: test' \
   'base_runtime_redis::tests::ping_cleanup_failure_is_terminal_not_readiness_retry: test' \
   'base_runtime_redis::tests::redis_fixture_requires_exact_owner_storage_and_loopback_without_database_override: test' \
   'base_runtime_redis::tests::namespace_redis_rejects_other_networks_and_every_host_publication: test' \
@@ -21,7 +23,7 @@ expected_flow_tests=$(printf '%s\n' \
   'didcomm_admission_recovery::flow_consumer::public_startup::owned_output_child: test' \
   'didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified: test')
 [[ "$(printf '%s\n' "$flow_tests" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected_flow_tests" | LC_ALL=C sort)" ]] || {
-  echo 'Flow executable changed its exact sixteen-case owner inventory' >&2
+  echo 'Flow executable changed its exact eighteen-case owner inventory' >&2
   exit 1
 }
 printf '%s\n' "$flow_tests"

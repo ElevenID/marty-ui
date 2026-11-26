@@ -22,6 +22,10 @@ pub struct ApprovalHostConfig {
     pub consent_database_url: String,
     pub authority_database_url: String,
     pub organization_database_url: String,
+    pub runtime_pool_max_connections: u32,
+    pub consent_pool_max_connections: u32,
+    pub authority_pool_max_connections: u32,
+    pub organization_pool_max_connections: u32,
     pub service_token: String,
     pub organization_id: Uuid,
     pub issuer: Principal,
@@ -152,6 +156,28 @@ impl ApprovalHostConfig {
             consent_database_url: database_url(&values, DATABASE_FIELDS[1])?,
             authority_database_url: database_url(&values, DATABASE_FIELDS[2])?,
             organization_database_url: database_url(&values, DATABASE_FIELDS[3])?,
+            runtime_pool_max_connections: pool_limit(
+                &values,
+                "DELEGATION_APPROVAL_RUNTIME_POOL_MAX_CONNECTIONS",
+                1,
+            )?,
+            consent_pool_max_connections: pool_limit(
+                &values,
+                "DELEGATION_APPROVAL_CONSENT_POOL_MAX_CONNECTIONS",
+                1,
+            )?,
+            // Authority refresh holds its write transaction while reading the
+            // original binding through the authority pool. It needs two leases.
+            authority_pool_max_connections: pool_limit(
+                &values,
+                "DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS",
+                2,
+            )?,
+            organization_pool_max_connections: pool_limit(
+                &values,
+                "DELEGATION_APPROVAL_ORGANIZATION_POOL_MAX_CONNECTIONS",
+                1,
+            )?,
             service_token: service_token.to_owned(),
             organization_id: id,
             issuer: Principal {
@@ -208,6 +234,18 @@ fn seconds(
         return Err(ApprovalHostConfigError::Invalid(name));
     }
     Ok(result)
+}
+
+fn pool_limit(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    minimum: u32,
+) -> Result<u32, ApprovalHostConfigError> {
+    let value = seconds(values, name, 8, 8)?;
+    if value < minimum {
+        return Err(ApprovalHostConfigError::Invalid(name));
+    }
+    Ok(value)
 }
 
 fn database_url(
@@ -281,10 +319,34 @@ mod tests {
         let config = ApprovalHostConfig::from_values(values()).unwrap();
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8019");
         assert_eq!(config.authority_validity_seconds, 15);
+        assert_eq!(config.runtime_pool_max_connections, 8);
+        assert_eq!(config.consent_pool_max_connections, 8);
+        assert_eq!(config.authority_pool_max_connections, 8);
+        assert_eq!(config.organization_pool_max_connections, 8);
         let debug = format!("{config:?}");
         assert!(!debug.contains("example-secret"));
         assert!(!debug.contains("service-token"));
         assert!(!debug.contains("postgresql"));
+    }
+
+    #[test]
+    fn native_container_http_address_is_explicit_and_invalid_values_do_not_fall_back() {
+        let mut input = values();
+        input.insert(
+            "DELEGATION_APPROVAL_HTTP_ADDR".into(),
+            "0.0.0.0:8019".into(),
+        );
+        let config = ApprovalHostConfig::from_values(input).unwrap();
+        assert!(config.http_addr.ip().is_unspecified());
+        assert_eq!(config.http_addr.port(), 8019);
+        for address in ["", "http://0.0.0.0:8019", "0.0.0.0:8019\n"] {
+            let mut input = values();
+            input.insert("DELEGATION_APPROVAL_HTTP_ADDR".into(), address.into());
+            assert_eq!(
+                ApprovalHostConfig::from_values(input).unwrap_err(),
+                ApprovalHostConfigError::Invalid("DELEGATION_APPROVAL_HTTP_ADDR")
+            );
+        }
     }
 
     #[test]
@@ -333,5 +395,45 @@ mod tests {
                 ApprovalHostConfigError::Invalid(name)
             );
         }
+        for (name, minimum) in [
+            ("DELEGATION_APPROVAL_RUNTIME_POOL_MAX_CONNECTIONS", 1),
+            ("DELEGATION_APPROVAL_CONSENT_POOL_MAX_CONNECTIONS", 1),
+            ("DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS", 2),
+            ("DELEGATION_APPROVAL_ORGANIZATION_POOL_MAX_CONNECTIONS", 1),
+        ] {
+            for invalid in ["0", "9", "-1", "", " 2", "4294967296"] {
+                let mut input = values();
+                input.insert(name.into(), invalid.into());
+                assert_eq!(
+                    ApprovalHostConfig::from_values(input).unwrap_err(),
+                    ApprovalHostConfigError::Invalid(name)
+                );
+            }
+            let mut input = values();
+            input.insert(name.into(), minimum.to_string());
+            let config = ApprovalHostConfig::from_values(input).unwrap();
+            let actual = match name {
+                "DELEGATION_APPROVAL_RUNTIME_POOL_MAX_CONNECTIONS" => {
+                    config.runtime_pool_max_connections
+                }
+                "DELEGATION_APPROVAL_CONSENT_POOL_MAX_CONNECTIONS" => {
+                    config.consent_pool_max_connections
+                }
+                "DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS" => {
+                    config.authority_pool_max_connections
+                }
+                _ => config.organization_pool_max_connections,
+            };
+            assert_eq!(actual, minimum);
+        }
+        let mut input = values();
+        input.insert(
+            "DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS".into(),
+            "1".into(),
+        );
+        assert_eq!(
+            ApprovalHostConfig::from_values(input).unwrap_err(),
+            ApprovalHostConfigError::Invalid("DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS")
+        );
     }
 }

@@ -168,8 +168,18 @@ impl GenerationPlan {
     }
     pub(crate) fn layer(&self) -> (&'static str, &'static [u8]) {
         match self {
-            Self::Public(_) => (LAYER, include_bytes!("../../../../deploy-config/compose/selfhost-installer/compose.generation.yml")),
-            Self::Managed(_) => (MANAGED_LAYER, include_bytes!("../../../../deploy-config/compose/selfhost-installer/compose.generation-managed.yml")),
+            Self::Public(_) => (
+                LAYER,
+                include_bytes!(
+                    "../../../../deploy-config/compose/selfhost-installer/compose.generation.yml"
+                ),
+            ),
+            Self::Managed(_) => (
+                MANAGED_LAYER,
+                include_bytes!(
+                    "../../../../deploy-config/compose/selfhost-installer/compose.generation-managed.yml"
+                ),
+            ),
         }
     }
     pub(crate) fn environment(

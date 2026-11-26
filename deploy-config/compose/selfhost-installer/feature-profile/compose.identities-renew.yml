@@ -1,0 +1,57 @@
+# Only the retained native generation owner selects this scoped producer.
+services:
+  installer-feature-identities:
+    profiles: [setup]
+    image: ${FEATURE_SERVICES_IMAGE:?}
+    entrypoint: [/usr/local/bin/marty-feature-identity-bootstrap]
+    init: true
+    user: "0:0"
+    read_only: true
+    restart: "no"
+    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [default]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777"]
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?}
+      com.elevenid.installer.phase: setup
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /input/ca.crt
+      FEATURE_IDENTITY_RENEWAL_ROLE_ID_FILE: /input/role-id
+      FEATURE_IDENTITY_RENEWAL_SECRET_ID_FILE: /input/secret-id
+      FEATURE_IDENTITY_SELECTION_FILE: /input/feature-identities.json
+      FEATURE_IDENTITY_WORKLOAD_CA_FILE: /input/workload-ca.crt
+      FEATURE_IDENTITY_OUTPUT_DIR: /output
+    volumes:
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/input/ca.crt
+        target: /input/ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/input/role-id
+        target: /input/role-id
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/input/secret-id
+        target: /input/secret-id
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/input/feature-identities.json
+        target: /input/feature-identities.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/input/workload-ca.crt
+        target: /input/workload-ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_IDENTITY_WORK_DIR:?}/output
+        target: /output
+        read_only: false
+        bind: {create_host_path: false}

@@ -58,6 +58,7 @@ const JSON_NAMES: [&str; 3] = [
 ];
 const PUBLIC_NAMES: &[&str] = &[
     "DELEGATED_USE_LISTEN_ADDR",
+    "DELEGATED_USE_HEALTH_ADDR",
     "DELEGATED_USE_POOL_MAX_CONNECTIONS",
     "DELEGATED_USE_PUBLIC_CALLER_ENABLED",
     "DELEGATED_USE_ORGANIZATION_ID",
@@ -153,6 +154,7 @@ impl fmt::Debug for ReceiptSigningConfig {
 #[derive(Clone)]
 pub struct DelegatedUseHostConfig {
     pub listen_addr: SocketAddr,
+    pub health_addr: Option<SocketAddr>,
     pub public_caller_enabled: bool,
     pub pool_max_connections: u32,
     pub organization_id: Uuid,
@@ -185,6 +187,7 @@ impl fmt::Debug for DelegatedUseHostConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DelegatedUseHostConfig")
             .field("listen_addr", &self.listen_addr)
+            .field("health_addr", &self.health_addr)
             .field("organization_id", &self.organization_id)
             .field("deployment_profile_id", &self.deployment_profile_id)
             .field("delegation_policy_id", &self.delegation_policy_id)
@@ -283,6 +286,19 @@ impl DelegatedUseHostConfig {
             .ok()
             .filter(|address| address.port() != 0)
             .ok_or(HostConfigError::Invalid("DELEGATED_USE_LISTEN_ADDR"))?;
+        let health_addr = input
+            .get("DELEGATED_USE_HEALTH_ADDR")
+            .map(|raw| {
+                raw.parse::<SocketAddr>()
+                    .ok()
+                    .filter(|address| {
+                        address.ip().is_loopback()
+                            && address.port() != 0
+                            && address.port() != listen_addr.port()
+                    })
+                    .ok_or(HostConfigError::Invalid("DELEGATED_USE_HEALTH_ADDR"))
+            })
+            .transpose()?;
         let database_urls = DatabaseUrls {
             use_writer: database(&input, DATABASE_NAMES[0])?,
             runtime_reader: database(&input, DATABASE_NAMES[1])?,
@@ -530,6 +546,7 @@ impl DelegatedUseHostConfig {
             .map_err(|_| HostConfigError::Invalid("DELEGATED_USE_WORKLOAD_BINDINGS"))?;
         Ok(Self {
             listen_addr,
+            health_addr,
             public_caller_enabled,
             organization_id,
             deployment_profile_id,

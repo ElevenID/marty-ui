@@ -1,0 +1,52 @@
+# This service is explicitly selected by its native setup owner after baseline
+# workload CA provisioning; no ordinary runtime operation selects it.
+services:
+  installer-feature-identities:
+    profiles: [setup]
+    image: ${MARTY_INSTALLER_SERVICES_IMAGE:?signed service image required}
+    entrypoint: [/usr/local/bin/marty-feature-identity-bootstrap]
+    init: true
+    user: "0:0"
+    read_only: true
+    restart: "no"
+    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [default]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777"]
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLATION_ID:?}
+      com.elevenid.installer.phase: setup
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /input/ca.crt
+      FEATURE_IDENTITY_AUTHORITY_TOKEN_FILE: /input/root.token
+      FEATURE_IDENTITY_SELECTION_FILE: /input/feature-identities.json
+      FEATURE_IDENTITY_WORKLOAD_CA_FILE: /input/workload-ca.crt
+      FEATURE_IDENTITY_OUTPUT_DIR: /output
+    volumes:
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-state/root.token
+        target: /input/root.token
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/openbao-state/tls/ca.crt
+        target: /input/ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/evidence/feature-identities.json
+        target: /input/feature-identities.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/secrets/workload_identity_ca_cert
+        target: /input/workload-ca.crt
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${MARTY_INSTALLATION_DIR:?}/feature-identity-output
+        target: /output
+        read_only: false
+        bind: {create_host_path: false}

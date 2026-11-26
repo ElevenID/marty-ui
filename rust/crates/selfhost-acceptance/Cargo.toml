@@ -15,10 +15,13 @@ axum-server.workspace = true
 futures-util.workspace = true
 marty-auth = { path = "../../services/auth" }
 marty-compliance-profile = { path = "../../services/compliance-profile" }
+marty-delegated-authority = { path = "../../services/delegated-authority" }
+marty-delegated-use = { path = "../../services/delegated-use" }
 marty-deployment-profile = { path = "../../services/deployment-profile" }
 marty-device-registration = { path = "../../services/device-registration" }
 marty-flow = { path = "../../services/flow" }
 marty-issuance-service = { path = "../../services/issuance" }
+marty-machine-credential-source = { path = "../machine-credential-source" }
 marty-notification = { path = "../../services/notification" }
 marty-organization = { path = "../../services/organization" }
 marty-credential-template = { path = "../../services/credential-template" }
@@ -30,7 +33,7 @@ mmf-messaging.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 serde_yaml.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

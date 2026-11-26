@@ -206,6 +206,10 @@ impl Fixture {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::raw_sql(crate::external_observation_schema::MATERIALIZATION_MIGRATION_SQL)
+            .execute(&pool)
+            .await
+            .unwrap();
         // Synthetic registered-schema fixture, not qualification of the entire
         // protected owner CLI. Real owner-command integration is tested separately.
         sqlx::query(
@@ -217,6 +221,7 @@ impl Fixture {
         for version in [
             crate::external_observation_schema::JOURNAL_VERSION,
             crate::external_observation_schema::VERSION,
+            crate::external_observation_schema::MATERIALIZATION_VERSION,
         ] {
             sqlx::query("INSERT INTO issuance_service.rust_schema_migrations(version) VALUES ($1)")
                 .bind(version)

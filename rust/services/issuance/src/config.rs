@@ -311,6 +311,8 @@ pub struct IssuanceServiceConfig {
     pub external_associations_enabled: bool,
     pub external_association_database_url: Option<String>,
     pub external_observation_database_url: Option<String>,
+    pub external_observation_pool_max_connections: u32,
+    pub external_association_pool_max_connections: u32,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
@@ -935,6 +937,14 @@ impl IssuanceServiceConfig {
             external_associations_enabled,
             external_association_database_url,
             external_observation_database_url,
+            external_observation_pool_max_connections: isolated_pool_limit(
+                &values,
+                "ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS",
+            )?,
+            external_association_pool_max_connections: isolated_pool_limit(
+                &values,
+                "ISSUANCE_EXTERNAL_ASSOCIATION_POOL_MAX_CONNECTIONS",
+            )?,
             passport_tenant_keys,
             passport_native,
             signing_keys_internal_url,
@@ -1336,6 +1346,24 @@ fn validate_database_url(value: &str) -> Result<String, MmfError> {
         ));
     }
     Ok(normalized)
+}
+
+fn isolated_pool_limit(values: &BTreeMap<String, String>, name: &str) -> Result<u32, MmfError> {
+    let invalid = || {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "Isolated database pool limit must be between 1 and 8",
+        )
+    };
+    let maximum = values
+        .get(name)
+        .map(|value| value.parse::<u32>().map_err(|_| invalid()))
+        .transpose()?
+        .unwrap_or(8);
+    if !(1..=8).contains(&maximum) {
+        return Err(invalid());
+    }
+    Ok(maximum)
 }
 
 fn validate_observation_database_url(value: &str) -> Result<String, MmfError> {
@@ -2505,6 +2533,8 @@ fn observation_ingress_requires_explicit_activation_configuration() {
     ])
     .unwrap();
     assert!(config.external_observations_enabled);
+    assert_eq!(config.external_observation_pool_max_connections, 8);
+    assert_eq!(config.external_association_pool_max_connections, 8);
     assert_eq!(
         config.external_observation_database_url.as_deref(),
         Some(url.as_str())
@@ -2518,6 +2548,24 @@ fn observation_ingress_requires_explicit_activation_configuration() {
     ] {
         let error = validate_observation_database_url(invalid).unwrap_err();
         assert!(!format!("{error:?}").contains("synthetic-secret"));
+    }
+    for name in [
+        "ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS",
+        "ISSUANCE_EXTERNAL_ASSOCIATION_POOL_MAX_CONNECTIONS",
+    ] {
+        for invalid in ["0", "9", "-1", "", " 2", "4294967296"] {
+            assert!(IssuanceServiceConfig::from_values([(name.into(), invalid.into())]).is_err());
+        }
+        for maximum in [1, 2, 8] {
+            let config =
+                IssuanceServiceConfig::from_values([(name.into(), maximum.to_string())]).unwrap();
+            let actual = if name == "ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS" {
+                config.external_observation_pool_max_connections
+            } else {
+                config.external_association_pool_max_connections
+            };
+            assert_eq!(actual, maximum);
+        }
     }
 }
 #[test]

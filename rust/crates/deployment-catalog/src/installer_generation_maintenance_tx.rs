@@ -21,8 +21,14 @@ use std::{
     time::Duration,
 };
 
+#[path = "installer_generation_feature_renewal.rs"]
+mod feature_renewal;
 #[path = "installer_generation_supersession.rs"]
 mod supersession;
+pub(crate) use feature_renewal::{
+    feature_joint_activation_observed_at, project_feature_joint_model,
+    verify_feature_joint_activation, verify_feature_renewal_context, FeatureRenewalContext,
+};
 pub(crate) use supersession::GenerationRecoveryBaseline;
 pub(crate) use supersession::{
     completed_predecessor, require_attempt_incoming, unused_predecessor,
@@ -113,6 +119,8 @@ struct ActivationIntent {
     attempt: u64,
     binding_sha256: String,
     helper_receipt_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feature_renewal_sha256: Option<String>,
     inputs: ComposeInputs,
     model: Value,
     configuration_sha256: String,
@@ -420,9 +428,7 @@ fn operation(state: &LockedInspection, scope: Attempt, phase: &str) -> Result<St
     Ok(scope.operation(phase, next))
 }
 fn parent_session(view: &LockedInspection, installation: &Path) -> Result<SavedSession> {
-    current_session(view, installation)?
-        .map(Ok)
-        .unwrap_or_else(|| installer_doctor::load_initial_session(view, installation))
+    installer_doctor::load_session(view, installation)
 }
 fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> Result<Intent> {
     let sequence = scope.sequence;
@@ -448,8 +454,24 @@ fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> 
         intent.oidc_secret_rotation_sha256
             == crate::installer_oidc_rotation::for_parent(installation, &parent)?,
     )?;
-    let current = parent_session(view, installation)?;
-    require(encode(&current)? == encode(&intent.parent_session)?)?;
+    // A staged feature producer may have replaced its setup ID while this
+    // baseline transaction still owns activation. Validate the exact recorded
+    // parent chain without asking normal doctor to adopt an unfinished child.
+    require(
+        generation::load_verified(installation, &intent.installation_id, &intent.engine_id)?
+            .as_ref()
+            == Some(&parent),
+    )?;
+    let recorded: SavedSession = if parent.sequence() == 0 {
+        installer_doctor::load_initial_session(view, installation)?
+    } else {
+        decode(&read(installation, &parent.attempt_id().record("session"))?)?
+    };
+    crate::installer_features::generations::require_session_extension(
+        installation,
+        &recorded,
+        &intent.parent_session,
+    )?;
     let plan = intent.plan(installation)?;
     plan.require_saved(view)?;
     plan.require_parent(installation, &parent)?;
@@ -695,7 +717,7 @@ fn begin_with_plan(
     if let Some(existing) = inputs.files.iter().find(|file| file.path == layer.path) {
         require(existing.sha256 == layer.sha256)?;
     } else {
-        inputs.files.push(layer);
+        crate::installer_features::append_layer(&mut inputs, layer);
     }
     let mut values = plan.environment(installation)?;
     values.insert(
@@ -739,6 +761,15 @@ fn begin_with_plan(
             .writable_bind_roots
             .extend(saved.inputs.writable_bind_roots.iter().cloned());
     }
+    // Supersession bounds the base owner to one stale runtime, while the
+    // independently selected feature generation and its exact retained helper
+    // remain part of this saved model.
+    if let Some(features) = crate::installer_features::for_inputs(&saved.inputs)? {
+        inputs
+            .readonly_bind_roots
+            .insert(features.projection_directory(installation));
+    }
+    feature_renewal::retain_helper_roots(installation, &saved, &mut inputs)?;
     inputs
         .writable_bind_roots
         .insert(work(installation, scope).join("transfer"));
@@ -1186,7 +1217,7 @@ fn activation_inputs(
     if let Some(existing) = inputs.files.iter().find(|file| file.path == layer.path) {
         require(existing.path == layer.path && existing.sha256 == layer.sha256)?;
     } else {
-        inputs.files.push(layer);
+        crate::installer_features::append_layer(&mut inputs, layer);
     }
     let mut values = plan.environment(installation)?;
     values.insert(
@@ -1210,6 +1241,11 @@ fn activation_inputs(
     plan.bind_inputs(installation, &mut inputs)?;
     let initial = installer_doctor::load_initial_session(state.inspection(), installation)?;
     inputs.readonly_bind_roots = initial.inputs.readonly_bind_roots;
+    if let Some(features) = crate::installer_features::for_inputs(&intent.parent_session.inputs)? {
+        inputs
+            .readonly_bind_roots
+            .insert(features.projection_directory(installation));
+    }
     inputs.readonly_bind_roots.extend([
         binding.secret_dir(installation)?,
         work(installation, intent.scope()).join("current"),
@@ -1231,7 +1267,8 @@ fn activation_inputs(
     if let Some(root) = supersession::runtime_root_for_intent(installation, intent)? {
         inputs.readonly_bind_roots.insert(root);
     }
-    Ok(inputs)
+    feature_renewal::retain_helper_roots(installation, &intent.parent_session, &mut inputs)?;
+    feature_renewal::project_inputs(state, installation, intent, inputs)
 }
 fn load_activation_intent(
     installation: &Path,
@@ -1250,6 +1287,8 @@ fn load_activation_intent(
             && value.binding_sha256 == binding.sha256()?
             && value.helper_receipt_sha256
                 == hash(&read(installation, &intent.scope().record("helper"))?)
+            && value.feature_renewal_sha256
+                == feature_renewal::digest(installation, intent.scope())?
             && value.configuration_sha256 == installer_compose::model_sha256(&value.model)?
             && value.inputs.installation == installation
             && value.inputs.profiles.is_empty()
@@ -1258,7 +1297,8 @@ fn load_activation_intent(
             && value.created_at >= intent.created_at,
     )?;
     let helper: ComposeReceipt = decode(&read(installation, &intent.scope().record("helper"))?)?;
-    require(encode(value.inputs.prior.as_ref().ok_or(REFUSED)?)? == encode(&helper)?)?;
+    let runtime_parent = feature_renewal::runtime_parent(installation, intent, &helper)?;
+    require(encode(value.inputs.prior.as_ref().ok_or(REFUSED)?)? == encode(&runtime_parent)?)?;
     let parent = generation::read_recorded_attempt(
         installation,
         intent.sequence - 1,
@@ -1334,6 +1374,7 @@ fn prepare_activation(
         attempt: intent.attempt,
         binding_sha256: binding.sha256()?,
         helper_receipt_sha256: hash(&read(installation, &intent.scope().record("helper"))?),
+        feature_renewal_sha256: feature_renewal::digest(installation, intent.scope())?,
         inputs,
         model: session.model().clone(),
         configuration_sha256: session.configuration_sha256().into(),
@@ -1356,6 +1397,7 @@ fn activate(
     let scope = intent.scope();
     let planned = prepare_activation(installation, docker, state, intent, binding, helper)?;
     require_candidate_fresh(installation, binding, now()?)?;
+    feature_renewal::require_fresh(installation, scope)?;
     let session = ComposeSession::new_generation(
         docker,
         state.journal().runtime().ok_or(REFUSED)?,
@@ -1425,6 +1467,7 @@ fn activate(
     )?;
     let started_name = scope.record("runtime-started");
     require_candidate_fresh(installation, binding, now()?)?;
+    feature_renewal::require_fresh(installation, scope)?;
     let prior_started = state.read_evidence(&started_name)?;
     if let Some(bytes) = &prior_started {
         let previous: ComposeReceipt = decode(bytes)?;
@@ -1511,6 +1554,7 @@ fn activate(
     };
     let checkpoint_ref = native_reference(state, &saved.receipt)?;
     require_candidate_fresh(installation, binding, now()?)?;
+    feature_renewal::require_fresh(installation, scope)?;
     let activation_name = scope.record("activation");
     if state.read_evidence(&activation_name)?.is_none() {
         let value = Activation {
@@ -1573,7 +1617,8 @@ fn activate(
     if before.as_deref() != Some(&next) {
         generation::publish_current(installation, state, before.as_deref(), &next)?;
     }
-    require(selected(installation)?.is_some_and(|selected| selected.binding == *binding))
+    require(selected(installation)?.is_some_and(|selected| selected.binding == *binding))?;
+    feature_renewal::complete(state, installation, scope)
 }
 
 pub(super) fn require_activation(
@@ -1623,7 +1668,8 @@ pub(super) fn require_activation(
             && saved.schema == "elevenid.installer-compose-session/v1",
     )?;
     let helper: ComposeReceipt = decode(&read(installation, &scope.record("helper"))?)?;
-    let before = helper.resources.as_ref().ok_or(REFUSED)?;
+    let runtime_parent = feature_renewal::runtime_parent(installation, &intent, &helper)?;
+    let before = runtime_parent.resources.as_ref().ok_or(REFUSED)?;
     let after = checkpoint.resources.as_ref().ok_or(REFUSED)?;
     let roles: BTreeSet<_> = plan.services.iter().cloned().collect();
     let referenced_changed =
@@ -1734,6 +1780,28 @@ fn reconcile(
 ) -> Result<GenerationBinding> {
     crate::installer_lifecycle::require_recorded_running_intent(state.inspection(), installation)?;
     crate::installer_root_retirement::require_no_pending_for_generation(state.inspection())?;
+    if crate::installer_features::generations::has_pending_baseline_renewal(
+        installation,
+        intent.sequence,
+        intent.attempt,
+    )? {
+        // The feature helper may already have replaced its own ID. Its native
+        // owner resumes that exact producer before an old baseline census can
+        // mistake the authenticated intermediate state for a foreign resource.
+        let binding = generation::load_attempt(installation, intent.sequence, intent.attempt)?;
+        feature_renewal::prepare(installation, docker, state, intent, &binding)?;
+        let raw = read(installation, &intent.scope().record("helper"))?;
+        let helper: ComposeReceipt = decode(&raw)?;
+        let runtime_parent = feature_renewal::runtime_parent(installation, intent, &helper)?;
+        prepare_activation(
+            installation,
+            docker,
+            state,
+            intent,
+            &binding,
+            &runtime_parent,
+        )?;
+    }
     recover_infrastructure(installation, docker, state, intent)?;
     let helper = producer(installation, docker, state, intent)?;
     let parent = intent.parent(installation)?;
@@ -1760,7 +1828,16 @@ fn reconcile(
         return Err("The new generation attempt completed after its admission deadline; retain its evidence for the next bounded recovery invocation".into());
     }
     require_candidate_fresh(installation, &binding, observed_at)?;
-    activate(installation, docker, state, intent, &binding, &helper)?;
+    feature_renewal::prepare(installation, docker, state, intent, &binding)?;
+    let runtime_parent = feature_renewal::runtime_parent(installation, intent, &helper)?;
+    activate(
+        installation,
+        docker,
+        state,
+        intent,
+        &binding,
+        &runtime_parent,
+    )?;
     Ok(binding)
 }
 pub(super) fn begin_and_reconcile(
@@ -1820,6 +1897,7 @@ pub(super) fn reconcile_pending(
     state: &mut LockedMaintenance,
 ) -> Result<Option<GenerationBinding>> {
     state.inspection().require_path_binding(installation)?;
+    feature_renewal::repair_selected_completion(state, installation)?;
     let Some(parent) = generation::load_verified(
         installation,
         &state.journal().installation_id().to_string(),

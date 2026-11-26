@@ -12,6 +12,7 @@ pub struct CredentialTemplateServiceConfig {
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub grpc_server_tls: Option<CredentialTemplateGrpcServerTls>,
     pub database_url: String,
     pub database_max_connections: u32,
@@ -168,10 +169,24 @@ impl CredentialTemplateServiceConfig {
             return Err(invalid("MARTY_MIGRATION_PROFILE"));
         }
 
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address.port() == http_addr.port() || https.address.port() == grpc_addr.port()
+            {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+            require_secret(&service_token, "GRPC_SERVICE_TOKEN", 32)?;
+        }
+
         Ok(Self {
             environment,
             http_addr,
             grpc_addr,
+            managed_authority_https,
             grpc_server_tls,
             database_url: parsed_database.to_string(),
             database_max_connections,
@@ -412,6 +427,85 @@ mod tests {
         );
         assert_eq!(config.http_addr.port(), 8003);
         assert_eq!(config.grpc_addr.port(), 9003);
+        assert!(config.managed_authority_https.is_none());
+    }
+
+    #[test]
+    fn managed_owner_listener_requires_remote_identity_and_service_authority() {
+        let mut input = values("development");
+        input.extend([
+            ("MANAGED_AUTHORITY_HTTPS_ADDR".into(), "0.0.0.0:8443".into()),
+            (
+                "MANAGED_AUTHORITY_TLS_CERT_FILE".into(),
+                "server.crt".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_PROVIDER".into(),
+                "openbao-transit".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_ADDR".into(),
+                "https://openbao:8200".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE".into(),
+                "bao-ca.crt".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE".into(),
+                "server-token".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_KEY_NAME".into(),
+                "ct-server".into(),
+            ),
+            ("MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION".into(), "1".into()),
+        ]);
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input.clone()),
+            Err(CredentialTemplateConfigError::Missing {
+                name: "GRPC_SERVICE_TOKEN"
+            })
+        );
+        input.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input.clone())
+                .unwrap()
+                .managed_authority_https
+                .unwrap()
+                .address
+                .port(),
+            8443
+        );
+        for (name, raw) in [
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "0.0.0.0:8003"),
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "0.0.0.0:9003"),
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "127.0.0.1:8003"),
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "[::1]:9003"),
+            ("MANAGED_AUTHORITY_TLS_KEY_FILE", "private.key"),
+            ("MANAGED_AUTHORITY_TLS_KMS_ADDR", "http://openbao:8200"),
+            ("MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION", "0"),
+        ] {
+            let mut invalid = input.clone();
+            invalid.insert(name.into(), raw.into());
+            assert!(
+                CredentialTemplateServiceConfig::from_values(invalid).is_err(),
+                "{name}"
+            );
+        }
+        for name in [
+            "MANAGED_AUTHORITY_HTTPS_ADDR",
+            "MANAGED_AUTHORITY_TLS_CERT_FILE",
+        ] {
+            let mut partial = input.clone();
+            partial.remove(name);
+            assert!(CredentialTemplateServiceConfig::from_values(partial).is_err());
+        }
+        input.insert("GRPC_SERVICE_TOKEN".into(), "short".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input),
+            Err(invalid("GRPC_SERVICE_TOKEN"))
+        );
     }
 
     #[test]

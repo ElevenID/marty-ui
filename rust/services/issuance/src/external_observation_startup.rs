@@ -19,9 +19,29 @@ pub async fn prepare_isolated_observation_router(
     enabled: bool,
     service_key: Option<&str>,
 ) -> Result<Option<Router>, &'static str> {
+    prepare_isolated_observation_router_with_pool_limit(
+        canonical_pool,
+        observation_database_url,
+        enabled,
+        service_key,
+        8,
+    )
+    .await
+}
+
+pub async fn prepare_isolated_observation_router_with_pool_limit(
+    canonical_pool: &PgPool,
+    observation_database_url: Option<&str>,
+    enabled: bool,
+    service_key: Option<&str>,
+    maximum_connections: u32,
+) -> Result<Option<Router>, &'static str> {
     const FAILURE: &str = "Isolated observation runtime preflight failed";
     if !enabled {
         return Ok(None);
+    }
+    if !(1..=8).contains(&maximum_connections) {
+        return Err("Isolated observation pool limit must be between 1 and 8");
     }
     if service_key.is_none() {
         return Err("Observation Gateway service credential is required");
@@ -32,7 +52,7 @@ pub async fn prepare_isolated_observation_router(
     let pool = tokio::time::timeout(
         Duration::from_secs(5),
         PgPoolOptions::new()
-            .max_connections(8)
+            .max_connections(maximum_connections)
             .acquire_timeout(Duration::from_secs(5))
             .connect(url),
     )

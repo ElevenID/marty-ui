@@ -33,7 +33,15 @@ async fn actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_start
     let reads = live_wire::Reads::default();
     let (mut template, mut policy) = live_wire::readers(&owned, &reads).await?;
     let mut references = Server::https(live_wire::reference_health(&reads)).await?;
-    let env = environment(&owned, &db, &keys, &template, &policy, &references)?;
+    // Keep this port reserved while the fixture selects its business listener,
+    // so the two unbound addresses cannot accidentally be the same socket.
+    let health_reservation = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let health_address = health_reservation.local_addr()?;
+    let mut env = environment(&owned, &db, &keys, &template, &policy, &references)?;
+    env.insert(
+        "DELEGATED_USE_HEALTH_ADDR".into(),
+        health_address.to_string(),
+    );
     let no_business_signing = [
         format!("transit/sign/{}", keys.key),
         "transit/sign/receipt-ed25519".into(),
@@ -62,9 +70,33 @@ async fn actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_start
     )
     .await?;
 
+    drop(health_reservation);
     let mut executable = Executable::start(&env).await?;
     let client = caller(None).await?;
     let origin = format!("https://{}", env["DELEGATED_USE_LISTEN_ADDR"]);
+    let local_origin = format!("http://{health_address}");
+    let local = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?;
+    for route in ["/health", "/ready"] {
+        let response = local.get(format!("{local_origin}{route}")).send().await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+        assert!(response.bytes().await?.is_empty());
+    }
+    assert_eq!(
+        local
+            .get(format!(
+                "{local_origin}/internal/v1/organizations/{}/delegated-use/receipts/recover",
+                owned.organization
+            ))
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     for route in ["/health", "/ready"] {
         let response = client.get(format!("{origin}{route}")).send().await?;
         assert_eq!(response.status(), StatusCode::OK);
@@ -192,6 +224,16 @@ async fn actual_executable_qualifies_remote_readiness_mtls_and_fail_closed_start
         client.get(format!("{origin}/ready")).send().await?.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
+    for route in ["/health", "/ready"] {
+        assert_eq!(
+            local
+                .get(format!("{local_origin}{route}"))
+                .send()
+                .await?
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
     executable.close().await?;
     rejected_before_listen(&env, "runtime qualification failed before listening").await?;
     db.sql(format!(

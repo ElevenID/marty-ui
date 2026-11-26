@@ -1,0 +1,23 @@
+# The journal role cannot write canonical issuance/ownership authority.
+# Materialization retains the separately qualified canonical runtime pool.
+services:
+  issuance:
+    environment: &id001
+      ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL_FILE: /run/feature-profile/feature_observation_database_url
+      ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS: '1'
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_observation_database_url
+      target: /run/feature-profile/feature_observation_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance-native:
+    environment: *id001
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_observation_database_url
+      target: /run/feature-profile/feature_observation_database_url
+      read_only: true
+      bind:
+        create_host_path: false

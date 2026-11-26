@@ -1019,7 +1019,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 11
+    assert verified[-1] == b"" and len(verified) == 12
     flow_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert flow_tests == [
         "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
@@ -1032,6 +1032,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         "rust/crates/flow-acceptance/tests/support/flow_public_startup.rs",
         "rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs",
         "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs",
+        "rust/crates/flow-acceptance/tests/support/managed_http_provider_tls.rs",
     ]
     expected = {
         "all": "false",
@@ -1047,7 +1048,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
     }
     assert _classify_changed_paths(
         flow_tests, tmp_path, include_rust_plan=True
-    ) == [expected] * 10
+    ) == [expected] * 11
     assert _classify_changed_paths(
         flow_tests, tmp_path, combined=True, include_rust_plan=True
     ) == [expected]
@@ -4811,7 +4812,7 @@ def test_platform_acceptance_runners_require_complete_executed_rosters() -> None
                 if step.get("name") == "Run isolated database contract suites concurrently")
     assert step["if"] == "matrix.lane != 'renewal-unit'"
     assert not step.get("continue-on-error", False)
-    for owner, count in (("flow", 16), ("selfhost", 17)):
+    for owner, count in (("flow", 18), ("selfhost", 17)):
         script = f"run-{owner}-acceptance-contracts.sh"
         assert f"bash ../scripts/ci/{script}" in step["run"]
         runner = (ROOT / "scripts/ci" / script).read_text(encoding="utf-8")
@@ -4819,9 +4820,11 @@ def test_platform_acceptance_runners_require_complete_executed_rosters() -> None
         assert f"{count} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;" in runner
         assert "rust_db_obligations.py" in runner
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(encoding="utf-8")
-    assert "exact sixteen-case owner inventory" in inventory
+    assert "exact eighteen-case owner inventory" in inventory
     assert 'flow_tests=$("$1" --list)' in inventory
     for case in ("platform_fixture_uses_current_owned_schema_without_provider_objects",
+                 "managed_http_provider_tls::native_flow_clients_use_only_selected_ca_and_verify_hostnames",
+                 "managed_http_provider_tls::selected_ca_cannot_enable_plaintext_or_accept_key_material",
                  "didcomm_http_admission_recovers_real_keyed_reservation",
                  "didcomm_flow_grpc_provider_preserves_keyed_admission"):
         assert f"{case}: test" in inventory

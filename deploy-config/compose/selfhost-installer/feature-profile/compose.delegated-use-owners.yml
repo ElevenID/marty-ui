@@ -1,0 +1,72 @@
+# Real private HTTPS owners; each service retains its own nonexportable identity.
+services:
+  credential-template:
+    environment:
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/secrets/ct_workload_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: https://openbao:8200
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/secrets/ct_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: ${CT_TLS_KMS_KEY_NAME:?}
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: '1'
+  issuance-native:
+    environment:
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/secrets/issuance_workload_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: https://openbao:8200
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?}
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: '1'
+  trust-profile:
+    environment:
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/feature-profile/feature_trust_profile_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: https://openbao:8200
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/feature-profile/feature_trust_profile_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: feature-workload-tls-trust-profile-server
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: '1'
+    secrets:
+    - openbao_tls_ca_cert
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_trust_profile_server_cert
+      target: /run/feature-profile/feature_trust_profile_server_cert
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_trust_profile_tls_kms_token
+      target: /run/feature-profile/feature_trust_profile_tls_kms_token
+      read_only: true
+      bind:
+        create_host_path: false
+  deployment-profile:
+    environment:
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/feature-profile/feature_deployment_profile_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: https://openbao:8200
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/feature-profile/feature_deployment_profile_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: feature-workload-tls-deployment-profile-server
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: '1'
+    secrets:
+    - openbao_tls_ca_cert
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_deployment_profile_server_cert
+      target: /run/feature-profile/feature_deployment_profile_server_cert
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_deployment_profile_tls_kms_token
+      target: /run/feature-profile/feature_deployment_profile_tls_kms_token
+      read_only: true
+      bind:
+        create_host_path: false

@@ -1,0 +1,7 @@
+services:
+  delegation-approval:
+    depends_on:
+      feature-database-grants: !reset null
+  delegation-commands:
+    depends_on:
+      feature-database-grants: !reset null

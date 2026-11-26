@@ -2,9 +2,10 @@
 //! This is not an ownership proof for Docker resources or a deletion manifest.
 #![cfg(target_os = "linux")]
 
-use crate::installer_state::LockedInspection;
+use crate::{installer_state::LockedInspection, installer_top_level_census::TopLevelName};
 use serde::Serialize;
 use std::{
+    collections::BTreeSet,
     ffi::{CString, OsStr},
     fs::{self, File, Metadata},
     os::{
@@ -59,6 +60,16 @@ pub struct HostStorageInventory {
     /// Observed owner/mode metadata and device/inode never authorize deletion.
     pub deletion_eligible: bool,
     pub entries: Vec<HostEntry>,
+    /// Omitted for every historical unselected installation. These receipts
+    /// qualify only their selected native owners, never deletion authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_owner_receipts: Option<FeatureOwnerReceipts>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeatureOwnerReceipts {
+    pub feature_profile_sha256: String,
+    pub receipts: Vec<&'static str>,
 }
 
 fn component(name: &OsStr) -> Result<CString> {
@@ -175,6 +186,13 @@ fn add(
 }
 
 fn scan(installation: &File) -> Result<Vec<HostEntry>> {
+    scan_with_features(installation, &BTreeSet::new())
+}
+
+fn scan_with_features(
+    installation: &File,
+    features: &BTreeSet<TopLevelName>,
+) -> Result<Vec<HostEntry>> {
     let device = installation.metadata().map_err(|_| REFUSED)?.dev();
     let mut entries = Vec::new();
     for (root, category) in [
@@ -190,7 +208,75 @@ fn scan(installation: &File) -> Result<Vec<HostEntry>> {
             add(&mut entries, &file, root, category, device, 0)?;
         }
     }
+    for (name, root) in [
+        (
+            TopLevelName::FeatureProfileSecrets,
+            "feature-profile-secrets",
+        ),
+        (
+            TopLevelName::FeaturePostgresTransport,
+            "feature-postgres-transport",
+        ),
+        (
+            TopLevelName::FeatureIdentityOutput,
+            "feature-identity-output",
+        ),
+        (
+            TopLevelName::FeatureProfileGenerations,
+            "feature-profile-generations",
+        ),
+    ] {
+        if features.contains(&name) {
+            let file = open_child(installation, OsStr::new(root))?.ok_or(REFUSED)?;
+            add(&mut entries, &file, root, Category::Credential, device, 0)?;
+        }
+    }
     Ok(entries)
+}
+
+/// Only fixed names backed by the selected native owner can join a census.
+/// Existing similarly named paths on an unselected install remain unknown.
+pub(crate) fn verified_feature_roots(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<BTreeSet<TopLevelName>> {
+    locked.require_path_binding(installation)?;
+    let Some(selection) = crate::installer_features::load(locked)? else {
+        return Ok(BTreeSet::new());
+    };
+    let root = locked.installation_directory();
+    let mut selected = BTreeSet::new();
+    let present =
+        |name: &str| -> Result<bool> { Ok(open_child(root, OsStr::new(name))?.is_some()) };
+    let recorded =
+        |name: &str| -> Result<bool> { Ok(locked.diagnostic_record(name, true)?.is_some()) };
+    if present("feature-profile-secrets")?
+        || recorded(crate::installer_feature_credentials::RECORD)?
+    {
+        crate::installer_feature_credentials::verify(locked, &selection.credential_names()?)?;
+        selected.insert(TopLevelName::FeatureProfileSecrets);
+    }
+    if present("feature-postgres-transport")?
+        || recorded(crate::installer_feature_postgres_tls::RECORD)?
+    {
+        crate::installer_feature_postgres_tls::verify(locked, installation)?;
+        selected.insert(TopLevelName::FeaturePostgresTransport);
+    }
+    if present("feature-identity-output")?
+        || recorded(crate::installer_feature_identity::RECORD)?
+        || recorded("feature-identities-pending.json")?
+    {
+        let identities = selection.identity_selection()?.ok_or(REFUSED)?;
+        crate::installer_feature_identity::verify_retained(locked, installation, &identities)?;
+        selected.insert(TopLevelName::FeatureIdentityOutput);
+    }
+    crate::installer_features::verify_generations(locked, installation)?;
+    if present("feature-profile-generations")? {
+        selected.insert(TopLevelName::FeatureProfileGenerations);
+    }
+    locked.require_path_binding(installation)?;
+    locked.require_unchanged()?;
+    Ok(selected)
 }
 
 /// Inventory known host storage roots while the installation journal is locked.
@@ -200,7 +286,12 @@ fn scan(installation: &File) -> Result<Vec<HostEntry>> {
 /// can still appear under a known root. This output cannot authorize purge.
 fn inspect_held(locked: &LockedInspection, installation: &Path) -> Result<HostStorageInventory> {
     locked.require_path_binding(installation)?;
-    let entries = scan(locked.installation_directory())?;
+    let features = verified_feature_roots(locked, installation)?;
+    let entries = if features.is_empty() {
+        scan(locked.installation_directory())?
+    } else {
+        scan_with_features(locked.installation_directory(), &features)?
+    };
     locked.require_path_binding(installation)?;
     locked.require_unchanged()?;
     Ok(HostStorageInventory {
@@ -210,6 +301,32 @@ fn inspect_held(locked: &LockedInspection, installation: &Path) -> Result<HostSt
         not_atomic_snapshot: true,
         deletion_eligible: false,
         entries,
+        feature_owner_receipts: locked.journal().feature_profile_sha256().map(|hash| {
+            FeatureOwnerReceipts {
+                feature_profile_sha256: hash.into(),
+                receipts: [
+                    (
+                        TopLevelName::FeatureProfileSecrets,
+                        crate::installer_feature_credentials::RECORD,
+                    ),
+                    (
+                        TopLevelName::FeaturePostgresTransport,
+                        crate::installer_feature_postgres_tls::RECORD,
+                    ),
+                    (
+                        TopLevelName::FeatureIdentityOutput,
+                        crate::installer_feature_identity::RECORD,
+                    ),
+                    (
+                        TopLevelName::FeatureProfileGenerations,
+                        "feature-profile-generations.json",
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(name, receipt)| features.contains(&name).then_some(receipt))
+                .collect(),
+            }
+        }),
     })
 }
 
@@ -315,5 +432,27 @@ mod tests {
         assert_eq!(inventory.coverage, "known_host_storage_roots_only");
         assert!(inventory.not_atomic_snapshot);
         assert!(!inventory.deletion_eligible);
+        assert!(inventory.feature_owner_receipts.is_none());
+        assert!(!serde_json::to_string(&inventory)
+            .unwrap()
+            .contains("feature_owner_receipts"));
+
+        // A similarly named path cannot opt an old installation into a new
+        // owner. Its private contents remain untouched and unclaimed.
+        fs::create_dir(path.join("feature-profile-secrets")).unwrap();
+        fs::write(
+            path.join("feature-profile-secrets/unowned-canary"),
+            b"preserve",
+        )
+        .unwrap();
+        let unchanged = inspect(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(&inventory).unwrap(),
+            serde_json::to_value(&unchanged).unwrap()
+        );
+        assert_eq!(
+            fs::read(path.join("feature-profile-secrets/unowned-canary")).unwrap(),
+            b"preserve"
+        );
     }
 }

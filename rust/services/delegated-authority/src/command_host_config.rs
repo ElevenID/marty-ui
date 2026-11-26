@@ -20,6 +20,9 @@ pub struct CommandHostConfig {
     pub command_database_url: String,
     pub runtime_database_url: String,
     pub organization_database_url: String,
+    pub command_pool_max_connections: u32,
+    pub runtime_pool_max_connections: u32,
+    pub organization_pool_max_connections: u32,
     pub service_token: String,
     pub configuration: OrganizationApprovalConfiguration,
     pub authority: Authority,
@@ -139,6 +142,24 @@ impl CommandHostConfig {
             command_database_url: database_url(&values, DATABASE_FIELDS[0])?,
             runtime_database_url: database_url(&values, DATABASE_FIELDS[1])?,
             organization_database_url: database_url(&values, DATABASE_FIELDS[2])?,
+            command_pool_max_connections: seconds(
+                &values,
+                "DELEGATION_COMMAND_POOL_MAX_CONNECTIONS",
+                8,
+                8,
+            )?,
+            runtime_pool_max_connections: seconds(
+                &values,
+                "DELEGATION_COMMAND_RUNTIME_POOL_MAX_CONNECTIONS",
+                8,
+                8,
+            )?,
+            organization_pool_max_connections: seconds(
+                &values,
+                "DELEGATION_COMMAND_ORGANIZATION_POOL_MAX_CONNECTIONS",
+                8,
+                8,
+            )?,
             service_token: token.into(),
             configuration,
             authority,
@@ -239,6 +260,23 @@ mod tests {
         .collect()
     }
     #[test]
+    fn native_container_http_address_is_explicit_and_invalid_values_do_not_fall_back() {
+        let mut input = values();
+        input.insert("DELEGATION_COMMAND_HTTP_ADDR".into(), "0.0.0.0:8020".into());
+        let config = CommandHostConfig::from_values(input).unwrap();
+        assert!(config.http_addr.ip().is_unspecified());
+        assert_eq!(config.http_addr.port(), 8020);
+        for address in ["", "http://0.0.0.0:8020", "0.0.0.0:8020\n"] {
+            let mut input = values();
+            input.insert("DELEGATION_COMMAND_HTTP_ADDR".into(), address.into());
+            assert_eq!(
+                CommandHostConfig::from_values(input).unwrap_err(),
+                CommandHostConfigError::Invalid("DELEGATION_COMMAND_HTTP_ADDR")
+            );
+        }
+    }
+
+    #[test]
     fn command_host_is_explicit_and_contains_no_producer_writer_configuration() {
         assert_eq!(
             CommandHostConfig::from_values(BTreeMap::new()).unwrap_err(),
@@ -246,6 +284,9 @@ mod tests {
         );
         let config = CommandHostConfig::from_values(values()).unwrap();
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8020");
+        assert_eq!(config.command_pool_max_connections, 8);
+        assert_eq!(config.runtime_pool_max_connections, 8);
+        assert_eq!(config.organization_pool_max_connections, 8);
         assert!(!format!("{config:?}").contains("synthetic-secret"));
         let mut input = values();
         input.insert(
@@ -260,6 +301,31 @@ mod tests {
             let mut input = values();
             input.insert(name.into(), "301".into());
             assert!(CommandHostConfig::from_values(input).is_err());
+        }
+        for name in [
+            "DELEGATION_COMMAND_POOL_MAX_CONNECTIONS",
+            "DELEGATION_COMMAND_RUNTIME_POOL_MAX_CONNECTIONS",
+            "DELEGATION_COMMAND_ORGANIZATION_POOL_MAX_CONNECTIONS",
+        ] {
+            for invalid in ["0", "9", "-1", "", " 2", "4294967296"] {
+                let mut input = values();
+                input.insert(name.into(), invalid.into());
+                assert_eq!(
+                    CommandHostConfig::from_values(input).unwrap_err(),
+                    CommandHostConfigError::Invalid(name)
+                );
+            }
+            let mut input = values();
+            input.insert(name.into(), "1".into());
+            let config = CommandHostConfig::from_values(input).unwrap();
+            let actual = match name {
+                "DELEGATION_COMMAND_POOL_MAX_CONNECTIONS" => config.command_pool_max_connections,
+                "DELEGATION_COMMAND_RUNTIME_POOL_MAX_CONNECTIONS" => {
+                    config.runtime_pool_max_connections
+                }
+                _ => config.organization_pool_max_connections,
+            };
+            assert_eq!(actual, 1);
         }
     }
 }

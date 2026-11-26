@@ -32,6 +32,16 @@ if [ "$MODULE_NAME" = "delegated_use" ]; then
 	exec /usr/local/bin/marty-delegated-use
 fi
 
+if [ "$MODULE_NAME" = "delegation_approval" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-delegation-approval "$@"
+fi
+
+if [ "$MODULE_NAME" = "delegation_commands" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-delegation-commands "$@"
+fi
+
 if [ "$MODULE_NAME" = "signing_keys" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-signing-keys

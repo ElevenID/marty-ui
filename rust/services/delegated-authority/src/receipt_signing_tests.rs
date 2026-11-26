@@ -18,6 +18,101 @@ use std::{
     },
 };
 
+#[tokio::test]
+async fn receipt_https_transport_uses_exact_private_ca_and_validates_hostname() {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+    use rustls::pki_types::PrivatePkcs8KeyDer;
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca_params = CertificateParams::new(Vec::new()).unwrap();
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    let ca = ca_params.self_signed(&ca_key).unwrap();
+    let server_key = KeyPair::generate().unwrap();
+    let leaf = CertificateParams::new(vec!["localhost".into()])
+        .unwrap()
+        .signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))
+        .unwrap();
+    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![leaf.der().clone()],
+        PrivatePkcs8KeyDer::from(server_key.serialize_der()).into(),
+    )
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = Router::new().route(
+        "/probe",
+        post(|| async { Json(json!({"transport":"verified"})) }),
+    );
+    let server = axum_server::from_tcp_rustls(
+        listener,
+        axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls)),
+    )
+    .unwrap();
+    struct Task(tokio::task::JoinHandle<()>);
+    impl Drop for Task {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _task = Task(tokio::spawn(async move {
+        server.serve(router.into_make_service()).await.unwrap();
+    }));
+    let origin = format!("https://localhost:{port}");
+    let key = TestKey::new("EdDSA", 1);
+    let construct = |origin: &str, trusted_ca: &[u8]| {
+        HttpManagedDelegatedReceiptSigner::build_with_ca(
+            origin,
+            "r".repeat(40),
+            "s".repeat(40),
+            pin("EdDSA", &key),
+            Arc::new(TestMinter {
+                substitute_origin: false,
+                reuse_nonce: false,
+            }),
+            false,
+            Some(trusted_ca),
+        )
+    };
+    let pem = ca.pem();
+    let signer = construct(&origin, pem.as_bytes()).unwrap();
+    assert_eq!(
+        signer
+            .post("probe", &"r".repeat(40), json!({}), None)
+            .await
+            .unwrap(),
+        json!({"transport":"verified"})
+    );
+    let wrong_name = construct(&origin.replace("localhost", "127.0.0.1"), pem.as_bytes()).unwrap();
+    assert!(wrong_name
+        .post("probe", &"r".repeat(40), json!({}), None)
+        .await
+        .is_err());
+    let other_key = KeyPair::generate().unwrap();
+    let other_ca = ca_params.self_signed(&other_key).unwrap().pem();
+    let wrong_ca = construct(&origin, other_ca.as_bytes()).unwrap();
+    assert!(wrong_ca
+        .post("probe", &"r".repeat(40), json!({}), None)
+        .await
+        .is_err());
+    assert!(construct(&origin.replacen("https:", "http:", 1), pem.as_bytes()).is_err());
+    for invalid in [
+        Vec::new(),
+        b"-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----".to_vec(),
+        b"invalid certificate".to_vec(),
+        [pem.as_bytes(), pem.as_bytes()].concat(),
+        vec![b'x'; 65_537],
+    ] {
+        assert!(construct(&origin, &invalid).is_err());
+    }
+}
+
 #[derive(Clone)]
 enum TestKey {
     Es(SigningKey),

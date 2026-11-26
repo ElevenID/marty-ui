@@ -23,6 +23,8 @@ FLOW_NESTED = (
 
 
 FLOW_SHARED = {
+    "managed_http_provider_tls::native_flow_clients_use_only_selected_ca_and_verify_hostnames": "managed_http_provider_tls.rs",
+    "managed_http_provider_tls::selected_ca_cannot_enable_plaintext_or_accept_key_material": "managed_http_provider_tls.rs",
     "base_runtime_redis::tests::ping_cleanup_failure_is_terminal_not_readiness_retry": "base_runtime_redis.rs",
     "base_runtime_redis::tests::redis_fixture_requires_exact_owner_storage_and_loopback_without_database_override": "base_runtime_redis.rs",
     "base_runtime_redis::tests::namespace_redis_rejects_other_networks_and_every_host_publication": "base_runtime_redis.rs",
@@ -36,7 +38,7 @@ def test_flow_cases_have_one_required_source_and_runner_owner():
     nested = (FLOW / "tests/support/flow_public_startup.rs").read_text()
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     runner = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
-    assert len(FLOW_OUTER) + len(FLOW_NESTED) + len(FLOW_SHARED) == 16
+    assert len(FLOW_OUTER) + len(FLOW_NESTED) + len(FLOW_SHARED) == 18
     for name in FLOW_OUTER:
         assert len(re.findall(rf"(?:async )?fn {name}\(\)", source)) == 1
         assert inventory.count(f"'{name}: test'") == 1
@@ -46,7 +48,7 @@ def test_flow_cases_have_one_required_source_and_runner_owner():
     for required in ["list-flow-acceptance-cases.sh", "MARTY_PLATFORM_SCHEMA_TEST=1",
                      "MARTY_ISSUANCE_TEST_BINARY=", "--name flow_acceptance --owner flow-pr --",
                      '"$flow_executable" --nocapture --test-threads=4',
-                     "16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]:
+                     "18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]:
         assert required in runner
     for name, file in FLOW_SHARED.items():
         body = (FLOW / "tests/support" / file).read_text()

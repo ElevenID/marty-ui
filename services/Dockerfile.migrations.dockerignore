@@ -57,10 +57,12 @@ rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs
 rust/crates/flow-acceptance/tests/support/flow_public_startup.rs
 rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
 rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
+rust/crates/flow-acceptance/tests/support/managed_http_provider_tls.rs
 rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
 rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs
 rust/crates/selfhost-acceptance/tests/managed_postgres_contract.rs
 rust/crates/selfhost-acceptance/tests/support/managed_postgres.rs
+rust/crates/selfhost-acceptance/tests/support/feature_profile_database.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
 rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs

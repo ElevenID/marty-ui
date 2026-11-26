@@ -7,10 +7,10 @@ use axum::{
 };
 use chrono::Utc;
 use marty_deployment_profile::{
-    deployment_router, ApiAuthConfiguration, AssignDeviceRequest, AuthMethod,
-    CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentError, DeploymentHttpState,
-    DeploymentProfile, DeploymentRepository, DeploymentService, Lane, MemoryDeploymentRepository,
-    PostgresDeploymentRepository, UpdateDeploymentProfileRequest,
+    deployment_authority_router, deployment_router, ApiAuthConfiguration, AssignDeviceRequest,
+    AuthMethod, CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentError,
+    DeploymentHttpState, DeploymentProfile, DeploymentRepository, DeploymentService, Lane,
+    MemoryDeploymentRepository, PostgresDeploymentRepository, UpdateDeploymentProfileRequest,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
@@ -524,35 +524,54 @@ async fn resource_owner_projection_is_minimal_and_service_authenticated() {
     let id = profile.id.clone();
     repository.save_profile(profile).await.unwrap();
     let token = "s".repeat(32);
-    let app = deployment_router(
-        DeploymentHttpState::new(service)
-            .with_service_token(Some(token.clone()))
-            .unwrap(),
-    );
-    for (supplied, expected) in [
-        ("", StatusCode::UNAUTHORIZED),
-        ("wrong", StatusCode::UNAUTHORIZED),
-        (token.as_str(), StatusCode::OK),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/internal/v1/resource-owners/deployment-profiles/{id}"
-                    ))
-                    .header("x-service-token", supplied)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected);
-        if expected == StatusCode::OK {
-            let value: Value =
-                serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap())
-                    .unwrap();
-            assert_eq!(value, json!({"id":id,"organization_id":"org-1"}));
+    let state = DeploymentHttpState::new(service)
+        .with_service_token(Some(token.clone()))
+        .unwrap();
+    let ordinary = deployment_router(state.clone());
+    let authority = deployment_authority_router(state);
+    for path in ["/v1/deployment-profiles", "/health/ready"] {
+        assert_eq!(
+            authority
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("x-service-token", &token)
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    for app in [ordinary, authority] {
+        for (supplied, expected) in [
+            ("", StatusCode::UNAUTHORIZED),
+            ("wrong", StatusCode::UNAUTHORIZED),
+            (token.as_str(), StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/internal/v1/resource-owners/deployment-profiles/{id}"
+                        ))
+                        .header("x-service-token", supplied)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let value: Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap())
+                        .unwrap();
+                assert_eq!(value, json!({"id":id,"organization_id":"org-1"}));
+            }
         }
     }
 }

@@ -10,8 +10,10 @@ use marty_credential_template::{
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-const OWNER_MIGRATION: &str =
-    include_str!("../../issuance/migrations/0018_verification_prerequisites.sql");
+const OWNER_MIGRATION: &str = concat!(
+    include_str!("../../issuance/migrations/0018_verification_prerequisites.sql"),
+    include_str!("../../issuance/migrations/0020_verification_prerequisite_template_locks.sql"),
+);
 const POLICY_CHECK: &str = "credential_template_service.template_verification_prerequisite_valid(jsonb,text,text,text,jsonb,jsonb,jsonb,text,jsonb,integer)";
 
 fn template() -> CredentialTemplate {
@@ -250,6 +252,21 @@ async fn prerequisite_postgres_readiness_roundtrip_downgrade_and_schema_tamperin
             store.save_template(&guarded).await.is_err(),
             "changed {guard}"
         );
+        restore_owner_guards(&pool).await;
+        store.save_template(&guarded).await.unwrap();
+    }
+
+    // The scoped read-lock helper is part of the owner admission boundary,
+    // including its exact body, owner execution, fixed search path and ACL.
+    for mutation in [
+        "ALTER FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) SECURITY INVOKER",
+        "ALTER FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) SET search_path=public",
+        "GRANT EXECUTE ON FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) TO PUBLIC",
+        "CREATE OR REPLACE FUNCTION issuance_service.verification_prerequisite_lock_template(requested_template text,requested_organization text)
+          RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $noop$ BEGIN RETURN NULL; END; $noop$",
+    ] {
+        sqlx::query(mutation).execute(&pool).await.unwrap();
+        assert!(store.save_template(&guarded).await.is_err());
         restore_owner_guards(&pool).await;
         store.save_template(&guarded).await.unwrap();
     }

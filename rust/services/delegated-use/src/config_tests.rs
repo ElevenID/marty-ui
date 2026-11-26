@@ -207,10 +207,50 @@ fn accepts_each_supported_role_pool_limit() {
 }
 
 #[test]
+fn optional_health_listener_is_loopback_only_and_separate_from_mutual_tls() {
+    for raw in ["127.0.0.1:8022", "[::1]:8022"] {
+        let mut input = values();
+        input.insert("DELEGATED_USE_HEALTH_ADDR".into(), raw.into());
+        assert_eq!(
+            parse(input).unwrap().health_addr,
+            Some(raw.parse().unwrap())
+        );
+    }
+    for raw in [
+        "",
+        " 127.0.0.1:8022",
+        "127.0.0.1:8022\n",
+        "127.0.0.1:0",
+        "127.0.0.1:8021",
+        "[::1]:8021",
+        "0.0.0.0:8022",
+        "[::]:8022",
+        "192.0.2.1:8022",
+        "[2001:db8::1]:8022",
+        "health:8022",
+    ] {
+        let mut input = values();
+        input.insert("DELEGATED_USE_HEALTH_ADDR".into(), raw.into());
+        assert_eq!(
+            parse(input).unwrap_err(),
+            HostConfigError::Invalid("DELEGATED_USE_HEALTH_ADDR")
+        );
+    }
+    let mut input = values();
+    input.insert("DELEGATED_USE_LISTEN_ADDR".into(), "0.0.0.0:8022".into());
+    input.insert("DELEGATED_USE_HEALTH_ADDR".into(), "127.0.0.1:8022".into());
+    assert_eq!(
+        parse(input).unwrap_err(),
+        HostConfigError::Invalid("DELEGATED_USE_HEALTH_ADDR")
+    );
+}
+
+#[test]
 fn valid_configuration_uses_selected_profiles_and_redacts_credentials() {
     let input = values();
     let config = parse(input.clone()).unwrap();
     assert_eq!(config.listen_addr.to_string(), "127.0.0.1:8021");
+    assert_eq!(config.health_addr, None);
     assert_eq!(config.pool_max_connections, 4);
     assert!(!config.public_caller_enabled);
     assert_eq!(

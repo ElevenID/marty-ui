@@ -21,11 +21,11 @@ fn failure(message: &'static str) -> io::Error {
     io::Error::other(message)
 }
 
-async fn connect(url: &str) -> Result<PgPool, io::Error> {
+async fn connect(url: &str, maximum: u32) -> Result<PgPool, io::Error> {
     tokio::time::timeout(
         Duration::from_secs(5),
         PgPoolOptions::new()
-            .max_connections(8)
+            .max_connections(maximum)
             .acquire_timeout(Duration::from_secs(5))
             .after_connect(|connection, _| {
                 Box::pin(async move {
@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 "DELEGATION_APPROVAL_RUNTIME_DATABASE_URL"
             };
-            let pool = connect(&command_database(name)?).await?;
+            let pool = connect(&command_database(name)?, 1).await?;
             let repository = PgDelegationGrantRepository::new(pool.clone());
             if command == "migrate" {
                 repository.migrate().await?;
@@ -107,10 +107,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         host.confirmation_max_age_seconds,
         host.authority_validity_seconds,
     )?;
-    let runtime_pool = connect(&host.runtime_database_url).await?;
-    let consent_pool = connect(&host.consent_database_url).await?;
-    let authority_pool = connect(&host.authority_database_url).await?;
-    let organization_pool = connect(&host.organization_database_url).await?;
+    let runtime_pool = connect(
+        &host.runtime_database_url,
+        host.runtime_pool_max_connections,
+    )
+    .await?;
+    let consent_pool = connect(
+        &host.consent_database_url,
+        host.consent_pool_max_connections,
+    )
+    .await?;
+    let authority_pool = connect(
+        &host.authority_database_url,
+        host.authority_pool_max_connections,
+    )
+    .await?;
+    let organization_pool = connect(
+        &host.organization_database_url,
+        host.organization_pool_max_connections,
+    )
+    .await?;
     let repository = PgDelegationGrantRepository::new(runtime_pool.clone());
     repository.readiness().await?;
     let clock = Arc::new(SystemDelegationClock);

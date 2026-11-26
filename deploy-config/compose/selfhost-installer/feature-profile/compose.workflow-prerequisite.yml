@@ -1,0 +1,34 @@
+# A separate random capability is shared only by Flow and its two Issuance
+# aliases. Existing owner TLS and current human authorization remain mandatory.
+services:
+  flow:
+    environment:
+      FLOW_ISSUANCE_SERVICE_TOKEN_FILE: /run/feature-profile/feature_flow_issuance_service_token
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_flow_issuance_service_token
+      target: /run/feature-profile/feature_flow_issuance_service_token
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance:
+    environment: &id001
+      FLOW_PREREQUISITE_OWNER_URL: https://flow:8443
+      FLOW_PREREQUISITE_OWNER_CA_FILE: /run/secrets/workload_identity_ca_cert
+      FLOW_ISSUANCE_SERVICE_TOKEN_FILE: /run/feature-profile/feature_flow_issuance_service_token
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_flow_issuance_service_token
+      target: /run/feature-profile/feature_flow_issuance_service_token
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance-native:
+    environment: *id001
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_flow_issuance_service_token
+      target: /run/feature-profile/feature_flow_issuance_service_token
+      read_only: true
+      bind:
+        create_host_path: false

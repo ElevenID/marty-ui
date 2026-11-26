@@ -914,6 +914,10 @@ fn recover_running(
     } else {
         Value::Null
     };
+    // The ingress process has no database dependency. Recover its retained
+    // probe carrier after OpenBao, before any application or generation step
+    // that needs PostgreSQL's currently valid transport certificate.
+    maintain_feature_postgres(state, installation, docker)?;
     let usability: installer_generation_maintenance::CurrentGenerationUsability =
         installer_generation_maintenance::current_startup_usability(
             state.inspection(),
@@ -959,6 +963,43 @@ fn recover_running(
         "application":application.application,"validation_passed":true,"intent_preserved":true,
         "reboot_qualification_established":false,"installation_ready":false}),
     )
+}
+
+fn maintain_feature_postgres(
+    state: &mut LockedMaintenance,
+    installation: &Path,
+    docker: &Path,
+) -> Result<()> {
+    if crate::installer_features::load(state.inspection())?.is_none() {
+        return Ok(());
+    }
+    require_recorded_running_intent(state.inspection(), installation)?;
+    crate::installer_feature_postgres_tls::verify_for_renewal(state.inspection(), installation)?;
+    let saved = installer_doctor::load_session(state.inspection(), installation)?;
+    let mut inputs = saved.inputs.clone();
+    inputs.services = vec!["postgres".into(), "installer-ingress".into()];
+    inputs.profiles.clear();
+    let session = crate::installer_compose::ComposeSession::new_generation(
+        docker,
+        state.journal().runtime().ok_or(REFUSED)?,
+        inputs,
+    )?;
+    require(
+        session.model() == &saved.model
+            && session.configuration_sha256() == saved.configuration_sha256,
+    )?;
+    // Both retained processes must be available before the owner records a
+    // renewal intent. Starting them creates no resource or authority.
+    session.start_feature_postgres_carrier(state)?;
+    session.feature_postgres_probe_ready()?;
+    let session = session.bounded_feature_postgres_renewal();
+    crate::installer_feature_postgres_tls::renew(
+        state,
+        installation,
+        || session.reload_feature_postgres(),
+        |fingerprint| session.probe_feature_postgres(fingerprint),
+    )?;
+    Ok(())
 }
 
 fn stop_for_intent(

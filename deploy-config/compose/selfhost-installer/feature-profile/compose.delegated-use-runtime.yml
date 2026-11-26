@@ -1,0 +1,4 @@
+services:
+  delegated-use:
+    depends_on:
+      feature-database-grants: !reset null

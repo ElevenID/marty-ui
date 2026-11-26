@@ -26,9 +26,23 @@ pub async fn prepare_isolated_router(
     enabled: bool,
     service_key: Option<&str>,
 ) -> Result<Option<Router>, &'static str> {
+    prepare_isolated_router_with_pool_limit(canonical_pool, database_url, enabled, service_key, 8)
+        .await
+}
+
+pub async fn prepare_isolated_router_with_pool_limit(
+    canonical_pool: &PgPool,
+    database_url: Option<&str>,
+    enabled: bool,
+    service_key: Option<&str>,
+    maximum_connections: u32,
+) -> Result<Option<Router>, &'static str> {
     const FAILURE: &str = "Isolated association storage preflight failed";
     if !enabled {
         return Ok(None);
+    }
+    if !(1..=8).contains(&maximum_connections) {
+        return Err("Isolated association pool limit must be between 1 and 8");
     }
     let key = service_key.ok_or("Association Gateway service credential is required")?;
     if !(32..=512).contains(&key.len()) || !key.bytes().all(|b| b.is_ascii_graphic()) {
@@ -40,7 +54,7 @@ pub async fn prepare_isolated_router(
     let pool = tokio::time::timeout(
         Duration::from_secs(5),
         sqlx::postgres::PgPoolOptions::new()
-            .max_connections(8)
+            .max_connections(maximum_connections)
             .acquire_timeout(Duration::from_secs(5))
             .connect(url),
     )

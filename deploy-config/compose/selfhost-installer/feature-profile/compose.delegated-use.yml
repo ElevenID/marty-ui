@@ -1,0 +1,288 @@
+# Activated only after real owner configuration; application transport remains mTLS.
+services:
+  delegated-use:
+    image: ${FEATURE_SERVICES_IMAGE:?}
+    init: true
+    user: 10001:10001
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    networks:
+    - default
+    mem_limit: 768m
+    stop_grace_period: 60s
+    tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    labels:
+      com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?}
+      com.elevenid.installer.phase: runtime
+    environment:
+      SERVICE_NAME: delegated-use
+      MARTY_ENVIRONMENT: production
+      MARTY_DELEGATED_USE_ENABLED: 'true'
+      DELEGATED_USE_LISTEN_ADDR: 0.0.0.0:8021
+      DELEGATED_USE_HEALTH_ADDR: 127.0.0.1:8022
+      DELEGATED_USE_POOL_MAX_CONNECTIONS: '2'
+      DELEGATED_USE_USE_WRITER_DATABASE_URL_FILE: /run/feature-profile/feature_use_writer_database_url
+      DELEGATED_USE_RUNTIME_READER_DATABASE_URL_FILE: /run/feature-profile/feature_use_runtime_reader_database_url
+      DELEGATED_USE_ORGANIZATION_AUTHORITY_DATABASE_URL_FILE: /run/feature-profile/feature_use_organization_authority_database_url
+      DELEGATED_USE_REGISTRY_SOURCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_registry_source_database_url
+      DELEGATED_USE_ACCESS_SOURCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_access_source_database_url
+      DELEGATED_USE_MACHINE_POLICY_SOURCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_machine_policy_source_database_url
+      DELEGATED_USE_MACHINE_POLICY_EVIDENCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_machine_policy_evidence_database_url
+      DELEGATED_USE_DELEGATION_POLICY_SOURCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_delegation_policy_source_database_url
+      DELEGATED_USE_MACHINE_AUDIT_DATABASE_URL_FILE: /run/feature-profile/feature_use_machine_audit_database_url
+      DELEGATED_USE_FLOW_READER_DATABASE_URL_FILE: /run/feature-profile/feature_use_flow_reader_database_url
+      DELEGATED_USE_FLOW_INGRESS_DATABASE_URL_FILE: /run/feature-profile/feature_use_flow_ingress_database_url
+      DELEGATED_USE_CREDENTIAL_TRUST_DATABASE_URL_FILE: /run/feature-profile/feature_use_credential_trust_database_url
+      DELEGATED_USE_CREDENTIAL_STATUS_DATABASE_URL_FILE: /run/feature-profile/feature_use_credential_status_database_url
+      DELEGATED_USE_CREDENTIAL_EVIDENCE_DATABASE_URL_FILE: /run/feature-profile/feature_use_credential_evidence_database_url
+      DELEGATED_USE_ORGANIZATION_ID: ${FEATURE_ORGANIZATION_ID:?}
+      DELEGATED_USE_DEPLOYMENT_PROFILE_ID: ${FEATURE_USE_DEPLOYMENT_PROFILE_ID:?}
+      DELEGATED_USE_DELEGATION_POLICY_ID: ${FEATURE_USE_DELEGATION_POLICY_ID:?}
+      DELEGATED_USE_APPROVAL_PROFILE: ${FEATURE_APPROVAL_PROFILE:?}
+      DELEGATED_USE_APPROVAL_VERSION: ${FEATURE_APPROVAL_VERSION:?}
+      DELEGATED_USE_APPROVAL_ARTIFACT_DIGEST: ${FEATURE_APPROVAL_ARTIFACT_DIGEST:?}
+      DELEGATED_USE_STATUS_REF: ${FEATURE_DELEGATION_STATUS_REF:?}
+      DELEGATED_USE_FLOW_DEFINITION_ID: ${FEATURE_USE_FLOW_DEFINITION_ID:?}
+      DELEGATED_USE_FLOW_DEFINITION_VERSION: ${FEATURE_USE_FLOW_DEFINITION_VERSION:?}
+      DELEGATED_USE_PUBLIC_BASE_URL: ${FEATURE_USE_PUBLIC_BASE_URL:?}
+      DELEGATED_USE_PUBLIC_CALLER_ENABLED: ${FEATURE_USE_PUBLIC_CALLER_ENABLED:?}
+      DELEGATED_USE_VERIFIER_DID: ${FEATURE_USE_VERIFIER_DID:?}
+      DELEGATED_USE_VERIFIER_DISPLAY_NAME: ${FEATURE_USE_VERIFIER_DISPLAY_NAME:?}
+      DELEGATED_USE_RECEIPT_ISSUER_DID: ${FEATURE_USE_RECEIPT_ISSUER_DID:?}
+      DELEGATED_USE_RECEIPT_ALGORITHM: ${FEATURE_USE_RECEIPT_ALGORITHM:?}
+      DELEGATED_USE_RECEIPT_KEY_ID: ${FEATURE_USE_RECEIPT_KEY_ID:?}
+      DELEGATED_USE_RECEIPT_KEY_REFERENCE: ${FEATURE_USE_RECEIPT_KEY_REFERENCE:?}
+      DELEGATED_USE_CREDENTIAL_TEMPLATE_GRPC_TARGET: https://credential-template:9003
+      DELEGATED_USE_PRESENTATION_POLICY_GRPC_TARGET: https://presentation-policy:9009
+      DELEGATED_USE_ISSUANCE_NATIVE_URL: https://issuance-native:8443
+      DELEGATED_USE_CREDENTIAL_TEMPLATE_URL: https://credential-template:8443
+      DELEGATED_USE_TRUST_PROFILE_URL: https://trust-profile:8443
+      DELEGATED_USE_DEPLOYMENT_PROFILE_URL: https://deployment-profile:8443
+      DELEGATED_USE_REQUEST_SIGNING_ORIGIN: https://signing-keys:8018
+      DELEGATED_USE_RECEIPT_SIGNING_ORIGIN: https://signing-keys:8018
+      DELEGATED_USE_REQUEST_GRANT_OPENBAO_ORIGIN: https://openbao:8200
+      DELEGATED_USE_RECEIPT_GRANT_OPENBAO_ORIGIN: https://openbao:8200
+      DELEGATED_USE_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      DELEGATED_USE_ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      DELEGATED_USE_REQUEST_SIGN_CREDENTIAL_FILE: /run/secrets/signing_keys_issuer_sign_key
+      DELEGATED_USE_RECEIPT_SIGN_CREDENTIAL_FILE: /run/secrets/signing_keys_issuer_sign_key
+      DELEGATED_USE_REQUEST_READ_CREDENTIAL_FILE: /run/feature-profile/feature_signing_keys_read_key
+      DELEGATED_USE_RECEIPT_READ_CREDENTIAL_FILE: /run/feature-profile/feature_signing_keys_read_key
+      DELEGATED_USE_REQUEST_MINT_TOKEN_FILE: /run/feature-profile/feature_delegated_use_request_mint_token
+      DELEGATED_USE_RECEIPT_MINT_TOKEN_FILE: /run/feature-profile/feature_delegated_use_receipt_mint_token
+      DELEGATED_USE_RECEIPT_PUBLIC_JWK_FILE: /run/feature-profile/feature_delegated_use_receipt_public_jwk
+      DELEGATED_USE_WORKLOAD_BINDINGS_FILE: /run/feature-profile/feature_delegated_use_workload_bindings
+      DELEGATED_USE_CLIENT_CA_FILES: '["/run/feature-profile/feature_workload_client_ca_der"]'
+      DELEGATED_USE_WORKLOAD_TLS_CA_CERT_FILE: /run/secrets/workload_identity_ca_cert
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
+      DELEGATED_USE_TLS_CERT_FILE: /run/feature-profile/feature_delegated_use_server_cert
+      DELEGATED_USE_TLS_KMS_PROVIDER: openbao-transit
+      DELEGATED_USE_TLS_KMS_ADDR: https://openbao:8200
+      DELEGATED_USE_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      DELEGATED_USE_TLS_KMS_TOKEN_FILE: /run/feature-profile/feature_delegated_use_server_tls_kms_token
+      DELEGATED_USE_TLS_KMS_KEY_NAME: feature-workload-tls-delegated-use-server
+      DELEGATED_USE_TLS_KMS_KEY_VERSION: '1'
+      DELEGATED_USE_WORKLOAD_TLS_CERT_FILE: /run/feature-profile/feature_delegated_use_client_cert
+      DELEGATED_USE_WORKLOAD_TLS_KMS_PROVIDER: openbao-transit
+      DELEGATED_USE_WORKLOAD_TLS_KMS_ADDR: https://openbao:8200
+      DELEGATED_USE_WORKLOAD_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      DELEGATED_USE_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/feature-profile/feature_delegated_use_client_tls_kms_token
+      DELEGATED_USE_WORKLOAD_TLS_KMS_KEY_NAME: feature-workload-tls-delegated-use-client
+      DELEGATED_USE_WORKLOAD_TLS_KMS_KEY_VERSION: '1'
+    secrets:
+    - grpc_service_token
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - workload_identity_ca_cert
+    - openbao_tls_ca_cert
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_writer_database_url
+      target: /run/feature-profile/feature_use_writer_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_runtime_reader_database_url
+      target: /run/feature-profile/feature_use_runtime_reader_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_organization_authority_database_url
+      target: /run/feature-profile/feature_use_organization_authority_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_registry_source_database_url
+      target: /run/feature-profile/feature_use_registry_source_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_access_source_database_url
+      target: /run/feature-profile/feature_use_access_source_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_machine_policy_source_database_url
+      target: /run/feature-profile/feature_use_machine_policy_source_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_machine_policy_evidence_database_url
+      target: /run/feature-profile/feature_use_machine_policy_evidence_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_delegation_policy_source_database_url
+      target: /run/feature-profile/feature_use_delegation_policy_source_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_machine_audit_database_url
+      target: /run/feature-profile/feature_use_machine_audit_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_flow_reader_database_url
+      target: /run/feature-profile/feature_use_flow_reader_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_flow_ingress_database_url
+      target: /run/feature-profile/feature_use_flow_ingress_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_credential_trust_database_url
+      target: /run/feature-profile/feature_use_credential_trust_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_credential_status_database_url
+      target: /run/feature-profile/feature_use_credential_status_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_use_credential_evidence_database_url
+      target: /run/feature-profile/feature_use_credential_evidence_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_postgres_ca
+      target: /run/feature-profile/feature_postgres_ca
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_workload_client_ca_der
+      target: /run/feature-profile/feature_workload_client_ca_der
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_request_mint_token
+      target: /run/feature-profile/feature_delegated_use_request_mint_token
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_receipt_mint_token
+      target: /run/feature-profile/feature_delegated_use_receipt_mint_token
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_receipt_public_jwk
+      target: /run/feature-profile/feature_delegated_use_receipt_public_jwk
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_workload_bindings
+      target: /run/feature-profile/feature_delegated_use_workload_bindings
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_server_cert
+      target: /run/feature-profile/feature_delegated_use_server_cert
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_server_tls_kms_token
+      target: /run/feature-profile/feature_delegated_use_server_tls_kms_token
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_client_cert
+      target: /run/feature-profile/feature_delegated_use_client_cert
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegated_use_client_tls_kms_token
+      target: /run/feature-profile/feature_delegated_use_client_tls_kms_token
+      read_only: true
+      bind:
+        create_host_path: false
+    depends_on:
+      feature-database-grants:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      organization:
+        condition: service_healthy
+      flow:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
+      presentation-policy:
+        condition: service_healthy
+      trust-profile:
+        condition: service_healthy
+      deployment-profile:
+        condition: service_healthy
+      issuance-native:
+        condition: service_healthy
+      signing-keys:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - --fail
+      - --silent
+      - --show-error
+      - --max-time
+      - '18'
+      - http://127.0.0.1:8022/ready
+      interval: 15s
+      timeout: 20s
+      retries: 4
+      start_period: 60s

@@ -29,6 +29,8 @@ RUST_SERVICES = {
     "presentation_policy": "marty-presentation-policy",
     "revocation_profile": "marty-revocation-profile",
     "delegated_use": "marty-delegated-use",
+    "delegation_approval": "marty-delegation-approval",
+    "delegation_commands": "marty-delegation-commands",
     "signing_keys": "marty-signing-keys",
     "trust_profile": "marty-trust-profile",
     "verification": "marty-verification-service",
@@ -42,6 +44,7 @@ PROFILE_RUST_BINARIES = {
     "marty-passport-keyless-edge",
     "marty-passport-tls-bootstrap", "marty-keyless-grpc-bridge",
     "marty-acme-http01",
+    "marty-feature-identity-bootstrap",
 }
 ALL_RUST_BINARIES = (
     set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
@@ -264,7 +267,7 @@ def assert_closed_rust_dispatch(script: str) -> None:
     assert {name for name, _ in branches} == set(RUST_SERVICES)
     for service_name, body in branches:
         expected = f"exec /usr/local/bin/{RUST_SERVICES[service_name]}"
-        if service_name == "verification":
+        if service_name in {"verification", "delegation_approval", "delegation_commands"}:
             expected += ' "$@"'
         assert [
             line.strip()

@@ -113,6 +113,14 @@ NATIVE_CONFIG_META = frozenset({"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"})
 # This ceiling belongs to the authenticated external PostgreSQL installer layer.
 # Development/beta source profiles retain the native five-connection default.
 EXTERNAL_POSTGRES_ONLY = frozenset({"ISSUANCE_DATABASE_MAX_CONNECTIONS"})
+# The typed native feature profile bounds its separately authenticated producer
+# pools. Baseline development/beta profiles keep these features and inputs off.
+FEATURE_PROFILE_POOL_INPUTS = frozenset(
+    {
+        "ISSUANCE_EXTERNAL_ASSOCIATION_POOL_MAX_CONNECTIONS",
+        "ISSUANCE_EXTERNAL_OBSERVATION_POOL_MAX_CONNECTIONS",
+    }
+)
 FORBIDDEN_LOCAL_CUSTODY_INPUTS = frozenset(
     {
         "ICAO_DOCUMENT_SIGNER_URL",
@@ -345,6 +353,7 @@ def assert_sources(base, profile, runtime):
         | FILE_SELECTORS
         | NATIVE_CONFIG_META
         | EXTERNAL_POSTGRES_ONLY
+        | FEATURE_PROFILE_POOL_INPUTS
         | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | {"GRPC_WORKLOAD_TLS_SERVER_" + suffix for suffix in (
             "KEY", "KEY_FILE", "PRIVATE_KEY", "PRIVATE_KEY_FILE",
@@ -357,6 +366,7 @@ def assert_sources(base, profile, runtime):
             assert PREREQUISITE_OPT_IN_ONLY.isdisjoint(service.get("environment", {}))
     actual_omitted = inputs - set(env)
     assert EXTERNAL_POSTGRES_ONLY.isdisjoint(set(env) | set(legacy))
+    assert FEATURE_PROFILE_POOL_INPUTS.isdisjoint(set(env) | set(legacy))
     assert actual_omitted == omitted, (
         "Update the exhaustive native configuration inventory: "
         f"unexpected={sorted(actual_omitted - omitted)!r}, "

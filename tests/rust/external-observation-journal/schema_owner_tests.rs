@@ -13,6 +13,9 @@ async fn registered_schema_verifies_in_read_only_transaction() {
         .await
         .unwrap();
     validate(&mut tx).await.unwrap();
+    crate::external_observation_schema::validate_materialization_locks(&mut tx)
+        .await
+        .unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(f.counts().await, (0, 0, 0));
     f.pool.close().await;
@@ -62,6 +65,18 @@ async fn catalog_rejects_weakened_or_unexpected_schema_and_function_bodies() {
         let mut tx = f.pool.begin().await.unwrap();
         sqlx::raw_sql(drift).execute(&mut *tx).await.unwrap();
         assert!(validate(&mut tx).await.is_err(), "accepted schema drift: {drift}");
+        tx.rollback().await.unwrap();
+    }
+    for drift in [
+        "ALTER FUNCTION issuance_service.materialization_lock_binding(uuid,text,text) SECURITY INVOKER",
+        "ALTER FUNCTION issuance_service.materialization_lock_head(text,text,text) SET search_path=public",
+        "GRANT EXECUTE ON FUNCTION issuance_service.materialization_lock_journal(uuid,text) TO PUBLIC",
+        "CREATE FUNCTION issuance_service.materialization_lock_extra() RETURNS integer LANGUAGE sql AS 'SELECT 1'",
+        "DELETE FROM issuance_service.rust_schema_migrations WHERE version='0019_observation_materialization_locks'",
+    ] {
+        let mut tx = f.pool.begin().await.unwrap();
+        sqlx::raw_sql(drift).execute(&mut *tx).await.unwrap();
+        assert!(crate::external_observation_schema::validate_materialization_locks(&mut tx).await.is_err(),"accepted row-lock drift: {drift}");
         tx.rollback().await.unwrap();
     }
     let mut tx = f.pool.begin().await.unwrap();

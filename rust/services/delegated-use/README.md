@@ -47,6 +47,16 @@ the original certificate observation again after its awaited checks. Neither a
 successful probe nor an authenticated TLS connection supplies current grant
 consent, cryptographic machine proof or a business permit.
 
+An optional `DELEGATED_USE_HEALTH_ADDR` adds a container-local listener for an
+orchestrator's GET `/health` and `/ready` probes. It is disabled when absent,
+requires a loopback address with a nonzero port distinct from the mutual-TLS
+listener, and repeats that boundary at socket creation. Both local routes run
+the same bounded runtime readiness checks and return only an empty uncached
+200 or 503. They reject query parameters and request bodies and expose no
+business routes. The native profile selects `127.0.0.1:8022` without publishing
+that port. Business requests still require the original mutual-TLS listener
+and exact machine certificate mapping.
+
 ### Optional managed machine caller surface
 
 With `DELEGATED_USE_PUBLIC_CALLER_ENABLED=true`, the same listener also mounts:
@@ -174,6 +184,7 @@ output omit connection strings, credentials, key material and upstream bodies.
 | `MARTY_DELEGATED_USE_ENABLED` | Required exact `true` to start |
 | `DELEGATED_USE_POOL_MAX_CONNECTIONS` | Maximum PostgreSQL connections per restricted role (1 to 4, default 4). Budget for fourteen pools per service instance. |
 | `DELEGATED_USE_LISTEN_ADDR` | Socket address; defaults to `127.0.0.1:8021`; port zero is rejected |
+| `DELEGATED_USE_HEALTH_ADDR` | Optional loopback-only readiness listener; no default, nonzero port distinct from the mutual-TLS listener. Native profile: `127.0.0.1:8022`, with no published host port. |
 | `DELEGATED_USE_ORGANIZATION_ID` | Canonical, nonnil tenant UUID |
 | `DELEGATED_USE_DEPLOYMENT_PROFILE_ID` | Exact full-machine deployment selection |
 | `DELEGATED_USE_DELEGATION_POLICY_ID` | Exact Organization-owned delegated-use policy UUID |

@@ -1,0 +1,78 @@
+# Runtime must never fall back to the schema-owning default application login.
+# The native database owner migrates first; both serving aliases validate only.
+services:
+  issuance:
+    environment:
+      DATABASE_URL: !reset null
+      DATABASE_URL_TEMPLATE: !reset null
+      MARTY_DB_PASSWORD: !reset null
+      MARTY_DB_PASSWORD_FILE: !reset null
+      DATABASE_URL_FILE: /run/feature-profile/feature_issuance_runtime_database_url
+      PGSSLROOTCERT: /run/feature-profile/feature_postgres_ca
+      MARTY_SCHEMA_STARTUP_MODE: validate
+      MARTY_APPLICATION_OWNERSHIP_ENABLED: ${MARTY_APPLICATION_OWNERSHIP_ENABLED:?typed workflow selection required}
+      MARTY_EXTERNAL_ASSOCIATIONS_ENABLED: ${MARTY_EXTERNAL_ASSOCIATIONS_ENABLED:?typed workflow selection required}
+      MARTY_EXTERNAL_OBSERVATIONS_ENABLED: ${MARTY_EXTERNAL_OBSERVATIONS_ENABLED:?typed workflow selection required}
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_issuance_runtime_database_url
+      target: /run/feature-profile/feature_issuance_runtime_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_postgres_ca
+      target: /run/feature-profile/feature_postgres_ca
+      read_only: true
+      bind:
+        create_host_path: false
+    secrets: !override
+    - openbao_service_token
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - token_hmac_key
+    - grpc_service_token
+    - openbao_tls_ca_cert
+    - sign_grant_mint_issuance_credential_token
+    - sign_grant_mint_issuance_passport_token
+    - workload_identity_ca_cert
+  issuance-native:
+    environment:
+      DATABASE_URL: !reset null
+      DATABASE_URL_TEMPLATE: !reset null
+      MARTY_DB_PASSWORD: !reset null
+      MARTY_DB_PASSWORD_FILE: !reset null
+      DATABASE_URL_FILE: /run/feature-profile/feature_issuance_runtime_database_url
+      PGSSLROOTCERT: /run/feature-profile/feature_postgres_ca
+      MARTY_SCHEMA_STARTUP_MODE: validate
+      MARTY_APPLICATION_OWNERSHIP_ENABLED: ${MARTY_APPLICATION_OWNERSHIP_ENABLED:?typed workflow selection required}
+      MARTY_EXTERNAL_ASSOCIATIONS_ENABLED: ${MARTY_EXTERNAL_ASSOCIATIONS_ENABLED:?typed workflow selection required}
+      MARTY_EXTERNAL_OBSERVATIONS_ENABLED: ${MARTY_EXTERNAL_OBSERVATIONS_ENABLED:?typed workflow selection required}
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_issuance_runtime_database_url
+      target: /run/feature-profile/feature_issuance_runtime_database_url
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_postgres_ca
+      target: /run/feature-profile/feature_postgres_ca
+      read_only: true
+      bind:
+        create_host_path: false
+    secrets: !override
+    - issuance_api_key
+    - signing_keys_issuer_sign_key
+    - signing_keys_integration_secret_key
+    - token_hmac_key
+    - grpc_service_token
+    - sign_grant_mint_issuance_credential_token
+    - sign_grant_mint_issuance_passport_token
+    - workload_identity_ca_cert
+    - issuance_workload_server_cert
+    - openbao_tls_ca_cert
+    - issuance_tls_kms_token
+    - passport_tenant_api_keys
+    - personalization_bureau_api_key

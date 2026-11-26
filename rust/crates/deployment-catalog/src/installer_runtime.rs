@@ -946,7 +946,7 @@ impl DockerRunner {
         installation: &str,
     ) -> Result<String> {
         fixed_openbao_arguments(container, installation, None)?;
-        self.fixed_openbao_call(
+        self.fixed_owned_call(
             &[
                 "exec",
                 "--user",
@@ -969,7 +969,7 @@ impl DockerRunner {
         attempt: &str,
     ) -> Result<String> {
         fixed_openbao_arguments(container, installation, Some(attempt))?;
-        self.fixed_openbao_call(
+        self.fixed_owned_call(
             &[
                 "exec",
                 "--user",
@@ -991,7 +991,7 @@ impl DockerRunner {
         if !fixed_container_id(container) {
             return Err("OpenBao reload requires the exact retained container ID".into());
         }
-        let output = self.fixed_openbao_call(
+        let output = self.fixed_owned_call(
             &["kill", "--signal=HUP", container],
             Duration::from_secs(30),
             1024,
@@ -1015,7 +1015,7 @@ impl DockerRunner {
         if !fixed_container_id(intent_sha256) {
             return Err("OpenBao root retirement requires the exact retained intent digest".into());
         }
-        self.fixed_openbao_call(
+        self.fixed_owned_call(
             &[
                 "exec",
                 "--user",
@@ -1035,12 +1035,61 @@ impl DockerRunner {
             8192,
         )
     }
-    fn fixed_openbao_call(
+    /// The feature transport owner supplies exact authenticated retained IDs.
+    /// These fixed commands never accept an executable, endpoint, SQL or token.
+    pub(crate) fn reload_feature_postgres_tls(&self, container: &str) -> Result<()> {
+        if !fixed_container_id(container) {
+            return Err("PostgreSQL reload requires its exact retained container ID".into());
+        }
+        let output = self.fixed_owned_call(
+            &["kill", "--signal=HUP", container],
+            Duration::from_secs(30),
+            1024,
+        )?;
+        if output.trim() != container {
+            return Err(
+                "PostgreSQL reload acknowledgement differs from the owned container".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn probe_feature_postgres_tls(
         &self,
-        args: &[&str],
+        carrier: &str,
+        expected_der_sha256: &str,
         timeout: Duration,
-        maximum: usize,
-    ) -> Result<String> {
+    ) -> Result<()> {
+        if !fixed_container_id(carrier)
+            || !fixed_container_id(expected_der_sha256)
+            || timeout.is_zero()
+            || timeout > Duration::from_secs(10)
+        {
+            return Err("PostgreSQL probe requires the exact carrier, leaf fingerprint and bounded deadline".into());
+        }
+        let output = self.fixed_owned_call(
+            &[
+                "exec",
+                "--user",
+                "0:0",
+                "--workdir",
+                "/",
+                carrier,
+                "/run/feature-profile-operator",
+                "installer-feature-postgres-probe",
+                "--expected-sha256",
+                expected_der_sha256,
+            ],
+            timeout,
+            1024,
+        )?;
+        if !output.trim().is_empty() {
+            return Err("PostgreSQL probe returned an unexpected response".into());
+        }
+        Ok(())
+    }
+
+    fn fixed_owned_call(&self, args: &[&str], timeout: Duration, maximum: usize) -> Result<String> {
         self.info()?;
         self.recheck_endpoint()?;
         let result = self.runner.run(args, self.budget(timeout)?, maximum);
@@ -1378,6 +1427,56 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(&log).unwrap(), expected);
     }
+    #[test]
+    fn feature_postgres_control_has_fixed_argv_and_preserves_generic_exec_refusal() {
+        let d = private_temp();
+        let log = d.path().join("postgres-args");
+        let container = "a".repeat(64);
+        let leaf = "b".repeat(64);
+        let path = script(d.path(), &format!(
+            "if [ \"$1\" = info ]; then printf '%s\\n' '{}'; exit 0; fi\nprintf '%s\\n' \"$@\" >> '{}'\nif [ \"$1\" = kill ]; then printf '%s\\n' \"$3\"; fi",
+            info(), log.display(),
+        ));
+        let runner = DockerRunner::new(
+            &path,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            d.path(),
+        )
+        .unwrap();
+        runner.reload_feature_postgres_tls(&container).unwrap();
+        runner
+            .probe_feature_postgres_tls(&container, &leaf, Duration::from_secs(5))
+            .unwrap();
+        let expected = format!("kill\n--signal=HUP\n{container}\nexec\n--user\n0:0\n--workdir\n/\n{container}\n/run/feature-profile-operator\ninstaller-feature-postgres-probe\n--expected-sha256\n{leaf}\n");
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+        assert!(runner.run_checked(&["exec", &container, "sh"]).is_err());
+        assert!(runner
+            .run_checked(&["kill", "--signal=HUP", &container])
+            .is_err());
+        for invalid in [
+            "postgres",
+            "--privileged",
+            "abc",
+            &"A".repeat(64),
+            &format!("{container}\n"),
+        ] {
+            assert!(runner.reload_feature_postgres_tls(invalid).is_err());
+            assert!(runner
+                .probe_feature_postgres_tls(invalid, &leaf, Duration::from_secs(5))
+                .is_err());
+            assert!(runner
+                .probe_feature_postgres_tls(&container, invalid, Duration::from_secs(5))
+                .is_err());
+        }
+        for timeout in [Duration::ZERO, Duration::from_secs(11)] {
+            assert!(runner
+                .probe_feature_postgres_tls(&container, &leaf, timeout)
+                .is_err());
+        }
+        assert_eq!(fs::read_to_string(&log).unwrap(), expected);
+    }
+
     #[test]
     fn selected_profile_requires_positive_daemon_mode_and_exact_engine() {
         let rootless = rootless_info();

@@ -51,6 +51,7 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     assert "--external-postgres-file PATH" in result.stdout
     assert "--hosting-file PATH" in result.stdout
     assert "--settings-file PATH" in result.stdout
+    assert "--feature-profile-file PATH" in result.stdout
     assert "--acme-staging-roots PATH" in result.stdout
     assert "--check-host" in result.stdout
     assert "--check-compatibility" in result.stdout
@@ -90,6 +91,16 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--settings-file"], "Missing value"),
     (["--settings-file", "--yes"], "Missing value"),
     (["--settings-file", "/one", "--settings-file", "/two"], "Repeated application settings"),
+    (["--feature-profile-file"], "Missing value"),
+    (["--feature-profile-file", ""], "Missing value"),
+    (["--feature-profile-file", "--yes"], "Missing value"),
+    (["--feature-profile-file", "/one", "--feature-profile-file", "/two"], "Repeated feature profile"),
+    (["--feature-profile-file", "relative.json"], "must be absolute"),
+    (["--feature-profile-file", "/private/features.json", "--foundation-file", "/private/aws.json"], "requires fresh managed local PostgreSQL"),
+    (["--foundation-file", "/private/aws.json", "--feature-profile-file", "/private/features.json"], "requires fresh managed local PostgreSQL"),
+    (["--external-oidc-file", "/private/oidc.json", "--external-postgres-file", "/private/db.json", "--feature-profile-file", "/private/features.json"], "requires fresh managed local PostgreSQL"),
+    (["--feature-profile-file", "/private/features.json", "--external-oidc-file", "/private/oidc.json", "--external-postgres-file", "/private/db.json"], "requires fresh managed local PostgreSQL"),
+    (["--check-host", "--feature-profile-file", "/private/features.json"], "cannot be combined"),
     (["--acme-staging-roots"], "Missing value"),
     (["--acme-staging-roots", ""], "Missing value"),
     (["--acme-staging-roots", "--yes"], "Missing value"),
@@ -100,7 +111,7 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--check-compatibility", "--yes"], "cannot be combined"),
     *[(["--check-compatibility", option, "/private/input"], "cannot be combined")
       for option in ("--install-dir", "--foundation-file", "--external-oidc-file", "--hosting-file",
-                     "--settings-file", "--acme-staging-roots")],
+                     "--settings-file", "--feature-profile-file", "--acme-staging-roots")],
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
     # Keep argument-policy checks independent of the test runner's actual OS.
@@ -369,7 +380,7 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
                  docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
                  docker_bin="/usr/bin/docker", destination="", foundation_file="", external_oidc_file="", external_postgres_file="", hosting_file=hosting, settings_file="",
-                 acme_staging_roots="", yes="false", check_compatibility="false", channel="nightly")
+                 feature_profile_file="", acme_staging_roots="", yes="false", check_compatibility="false", channel="nightly")
     script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
     result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
     assert result.returncode == 0, result.stderr
@@ -413,6 +424,7 @@ def test_compatibility_check_handoff_preserves_explicit_mode(tmp_path, monkeypat
     ("--settings-file", "settings_file"),
     ("--external-oidc-file", "external_oidc_file"),
     ("--external-postgres-file", "external_postgres_file"),
+    ("--feature-profile-file", "feature_profile_file"),
 ])
 @pytest.mark.parametrize("settings", [None, "/private/settings $(literal); &.json"])
 def test_private_input_parse_and_handoff_is_one_explicit_argument(tmp_path, monkeypatch, verb, option, variable, settings):

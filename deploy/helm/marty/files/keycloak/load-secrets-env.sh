@@ -115,6 +115,15 @@ expand_database_url() {
 }
 
 load_secret_env() {
+    # An isolated runtime role must never be replaced by the inherited owner
+    # password template after its protected URL file has been selected.
+    if [ -n "${DATABASE_URL_FILE:-}" ] && [ -n "${DATABASE_URL_TEMPLATE:-}" ]; then
+        echo 'DATABASE_URL_FILE and DATABASE_URL_TEMPLATE are mutually exclusive.' >&2
+        exit 1
+    fi
+    load_secret_var DATABASE_URL
+    load_secret_var ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL
+    load_secret_var ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL
     load_secret_var POSTGRES_PASSWORD
     load_secret_var KEYCLOAK_DB_PASSWORD
     load_secret_var MARTY_DB_PASSWORD

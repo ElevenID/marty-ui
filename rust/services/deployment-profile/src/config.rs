@@ -26,6 +26,7 @@ pub use marty_service_runtime::WorkloadTlsFiles;
 pub struct DeploymentServiceConfig {
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub marty_organization_id: Uuid,
@@ -70,7 +71,7 @@ impl DeploymentServiceConfig {
         if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
             return Err(invalid("DATABASE_URL"));
         }
-        let http_addr = value(&values, "DEPLOYMENT_PROFILE_HTTP_ADDR")
+        let http_addr: SocketAddr = value(&values, "DEPLOYMENT_PROFILE_HTTP_ADDR")
             .map(str::to_owned)
             .unwrap_or_else(|| {
                 format!(
@@ -115,9 +116,25 @@ impl DeploymentServiceConfig {
             1,
             120,
         )?;
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address.port() == http_addr.port() {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+            if service_token.as_ref().is_none_or(|token| token.len() < 32) {
+                return Err(DeploymentConfigError::Missing {
+                    name: "GRPC_SERVICE_TOKEN",
+                });
+            }
+        }
         Ok(Self {
             environment,
             http_addr,
+            managed_authority_https,
             database_url,
             database_max_connections,
             marty_organization_id,
@@ -268,12 +285,85 @@ mod tests {
     fn normalizes_legacy_database_and_compose_grpc_urls() {
         let config = DeploymentServiceConfig::from_values(base("development")).unwrap();
         assert_eq!(config.http_addr.port(), 8010);
+        assert!(config.managed_authority_https.is_none());
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert!(config.database_url.starts_with("postgresql://"));
         assert_eq!(
             config.marty_organization_id.to_string(),
             "00000000-0000-0000-0000-000000000001"
         );
+    }
+
+    #[test]
+    fn managed_owner_listener_requires_remote_identity_and_service_authority() {
+        let mut input = base("development");
+        input.extend([
+            ("MANAGED_AUTHORITY_HTTPS_ADDR".into(), "0.0.0.0:8443".into()),
+            (
+                "MANAGED_AUTHORITY_TLS_CERT_FILE".into(),
+                "server.crt".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_PROVIDER".into(),
+                "openbao-transit".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_ADDR".into(),
+                "https://openbao:8200".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE".into(),
+                "bao-ca.crt".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE".into(),
+                "server-token".into(),
+            ),
+            (
+                "MANAGED_AUTHORITY_TLS_KMS_KEY_NAME".into(),
+                "deployment-server".into(),
+            ),
+            ("MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION".into(), "1".into()),
+        ]);
+        assert_eq!(
+            DeploymentServiceConfig::from_values(input.clone()),
+            Err(DeploymentConfigError::Missing {
+                name: "GRPC_SERVICE_TOKEN"
+            })
+        );
+        input.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        assert_eq!(
+            DeploymentServiceConfig::from_values(input.clone())
+                .unwrap()
+                .managed_authority_https
+                .unwrap()
+                .address
+                .port(),
+            8443
+        );
+        for (name, raw) in [
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "0.0.0.0:8010"),
+            ("MANAGED_AUTHORITY_HTTPS_ADDR", "127.0.0.1:8010"),
+            ("MANAGED_AUTHORITY_TLS_KEY_FILE", "private.key"),
+            ("MANAGED_AUTHORITY_TLS_KMS_ADDR", "http://openbao:8200"),
+            ("MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION", "0"),
+            ("GRPC_SERVICE_TOKEN", "short"),
+        ] {
+            let mut invalid = input.clone();
+            invalid.insert(name.into(), raw.into());
+            assert!(
+                DeploymentServiceConfig::from_values(invalid).is_err(),
+                "{name}"
+            );
+        }
+        for name in [
+            "MANAGED_AUTHORITY_HTTPS_ADDR",
+            "MANAGED_AUTHORITY_TLS_CERT_FILE",
+        ] {
+            let mut partial = input.clone();
+            partial.remove(name);
+            assert!(DeploymentServiceConfig::from_values(partial).is_err());
+        }
     }
 
     #[test]

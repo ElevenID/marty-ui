@@ -97,6 +97,32 @@ def test_packaged_secret_loader_matches_canonical_script():
     assert (ROOT / LOADERS[0]).read_bytes() == (ROOT / LOADERS[1]).read_bytes()
 
 
+@pytest.mark.parametrize("loader", LOADERS)
+@pytest.mark.parametrize("name", [
+    "DATABASE_URL", "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL",
+    "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL",
+])
+def test_isolated_database_url_file_is_loaded_without_replacement(tmp_path, loader, name):
+    value = "postgresql://isolated:synthetic%2540@postgres:5432/marty?sslmode=verify-full"
+    secret = tmp_path / "database-url"
+    secret.write_text(value, encoding="utf-8")
+    result = run_loader(loader, {f"{name}_FILE": str(secret)},
+                        f'. "$1" && test -z "${{{name}_FILE+x}}" && printf "%s" "${name}"')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == value
+    assert not result.stderr
+    conflict = run_loader(loader, {f"{name}_FILE": str(secret), name: "synthetic-inline-secret"})
+    assert conflict.returncode != 0
+    assert conflict.stdout == ""
+    assert value not in conflict.stderr and "synthetic-inline-secret" not in conflict.stderr
+    if name == "DATABASE_URL":
+        conflict = run_loader(loader, {f"{name}_FILE": str(secret),
+                                      "DATABASE_URL_TEMPLATE": "postgresql://owner:must-not-win@postgres/marty"})
+        assert conflict.returncode != 0
+        assert conflict.stdout == ""
+        assert conflict.stderr == "DATABASE_URL_FILE and DATABASE_URL_TEMPLATE are mutually exclusive.\n"
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX shell process environment is required")
 def test_encoding_does_not_overwrite_the_raw_database_password():
     password = "customer%40@:/#é"

@@ -1,5 +1,5 @@
 //! Owned local PostgreSQL process; never accepts a database URL or provider account.
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose};
 use sqlx::{postgres::PgConnectOptions, ConnectOptions};
 use std::{
     fs,
@@ -39,6 +39,15 @@ pub struct Database {
 
 impl Database {
     pub fn start() -> Self {
+        Self::start_with_max_connections(36)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn start_feature_profile() -> Self {
+        Self::start_with_max_connections(100)
+    }
+
+    fn start_with_max_connections(max_connections: u16) -> Self {
         let bin = PathBuf::from(
             std::env::var_os("MARTY_TEST_POSTGRES_BIN_DIR")
                 .expect("set the absolute local PostgreSQL bin directory"),
@@ -74,27 +83,16 @@ impl Database {
             "owned initdb failed: {}",
             String::from_utf8_lossy(&initialized.stderr)
         );
-        let ca_key = KeyPair::generate().unwrap();
-        let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
-        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
-        private_file(
-            &directory.path().join("ca.pem"),
-            &ca.self_signed(&ca_key).unwrap().pem(),
-        );
-        let server_key = KeyPair::generate().unwrap();
-        let server = CertificateParams::new(vec!["127.0.0.1".into()])
-            .unwrap()
-            .signed_by(&server_key, &Issuer::from_params(&ca, &ca_key))
-            .unwrap();
-        private_file(&data.join("server.pem"), &server.pem());
-        private_file(&data.join("server.key"), &server_key.serialize_pem());
+        let (ca, server, server_key) = fixture_certificates();
+        private_file(&directory.path().join("ca.pem"), &ca);
+        private_file(&data.join("server.pem"), &server);
+        private_file(&data.join("server.key"), &server_key);
         fs::write(
             data.join("postgresql.auto.conf"),
             format!(
                 "listen_addresses='127.0.0.1'\nport={port}\nunix_socket_directories=''\n\
                  ssl=on\nssl_cert_file='server.pem'\nssl_key_file='server.key'\n\
-                 max_connections=36\nshared_buffers='16MB'\nstatement_timeout='30s'\n"
+                 max_connections={max_connections}\nshared_buffers='16MB'\nstatement_timeout='30s'\n"
             ),
         )
         .unwrap();
@@ -200,6 +198,31 @@ impl Drop for Database {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn fixture_certificates() -> (String, String, String) {
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    // rcgen gives both certificates the same default subject. OpenSSL/libpq
+    // then treats the leaf as self-issued and refuses it, unlike rustls.
+    // Keep their distinct identities explicit for both verified-TLS clients.
+    ca.distinguished_name
+        .push(DnType::CommonName, "Marty owned PostgreSQL fixture CA");
+    let server_key = KeyPair::generate().unwrap();
+    let mut server = CertificateParams::new(vec!["127.0.0.1".into()]).unwrap();
+    server
+        .distinguished_name
+        .push(DnType::CommonName, "Marty owned PostgreSQL fixture server");
+    let server = server
+        .signed_by(&server_key, &Issuer::from_params(&ca, &ca_key))
+        .unwrap();
+    (
+        ca.self_signed(&ca_key).unwrap().pem(),
+        server.pem(),
+        server_key.serialize_pem(),
+    )
 }
 
 fn private_file(path: &Path, contents: &str) {
