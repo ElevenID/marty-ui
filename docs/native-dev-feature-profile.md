@@ -105,6 +105,14 @@ and revision/digest values without copying user credentials into a public
 receipt. An activation document is evidence binding, not a substitute for the
 owner's authorization or readiness check.
 
+Initial owner activation is once-only. Configure every selected pending runtime
+in the same activation input: if both delegated use and public verification were
+selected, both must be ready before activation. The native owner refuses an
+input that leaves either runtime awaiting owner configuration. Later generations
+renew credential material; they do not perform a second policy activation. See
+the [activation coordinator](../rust/crates/deployment-catalog/src/installer_feature_activation.rs)
+for the exact binding and recovery contract.
+
 Public verification activation uses
 `elevenid.installer-public-verification-activation/v1`. It binds installation ID,
 feature profile hash, exact catalog hash, owner API receipt hash, console origin,

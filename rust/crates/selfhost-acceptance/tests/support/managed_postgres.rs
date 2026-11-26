@@ -1,5 +1,5 @@
 //! Owned local PostgreSQL process; never accepts a database URL or provider account.
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, KeyUsagePurpose};
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose};
 use sqlx::{postgres::PgConnectOptions, ConnectOptions};
 use std::{
     fs,
@@ -74,21 +74,10 @@ impl Database {
             "owned initdb failed: {}",
             String::from_utf8_lossy(&initialized.stderr)
         );
-        let ca_key = KeyPair::generate().unwrap();
-        let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
-        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
-        private_file(
-            &directory.path().join("ca.pem"),
-            &ca.self_signed(&ca_key).unwrap().pem(),
-        );
-        let server_key = KeyPair::generate().unwrap();
-        let server = CertificateParams::new(vec!["127.0.0.1".into()])
-            .unwrap()
-            .signed_by(&server_key, &Issuer::from_params(&ca, &ca_key))
-            .unwrap();
-        private_file(&data.join("server.pem"), &server.pem());
-        private_file(&data.join("server.key"), &server_key.serialize_pem());
+        let (ca, server, server_key) = fixture_certificates();
+        private_file(&directory.path().join("ca.pem"), &ca);
+        private_file(&data.join("server.pem"), &server);
+        private_file(&data.join("server.key"), &server_key);
         fs::write(
             data.join("postgresql.auto.conf"),
             format!(
@@ -200,6 +189,31 @@ impl Drop for Database {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn fixture_certificates() -> (String, String, String) {
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    // rcgen gives both certificates the same default subject. OpenSSL/libpq
+    // then treats the leaf as self-issued and refuses it, unlike rustls.
+    // Keep their distinct identities explicit for both verified-TLS clients.
+    ca.distinguished_name
+        .push(DnType::CommonName, "Marty owned PostgreSQL fixture CA");
+    let server_key = KeyPair::generate().unwrap();
+    let mut server = CertificateParams::new(vec!["127.0.0.1".into()]).unwrap();
+    server
+        .distinguished_name
+        .push(DnType::CommonName, "Marty owned PostgreSQL fixture server");
+    let server = server
+        .signed_by(&server_key, &Issuer::from_params(&ca, &ca_key))
+        .unwrap();
+    (
+        ca.self_signed(&ca_key).unwrap().pem(),
+        server.pem(),
+        server_key.serialize_pem(),
+    )
 }
 
 fn private_file(path: &Path, contents: &str) {

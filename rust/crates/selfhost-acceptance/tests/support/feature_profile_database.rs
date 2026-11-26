@@ -121,6 +121,7 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     let generated = credentials::generate_credentials().unwrap();
     credentials::validate_credentials(&generated).unwrap();
     let inventory = std::str::from_utf8(&generated[credentials::PASSWORD_INVENTORY]).unwrap();
+    qualify_psql_transport(&database);
 
     // Phase order is deliberate. The roles phase is fresh-only, and grants
     // refuse before the exact source-owned schemas have been migrated.
@@ -365,7 +366,9 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     core.close().await;
     admin.close().await;
     database.stop();
-    println!("native feature profile: exact bootstrap, migrations, TLS, 24 runtime roles and negative boundaries passed");
+    println!(
+        "native feature profile: exact bootstrap, migrations, TLS, 24 runtime roles and negative boundaries passed"
+    );
 }
 
 async fn qualify_template_row_locks(owner: &PgPool, canonical: &PgPool) {
@@ -547,35 +550,15 @@ async fn connect(options: PgConnectOptions, maximum: u32) -> PgPool {
 
 fn setup_phase(database: &managed_postgres::Database, phase: &str, inventory: &str) -> bool {
     assert!(matches!(phase, "roles" | "grants"));
-    let bin = PathBuf::from(std::env::var_os("MARTY_TEST_POSTGRES_BIN_DIR").unwrap());
-    assert!(bin.join("psql").is_file(), "native psql is required");
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../deploy-config/compose/selfhost-installer/feature-profile")
         .join(format!("database-{phase}.sql"));
+    std::fs::read(&source)
+        .expect("native feature source SQL must be readable by the fixture owner");
     let output = managed_postgres::run(
-        Command::new(bin.join("psql"))
-            .args([
-                "-X",
-                "--no-password",
-                "--quiet",
-                "--set",
-                "ON_ERROR_STOP=1",
-                "--file",
-            ])
+        psql_command(database)
+            .arg("--file")
             .arg(source)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("PGHOST", "127.0.0.1")
-            .env(
-                "PGPORT",
-                database.admin_options("marty").get_port().to_string(),
-            )
-            .env("PGDATABASE", "marty")
-            .env("PGUSER", "postgres")
-            .env("PGPASSWORD", ADMIN_PASSWORD)
-            .env("PGSSLMODE", "verify-full")
-            .env("PGSSLROOTCERT", database.ca())
-            .env("PGCONNECT_TIMEOUT", "5")
             .env("FEATURE_DATABASE_PASSWORDS", inventory),
         45,
     );
@@ -584,6 +567,55 @@ fn setup_phase(database: &managed_postgres::Database, phase: &str, inventory: &s
         println!("native feature {phase} phase refused");
     }
     output.status.success()
+}
+
+fn psql_command(database: &managed_postgres::Database) -> Command {
+    let bin = PathBuf::from(std::env::var_os("MARTY_TEST_POSTGRES_BIN_DIR").unwrap());
+    assert!(bin.join("psql").is_file(), "native psql is required");
+    let mut command = Command::new(bin.join("psql"));
+    command
+        .args(["-X", "--no-password", "--quiet", "--set", "ON_ERROR_STOP=1"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("PGHOST", "127.0.0.1")
+        .env(
+            "PGPORT",
+            database.admin_options("marty").get_port().to_string(),
+        )
+        .env("PGDATABASE", "marty")
+        .env("PGUSER", "postgres")
+        .env("PGPASSWORD", ADMIN_PASSWORD)
+        .env("PGSSLMODE", "verify-full")
+        .env("PGSSLROOTCERT", database.ca())
+        .env("PGCONNECT_TIMEOUT", "5");
+    command
+}
+
+fn qualify_psql_transport(database: &managed_postgres::Database) {
+    let output = managed_postgres::run(
+        psql_command(database).args([
+            "--no-align",
+            "--tuples-only",
+            "--command",
+            "SELECT current_user='postgres' AND current_database()='marty' AND (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid())",
+        ]),
+        15,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let category = if stderr.contains("certificate verify failed") {
+        "certificate-verification"
+    } else if stderr.contains("does not match host name") {
+        "hostname-verification"
+    } else if stderr.contains("password authentication failed") {
+        "authentication"
+    } else {
+        "connection-or-owner"
+    };
+    assert!(
+        output.status.success() && output.stdout == b"t\n",
+        "native psql/libpq verify-full transport preflight refused: {category}"
+    );
+    println!("native feature psql/libpq verified TLS transport passed");
 }
 
 async fn role_password_fingerprints(admin: &PgPool) -> Vec<(String, String)> {

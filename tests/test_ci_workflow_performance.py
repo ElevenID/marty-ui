@@ -1019,7 +1019,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 11
+    assert verified[-1] == b"" and len(verified) == 12
     flow_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert flow_tests == [
         "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
@@ -1032,6 +1032,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         "rust/crates/flow-acceptance/tests/support/flow_public_startup.rs",
         "rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs",
         "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs",
+        "rust/crates/flow-acceptance/tests/support/managed_http_provider_tls.rs",
     ]
     expected = {
         "all": "false",
@@ -1047,7 +1048,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
     }
     assert _classify_changed_paths(
         flow_tests, tmp_path, include_rust_plan=True
-    ) == [expected] * 10
+    ) == [expected] * 11
     assert _classify_changed_paths(
         flow_tests, tmp_path, combined=True, include_rust_plan=True
     ) == [expected]

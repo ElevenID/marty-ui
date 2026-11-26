@@ -241,7 +241,7 @@ mod tests {
         }
         let row = json!({"Service":"installer-ingress","ID":id,"State":"running"});
         assert!(role_state(&[row.clone(), row.clone()], "installer-ingress", &id).is_err());
-        assert!(role_state(&[row.clone()], "flow", &id).is_err());
+        assert!(role_state(std::slice::from_ref(&row), "flow", &id).is_err());
         assert!(role_state(&[row], "installer-ingress", &"b".repeat(64)).is_err());
         assert!(role_state(&[], "installer-ingress", &id).is_err());
     }

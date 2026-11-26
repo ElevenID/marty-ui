@@ -19,7 +19,7 @@ def test_public_flow_main_gate_is_registered_and_required():
     inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     assert f"'{NAME}: test'" in inventory
-    assert "Flow executable changed its exact sixteen-case owner inventory" in inventory
+    assert "Flow executable changed its exact eighteen-case owner inventory" in inventory
     assert '[[ $# == 0 && "${MARTY_PLATFORM_FULL_QUALIFICATION:-0}" == 0 ]] || exit 2' in script
     assert "--name flow_acceptance --owner flow-pr --" in script
     assert (

@@ -321,6 +321,9 @@ def private_config_keys() -> set[str]:
         "BAO_TOKEN", "KC_DB_PASSWORD", "KC_BOOTSTRAP_ADMIN_PASSWORD",
         "MARTY_ORG_ADMIN_PASSWORD", "KEYCLOAK_SMTP_PASSWORD",
         "OIDC_CLIENT_SECRET", "VERIFICATION_GOVERNANCE_JSON",
+        # Native feature URLs are still private if supplied to the shared loader.
+        "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL",
+        "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL",
     })
     workloads = yaml.safe_load((CHART / "files/workloads.yaml").read_text())
     for workload in workloads.values():
@@ -372,6 +375,8 @@ def test_every_rendered_private_secret_alias_is_guarded(rendered: list[dict]) ->
 @pytest.mark.parametrize("key", [
     "POSTGRES_PASSWORD", "MARTY_DB_PASSWORD", "DATABASE_URL", "DATABASE_SYNC_URL",
     "ISSUANCE_API_KEY", "TOKEN_HMAC_KEY", "MARTY_API_CLIENT_SECRET",
+    "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL",
+    "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL",
     "KEYCLOAK_SIGNING_KMS_TOKEN", "BAO_TOKEN", "KC_DB_PASSWORD",
     "KC_BOOTSTRAP_ADMIN_PASSWORD", "MARTY_ORG_ADMIN_PASSWORD",
     "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "GOOGLE_CLIENT_SECRET",

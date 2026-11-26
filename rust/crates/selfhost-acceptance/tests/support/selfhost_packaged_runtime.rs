@@ -416,9 +416,10 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
     // A database cloned from the current platform template retains the oracle's
     // object ownership. Production self-host databases are owned by the
     // service role, which must be able to apply additive startup migrations.
-    // Transfer only service tables/sequences and the three exact routines
-    // replaced by migration 0013: REASSIGN OWNED also targets PostgreSQL
-    // system objects owned by the bootstrap superuser and is therefore refused.
+    // Transfer only service tables/sequences, the three exact routines replaced
+    // by migration 0013, and the restricted template-lock helper whose owner must
+    // match the transaction table. REASSIGN OWNED also targets PostgreSQL system
+    // objects owned by the bootstrap superuser and is therefore refused.
     record_database_stage("transfer-ownership");
     sqlx::query(
         "DO $ownership$
@@ -442,6 +443,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
            ALTER FUNCTION issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text) OWNER TO marty;
            ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty;
            ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_authorization() OWNER TO marty;
+           ALTER FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) OWNER TO marty;
          END
          $ownership$",
     )
@@ -461,11 +463,12 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
              WHERE namespace.nspname = 'issuance_service'
                AND object.relkind IN ('r', 'p', 'S')
                AND pg_get_userbyid(object.relowner) <> 'marty'),
-           (SELECT count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')
+           (SELECT count(*) = 4 AND bool_and(pg_get_userbyid(proowner) = 'marty')
               FROM pg_proc WHERE oid IN (
                 'issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text)'::regprocedure,
                 'issuance_service.guard_explicit_jwt_vc_transaction()'::regprocedure,
-                'issuance_service.guard_explicit_jwt_vc_authorization()'::regprocedure))",
+                'issuance_service.guard_explicit_jwt_vc_authorization()'::regprocedure,
+                'issuance_service.verification_prerequisite_lock_template(text,text)'::regprocedure))",
     )
     .fetch_one(&pool)
     .await
@@ -527,7 +530,7 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
 }
 
 async fn verify_catalog_access(pool: &sqlx::PgPool) -> Result<(), String> {
-    let access: (bool, bool, bool, bool, bool) = sqlx::query_as(
+    let access: (bool, bool, bool, bool, bool, bool) = sqlx::query_as(
         "SELECT
            has_schema_privilege(current_user, 'credential_template_service', 'USAGE'),
            has_table_privilege(current_user, 'credential_template_service.credential_templates', 'SELECT'),
@@ -537,12 +540,29 @@ async fn verify_catalog_access(pool: &sqlx::PgPool) -> Result<(), String> {
              SELECT 1 FROM pg_attribute
              WHERE attrelid='credential_template_service.credential_templates'::regclass
                AND attnum > 0 AND NOT attisdropped AND attname <> 'id'
-               AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE'))",
+               AND has_column_privilege(current_user, attrelid, attnum, 'UPDATE')),
+           EXISTS (
+             SELECT 1 FROM pg_proc p
+             WHERE p.oid='issuance_service.verification_prerequisite_lock_template(text,text)'::regprocedure
+               AND has_function_privilege(current_user,p.oid,'EXECUTE')
+               AND NOT EXISTS (
+                 SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+                 WHERE a.grantee=0))",
     )
     .fetch_one(pool)
     .await
     .map_err(|_| ERROR)?;
-    require(access == (true, true, true, true, true))?;
+    require(access == (true, true, true, true, true, true))?;
+    // The cloned schema retains PUBLIC's revoked helper access. The exact owner
+    // transfer must make the new trigger dependency callable without a broad
+    // function grant or a change to the template mutation boundary below.
+    let absent_template: Option<Value> = sqlx::query_scalar(
+        "SELECT issuance_service.verification_prerequisite_lock_template(NULL,NULL)",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|_| ERROR)?;
+    require(absent_template.is_none())?;
     let empty = sqlx::query(
         "SELECT id FROM credential_template_service.credential_templates WHERE false FOR SHARE",
     )

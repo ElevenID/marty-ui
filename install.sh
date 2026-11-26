@@ -20,7 +20,7 @@ main() (
             '--external-oidc-file selects external login with managed OpenBao using a private JSON file at an absolute path; it cannot be combined with --foundation-file or host/compatibility checks. See docs/installer-external-oidc.md.' \
             '--external-postgres-file selects a preprovisioned TLS PostgreSQL endpoint and private password file; it requires --external-oidc-file. See docs/installer-external-postgres.md.' \
             '--settings-file accepts a private typed JSON application policy and private optional credential-file references; see docs/installer-application-settings.md.' \
-            '--feature-profile-file selects an explicit private feature profile for a fresh managed local PostgreSQL installation; it cannot be combined with external PostgreSQL, an AWS foundation, or host/compatibility checks. See docs/installer-feature-profile.md.'
+            '--feature-profile-file selects an explicit private feature profile for a fresh managed local PostgreSQL installation; it cannot be combined with external PostgreSQL, an AWS foundation, or host/compatibility checks. See docs/native-dev-feature-profile.md.'
     }
     # Candidate rootless entry must not execute even platform probes with
     # inherited root identity, capabilities, or privilege-gaining exec rights.
