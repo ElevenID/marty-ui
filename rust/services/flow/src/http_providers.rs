@@ -51,21 +51,23 @@ impl BoundedHttpClient {
         Self::build(base_url, Some(api_key), None, provider, timeout)
     }
 
-    fn delegated(
-        base_url: &str,
-        service_token: Option<&str>,
-        provider: &'static str,
-        timeout: Duration,
-    ) -> Result<Self, FlowProviderError> {
-        Self::build(base_url, None, service_token, provider, timeout)
-    }
-
     fn build(
         base_url: &str,
         api_key: Option<&str>,
         service_token: Option<&str>,
         provider: &'static str,
         timeout: Duration,
+    ) -> Result<Self, FlowProviderError> {
+        Self::build_with_ca(base_url, api_key, service_token, provider, timeout, None)
+    }
+
+    fn build_with_ca(
+        base_url: &str,
+        api_key: Option<&str>,
+        service_token: Option<&str>,
+        provider: &'static str,
+        timeout: Duration,
+        trusted_ca: Option<&[u8]>,
     ) -> Result<Self, FlowProviderError> {
         let mut base_url = Url::parse(base_url).map_err(|_| invalid_config(provider))?;
         if !matches!(base_url.scheme(), "http" | "https")
@@ -76,6 +78,7 @@ impl BoundedHttpClient {
             || base_url.fragment().is_some()
             || api_key.is_some_and(|value| value.trim().len() < 16)
             || service_token.is_some_and(|value| value.trim().len() < 16)
+            || (trusted_ca.is_some() && base_url.scheme() != "https")
         {
             return Err(invalid_config(provider));
         }
@@ -83,10 +86,33 @@ impl BoundedHttpClient {
             let path = format!("{}/", base_url.path());
             base_url.set_path(&path);
         }
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(pem) = trusted_ca {
+            let text = std::str::from_utf8(pem).map_err(|_| invalid_config(provider))?;
+            if pem.is_empty()
+                || pem.len() > 65_536
+                || !pem.is_ascii()
+                || pem.contains(&0)
+                || text.contains("PRIVATE KEY")
+                || !text.trim().starts_with("-----BEGIN CERTIFICATE-----")
+                || !text.trim().ends_with("-----END CERTIFICATE-----")
+                || text.matches("-----BEGIN CERTIFICATE-----").count() != 1
+                || text.matches("-----END CERTIFICATE-----").count() != 1
+            {
+                return Err(invalid_config(provider));
+            }
+            let certificate =
+                reqwest::Certificate::from_pem(pem).map_err(|_| invalid_config(provider))?;
+            builder = builder
+                .tls_certs_only([certificate])
+                .https_only(true)
+                .no_proxy()
+                .retry(reqwest::retry::never());
+        }
+        let client = builder
             .build()
             .map_err(|_| FlowProviderError::Unavailable { provider })?;
         Ok(Self {
@@ -271,30 +297,80 @@ impl HttpFlowReferenceProvider {
         deployment_profile_url: &str,
         service_token: Option<&str>,
     ) -> Result<Self, FlowProviderError> {
+        Self::build(
+            issuance_native_url,
+            issuance_api_key,
+            credential_template_url,
+            trust_profile_url,
+            deployment_profile_url,
+            service_token,
+            None,
+        )
+    }
+
+    /// Use one explicit public workload CA for the fixed HTTPS owner routes.
+    /// This does not add an alternate trust source or relax hostname validation.
+    pub fn with_trusted_ca(
+        issuance_native_url: &str,
+        issuance_api_key: &str,
+        credential_template_url: &str,
+        trust_profile_url: &str,
+        deployment_profile_url: &str,
+        service_token: Option<&str>,
+        trusted_ca: &[u8],
+    ) -> Result<Self, FlowProviderError> {
+        Self::build(
+            issuance_native_url,
+            issuance_api_key,
+            credential_template_url,
+            trust_profile_url,
+            deployment_profile_url,
+            service_token,
+            Some(trusted_ca),
+        )
+    }
+
+    fn build(
+        issuance_native_url: &str,
+        issuance_api_key: &str,
+        credential_template_url: &str,
+        trust_profile_url: &str,
+        deployment_profile_url: &str,
+        service_token: Option<&str>,
+        trusted_ca: Option<&[u8]>,
+    ) -> Result<Self, FlowProviderError> {
         Ok(Self {
-            application_templates: BoundedHttpClient::new(
+            application_templates: BoundedHttpClient::build_with_ca(
                 issuance_native_url,
-                issuance_api_key,
+                Some(issuance_api_key),
+                None,
                 "application_template",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
-            delivery_destinations: BoundedHttpClient::delegated(
+            delivery_destinations: BoundedHttpClient::build_with_ca(
                 credential_template_url,
+                None,
                 service_token,
                 "delivery_destination",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
-            trust_profiles: BoundedHttpClient::delegated(
+            trust_profiles: BoundedHttpClient::build_with_ca(
                 trust_profile_url,
+                None,
                 service_token,
                 "trust_profile",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
-            deployment_profiles: BoundedHttpClient::delegated(
+            deployment_profiles: BoundedHttpClient::build_with_ca(
                 deployment_profile_url,
+                None,
                 service_token,
                 "deployment_profile",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
         })
     }
@@ -473,31 +549,55 @@ impl HttpSigningProvider {
         api_key: &str,
         issuer_sign_key: &str,
     ) -> Result<Self, FlowProviderError> {
+        Self::build(base_url, api_key, issuer_sign_key, None)
+    }
+
+    pub fn with_trusted_ca(
+        base_url: &str,
+        api_key: &str,
+        issuer_sign_key: &str,
+        trusted_ca: &[u8],
+    ) -> Result<Self, FlowProviderError> {
+        Self::build(base_url, api_key, issuer_sign_key, Some(trusted_ca))
+    }
+
+    fn build(
+        base_url: &str,
+        api_key: &str,
+        issuer_sign_key: &str,
+        trusted_ca: Option<&[u8]>,
+    ) -> Result<Self, FlowProviderError> {
         if api_key == issuer_sign_key {
             return Err(invalid_config("signing_identity"));
         }
-        let envelopes = BoundedHttpClient::new(
+        let envelopes = BoundedHttpClient::build_with_ca(
             base_url,
-            api_key,
+            Some(api_key),
+            None,
             "flow_key_envelope",
             Duration::from_secs(10),
+            trusted_ca,
         )?;
         let compatibility_url = envelopes
             .base_url
             .join("compat/")
             .map_err(|_| invalid_config("signing_identity"))?;
         Ok(Self {
-            signing: BoundedHttpClient::new(
+            signing: BoundedHttpClient::build_with_ca(
                 compatibility_url.as_str(),
-                api_key,
+                Some(api_key),
+                None,
                 "signing_identity",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
-            issuer_signing: BoundedHttpClient::new(
+            issuer_signing: BoundedHttpClient::build_with_ca(
                 compatibility_url.as_str(),
-                issuer_sign_key,
+                Some(issuer_sign_key),
+                None,
                 "signing_identity",
                 Duration::from_secs(10),
+                trusted_ca,
             )?,
             envelopes,
             grant_minter: None,

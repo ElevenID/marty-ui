@@ -1,0 +1,192 @@
+# The typed fresh feature profile owns one PostgreSQL database. No host port,
+# arbitrary endpoint, password environment, or serving migration owner is added.
+x-feature-setup: &feature-setup
+  profiles: [installer-init]
+  init: true
+  restart: "no"
+  read_only: true
+  user: "0:0"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  networks: [default]
+  mem_limit: 512m
+  tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777", "/var/lib/postgresql/data:rw,noexec,nosuid,nodev,size=1048576,mode=0700", "/var/run/postgresql:rw,noexec,nosuid,nodev,size=1048576,mode=0700"]
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?installation identity required}
+    com.elevenid.installer.phase: setup
+x-feature-ca: &feature-ca
+  type: bind
+  source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_postgres_ca
+  target: /run/feature-profile/feature_postgres_ca
+  read_only: true
+  bind: {create_host_path: false}
+x-feature-code: &feature-code
+  type: bind
+  source: ./deploy-config/compose/selfhost-installer/feature-profile
+  target: /run/feature-profile-code
+  read_only: true
+  bind: {create_host_path: false}
+
+services:
+  postgres:
+    # This authenticated wrapper preserves official initdb behavior and runs
+    # postgres with group0 solely to read its separately owned0640 transport key.
+    entrypoint: [/bin/bash, /run/feature-profile-code/postgres-tls-start.sh]
+    command: [postgres, -c, ssl=on, -c, ssl_cert_file=/run/postgres-transport/server.crt, -c, ssl_key_file=/run/postgres-transport/server.key, -c, ssl_min_protocol_version=TLSv1.2, -c, max_connections=100]
+    ports: !reset []
+    volumes:
+      - *feature-code
+      - type: bind
+        source: ${FEATURE_POSTGRES_TLS_DIR:?owned PostgreSQL transport required}
+        target: /run/postgres-transport
+        read_only: true
+        bind: {create_host_path: false}
+
+  feature-database-roles:
+    <<: *feature-setup
+    image: ${FEATURE_POSTGRES_IMAGE:?signed PostgreSQL image required}
+    entrypoint: [/bin/sh, /run/feature-profile-code/database-setup.sh]
+    command: [roles]
+    depends_on:
+      postgres: {condition: service_healthy}
+    secrets: [postgres_password]
+    volumes:
+      - *feature-code
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_database_passwords
+        target: /run/feature-profile/feature_database_passwords
+        read_only: true
+        bind: {create_host_path: false}
+
+  feature-delegation-migrate:
+    <<: *feature-setup
+    image: ${FEATURE_MIGRATIONS_IMAGE:?signed migration image required}
+    entrypoint: [/usr/local/bin/marty-delegated-use-migrate]
+    command: [delegated-authority]
+    environment:
+      DELEGATED_USE_MIGRATION_DATABASE_URL_FILE: /run/feature-profile/feature_delegation_owner_database_url
+      DELEGATED_USE_MIGRATION_DATABASE_CA_FILE: /run/feature-profile/feature_postgres_ca
+    depends_on:
+      feature-database-roles: {condition: service_completed_successfully}
+    volumes:
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_delegation_owner_database_url
+        target: /run/feature-profile/feature_delegation_owner_database_url
+        read_only: true
+        bind: {create_host_path: false}
+
+  feature-credential-migrate:
+    <<: *feature-setup
+    image: ${FEATURE_MIGRATIONS_IMAGE:?signed migration image required}
+    entrypoint: [/usr/local/bin/marty-delegated-use-migrate]
+    command: [machine-credential-source]
+    environment:
+      DELEGATED_USE_MIGRATION_DATABASE_URL_FILE: /run/feature-profile/feature_credential_owner_database_url
+      DELEGATED_USE_MIGRATION_DATABASE_CA_FILE: /run/feature-profile/feature_postgres_ca
+    depends_on:
+      feature-database-roles: {condition: service_completed_successfully}
+    volumes:
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_credential_owner_database_url
+        target: /run/feature-profile/feature_credential_owner_database_url
+        read_only: true
+        bind: {create_host_path: false}
+
+  feature-database-grants:
+    <<: *feature-setup
+    image: ${FEATURE_POSTGRES_IMAGE:?signed PostgreSQL image required}
+    entrypoint: [/bin/sh, /run/feature-profile-code/database-setup.sh]
+    command: [grants]
+    secrets: [postgres_password]
+    depends_on:
+      feature-delegation-migrate: {condition: service_completed_successfully}
+      feature-credential-migrate: {condition: service_completed_successfully}
+      db-migrate: {condition: service_completed_successfully}
+      issuance-migrations: {condition: service_completed_successfully}
+    volumes:
+      - *feature-code
+      - *feature-ca
+
+  issuance:
+    environment:
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
+    depends_on:
+      feature-database-grants: {condition: service_completed_successfully}
+  issuance-native:
+    environment:
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "2"
+    depends_on:
+      feature-database-grants: {condition: service_completed_successfully}
+  flow:
+    environment:
+      FLOW_DATABASE_MAX_CONNECTIONS: "2"
+
+  installer-ingress:
+    # This retained database-independent process carries only the fixed
+    # no-password TLS probe; an expired public leaf does not stop its process.
+    volumes:
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_OPERATOR:?retained native operator required}
+        target: /run/feature-profile-operator
+        read_only: true
+        bind: {create_host_path: false}
+
+  revocation-profile-migrate:
+    environment:
+      RP_DATABASE_MAX_CONNECTIONS: "1"
+
+  db-migrate:
+    environment:
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "1"
+
+  kms-initialize:
+    environment:
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "1"
+
+  issuance-migrations:
+    environment:
+      ISSUANCE_DATABASE_MAX_CONNECTIONS: "1"
+
+  auth:
+    environment:
+      AUTH_DATABASE_MAX_CONNECTIONS: "2"
+
+  organization:
+    environment:
+      ORGANIZATION_DATABASE_MAX_CONNECTIONS: "2"
+
+  credential-template:
+    environment:
+      CREDENTIAL_TEMPLATE_DATABASE_MAX_CONNECTIONS: "2"
+
+  trust-profile:
+    environment:
+      TRUST_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+
+  notification:
+    environment:
+      NOTIFICATION_DATABASE_MAX_CONNECTIONS: "2"
+
+  compliance-profile:
+    environment:
+      COMPLIANCE_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+
+  presentation-policy:
+    environment:
+      PRESENTATION_POLICY_DATABASE_MAX_CONNECTIONS: "2"
+
+  deployment-profile:
+    environment:
+      DEPLOYMENT_PROFILE_DATABASE_MAX_CONNECTIONS: "2"
+
+  revocation-profile:
+    environment:
+      RP_DATABASE_MAX_CONNECTIONS: "2"
+
+  device-registration:
+    environment:
+      DATABASE_MAX_CONNECTIONS: "2"

@@ -1,0 +1,97 @@
+# The feature producer issues additive, separately scoped credentials. It does
+# not rewrite baseline signing policies or share mint authority with a verifier.
+services:
+  signing-keys:
+    environment:
+      BAO_TOKEN_FILE: /run/feature-profile/feature_signing_keys_openbao_token
+      SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/feature-profile/feature_sign_grant_verify_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_openbao_token
+      target: /run/feature-profile/feature_signing_keys_openbao_token
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_sign_grant_verify_token
+      target: /run/feature-profile/feature_sign_grant_verify_token
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  gateway:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  credential-template:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  trust-profile:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  issuance-native:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  presentation-policy:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false
+  flow:
+    environment:
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/feature-profile/feature_signing_keys_read_key
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_signing_keys_read_key
+      target: /run/feature-profile/feature_signing_keys_read_key
+      read_only: true
+      bind:
+        create_host_path: false

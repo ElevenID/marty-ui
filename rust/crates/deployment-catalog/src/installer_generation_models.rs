@@ -129,6 +129,7 @@ pub(super) fn require_transition_model(
         expected["services"]["installer-generation"] =
             helper_model["services"]["installer-generation"].clone();
     }
+    super::tx::project_feature_joint_model(installation, candidate, &mut expected, full)?;
     require(projection(&expected, full)? == projection(model, full)?)?;
     if !full {
         require(
@@ -228,9 +229,13 @@ pub(crate) fn require_runtime_model(
         read(installation, &parent.record_name("session"))?
     };
     let recorded: SavedSession = decode(&recorded)?;
+    crate::installer_features::generations::require_session_extension(
+        installation,
+        &recorded,
+        &previous,
+    )?;
     require(
-        encode(&previous)? == encode(&recorded)?
-            && intent["parent_binding_sha256"] == parent.sha256()?
+        intent["parent_binding_sha256"] == parent.sha256()?
             && intent["sequence"] == binding.sequence()
             && intent.get("attempt").and_then(Value::as_u64).unwrap_or(0) == binding.attempt()
             && previous.configuration_sha256 == installer_compose::model_sha256(&previous.model)?

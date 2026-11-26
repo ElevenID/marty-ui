@@ -10,7 +10,10 @@ use marty_credential_template::{
     control_plane::NativeCredentialTemplateControlPlane,
     credential_template_proto::credential_template_service_server::CredentialTemplateServiceServer,
     grpc_service::CredentialTemplateGrpcService,
-    http_service::{credential_template_router, CredentialTemplateHttpState},
+    http_service::{
+        credential_template_authority_router, credential_template_router,
+        CredentialTemplateHttpState,
+    },
     migration::{
         migrate_credential_template_schema, reconcile_credential_template_data,
         validate_credential_template_schema, CredentialTemplateDataReconciliationConfig,
@@ -192,6 +195,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.service_authentication_required(),
     )?;
 
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                credential_template_authority_router(http_state.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_healthy(CredentialTemplateDependency::HttpListener)?;
     let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
@@ -209,6 +222,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let authority =
+        marty_service_runtime::https::serve_optional(authority_server, shutdown_rx.clone());
     let mut http_shutdown = shutdown_rx.clone();
     let mut grpc_shutdown = shutdown_rx;
     let http = axum::serve(http_listener, http_app).with_graceful_shutdown(async move {
@@ -254,6 +269,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
             async {
                 grpc.await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
+            async {
+                authority
+                    .await
                     .map_err(|error| Box::new(error) as Box<dyn Error>)
             },
         )

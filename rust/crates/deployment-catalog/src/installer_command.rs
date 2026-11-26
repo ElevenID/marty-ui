@@ -31,6 +31,7 @@ struct Options {
     external_postgres_file: Option<PathBuf>,
     hosting_file: Option<PathBuf>,
     settings_file: Option<PathBuf>,
+    feature_profile_file: Option<PathBuf>,
     acme_staging_roots: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
@@ -53,6 +54,55 @@ pub(crate) struct RuntimeInvocation<'a> {
     pub(crate) completion: RuntimeCompletion,
 }
 pub(crate) const STAGING_ROOTS: &str = "staging-acme-roots.pem";
+
+fn prepare_feature_credentials(
+    state: &mut InstallerState,
+    installation: &Path,
+    selection: &crate::installer_features::Selection,
+) -> Result<crate::installer_feature_credentials::FeatureCredentialDirectory> {
+    let mut owner = crate::installer_feature_credentials::FeatureCredentialDirectory::create(
+        state,
+        installation,
+    )?;
+    for (name, bytes) in crate::installer_feature_database::generate_credentials()? {
+        owner.write(&name, &bytes)?;
+    }
+    for (name, bytes) in selection.initial_secrets()? {
+        owner.write(&name, &bytes)?;
+    }
+    let required = selection.credential_names()?;
+    let mut generated_scalars = std::collections::BTreeSet::new();
+    for name in [
+        crate::installer_workflow_features::PREREQUISITE_TOKEN,
+        "feature_signing_keys_read_key",
+    ] {
+        if !required.contains(name) {
+            continue;
+        }
+        let mut entropy = [0u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut entropy))
+            .map_err(|_| "feature prerequisite token entropy unavailable")?;
+        if entropy == [0; 32] {
+            return Err("feature prerequisite token entropy invalid".into());
+        }
+        let token: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
+        if !generated_scalars.insert(token.clone()) {
+            return Err("feature scalar credentials must be distinct".into());
+        }
+        owner.write(name, token.as_bytes())?;
+    }
+    let ca = crate::installer_feature_postgres_tls::create(state, installation)?;
+    owner.write(crate::installer_feature_postgres_tls::CA_CREDENTIAL, &ca)?;
+    if let Some(identity) = selection.identity_selection()? {
+        state.write_evidence(
+            crate::installer_features::IDENTITY_SELECTION,
+            &serde_json::to_vec(&identity)
+                .map_err(|_| "cannot encode feature identity selection")?,
+        )?;
+    }
+    Ok(owner)
+}
 
 fn initial_staging_roots(
     hosting: &crate::installer_hosting::Prepared,
@@ -140,6 +190,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--external-postgres-file",
             "--hosting-file",
             "--settings-file",
+            "--feature-profile-file",
             "--acme-staging-roots",
         ]
         .contains(&key)
@@ -188,6 +239,12 @@ fn options(args: &[String]) -> Result<Options> {
     }
     let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
     let settings_file = values.remove("--settings-file").map(PathBuf::from);
+    let feature_profile_file = values.remove("--feature-profile-file").map(PathBuf::from);
+    if feature_profile_file.is_some()
+        && (external_postgres_file.is_some() || foundation_file.is_some())
+    {
+        return Err("--feature-profile-file requires fresh managed local PostgreSQL and cannot use --external-postgres-file or --foundation-file".into());
+    }
     let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
     if check_compatibility
         && (yes
@@ -197,6 +254,7 @@ fn options(args: &[String]) -> Result<Options> {
             || external_postgres_file.is_some()
             || hosting_file.is_some()
             || settings_file.is_some()
+            || feature_profile_file.is_some()
             || acme_staging_roots.is_some())
     {
         return Err(
@@ -227,6 +285,9 @@ fn options(args: &[String]) -> Result<Options> {
             .is_some_and(|p| !p.is_absolute())
         || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
         || settings_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || feature_profile_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
         || acme_staging_roots
             .as_ref()
             .is_some_and(|p| !p.is_absolute())
@@ -255,6 +316,7 @@ fn options(args: &[String]) -> Result<Options> {
         external_postgres_file,
         hosting_file,
         settings_file,
+        feature_profile_file,
         acme_staging_roots,
         channel,
         profile,
@@ -330,6 +392,57 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
 pub fn candidate_test(args: &[String], build_identity: &str) -> Result<()> {
     install_inner(args, build_identity, InstallMode::CandidateTest)
 }
+
+struct FeatureActivationOptions {
+    installation: PathBuf,
+    input: PathBuf,
+    docker: PathBuf,
+}
+
+fn feature_activation_options(args: &[String]) -> Result<FeatureActivationOptions> {
+    const USAGE: &str =
+        "Expected installer-feature-activate --install-dir ABS --input ABS [--docker-bin ABS]";
+    let mut values = BTreeMap::new();
+    let mut arguments = args.iter();
+    while let Some(option) = arguments.next() {
+        let value = arguments.next().ok_or(USAGE)?;
+        if !["--install-dir", "--input", "--docker-bin"].contains(&option.as_str())
+            || values.insert(option.as_str(), value.as_str()).is_some()
+        {
+            return Err(USAGE.into());
+        }
+        let path = Path::new(value);
+        if !path.is_absolute()
+            || value.len() > 4096
+            || value.chars().any(char::is_control)
+            || value
+                .split('/')
+                .skip(1)
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err(USAGE.into());
+        }
+    }
+    Ok(FeatureActivationOptions {
+        installation: PathBuf::from(*values.get("--install-dir").ok_or(USAGE)?),
+        input: PathBuf::from(*values.get("--input").ok_or(USAGE)?),
+        docker: PathBuf::from(*values.get("--docker-bin").unwrap_or(&"/usr/bin/docker")),
+    })
+}
+
+/// Bind real owner configuration to the existing installation under its native
+/// maintenance lock. Parsing does not read or modify the selected installation.
+pub fn activate_features(args: &[String]) -> Result<()> {
+    let options = feature_activation_options(args)?;
+    let mut maintenance = crate::installer_state::LockedMaintenance::open(&options.installation)?;
+    crate::installer_features::generations::activate(
+        &mut maintenance,
+        &options.installation,
+        &options.docker,
+        &options.input,
+    )
+}
+
 pub(crate) fn require_rootless_process() -> Result<()> {
     let mut real_uid = 0;
     let mut effective_uid = 0;
@@ -410,6 +523,10 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     let settings = crate::installer_settings::prepare(
         o.settings_file.as_deref(),
         o.foundation_file.is_none() && o.external_oidc_file.is_none(),
+    )?;
+    let features = crate::installer_features::prepare(
+        o.feature_profile_file.as_deref(),
+        o.external_postgres_file.is_none() && o.foundation_file.is_none(),
     )?;
     let staging_roots = initial_staging_roots(&hosting, o.acme_staging_roots.as_deref())?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
@@ -621,6 +738,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     crate::installer_oidc::select(external_oidc, &mut state)?;
     crate::installer_postgres::select(external_postgres, &mut state)?;
     crate::installer_hosting::select(hosting, &mut state)?;
+    crate::installer_features::select(features, &mut state)?;
     crate::installer_settings::select(settings, &mut state)?;
     if let Some(roots) = &staging_roots {
         state.write_evidence(STAGING_ROOTS, roots)?;
@@ -732,6 +850,7 @@ pub(crate) fn provision_runtime(
     }
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
     let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
+    let features = state.with_inspection(crate::installer_features::load)?;
     let realm = if external_oidc.is_none() {
         eprintln!("Marty runtime stage: packaged realm");
         let realm_path = bundle.join("config/keycloak/11id-realm.json");
@@ -751,6 +870,10 @@ pub(crate) fn provision_runtime(
     } else {
         state.generate_local_credentials(realm.as_ref().ok_or("packaged realm absent")?)?;
     }
+    let mut feature_credentials = features
+        .as_ref()
+        .map(|selection| prepare_feature_credentials(state, installation, selection))
+        .transpose()?;
     state.persist_credential_creation_receipt(installation)?;
     if let Some(selection) = &external_oidc {
         selection.import_inputs(state)?;
@@ -774,7 +897,7 @@ pub(crate) fn provision_runtime(
         );
     }
     let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
-    let bootstrap = crate::installer_application::bootstrap_inputs(
+    let mut bootstrap = crate::installer_application::bootstrap_inputs(
         installation,
         bundle,
         state,
@@ -832,6 +955,44 @@ pub(crate) fn provision_runtime(
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
+    if let Some(selection) = &features {
+        let mut owner = feature_credentials
+            .take()
+            .ok_or("feature credential creation owner absent")?;
+        if let Some(identity) = selection.identity_selection()? {
+            eprintln!("Marty runtime stage: selected feature identities through Compose");
+            let mut inputs = crate::installer_application::job_inputs(
+                &bootstrap,
+                receipt,
+                "installer-feature-identities",
+            );
+            inputs
+                .files
+                .push(crate::installer_application::bundle_bound(
+                bundle,
+                "deploy-config/compose/selfhost-installer/feature-profile/compose.identities.yml",
+            )?);
+            inputs
+                .writable_bind_roots
+                .insert(installation.join("feature-identity-output"));
+            let (next, _) = crate::installer_feature_identity::bootstrap_feature_identities(
+                docker,
+                installation,
+                bundle,
+                state,
+                &infrastructure,
+                services_image,
+                inputs,
+                invocation.operator_sha,
+                &identity,
+                |name, bytes| owner.write(name, bytes),
+            )?;
+            receipt = next;
+        }
+        owner.seal(state, &selection.credential_names()?)?;
+        crate::installer_features::initialize_generations(state, installation)?;
+        selection.bind_inputs(&mut bootstrap)?;
+    }
     eprintln!("Marty runtime stage: ingress inputs through Compose");
     let (next, ingress) = crate::installer_ingress::provision(
         docker,
@@ -1289,6 +1450,54 @@ fn completion_after_validation(
 mod tests {
     use super::*;
     #[test]
+    fn feature_activation_parsing_is_exact_and_precedes_installation_access() {
+        let args: Vec<String> = [
+            "--install-dir",
+            "/private/install",
+            "--input",
+            "/private/owner activation.json",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let parsed = feature_activation_options(&args).unwrap();
+        assert_eq!(parsed.installation, Path::new("/private/install"));
+        assert_eq!(parsed.input, Path::new("/private/owner activation.json"));
+        assert_eq!(parsed.docker, Path::new("/usr/bin/docker"));
+        let mut explicit = args.clone();
+        explicit.extend(["--docker-bin".into(), "/private/docker".into()]);
+        assert_eq!(
+            feature_activation_options(&explicit).unwrap().docker,
+            Path::new("/private/docker")
+        );
+        for extra in [
+            vec!["--input", "/private/another.json"],
+            vec!["--install-dir", "/private/another-install"],
+            vec!["--docker-bin"],
+            vec!["--force", "true"],
+            vec!["--yes"],
+        ] {
+            let mut invalid = args.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(feature_activation_options(&invalid).is_err());
+        }
+        for invalid in [
+            "relative.json",
+            "/",
+            "/private/../owner.json",
+            "/private//owner.json",
+            "/private/owner.json/",
+            "/private/owner\n.json",
+        ] {
+            let mut changed = args.clone();
+            *changed.last_mut().unwrap() = invalid.into();
+            assert!(feature_activation_options(&changed).is_err());
+        }
+        assert!(feature_activation_options(&[]).is_err());
+        assert!(feature_activation_options(&args[..2]).is_err());
+    }
+
+    #[test]
     fn acme_continuation_preserves_no_new_privileges_and_literal_paths() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1489,6 +1698,7 @@ mod tests {
             vec!["--external-postgres-file", "/private/postgres.json"],
             vec!["--hosting-file", "/private/hosting.json"],
             vec!["--settings-file", "/private/settings.json"],
+            vec!["--feature-profile-file", "/private/features.json"],
             vec!["--acme-staging-roots", "/private/roots.pem"],
         ] {
             let mut invalid = compatibility_args.clone();
@@ -1572,6 +1782,33 @@ mod tests {
         *settings_args.last_mut().unwrap() = "/private/application.json".into();
         settings_args.extend(["--settings-file".into(), "/private/other.json".into()]);
         assert!(candidate_test_options(&settings_args).is_err());
+        let mut feature_args = args.clone();
+        feature_args.extend([
+            "--feature-profile-file".into(),
+            "/private/features.json".into(),
+        ]);
+        assert_eq!(
+            candidate_test_options(&feature_args)
+                .unwrap()
+                .feature_profile_file,
+            Some(PathBuf::from("/private/features.json"))
+        );
+        let mut external_login_features = feature_args.clone();
+        external_login_features
+            .extend(["--external-oidc-file".into(), "/private/oidc.json".into()]);
+        assert!(candidate_test_options(&external_login_features).is_ok());
+        for extra in [
+            vec!["--feature-profile-file", "/private/second.json"],
+            vec!["--foundation-file", "/private/foundation.json"],
+            vec!["--external-postgres-file", "/private/postgres.json"],
+            vec!["--check-compatibility"],
+        ] {
+            let mut invalid = external_login_features.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
+        *feature_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&feature_args).is_err());
         args.truncate(args.len() - 2);
         assert!(candidate_test_options(&args).is_err());
         args.extend(["--runtime-profile".into(), "rootful".into()]);

@@ -41,6 +41,16 @@ pub struct CredentialTemplateHttpState {
     pub environment: RuntimeEnvironment,
 }
 
+/// The managed HTTPS listener exposes only the authenticated owner projection.
+pub fn credential_template_authority_router(state: CredentialTemplateHttpState) -> Router {
+    Router::new()
+        .route(
+            "/internal/v1/resource-owners/credential-templates/{template_id}",
+            get(template_owner),
+        )
+        .with_state(state)
+}
+
 pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router {
     Router::new()
         .route(

@@ -1,0 +1,21 @@
+# Only a native activation generation with a bound, owner-provisioned catalog
+# selects this layer. Awaiting-owner selection must not select or mount it.
+services:
+  flow:
+    environment:
+      MARTY_SIGNING_GRANT_PROVIDER: openbao-transit
+      FLOW_PUBLIC_VERIFICATION_CONFIG_FILE: /run/feature-profile/feature_public_verification_catalog
+      FLOW_DEMO_HOLDER_SIGN_GRANT_MINT_TOKEN_FILE: /run/feature-profile/feature_public_verification_holder_mint_token
+    volumes:
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_public_verification_catalog
+      target: /run/feature-profile/feature_public_verification_catalog
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${FEATURE_PROFILE_SECRET_DIR:?private feature credential directory required}/feature_public_verification_holder_mint_token
+      target: /run/feature-profile/feature_public_verification_holder_mint_token
+      read_only: true
+      bind:
+        create_host_path: false

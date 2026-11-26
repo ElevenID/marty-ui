@@ -1,0 +1,9 @@
+# Keep completed setup containers as evidence; ordinary restarts never rerun
+# database roles, migrations or grants and do not recreate their containers.
+services:
+  issuance:
+    depends_on:
+      feature-database-grants: !reset null
+  issuance-native:
+    depends_on:
+      feature-database-grants: !reset null

@@ -42,6 +42,20 @@ mod installer_custody_watch;
 #[cfg(all(target_os = "linux", feature = "installer-development"))]
 pub(crate) mod installer_development_image;
 pub mod installer_doctor;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_feature_caller_binding;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_feature_credentials;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_feature_database;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_feature_identity;
+#[cfg(target_os = "linux")]
+pub mod installer_feature_postgres_probe;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_feature_postgres_tls;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_features;
 pub mod installer_fetch;
 #[cfg(target_os = "linux")]
 mod installer_filesystem;
@@ -116,6 +130,8 @@ pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_workflow_features;
 pub mod kubernetes_application;
 #[cfg(target_os = "linux")]
 pub mod kubernetes_legacy_recovery;

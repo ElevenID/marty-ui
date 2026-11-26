@@ -16,6 +16,142 @@ fn fixture_sql(sql: String) -> sqlx::AssertSqlSafe<String> {
 }
 
 #[tokio::test]
+async fn canonical_materialization_locks_without_journal_update_authority() {
+    let roles = Roles::new().await;
+    let canonical_name = format!("materialization_runtime_{}", Uuid::new_v4().simple());
+    sqlx::raw_sql(fixture_sql(format!(
+        "CREATE ROLE {canonical_name} LOGIN PASSWORD 'synthetic-canonical-runtime' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+         GRANT USAGE ON SCHEMA issuance_service,organization_service TO {canonical_name};
+         GRANT SELECT ON issuance_service.rust_schema_migrations,issuance_service.applications,
+           issuance_service.evidence_facts,issuance_service.evidence_fact_heads,issuance_service.issuance_events,
+           issuance_service.external_observation_bindings,issuance_service.external_observation_receipts,
+           issuance_service.external_observation_heads,issuance_service.external_observation_audit TO {canonical_name};
+         GRANT INSERT ON issuance_service.evidence_facts,issuance_service.evidence_fact_heads,issuance_service.issuance_events TO {canonical_name};
+         GRANT UPDATE(updated_at) ON issuance_service.applications TO {canonical_name};
+         GRANT UPDATE(fact_id,updated_at) ON issuance_service.evidence_fact_heads TO {canonical_name};
+         GRANT EXECUTE ON FUNCTION issuance_service.external_observation_lock_administrator(uuid,text),
+           issuance_service.materialization_lock_binding(uuid,text,text),
+           issuance_service.materialization_lock_journal(uuid,text),
+           issuance_service.materialization_lock_head(text,text,text) TO {canonical_name};"
+    ))).execute(&roles.fixture.pool).await.unwrap();
+    let port = std::env::var("EXTERNAL_OBSERVATION_TEST_PORT").unwrap();
+    let canonical = PgPoolOptions::new().max_connections(2)
+        .connect(&format!("postgresql://{canonical_name}:synthetic-canonical-runtime@127.0.0.1:{port}/external_observation_contract_test"))
+        .await.unwrap();
+    let service_key = "synthetic-gateway-key-with-thirty-two-bytes";
+    assert!(prepare_isolated_observation_router(
+        &canonical,
+        Some(&roles.url),
+        true,
+        Some(service_key)
+    )
+    .await
+    .unwrap()
+    .is_some());
+    let organization = Uuid::parse_str("20000000-0000-4000-8000-000000000001").unwrap();
+    let identity = ProducerIdentity {
+        organization_id: organization.to_string(),
+        api_key_id: "10000000-0000-4000-8000-000000000001".into(),
+    };
+    let input = roles.fixture.input();
+    PostgresObservationJournal::new(
+        roles.runtime.clone(),
+        Arc::new(PostgresObservationAuthority),
+    )
+    .submit(&identity, &input, &input.observation_id)
+    .await
+    .unwrap();
+    let before: i64 = sqlx::query_scalar("SELECT (extract(epoch FROM updated_at)*1000000)::bigint FROM issuance_service.applications WHERE id='application-one'")
+        .fetch_one(&canonical).await.unwrap();
+    let first = crate::external_observation_materialization::materialize(
+        &canonical,
+        organization,
+        "admin-one",
+        "source-one",
+        &input.observation_id,
+        before,
+    )
+    .await
+    .unwrap();
+    assert!(!first.replayed);
+    let replay = crate::external_observation_materialization::materialize(
+        &canonical,
+        organization,
+        "admin-one",
+        "source-one",
+        &input.observation_id,
+        before,
+    )
+    .await
+    .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(first.receipt_id, replay.receipt_id);
+    assert_eq!(first.fact_id, replay.fact_id);
+    for statement in [
+        "UPDATE issuance_service.external_observation_receipts SET envelope=envelope",
+        "UPDATE issuance_service.external_observation_audit SET event_type=event_type",
+        "DELETE FROM issuance_service.external_observation_receipts",
+        "DELETE FROM issuance_service.external_observation_audit",
+        "UPDATE issuance_service.external_observation_bindings SET active=active",
+        "UPDATE issuance_service.external_observation_heads SET sequence=sequence",
+        "TRUNCATE issuance_service.external_observation_audit CASCADE",
+    ] {
+        let error = sqlx::query(statement)
+            .execute(&canonical)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42501"),
+            "{statement}"
+        );
+    }
+    // The narrow helper still holds the same transaction row lock; another
+    // owner connection cannot update the receipt while this lease is held.
+    let mut held = canonical.begin().await.unwrap();
+    sqlx::query("SELECT receipt FROM issuance_service.materialization_lock_journal($1,$2)")
+        .bind(first.receipt_id)
+        .bind(organization.to_string())
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let mut competing = roles.fixture.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout='100ms'")
+        .execute(&mut *competing)
+        .await
+        .unwrap();
+    let error = sqlx::query("UPDATE issuance_service.external_observation_receipts SET envelope=envelope WHERE receipt_id=$1")
+        .bind(first.receipt_id).execute(&mut *competing).await.unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    competing.rollback().await.unwrap();
+    held.rollback().await.unwrap();
+    sqlx::raw_sql(fixture_sql(format!("REVOKE EXECUTE ON FUNCTION issuance_service.materialization_lock_journal(uuid,text) FROM {canonical_name}")))
+        .execute(&roles.fixture.pool).await.unwrap();
+    assert!(
+        crate::external_observation_materialization::verify_materialization_storage(&canonical)
+            .await
+            .is_err()
+    );
+    canonical.close().await;
+    sqlx::raw_sql(fixture_sql(format!(
+        "DROP OWNED BY {canonical_name}; DROP ROLE {canonical_name};"
+    )))
+    .execute(&roles.fixture.pool)
+    .await
+    .unwrap();
+    roles.close().await;
+}
+
+#[tokio::test]
 async fn ingress_role_cannot_gain_materialization_or_canonical_evidence_writes() {
     let roles = Roles::new().await;
     crate::external_observation_materialization::verify_materialization_storage(

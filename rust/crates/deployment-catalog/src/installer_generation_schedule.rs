@@ -474,7 +474,10 @@ pub(super) fn candidate_for_recovery(
         return Ok(candidate);
     }
     if blocker.is_some() && !withdraw_terminal {
-        return Err(format!("Generation recovery retains its native baseline while public certificate renewal is blocked: {}", blocker.ok_or(REFUSED)?));
+        return Err(format!(
+            "Generation recovery retains its native baseline while public certificate renewal is blocked: {}",
+            blocker.ok_or(REFUSED)?
+        ));
     }
     let permit = permit.ok_or(REFUSED)?;
     let context = installer_acme_host::maintenance_context(state.inspection())?;

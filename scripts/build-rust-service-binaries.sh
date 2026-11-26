@@ -32,10 +32,16 @@ cargo build --locked --release "$@" \
   -p marty-device-registration --bin marty-device-registration \
   -p marty-verification-service --bin marty-verification-service \
   -p marty-issuance-service --bin marty-issuance-service --bin marty-passport-beta-bureau --bin marty-passport-provider-ingress \
-  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge --bin marty-acme-http01 \
+  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-feature-identity-bootstrap --bin marty-oidf-keyless-edge --bin marty-acme-http01 \
   -p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge \
   -p marty-deployment-profile --bin marty-deployment-profile \
   -p marty-compliance-profile --bin marty-compliance-profile
+
+# Approval and lifecycle commands are separate hosts with separate database
+# authorities. Keep both in the authenticated services image; runtime selection
+# never imports an unqualified host binary.
+cargo build --locked --release "$@" -p marty-delegated-authority \
+  --bin marty-delegation-approval --bin marty-delegation-commands
 
 # Keep the delegated-use host on its own normal (non-test) Cargo feature graph.
 exec cargo build --locked --release "$@" -p marty-delegated-use --bin marty-delegated-use

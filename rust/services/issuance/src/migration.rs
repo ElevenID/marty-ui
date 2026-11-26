@@ -79,6 +79,14 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         crate::verification_prerequisite::MIGRATION_VERSION,
         crate::verification_prerequisite::MIGRATION_SQL,
     ),
+    (
+        crate::external_observation_schema::MATERIALIZATION_VERSION,
+        crate::external_observation_schema::MATERIALIZATION_MIGRATION_SQL,
+    ),
+    (
+        crate::verification_prerequisite::TEMPLATE_LOCK_VERSION,
+        crate::verification_prerequisite::TEMPLATE_LOCK_SQL,
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -216,6 +224,7 @@ pub async fn migrate_owned_schema(pool: &PgPool, organization_id: Uuid) -> Resul
     validate_jwt_vc_profile_connection(&mut transaction).await?;
     crate::verification_prerequisite::validate_connection(&mut transaction).await?;
     crate::external_observation_schema::validate(&mut transaction).await?;
+    crate::external_observation_schema::validate_materialization_locks(&mut transaction).await?;
     crate::application_ownership_schema::validate(&mut transaction).await?;
     crate::external_association_schema::validate(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
@@ -259,6 +268,7 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     validate_jwt_vc_profile_connection(&mut transaction).await?;
     crate::verification_prerequisite::validate_connection(&mut transaction).await?;
     crate::external_observation_schema::validate(&mut transaction).await?;
+    crate::external_observation_schema::validate_materialization_locks(&mut transaction).await?;
     crate::application_ownership_schema::validate(&mut transaction).await?;
     crate::external_association_schema::validate(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;

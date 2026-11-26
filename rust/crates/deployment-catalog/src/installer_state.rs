@@ -286,6 +286,8 @@ pub struct Journal {
     external_oidc_selection_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     external_postgres_selection_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feature_profile_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -321,11 +323,24 @@ impl Journal {
     pub(crate) fn external_postgres_selection_sha256(&self) -> Option<&str> {
         self.external_postgres_selection_sha256.as_deref()
     }
+    pub(crate) fn feature_profile_sha256(&self) -> Option<&str> {
+        self.feature_profile_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self.feature_profile_sha256.as_ref().is_some_and(|value| {
+            self.phase == Phase::Initialized
+                || self.external_postgres_selection_sha256.is_some()
+                || value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        }) {
+            return Err("invalid managed feature profile binding".into());
+        }
         if self
             .external_postgres_selection_sha256
             .as_ref()
@@ -1150,7 +1165,10 @@ impl LockedMaintenance {
             || entry.starts_with("openbao-root-retirement-")
             || entry.starts_with("rootless-canary-")
             || entry.starts_with("kms-registration-")
-            || entry.starts_with("oidc-provider-preflight-"))
+            || entry.starts_with("oidc-provider-preflight-")
+            || entry.starts_with("feature-postgres-renewal-")
+            || entry.starts_with("feature-postgres-carrier-compose-")
+            || entry == "feature-profile-activation.json")
             || bytes.is_empty()
             || bytes.len() > 4 * 1024 * 1024
         {
@@ -1467,6 +1485,8 @@ impl InstallerState {
                 "generation-transfer",
                 "application-generation",
                 "organization-bootstrap-output",
+                "feature-identity-output",
+                "feature-profile-generations",
             ]
             .contains(&entry)
         {
@@ -1511,6 +1531,41 @@ impl InstallerState {
         self.poisoned = false;
         Ok(())
     }
+    /// Return the descriptor captured by the exclusive feature-owner creation.
+    /// Callers retain it until their own immutable creation receipt is sealed;
+    /// a later reopen can never stand in for this creation proof.
+    pub(crate) fn create_feature_directory(&mut self, entry: &str) -> Result<File> {
+        self.require_live_phase(Phase::Provisioning)?;
+        if self.journal.feature_profile_sha256().is_none()
+            || ![
+                "feature-profile-secrets",
+                "feature-postgres-transport",
+                "feature-identity-output",
+                "feature-profile-generations",
+            ]
+            .contains(&entry)
+        {
+            return Err("feature directory requires the selected fresh profile".into());
+        }
+        self.poisoned = true;
+        if unsafe { libc::mkdirat(self.directory.as_raw_fd(), name(entry).as_ptr(), 0o700) } != 0 {
+            return Err(error("create feature owner directory"));
+        }
+        let child = open_at(
+            &self.directory,
+            &name(entry),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&child, true)?;
+        child
+            .sync_all()
+            .and_then(|_| self.directory.sync_all())
+            .map_err(|_| "persist feature owner directory")?;
+        self.poisoned = false;
+        Ok(child)
+    }
+
     /// Create the two private control mounts for a fresh managed OpenBao node.
     /// Only the socket child may later change to the mapped image owner. The
     /// installation root, outer directory and credential identity stay private
@@ -2584,6 +2639,7 @@ impl InstallerState {
             application_settings_sha256: None,
             external_oidc_selection_sha256: None,
             external_postgres_selection_sha256: None,
+            feature_profile_sha256: None,
         };
         let mut state = Self {
             directory,
@@ -2782,6 +2838,7 @@ impl InstallerState {
     pub(crate) fn bind_external_postgres_selection(&mut self, digest: &str) -> Result<()> {
         self.require_live_phase(Phase::Verified)?;
         if self.journal.external_postgres_selection_sha256.is_some()
+            || self.journal.feature_profile_sha256.is_some()
             || self.journal.external_oidc_selection_sha256.is_none()
             || self.journal.application_settings_sha256.is_some()
             || digest.len() != 64
@@ -2793,6 +2850,26 @@ impl InstallerState {
         }
         let mut journal = self.journal.clone();
         journal.external_postgres_selection_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Select a fresh managed-database feature profile before application policy
+    /// and provisioning. Absence preserves the exact historical journal bytes.
+    pub(crate) fn bind_feature_profile(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.feature_profile_sha256.is_some()
+            || self.journal.external_postgres_selection_sha256.is_some()
+            || self.journal.application_settings_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("feature profile can be selected only once with managed PostgreSQL before application settings".into());
+        }
+        let mut journal = self.journal.clone();
+        journal.feature_profile_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())

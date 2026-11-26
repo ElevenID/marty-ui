@@ -12,7 +12,9 @@ use chrono::Utc;
 use marty_delegated_authority::{
     use_http::DelegationUseHttpAuthenticator, use_mtls::BoundDelegatedUseMtlsServer,
 };
-use marty_delegated_use::{config::DelegatedUseHostConfig, runtime::DelegatedUseRuntime};
+use marty_delegated_use::{
+    config::DelegatedUseHostConfig, health::LoopbackHealthServer, runtime::DelegatedUseRuntime,
+};
 
 #[derive(Clone)]
 struct ProbeState {
@@ -111,13 +113,33 @@ async fn run() -> Result<(), String> {
     let address = server
         .local_addr()
         .map_err(|_| "delegated use listener address unavailable")?;
+    let health_server = match config.health_addr {
+        Some(address) => match LoopbackHealthServer::bind(address, runtime.clone()).await {
+            Ok(server) => Some(server),
+            Err(_) => {
+                runtime.close().await;
+                return Err("delegated use loopback health listener failed before serving".into());
+            }
+        },
+        None => None,
+    };
     eprintln!("internal delegated use listening on {address}");
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
     let signal = tokio::spawn(async move {
         marty_service_runtime::shutdown_signal().await;
         let _ = shutdown.send(true);
     });
-    let result = server.serve(receiver).await;
+    let mut local_shutdown = receiver.clone();
+    let local_health = async move {
+        match health_server {
+            Some(server) => server.serve(local_shutdown).await,
+            None => {
+                marty_service_runtime::wait_for_shutdown(&mut local_shutdown).await;
+                Ok(())
+            }
+        }
+    };
+    let result = tokio::try_join!(server.serve(receiver), local_health).map(|_| ());
     signal.abort();
     runtime.close().await;
     result.map_err(|_| "delegated use listener stopped with an error".into())

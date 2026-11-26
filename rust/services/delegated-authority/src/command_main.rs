@@ -16,11 +16,11 @@ use tokio::net::TcpListener;
 fn failure(message: &'static str) -> io::Error {
     io::Error::other(message)
 }
-async fn connect(url: &str) -> Result<PgPool, io::Error> {
+async fn connect(url: &str, maximum: u32) -> Result<PgPool, io::Error> {
     tokio::time::timeout(
         Duration::from_secs(5),
         PgPoolOptions::new()
-            .max_connections(8)
+            .max_connections(maximum)
             .acquire_timeout(Duration::from_secs(5))
             .after_connect(|connection, _| {
                 Box::pin(async move {
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 "DELEGATION_COMMAND_RUNTIME_DATABASE_URL"
             };
-            let pool = connect(&database_secret(name)?).await?;
+            let pool = connect(&database_secret(name)?, 1).await?;
             let repository = PgDelegationGrantRepository::new(pool.clone());
             if command == "migrate" {
                 repository.migrate().await?;
@@ -84,9 +84,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(failure("unsupported delegation command host argument").into());
     }
     let host = CommandHostConfig::from_env()?;
-    let writer = connect(&host.command_database_url).await?;
-    let reader = connect(&host.runtime_database_url).await?;
-    let organization = connect(&host.organization_database_url).await?;
+    let writer = connect(
+        &host.command_database_url,
+        host.command_pool_max_connections,
+    )
+    .await?;
+    let reader = connect(
+        &host.runtime_database_url,
+        host.runtime_pool_max_connections,
+    )
+    .await?;
+    let organization = connect(
+        &host.organization_database_url,
+        host.organization_pool_max_connections,
+    )
+    .await?;
     let application = Arc::new(PgOrganizationCommandService::new(
         writer,
         reader,

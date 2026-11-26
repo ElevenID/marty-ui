@@ -3,6 +3,131 @@
 use super::*;
 
 impl ComposeSession {
+    pub(crate) fn feature_service_hashes(&self) -> BTreeMap<String, String> {
+        self.hashes.clone()
+    }
+    pub(crate) fn feature_changed_services(
+        &self,
+        previous: &Value,
+        added: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>> {
+        require(
+            !self.cleanup_only
+                && self.runtime_recovery_roles.is_none()
+                && self.generation_transition.is_none()
+                && self.inputs.profiles.is_empty()
+                && added.is_subset(&BTreeSet::from(["delegated-use".into()])),
+        )?;
+        let services = self.model["services"].as_object().ok_or(REFUSED)?;
+        let old: BTreeMap<_, _> = previous["services"]
+            .as_object()
+            .ok_or(REFUSED)?
+            .iter()
+            .filter(|(_, service)| service["labels"][SETUP_LABEL] != "setup")
+            .map(|(role, service)| (role.clone(), service))
+            .collect();
+        require(old.keys().all(|role| services.contains_key(role)))?;
+        let prior = self.prior();
+        let mut selected = BTreeSet::new();
+        for (role, service) in services {
+            require(service["labels"][SETUP_LABEL] != "setup")?;
+            if let Some(previous) = old.get(role) {
+                require(
+                    !added.contains(role)
+                        && previous["image"] == service["image"]
+                        && prior.containers.get(role).is_some_and(|identity| {
+                            !identity.setup && service["image"] == identity.image
+                        }),
+                )?;
+                if self.hashes.get(role)
+                    != prior
+                        .containers
+                        .get(role)
+                        .map(|identity| &identity.config_hash)
+                {
+                    selected.insert(role.clone());
+                }
+            } else {
+                require(
+                    added.contains(role)
+                        && !prior.containers.contains_key(role)
+                        && service["image"] == self.model["services"]["gateway"]["image"],
+                )?;
+                selected.insert(role.clone());
+            }
+        }
+        require(services.len() == old.len() + added.len())?;
+        Ok(selected)
+    }
+
+    /// The feature owner has already proved the exact signed-layer delta and
+    /// retained it in an immutable plan. This adds only its one typed new role;
+    /// every unrelated container/network/volume retains its original identity.
+    pub(crate) fn create_feature_replacements(
+        &self,
+        state: &mut LockedMaintenance,
+        permit: &crate::installer_features::generations::ActivationPermit,
+    ) -> Result<ComposeReceipt> {
+        permit.require_session(&self.inputs, &self.model)?;
+        require(
+            !self.cleanup_only
+                && self.runtime_recovery_roles.is_none()
+                && self.generation_transition.is_none(),
+        )?;
+        let selected = permit.selected();
+        require(
+            !selected.is_empty()
+                && self
+                    .inputs
+                    .services
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    == *selected,
+        )?;
+        let before = self.observe_feature_replacements(permit)?;
+        // This is a first create, never a retry after an uncertain result.
+        require(before == self.prior())?;
+        let command = [
+            "up",
+            "--no-build",
+            "--pull",
+            "never",
+            "--no-deps",
+            "--no-start",
+            "--force-recreate",
+            "--timeout",
+            "60",
+        ];
+        let operation = permit.operation("activate-create");
+        let mut writer = Evidence::Maintenance(state, Some(RuntimeOperationOwner::Generation));
+        self.generation_intent(
+            &mut writer,
+            &operation,
+            &command,
+            &before,
+            &self.inputs.services,
+        )?;
+        self.recheck()?;
+        let result = self.compose(&command, true, Duration::from_secs(180));
+        let resources = self.observe_feature_replacements(permit);
+        let statuses = self.status();
+        let complete = matches!((&resources,&statuses),(Ok(resources),Ok(rows)) if
+            selected.iter().all(|role|resources.containers.get(role).is_some_and(|current|
+                before.containers.get(role).map_or_else(||permit.added().contains(role),|old|old.id!=current.id)
+                && rows.iter().filter(|row|row["Service"]==role.as_str()).count()==1
+                && rows.iter().any(|row|row["Service"]==role.as_str()&&row["ID"]==current.id&&row["State"]=="created")))
+            && rows.len()==resources.containers.len());
+        self.receipt(
+            &mut writer,
+            &operation,
+            &result,
+            complete,
+            resources,
+            statuses,
+        )
+    }
+
     fn generation_roles(&self, operation: GenerationOperation) -> Result<BTreeSet<String>> {
         require(
             !self.cleanup_only
@@ -382,7 +507,7 @@ impl ComposeSession {
         )
     }
 
-    fn generation_intent(
+    pub(super) fn generation_intent(
         &self,
         writer: &mut Evidence<'_>,
         operation: &str,
@@ -774,7 +899,7 @@ fn generation_created(
         })
 }
 
-fn completed_setups(resources: &ProjectResources, rows: &[Value]) -> bool {
+pub(super) fn completed_setups(resources: &ProjectResources, rows: &[Value]) -> bool {
     let mut normalized = rows.to_vec();
     for row in &mut normalized {
         if row["Service"]

@@ -221,10 +221,12 @@ pub(crate) fn load_initial_session(
 }
 
 pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Result<SavedSession> {
-    match crate::installer_generation_maintenance::current_session(state, installation)? {
-        Some(saved) => Ok(saved),
-        None => load_initial_session(state, installation),
-    }
+    let baseline =
+        match crate::installer_generation_maintenance::current_session(state, installation)? {
+            Some(saved) => Ok(saved),
+            None => load_initial_session(state, installation),
+        }?;
+    crate::installer_features::generations::extend_session(state, installation, baseline)
 }
 
 fn failed_runtime_session(

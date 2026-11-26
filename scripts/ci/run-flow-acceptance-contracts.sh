@@ -47,4 +47,4 @@ MARTY_ISSUANCE_TEST_BINARY="$issuance_binary" \
   python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
     --name flow_acceptance --owner flow-pr -- \
     "$flow_executable" --nocapture --test-threads=4 2>&1 | tee "$log"
-grep -Eq '^test result: ok\. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$log"
+grep -Eq '^test result: ok\. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$log"

@@ -7,6 +7,7 @@ const MIGRATION_VERSIONS: &[&str] = &[
     "rust_credential_template_0003",
     "rust_credential_template_0004",
     "rust_credential_template_0005",
+    "rust_credential_template_0006",
 ];
 const ADVISORY_LOCK_ID: i64 = 718_431_214;
 
@@ -66,6 +67,11 @@ pub async fn migrate_credential_template_schema(
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0005_verification_prerequisite.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0006_verification_prerequisite_template_locks.sql"
     ))
     .execute(&mut *transaction)
     .await?;
@@ -482,7 +488,9 @@ async fn validate_verification_prerequisite_schema(
         .and_then(|(_, rest)| rest.split_once("$prerequisite_check$;"))
         .map(|(body, _)| body)
         .ok_or_else(|| incompatible("prerequisite predicate source is invalid"))?;
-    let readiness = source
+    let readiness_source =
+        include_str!("../migrations/0006_verification_prerequisite_template_locks.sql");
+    let readiness = readiness_source
         .split_once("AS $prerequisite_readiness$")
         .and_then(|(_, rest)| rest.split_once("$prerequisite_readiness$;"))
         .map(|(body, _)| body)

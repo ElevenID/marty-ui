@@ -123,6 +123,8 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/l
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
 COPY --from=rust-service-builder /build/rust/target/release/marty-delegated-use /usr/local/bin/marty-delegated-use
+COPY --from=rust-service-builder /build/rust/target/release/marty-delegation-approval /usr/local/bin/marty-delegation-approval
+COPY --from=rust-service-builder /build/rust/target/release/marty-delegation-commands /usr/local/bin/marty-delegation-commands
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer /usr/local/bin/marty-passport-callback-signer
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-callback-signer-supported /usr/local/bin/marty-passport-callback-signer-supported
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
@@ -146,6 +148,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-e
 COPY --from=rust-service-builder /build/rust/target/release/marty-acme-http01 /usr/local/bin/marty-acme-http01
 COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap
+COPY --from=rust-service-builder /build/rust/target/release/marty-feature-identity-bootstrap /usr/local/bin/marty-feature-identity-bootstrap
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh

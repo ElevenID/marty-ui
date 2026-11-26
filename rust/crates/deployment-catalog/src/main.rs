@@ -537,6 +537,29 @@ fn run() -> Result<(), String> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "installer-feature-activate")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::activate_features(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("native feature activation requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-feature-postgres-probe")
+    {
+        if args.len() != 3 || args[1] != "--expected-sha256" {
+            return Err(
+                "internal PostgreSQL probe requires its exact expected public fingerprint".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_feature_postgres_probe::run(&args[2]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal PostgreSQL probe requires Linux".into());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "installer-tls-finalize")
     {
         if args.len() != 1 {

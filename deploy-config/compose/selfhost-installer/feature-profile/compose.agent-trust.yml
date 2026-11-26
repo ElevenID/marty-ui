@@ -1,0 +1,143 @@
+x-feature-runtime: &feature-runtime
+  image: ${FEATURE_SERVICES_IMAGE:?signed service image required}
+  init: true
+  user: "10001:10001"
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  networks: [default]
+  mem_limit: 512m
+  stop_grace_period: 60s
+  tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777"]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+  labels:
+    com.elevenid.installer.id: ${MARTY_INSTALLER_ID:?}
+    com.elevenid.installer.phase: runtime
+x-feature-ca: &feature-ca
+  type: bind
+  source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_postgres_ca
+  target: /run/feature-profile/feature_postgres_ca
+  read_only: true
+  bind: {create_host_path: false}
+x-feature-dependencies: &feature-dependencies
+  feature-database-grants: {condition: service_completed_successfully}
+  postgres: {condition: service_healthy}
+  organization: {condition: service_healthy}
+
+services:
+  gateway:
+    environment:
+      MARTY_AGENT_ADMIN_ENABLED: "true"
+      MARTY_AGENT_ENROLLMENT_ENABLED: "true"
+      MARTY_DELEGATION_APPROVAL_ENABLED: "true"
+      MARTY_DELEGATION_COMMANDS_ENABLED: "true"
+      DELEGATED_AUTHORITY_SERVICE_URL: http://delegation-approval:8019
+      DELEGATED_COMMAND_SERVICE_URL: http://delegation-commands:8020
+    depends_on:
+      delegation-approval: {condition: service_healthy}
+      delegation-commands: {condition: service_healthy}
+  organization:
+    environment:
+      MARTY_AGENT_ADMIN_ENABLED: "true"
+      MARTY_AGENT_ENROLLMENT_ENABLED: "true"
+      MARTY_AGENT_ENROLLMENT_AUDIENCE: ${FEATURE_ENROLLMENT_AUDIENCE:?typed enrollment audience required}
+      MARTY_AGENT_ENROLLMENT_POLICY_PROFILE: ${FEATURE_ENROLLMENT_POLICY_PROFILE:?}
+      MARTY_AGENT_ENROLLMENT_POLICY_REVISION: ${FEATURE_ENROLLMENT_POLICY_REVISION:?}
+      MARTY_AGENT_ENROLLMENT_MAX_AGE_SECONDS: "120"
+  delegation-approval:
+    <<: *feature-runtime
+    environment:
+      SERVICE_NAME: delegation-approval
+      MARTY_ENVIRONMENT: production
+      MARTY_DELEGATION_APPROVAL_ENABLED: "true"
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      DELEGATION_APPROVAL_HTTP_ADDR: 0.0.0.0:8019
+      DELEGATION_APPROVAL_ORGANIZATION_ID: ${FEATURE_ORGANIZATION_ID:?}
+      DELEGATION_APPROVAL_PROFILE: ${FEATURE_APPROVAL_PROFILE:?}
+      DELEGATION_APPROVAL_VERSION: ${FEATURE_APPROVAL_VERSION:?}
+      DELEGATION_APPROVAL_ARTIFACT_DIGEST: ${FEATURE_APPROVAL_ARTIFACT_DIGEST:?}
+      DELEGATION_APPROVAL_RUNTIME_DATABASE_URL_FILE: /run/feature-profile/feature_approval_runtime_database_url
+      DELEGATION_APPROVAL_CONSENT_DATABASE_URL_FILE: /run/feature-profile/feature_approval_consent_database_url
+      DELEGATION_APPROVAL_AUTHORITY_DATABASE_URL_FILE: /run/feature-profile/feature_approval_authority_database_url
+      DELEGATION_APPROVAL_ORGANIZATION_DATABASE_URL_FILE: /run/feature-profile/feature_approval_organization_database_url
+      DELEGATION_APPROVAL_RUNTIME_POOL_MAX_CONNECTIONS: "2"
+      DELEGATION_APPROVAL_CONSENT_POOL_MAX_CONNECTIONS: "2"
+      DELEGATION_APPROVAL_AUTHORITY_POOL_MAX_CONNECTIONS: "2"
+      DELEGATION_APPROVAL_ORGANIZATION_POOL_MAX_CONNECTIONS: "2"
+    depends_on: *feature-dependencies
+    secrets: [grpc_service_token]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "4", http://127.0.0.1:8019/ready]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    volumes:
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_approval_runtime_database_url
+        target: /run/feature-profile/feature_approval_runtime_database_url
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_approval_consent_database_url
+        target: /run/feature-profile/feature_approval_consent_database_url
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_approval_authority_database_url
+        target: /run/feature-profile/feature_approval_authority_database_url
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_approval_organization_database_url
+        target: /run/feature-profile/feature_approval_organization_database_url
+        read_only: true
+        bind: {create_host_path: false}
+  delegation-commands:
+    <<: *feature-runtime
+    environment:
+      SERVICE_NAME: delegation-commands
+      MARTY_ENVIRONMENT: production
+      MARTY_DELEGATION_COMMANDS_ENABLED: "true"
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      DELEGATION_COMMAND_HTTP_ADDR: 0.0.0.0:8020
+      DELEGATION_COMMAND_ORGANIZATION_ID: ${FEATURE_ORGANIZATION_ID:?}
+      DELEGATION_COMMAND_APPROVAL_PROFILE: ${FEATURE_APPROVAL_PROFILE:?}
+      DELEGATION_COMMAND_APPROVAL_VERSION: ${FEATURE_APPROVAL_VERSION:?}
+      DELEGATION_COMMAND_APPROVAL_ARTIFACT_DIGEST: ${FEATURE_APPROVAL_ARTIFACT_DIGEST:?}
+      DELEGATION_COMMAND_STATUS_REF: ${FEATURE_DELEGATION_STATUS_REF:?}
+      DELEGATION_COMMAND_DATABASE_URL_FILE: /run/feature-profile/feature_command_writer_database_url
+      DELEGATION_COMMAND_RUNTIME_DATABASE_URL_FILE: /run/feature-profile/feature_command_runtime_database_url
+      DELEGATION_COMMAND_ORGANIZATION_DATABASE_URL_FILE: /run/feature-profile/feature_command_organization_database_url
+      DELEGATION_COMMAND_POOL_MAX_CONNECTIONS: "2"
+      DELEGATION_COMMAND_RUNTIME_POOL_MAX_CONNECTIONS: "2"
+      DELEGATION_COMMAND_ORGANIZATION_POOL_MAX_CONNECTIONS: "2"
+    depends_on: *feature-dependencies
+    secrets: [grpc_service_token]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "4", http://127.0.0.1:8020/ready]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    volumes:
+      - *feature-ca
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_command_writer_database_url
+        target: /run/feature-profile/feature_command_writer_database_url
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_command_runtime_database_url
+        target: /run/feature-profile/feature_command_runtime_database_url
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FEATURE_PROFILE_SECRET_DIR:?}/feature_command_organization_database_url
+        target: /run/feature-profile/feature_command_organization_database_url
+        read_only: true
+        bind: {create_host_path: false}

@@ -21,6 +21,9 @@ use crate::credential::{
 
 pub const MIGRATION_VERSION: &str = "0018_verification_prerequisites";
 pub const MIGRATION_SQL: &str = include_str!("../migrations/0018_verification_prerequisites.sql");
+pub const TEMPLATE_LOCK_VERSION: &str = "0020_verification_prerequisite_template_locks";
+pub const TEMPLATE_LOCK_SQL: &str =
+    include_str!("../migrations/0020_verification_prerequisite_template_locks.sql");
 
 // The configured transport is a child of the capability module, so its private
 // constructor remains inaccessible even to other Issuance modules.
@@ -33,6 +36,9 @@ pub async fn migrate(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         .execute(&mut *transaction)
         .await?;
     sqlx::raw_sql(MIGRATION_SQL)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(TEMPLATE_LOCK_SQL)
         .execute(&mut *transaction)
         .await?;
     validate_connection(&mut transaction).await?;
@@ -106,7 +112,12 @@ pub(crate) async fn validate_connection(
     ] {
         let start = format!("AS ${marker}$");
         let end = format!("${marker}$;");
-        let expected = MIGRATION_SQL
+        let source = if marker == "prerequisite_transaction" {
+            TEMPLATE_LOCK_SQL
+        } else {
+            MIGRATION_SQL
+        };
+        let expected = source
             .split_once(&start)
             .and_then(|(_, rest)| rest.split_once(&end))
             .map(|(body, _)| body)
@@ -124,6 +135,31 @@ pub(crate) async fn validate_connection(
         if !valid {
             return Err(failure());
         }
+    }
+    let helper_body = TEMPLATE_LOCK_SQL
+        .split_once("AS $prerequisite_template_lock$")
+        .and_then(|(_, rest)| rest.split_once("$prerequisite_template_lock$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(failure)?;
+    let helper_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+         WHERE p.oid=to_regprocedure('issuance_service.verification_prerequisite_lock_template(text,text)')
+           AND p.proargnames=ARRAY['requested_template','requested_organization']::text[]
+           AND p.pronargs=2 AND p.proargmodes IS NULL AND p.pronargdefaults=0 AND p.provariadic=0
+           AND p.prorettype='jsonb'::regtype AND p.provolatile='v' AND NOT p.proisstrict AND NOT p.proretset
+           AND p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog']::text[] AND p.prokind='f'
+           AND l.lanname='plpgsql' AND p.prosrc=$1
+           AND p.proowner=(SELECT relowner FROM pg_class WHERE oid=to_regclass('issuance_service.issuance_transactions'))
+           AND has_function_privilege(current_user,p.oid,'EXECUTE')
+           AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee=0))
+         AND (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+           WHERE n.nspname='issuance_service' AND p.proname ~ '^verification_prerequisite_lock_')=1",
+    )
+    .bind(helper_body)
+    .fetch_one(&mut *connection)
+    .await?;
+    if !helper_valid {
+        return Err(failure());
     }
     Ok(())
 }

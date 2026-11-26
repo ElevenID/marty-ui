@@ -1,3 +1,6 @@
+#[path = "support/managed_http_provider_tls.rs"]
+mod managed_http_provider_tls;
+
 #[path = "support/base_runtime_redis.rs"]
 #[allow(
     dead_code,

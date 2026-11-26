@@ -88,6 +88,7 @@ FLOW_PUBLISHED_TEST_FILES = (
     "support/flow_public_startup.rs",
     "support/flow_public_startup_peers.rs",
     "support/flow_rendered_selection.rs",
+    "support/managed_http_provider_tls.rs",
 )
 FLOW_DEMO_TEST_FILES = (
     "public_demo_signing_live_kms.rs",
@@ -106,6 +107,7 @@ FLOW_SUPPORT_OWNERS = {
     "flow_public_startup.rs": "support/flow_native_consumer.rs",
     "flow_public_startup_peers.rs": "support/flow_public_startup.rs",
     "flow_rendered_selection.rs": "support/flow_native_consumer.rs",
+    "managed_http_provider_tls.rs": "flow_published_schema_contract.rs",
     "public_demo_browser.rs": "public_demo_signing_live_kms.rs",
     "public_demo_canonical.rs": "public_demo_signing_live_kms.rs",
     "public_demo_gateway.rs": "public_demo_signing_live_kms.rs",
@@ -532,7 +534,8 @@ def test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts() 
     # The native database audit belongs to contracts CI, never the narrow
     # published-image selfhost-only selector emitted below.
     all_files = (*SELFHOST_TEST_FILES, "native_kms_schema_contract.rs",
-                 "managed_postgres_contract.rs", "support/managed_postgres.rs")
+                 "managed_postgres_contract.rs", "support/managed_postgres.rs",
+                 "support/feature_profile_database.rs")
     assert _tracked_paths(ROOT, SELFHOST_TEST_ROOT) == sorted(
         SELFHOST_TEST_ROOT + name for name in all_files
     )

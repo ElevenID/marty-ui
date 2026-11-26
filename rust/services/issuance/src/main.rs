@@ -199,11 +199,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })?;
     }
     let observations =
-        marty_issuance_service::external_observation_startup::prepare_isolated_observation_router(
+        marty_issuance_service::external_observation_startup::prepare_isolated_observation_router_with_pool_limit(
             &pool,
             config.external_observation_database_url.as_deref(),
             config.external_observations_enabled,
             config.issuance_api_key.as_deref(),
+            config.external_observation_pool_max_connections,
         )
         .await
         .map_err(std::io::Error::other)?;
@@ -215,11 +216,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await
     .map_err(std::io::Error::other)?;
     let associations =
-        marty_issuance_service::external_association_startup::prepare_isolated_router(
+        marty_issuance_service::external_association_startup::prepare_isolated_router_with_pool_limit(
             &pool,
             config.external_association_database_url.as_deref(),
             config.external_associations_enabled,
             config.issuance_api_key.as_deref(),
+            config.external_association_pool_max_connections,
         )
         .await
         .map_err(std::io::Error::other)?;

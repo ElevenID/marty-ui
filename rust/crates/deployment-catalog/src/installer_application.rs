@@ -63,7 +63,7 @@ pub(crate) fn bound(path: PathBuf) -> Result<BoundFile> {
         sha256: crate::installer_release::sha256(&bytes),
     })
 }
-fn bundle_bound(bundle: &Path, name: &str) -> Result<BoundFile> {
+pub(crate) fn bundle_bound(bundle: &Path, name: &str) -> Result<BoundFile> {
     let text = bundle_text(bundle, name, 2 * 1024 * 1024)?;
     Ok(BoundFile {
         path: bundle.join(name),
@@ -82,6 +82,7 @@ pub(crate) fn bootstrap_inputs(
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
     let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
+    let features = state.with_inspection(crate::installer_features::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let binding = state
         .journal()
@@ -231,6 +232,9 @@ pub(crate) fn bootstrap_inputs(
         selection.bind_inputs(&mut inputs)?;
     }
     if let Some(selection) = external_postgres {
+        selection.bind_inputs(&mut inputs)?;
+    }
+    if let Some(selection) = features {
         selection.bind_inputs(&mut inputs)?;
     }
     hosting.bind_inputs(&mut inputs)?;
@@ -395,7 +399,16 @@ fn start_inner(
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
     let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
     let external_postgres = state.with_inspection(crate::installer_postgres::load)?;
+    let features = state.with_inspection(crate::installer_features::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    if let Some(selection) = &features {
+        state.with_inspection(|view| {
+            let values =
+                crate::installer_feature_credentials::verify(view, &selection.credential_names()?)?;
+            selection.verify_imported(&values)
+        })?;
+        crate::installer_feature_postgres_tls::verify_at(installation)?;
+    }
     let public_acme =
         hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme;
     match (bao, foundation.as_ref()) {
@@ -592,6 +605,9 @@ fn start_inner(
     for (key, value) in state.with_inspection(crate::installer_hosting_addon::environment)? {
         append(&mut source_env, &key, &value)?;
     }
+    if let Some(selection) = &features {
+        selection.append_environment(&mut source_env, installation, images)?;
+    }
     state.write_evidence("application-source.env", &source_env)?;
     let mut inputs = bootstrap.clone();
     inputs.prior = prior;
@@ -642,6 +658,10 @@ fn start_inner(
         inputs
             .files
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
+    }
+    if let Some(selection) = &features {
+        selection.bind_inputs(&mut inputs)?;
+        selection.append_layers(&mut inputs, bundle)?;
     }
     crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
     #[cfg(feature = "installer-development")]
@@ -716,6 +736,10 @@ fn start_inner(
         maintenance_inputs
             .files
             .push(bundle_bound(bundle, crate::installer_postgres::LAYER)?);
+    }
+    if let Some(selection) = &features {
+        selection.bind_inputs(&mut maintenance_inputs)?;
+        selection.append_layers(&mut maintenance_inputs, bundle)?;
     }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
     #[cfg(feature = "installer-development")]

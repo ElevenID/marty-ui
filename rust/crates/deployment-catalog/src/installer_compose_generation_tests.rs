@@ -262,6 +262,7 @@ esac
             bindings: BTreeMap::new(),
             cleanup_only: false,
             generation_transition: None,
+            feature_producer_observation: None,
             runtime_recovery_roles: None,
         };
         let result = Self {

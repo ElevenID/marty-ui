@@ -2,7 +2,7 @@
 //! profile. Local identity, authority, policy and evidence owners remain concrete;
 //! the production constructor only supplies existing protected remote adapters.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, io::Read, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use axum::Router;
@@ -120,7 +120,8 @@ impl DelegatedUseRuntime {
             .readiness()
             .await
             .map_err(|_| DelegatedUseRuntimeError("database role boundary"))?;
-        let (providers, remote) = connect_flow_providers(configuration).await?;
+        let workload_ca = read_workload_ca(configuration)?;
+        let (providers, remote) = connect_flow_providers(configuration, &workload_ca).await?;
         let selected = &configuration.receipt_signing;
         let minter = GrantMinter::for_managed_openbao(
             &selected.grant_openbao_origin,
@@ -129,12 +130,13 @@ impl DelegatedUseRuntime {
         )
         .map_err(|_| DelegatedUseRuntimeError("receipt grant authority"))?;
         let receipt_signer = Arc::new(
-            HttpManagedDelegatedReceiptSigner::new(
+            HttpManagedDelegatedReceiptSigner::with_trusted_ca(
                 &selected.origin,
                 selected.read_credential.clone(),
                 selected.sign_credential.clone(),
                 selected.key.clone(),
                 minter,
+                &workload_ca,
             )
             .map_err(|_| DelegatedUseRuntimeError("managed receipt signer"))?,
         );
@@ -568,8 +570,22 @@ fn request_signing_endpoint(origin: &str) -> Result<url::Url> {
         .map_err(|_| DelegatedUseRuntimeError("request signing origin"))
 }
 
+fn read_workload_ca(configuration: &DelegatedUseHostConfig) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(&configuration.workload_client_tls.ca_certificate)
+        .map_err(|_| DelegatedUseRuntimeError("workload HTTPS trust"))?
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| DelegatedUseRuntimeError("workload HTTPS trust"))?;
+    if bytes.is_empty() || bytes.len() > 65_536 {
+        return Err(DelegatedUseRuntimeError("workload HTTPS trust"));
+    }
+    Ok(bytes)
+}
+
 async fn connect_flow_providers(
     configuration: &DelegatedUseHostConfig,
+    workload_ca: &[u8],
 ) -> Result<(FlowProviderRegistry, RemoteReadiness)> {
     let read = FlowDelegatedReadProviders::connect(
         &configuration.credential_template_grpc_target,
@@ -588,22 +604,24 @@ async fn connect_flow_providers(
     .map_err(|_| DelegatedUseRuntimeError("request grant authority"))?;
     let signing_endpoint = request_signing_endpoint(&selected.origin)?;
     let signing = Arc::new(
-        HttpSigningProvider::new(
+        HttpSigningProvider::with_trusted_ca(
             signing_endpoint.as_str(),
             &selected.read_credential,
             &selected.sign_credential,
+            workload_ca,
         )
         .map_err(|_| DelegatedUseRuntimeError("request signing selection"))?
         .with_grant_minter(minter),
     );
     let references = Arc::new(
-        HttpFlowReferenceProvider::new(
+        HttpFlowReferenceProvider::with_trusted_ca(
             &configuration.issuance_native_url,
             &configuration.issuance_api_key,
             &configuration.credential_template_url,
             &configuration.trust_profile_url,
             &configuration.deployment_profile_url,
             Some(&configuration.service_token),
+            workload_ca,
         )
         .map_err(|_| DelegatedUseRuntimeError("Flow reference selection"))?,
     );

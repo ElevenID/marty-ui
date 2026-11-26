@@ -29,6 +29,7 @@ fn executable_is_disabled_before_file_network_and_listener_work() {
         &[],
         &[
             ("DELEGATED_USE_LISTEN_ADDR", &address),
+            ("DELEGATED_USE_HEALTH_ADDR", &address),
             (
                 "DELEGATED_USE_USE_WRITER_DATABASE_URL_FILE",
                 "/never-log-unreadable-secret",

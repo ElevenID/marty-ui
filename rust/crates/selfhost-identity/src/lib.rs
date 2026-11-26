@@ -1,6 +1,7 @@
 //! Reviewed public self-host workload identities shared by native KMS operators.
 
 pub mod acme_http01;
+pub mod features;
 pub mod origin;
 pub mod renewal_leaf;
 pub mod tls;

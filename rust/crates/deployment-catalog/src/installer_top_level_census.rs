@@ -90,6 +90,10 @@ pub(crate) enum TopLevelName {
     GenerationIdentity,
     GenerationTransfer,
     ApplicationGeneration,
+    FeatureProfileSecrets,
+    FeaturePostgresTransport,
+    FeatureIdentityOutput,
+    FeatureProfileGenerations,
     OpenBaoEnv,
     OpenBaoPending,
     OpenBaoComposeRuntime,
@@ -154,6 +158,10 @@ impl TopLevelName {
             Self::GenerationIdentity => "generation-identity".into(),
             Self::GenerationTransfer => "generation-transfer".into(),
             Self::ApplicationGeneration => "application-generation".into(),
+            Self::FeatureProfileSecrets => "feature-profile-secrets".into(),
+            Self::FeaturePostgresTransport => "feature-postgres-transport".into(),
+            Self::FeatureIdentityOutput => "feature-identity-output".into(),
+            Self::FeatureProfileGenerations => "feature-profile-generations".into(),
             Self::OpenBaoEnv => "openbao.env".into(),
             Self::OpenBaoPending => "openbao-pending.json".into(),
             Self::OpenBaoComposeRuntime => "openbao-compose-runtime.json".into(),
@@ -181,7 +189,11 @@ impl TopLevelName {
             | Self::GenerationInputs
             | Self::GenerationIdentity
             | Self::GenerationTransfer
-            | Self::ApplicationGeneration => Kind::Directory,
+            | Self::ApplicationGeneration
+            | Self::FeatureProfileSecrets
+            | Self::FeaturePostgresTransport
+            | Self::FeatureIdentityOutput
+            | Self::FeatureProfileGenerations => Kind::Directory,
             _ => Kind::File,
         }
     }
@@ -333,6 +345,24 @@ pub(crate) fn inspect_held(
     expected_mount: u64,
     specs: &[ExpectedTopLevel],
 ) -> CensusOutcome {
+    inspect_selected_held(
+        root,
+        installation_id,
+        expected_root,
+        expected_mount,
+        specs,
+        &TopLevelName::REQUIRED.into_iter().collect(),
+    )
+}
+
+fn inspect_selected_held(
+    root: &File,
+    installation_id: uuid::Uuid,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    specs: &[ExpectedTopLevel],
+    required: &BTreeSet<TopLevelName>,
+) -> CensusOutcome {
     if expected_root.kind != Kind::Directory
         || expected_mount == 0
         || specs.is_empty()
@@ -350,8 +380,8 @@ pub(crate) fn inspect_held(
             return incomplete(IncompleteReason::InvalidSpecification);
         }
     }
-    if expected.len() != TopLevelName::REQUIRED.len()
-        || TopLevelName::REQUIRED
+    if expected.len() != required.len()
+        || required
             .iter()
             .any(|name| !expected.contains_key(&name.name()))
     {
@@ -425,12 +455,21 @@ pub(crate) fn inspect(
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return incomplete(IncompleteReason::InstallationChanged);
     }
-    let result = inspect_held(
+    let mut required: BTreeSet<_> = TopLevelName::REQUIRED.into_iter().collect();
+    let features =
+        match crate::installer_host_storage_inventory::verified_feature_roots(locked, installation)
+        {
+            Ok(features) => features,
+            Err(_) => return incomplete(IncompleteReason::MissingOrChangedEntry),
+        };
+    required.extend(features);
+    let result = inspect_selected_held(
         locked.installation_directory(),
         locked.journal().installation_id(),
         expected_root,
         expected_mount,
         specs,
+        &required,
     );
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return incomplete(IncompleteReason::InstallationChanged);
@@ -451,10 +490,16 @@ pub(crate) fn derive_current_fixed_specs(
         .require_path_binding(installation)
         .and_then(|_| locked.require_unchanged())
         .map_err(|_| IncompleteReason::InstallationChanged)?;
-    let result = derive_current_fixed_specs_held(
+    let mut required: BTreeSet<_> = TopLevelName::REQUIRED.into_iter().collect();
+    required.extend(
+        crate::installer_host_storage_inventory::verified_feature_roots(locked, installation)
+            .map_err(|_| IncompleteReason::MissingOrChangedEntry)?,
+    );
+    let result = derive_selected_specs_held(
         locked.installation_directory(),
         expected_root,
         expected_mount,
+        &required,
     );
     locked
         .require_path_binding(installation)
@@ -471,6 +516,20 @@ pub(crate) fn derive_current_fixed_specs_held(
     expected_root: &HostIdentity,
     expected_mount: u64,
 ) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    derive_selected_specs_held(
+        root,
+        expected_root,
+        expected_mount,
+        &TopLevelName::REQUIRED.into_iter().collect(),
+    )
+}
+
+fn derive_selected_specs_held(
+    root: &File,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    required: &BTreeSet<TopLevelName>,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
     if identity(root).ok().as_ref() != Some(expected_root)
         || mount_id(root).ok() != Some(expected_mount)
         || expected_mount == 0
@@ -478,10 +537,7 @@ pub(crate) fn derive_current_fixed_specs_held(
         return Err(IncompleteReason::InstallationChanged);
     }
     let observed_names = names(root)?;
-    let required_names: BTreeSet<_> = TopLevelName::REQUIRED
-        .iter()
-        .map(|name| name.name())
-        .collect();
+    let required_names: BTreeSet<_> = required.iter().map(|name| name.name()).collect();
     if observed_names != required_names {
         return Err(
             if observed_names.difference(&required_names).next().is_some() {
@@ -491,8 +547,8 @@ pub(crate) fn derive_current_fixed_specs_held(
             },
         );
     }
-    let mut specs = Vec::with_capacity(TopLevelName::REQUIRED.len());
-    for name in TopLevelName::REQUIRED {
+    let mut specs = Vec::with_capacity(required.len());
+    for name in required.iter().copied() {
         let held = open_child(root, OsStr::new(&name.name()))
             .map_err(|_| IncompleteReason::UnsafeEntry)?
             .ok_or(IncompleteReason::MissingOrChangedEntry)?;
@@ -592,6 +648,40 @@ mod tests {
         assert_eq!(snapshot.coverage, "expected_top_level_candidates_only");
         assert!(!snapshot.deletion_eligible);
         assert_eq!(snapshot.installation_id, id);
+    }
+
+    #[test]
+    fn feature_names_require_a_selected_owner_set_and_never_become_deletion_authority() {
+        let (temp, root, expected_root, mount, old_specs) = fixture();
+        assert_eq!(TopLevelName::REQUIRED.len(), 31);
+        let mut selected: BTreeSet<_> = TopLevelName::REQUIRED.into_iter().collect();
+        for name in [
+            TopLevelName::FeatureProfileSecrets,
+            TopLevelName::FeaturePostgresTransport,
+            TopLevelName::FeatureIdentityOutput,
+            TopLevelName::FeatureProfileGenerations,
+        ] {
+            fs::create_dir(temp.path().join(name.name())).unwrap();
+            selected.insert(name);
+        }
+        let id = uuid::Uuid::new_v4();
+        assert!(matches!(
+            inspect_held(&root, id, &expected_root, mount, &old_specs),
+            CensusOutcome::Incomplete(IncompleteReason::UnknownTopLevel)
+        ));
+        let specs = derive_selected_specs_held(&root, &expected_root, mount, &selected).unwrap();
+        let CensusOutcome::ExactExpectedSetObserved(snapshot) =
+            inspect_selected_held(&root, id, &expected_root, mount, &specs, &selected)
+        else {
+            panic!("expected exact selected set")
+        };
+        assert_eq!(snapshot.entries.len(), 35);
+        assert!(!snapshot.deletion_eligible);
+        fs::write(temp.path().join("feature-other-credentials"), b"unclaimed").unwrap();
+        assert!(matches!(
+            derive_selected_specs_held(&root, &expected_root, mount, &selected),
+            Err(IncompleteReason::UnknownTopLevel)
+        ));
     }
 
     #[test]

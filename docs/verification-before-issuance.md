@@ -140,6 +140,13 @@ Issuance migration `0018_verification_prerequisites.sql` installs the immutable
 intent, continuation and authorization-route guards. Credential Template
 migration `0005_verification_prerequisite.sql` validates the policy shape and
 requires those exact enabled guards before writing prerequisite templates.
+Additive Issuance migration `0020_verification_prerequisite_template_locks.sql`
+retains the invoker trigger and delegates its two exact template row locks to a
+narrow source-owner function. This permits a restricted Issuance LOGIN to hold
+the required locks without receiving template UPDATE authority. Credential
+Template migration `0006_verification_prerequisite_template_locks.sql` pins the
+revised guard and the helper's exact body, owner, security mode, search path and
+closed ACL. The historical migration bytes remain unchanged.
 Startup checks validate the deployed trigger/function/constraint shapes;
 disabled or replaced enforcement is rejected. The private
 `prerequisite1_*` storage status keeps unaware readers from treating a guarded

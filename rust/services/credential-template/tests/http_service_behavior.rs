@@ -12,7 +12,10 @@ use marty_credential_template::{
         IssuerIdentity,
     },
     catalog::system_delivery_destination_catalog,
-    http_service::{credential_template_router, CredentialTemplateHttpState},
+    http_service::{
+        credential_template_authority_router, credential_template_router,
+        CredentialTemplateHttpState,
+    },
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
     },
@@ -135,6 +138,10 @@ fn router() -> axum::Router {
 }
 
 fn router_with_service_auth(configured: bool) -> axum::Router {
+    credential_template_router(state_with_service_auth(configured))
+}
+
+fn state_with_service_auth(configured: bool) -> CredentialTemplateHttpState {
     let repository = Arc::new(Repository::default());
     // Return cross-tenant entries here to exercise application-level filtering.
     let registry = Arc::new(Registry::seeded(false));
@@ -148,7 +155,7 @@ fn router_with_service_auth(configured: bool) -> axum::Router {
         registry,
         control_plane,
     ));
-    credential_template_router(CredentialTemplateHttpState {
+    CredentialTemplateHttpState {
         application,
         registry_application,
         service_authenticator: Arc::new(
@@ -156,7 +163,7 @@ fn router_with_service_auth(configured: bool) -> axum::Router {
                 .unwrap(),
         ),
         environment: RuntimeEnvironment::Test,
-    })
+    }
 }
 
 #[tokio::test]
@@ -431,6 +438,61 @@ async fn template_owner_projection_requires_service_authority_and_only_exposes_s
         app.oneshot(req).await.unwrap().status(),
         StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn managed_owner_router_exposes_only_the_authenticated_projection() {
+    let state = state_with_service_auth(true);
+    let ordinary = credential_template_router(state.clone());
+    let created = ordinary
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = json_body(created).await;
+    let id = created["id"].as_str().unwrap();
+    let app = credential_template_authority_router(state);
+    for token in [None, Some("wrong"), Some(TOKEN)] {
+        let mut req = request(
+            "GET",
+            &format!("/internal/v1/resource-owners/credential-templates/{id}"),
+            json!({}),
+            false,
+        );
+        if let Some(token) = token {
+            req.headers_mut()
+                .insert("x-service-token", token.parse().unwrap());
+        }
+        let response = app.clone().oneshot(req).await.unwrap();
+        if token == Some(TOKEN) {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                json_body(response).await,
+                json!({"id":id,"organization_id":"org-1"})
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+    for path in [
+        "/v1/credential-templates",
+        "/v1/wallet-registry",
+        "/health/ready",
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request("GET", path, json!({}), true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }
 
 #[tokio::test]

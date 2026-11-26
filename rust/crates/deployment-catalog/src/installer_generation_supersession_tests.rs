@@ -346,6 +346,7 @@ impl Fixture {
                 attempt: 0,
                 binding_sha256: previous.sha256().unwrap(),
                 helper_receipt_sha256: hash(&encode(&helper).unwrap()),
+                feature_renewal_sha256: None,
                 inputs: activation_inputs.clone(),
                 configuration_sha256: installer_compose::model_sha256(&runtime).unwrap(),
                 model: runtime,

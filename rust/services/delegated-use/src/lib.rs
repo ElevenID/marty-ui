@@ -3,4 +3,5 @@
 //! Local owners retain authority/evidence; consumers retain business execution.
 pub mod config;
 pub mod database;
+pub mod health;
 pub mod runtime;

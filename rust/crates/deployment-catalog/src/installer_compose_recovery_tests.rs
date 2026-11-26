@@ -537,6 +537,7 @@ fn retained_recovery_cannot_pull_create_setup_or_enter_generation_replacement() 
         bindings: BTreeMap::new(),
         cleanup_only: false,
         generation_transition: None,
+        feature_producer_observation: None,
         runtime_recovery_roles: selected,
     };
     let mut state = InstallerState::create(

@@ -4,6 +4,16 @@
 #[path = "support/managed_postgres.rs"]
 mod managed_postgres;
 
+#[cfg(target_os = "linux")]
+#[path = "support/feature_profile_database.rs"]
+mod feature_profile;
+#[cfg(target_os = "linux")]
+#[path = "../../deployment-catalog/src/installer_feature_database.rs"]
+mod installer_feature_database;
+#[cfg(target_os = "linux")]
+#[path = "../../deployment-catalog/src/installer_json.rs"]
+mod installer_json;
+
 use managed_postgres::{Database, APP_PASSWORD, APP_ROLE, DATABASE};
 use sqlx::{postgres::PgPoolOptions, ConnectOptions, Connection, PgConnection, PgPool};
 use std::{

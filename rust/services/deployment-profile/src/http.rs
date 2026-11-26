@@ -127,6 +127,16 @@ struct DeleteResponse {
     deleted: bool,
 }
 
+/// The managed HTTPS listener exposes only the authenticated owner projection.
+pub fn deployment_authority_router(state: DeploymentHttpState) -> Router {
+    Router::new()
+        .route(
+            "/internal/v1/resource-owners/deployment-profiles/{profile_id}",
+            get(resource_owner),
+        )
+        .with_state(state)
+}
+
 pub fn deployment_router(state: DeploymentHttpState) -> Router {
     Router::new()
         .route(

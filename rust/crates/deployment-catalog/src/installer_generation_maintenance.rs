@@ -600,9 +600,7 @@ impl RenewalPermit {
             self.created_at(),
         )?;
         require_lineage(view, installation, &self.data.initial_configuration_sha256)?;
-        let saved = current_session(view, installation)?
-            .map(Ok)
-            .unwrap_or_else(|| installer_doctor::load_initial_session(view, installation))?;
+        let saved = installer_doctor::load_session(view, installation)?;
         require(
             serde_json::to_value(&saved.inputs).map_err(|_| REFUSED)?
                 == serde_json::to_value(inputs).map_err(|_| REFUSED)?,
@@ -636,9 +634,7 @@ impl RenewalPermit {
         view: &LockedInspection,
         inputs: &EnrolmentInputs<'_>,
     ) -> Result<()> {
-        let saved = current_session(view, inputs.installation)?
-            .map(Ok)
-            .unwrap_or_else(|| installer_doctor::load_initial_session(view, inputs.installation))?;
+        let saved = installer_doctor::load_session(view, inputs.installation)?;
         self.require_current(
             view,
             inputs.installation,
@@ -841,6 +837,10 @@ mod model;
 mod tx;
 pub(crate) use model::require_runtime_model;
 pub(crate) use tx::GenerationRecoveryBaseline;
+pub(crate) use tx::{
+    feature_joint_activation_observed_at, verify_feature_joint_activation,
+    verify_feature_renewal_context, FeatureRenewalContext,
+};
 #[path = "installer_generation_schedule.rs"]
 mod schedule;
 pub(crate) use schedule::{reconcile_locked, status_locked};

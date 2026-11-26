@@ -24,6 +24,16 @@ use std::{
 
 type Result<T> = std::result::Result<T, String>;
 pub const COMPOSE_VERSION: &str = "5.6.1";
+#[cfg(test)]
+#[path = "installer_compose_feature_limits_tests.rs"]
+mod feature_limits_tests;
+#[cfg(test)]
+#[path = "installer_compose_feature_observation_tests.rs"]
+mod feature_observation_tests;
+#[path = "installer_compose_feature_postgres.rs"]
+mod feature_postgres;
+#[path = "installer_compose_feature_producer.rs"]
+mod feature_producer;
 #[path = "installer_compose_generation.rs"]
 mod generation;
 #[cfg(test)]
@@ -34,6 +44,25 @@ const MAX_FILE: u64 = 2 * 1024 * 1024;
 // profile binds 17 files before startup and up to 21 with cleanup evidence.
 // Leave room for lifecycle plans while retaining the per-file custody checks.
 pub(crate) const MAX_BOUND_INPUTS: usize = 24;
+const MAX_COMPOSE_FILES: usize = 10;
+// A configured seven-group profile adds fifteen fixed runtime layers. The
+// largest supported union also has five base layers, two ACME layers, external
+// application/OIDC layers, one development image and both renewal helpers.
+const MAX_FEATURE_COMPOSE_FILES: usize = 27;
+// The connector variant has the largest evidence set: sixteen base bindings,
+// two development-image bindings, seven feature owners, one selected feature
+// material, one base plan, one joint-renewal record, one preparation and its
+// five exact AppRole inputs. Historical producer inputs never accumulate.
+const MAX_FEATURE_BOUND_INPUTS: usize = 34;
+
+fn input_counts_allowed(files: usize, bound_inputs: usize, selected_features: bool) -> bool {
+    let (file_limit, input_limit) = if selected_features {
+        (MAX_FEATURE_COMPOSE_FILES, MAX_FEATURE_BOUND_INPUTS)
+    } else {
+        (MAX_COMPOSE_FILES, MAX_BOUND_INPUTS)
+    };
+    files > 0 && files <= file_limit && bound_inputs <= input_limit
+}
 const MAX_WAIT: u64 = 720;
 const REFUSED: &str = "Compose installation policy refused the operation";
 pub(crate) const OPENBAO_DEVICE_IDENTITY_CHANGED: &str = "OpenBao private state filesystem device differs from its retained custody receipt; preserve the original owner and evidence; do not rewrite the receipt or retry lifecycle resume without an authenticated recovery path";
@@ -1073,6 +1102,7 @@ mod tests {
             bindings: BTreeMap::from([(installation.join("PRIVATE-input.env"), "b".repeat(64))]),
             cleanup_only: false,
             generation_transition: None,
+            feature_producer_observation: None,
             runtime_recovery_roles: None,
         };
         (root, state, session)
@@ -1511,6 +1541,9 @@ pub struct ComposeSession {
     // A generation owner may lend a read-only mixed-ID observation to local
     // recovery. Ordinary Compose operations cannot use this view to mutate.
     generation_transition: Option<BTreeSet<String>>,
+    // A feature producer recovery view additionally pins its receipt-derived
+    // full ID/execution and complete census on every local recovery read.
+    feature_producer_observation: Option<feature_producer::RecoveryObservation>,
     // A retained recovery command admits the complete model but starts only
     // this explicit runtime dependency closure. Ordinary starts keep their
     // existing whole-model runtime admission.
@@ -2380,6 +2413,7 @@ pub(crate) enum RuntimeOperationOwner {
     Acme,
     Generation,
     Health,
+    FeaturePostgres,
 }
 
 /// Only the immutable-generation owner may replace its fixed producer or the
@@ -2395,6 +2429,7 @@ impl RuntimeOperationOwner {
             Self::Acme => "acme-compose",
             Self::Generation => "generation-compose",
             Self::Health => "health-compose",
+            Self::FeaturePostgres => "feature-postgres-carrier-compose",
         }
     }
 }
@@ -2551,6 +2586,34 @@ fn admit_model_sources(
     Ok(())
 }
 
+/// Replacement observation may tolerate only the exact selected old roles.
+/// The feature wrapper can additionally admit its one fixed new runtime role;
+/// generic generation and credential-producer callers always pass an empty set.
+fn replacement_observation_census(
+    prior: &ProjectResources,
+    observed: &ProjectResources,
+    replacing: &BTreeSet<String>,
+    added: &BTreeSet<String>,
+) -> bool {
+    added.is_subset(&BTreeSet::from(["delegated-use".into()]))
+        && added.is_subset(replacing)
+        && added
+            .iter()
+            .all(|role| !prior.containers.contains_key(role))
+        && observed.networks == prior.networks
+        && observed.volumes == prior.volumes
+        && observed.containers.iter().all(|(role, current)| {
+            if let Some(previous) = prior.containers.get(role) {
+                replacing.contains(role) || current == previous
+            } else {
+                added.contains(role) && !current.setup
+            }
+        })
+        && prior.containers.iter().all(|(role, previous)| {
+            replacing.contains(role) || observed.containers.get(role) == Some(previous)
+        })
+}
+
 impl ComposeSession {
     pub fn new(
         docker_path: &Path,
@@ -2648,8 +2711,8 @@ impl ComposeSession {
                     .unwrap()
                     .is_match(&inputs.project)
                 && !inputs.files.is_empty()
-                && inputs.files.len() <= 10
-                && inputs.bound_inputs.len() <= MAX_BOUND_INPUTS
+                && inputs.files.len() <= MAX_FEATURE_COMPOSE_FILES
+                && inputs.bound_inputs.len() <= MAX_FEATURE_BOUND_INPUTS
                 && inputs.profiles.len() <= 8
                 && inputs.profiles.iter().all(|v| name(v))
                 && inputs.services.len() <= 96
@@ -2674,6 +2737,14 @@ impl ComposeSession {
         let external_postgres = crate::installer_postgres::for_inputs(&inputs)?;
         let hosting = crate::installer_hosting::for_inputs(&inputs)?;
         crate::installer_settings::for_inputs(&inputs)?;
+        let features = crate::installer_features::for_inputs(&inputs)?;
+        // The larger closed ceiling is available only after the exact retained
+        // feature selection and its input bindings have been authenticated.
+        require(input_counts_allowed(
+            inputs.files.len(),
+            inputs.bound_inputs.len(),
+            features.is_some(),
+        ))?;
         for root in inputs
             .writable_bind_roots
             .iter()
@@ -2746,6 +2817,7 @@ impl ComposeSession {
             bindings,
             cleanup_only,
             generation_transition: None,
+            feature_producer_observation: None,
             runtime_recovery_roles: None,
         };
         let output = session.compose(
@@ -2769,6 +2841,9 @@ impl ComposeSession {
         }
         if let Some(selection) = hosting {
             selection.validate_application_model(&model)?;
+        }
+        if let Some(selection) = features {
+            selection.validate_model(&session.inputs.installation, &model)?;
         }
         if cleanup_only {
             validate_failed_runtime_cleanup(session.inputs.prior.as_ref().ok_or(REFUSED)?, &model)?;
@@ -2824,10 +2899,23 @@ impl ComposeSession {
         }
     }
     pub fn observe_resources(&self) -> Result<ProjectResources> {
-        self.observe_transition(false, self.generation_transition.as_ref())
+        let resources = self.observe_transition(false, self.generation_transition.as_ref())?;
+        if let Some(observation) = &self.feature_producer_observation {
+            require(
+                self.generation_transition.as_ref()
+                    == Some(&BTreeSet::from(["installer-feature-identities".into()])),
+            )?;
+            observation.require(&resources, &self.status()?)?;
+        }
+        Ok(resources)
     }
     fn recheck(&self) -> Result<()> {
         verify_input_files(&self.inputs.installation, &self.bindings)?;
+        if let Some(features) = crate::installer_features::for_inputs(&self.inputs)? {
+            if !self.model.is_null() {
+                features.validate_model(&self.inputs.installation, &self.model)?;
+            }
+        }
         if let Some(settings) = crate::installer_settings::for_inputs(&self.inputs)? {
             settings.verify_model_secrets(&self.inputs.installation, &self.model)?;
         }
@@ -3005,6 +3093,39 @@ impl ComposeSession {
         allow_new: bool,
         replacing: Option<&BTreeSet<String>>,
     ) -> Result<ProjectResources> {
+        self.observe_transition_with_feature(allow_new, replacing, None)
+    }
+
+    fn observe_feature_replacements(
+        &self,
+        permit: &crate::installer_features::generations::ActivationPermit,
+    ) -> Result<ProjectResources> {
+        self.observe_transition_with_feature(false, Some(permit.selected()), Some(permit))
+    }
+
+    fn observe_transition_with_feature(
+        &self,
+        allow_new: bool,
+        replacing: Option<&BTreeSet<String>>,
+        feature: Option<&crate::installer_features::generations::ActivationPermit>,
+    ) -> Result<ProjectResources> {
+        let added = if let Some(permit) = feature {
+            permit.require_session(&self.inputs, &self.model)?;
+            require(
+                !allow_new
+                    && !self.cleanup_only
+                    && self.runtime_recovery_roles.is_none()
+                    && self.generation_transition.is_none()
+                    && replacing == Some(permit.selected())
+                    && permit.added().is_subset(permit.selected())
+                    && permit
+                        .added()
+                        .is_subset(&BTreeSet::from(["delegated-use".into()])),
+            )?;
+            permit.added().clone()
+        } else {
+            BTreeSet::new()
+        };
         self.recheck()?;
         let project_label = format!("label=com.docker.compose.project={}", self.inputs.project);
         let ids = identifiers(&self.docker.run_checked(&[
@@ -3215,17 +3336,9 @@ impl ComposeSession {
                 && prior.volumes.is_subset(&result.volumes),
         )?;
         if let Some(replacing) = replacing {
-            require(
-                result.networks == prior.networks
-                    && result.volumes == prior.volumes
-                    && result
-                        .containers
-                        .keys()
-                        .all(|role| prior.containers.contains_key(role))
-                    && prior.containers.keys().all(|role| {
-                        replacing.contains(role) || result.containers.contains_key(role)
-                    }),
-            )?;
+            require(replacement_observation_census(
+                &prior, &result, replacing, &added,
+            ))?;
         } else if !allow_new {
             require(result == prior)?;
         }

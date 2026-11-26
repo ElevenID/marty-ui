@@ -185,7 +185,7 @@ pub async fn materialize(
     }
     let binding_id: String = receipt.try_get("binding_id").map_err(database_error)?;
     let application_id: String = receipt.try_get("application_id").map_err(database_error)?;
-    let binding = sqlx::query("SELECT revision,active,application_id,subject_id,provider,fact_type,resource_scope,claim_rules,max_age_ms,max_clock_skew_ms FROM issuance_service.external_observation_bindings WHERE organization_id=$1 AND source_id=$2 AND id=$3 FOR SHARE")
+    let binding = sqlx::query("SELECT revision,active,application_id,subject_id,provider,fact_type,resource_scope,claim_rules,max_age_ms,max_clock_skew_ms FROM issuance_service.materialization_lock_binding($1,$2,$3)")
         .bind(org).bind(source).bind(&binding_id).fetch_optional(&mut *tx).await.map_err(database_error)?.ok_or(AdminError::Conflict)?;
     let app = sqlx::query("SELECT applicant_identifier,(extract(epoch FROM updated_at)*1000000)::bigint AS revision,status IN ('pending','under_review') AND expires_at>clock_timestamp() AS eligible FROM issuance_service.applications WHERE organization_id=$1 AND id=$2 FOR UPDATE")
         .bind(org.to_string()).bind(&application_id).fetch_optional(&mut *tx).await.map_err(database_error)?.ok_or(AdminError::NotAuthorized)?;
@@ -199,7 +199,7 @@ pub async fn materialize(
     {
         return Err(AdminError::NotAuthorized);
     }
-    let row = sqlx::query("SELECT r.*,to_jsonb(r) AS receipt_snapshot,a.event_type AS admission_event,a.received_at_ms AS admission_received_at_ms FROM issuance_service.external_observation_receipts r JOIN issuance_service.external_observation_audit a ON a.receipt_id=r.receipt_id WHERE r.receipt_id=$1 AND r.organization_id=$2 FOR SHARE OF r,a")
+    let row = sqlx::query("SELECT (locked.receipt).*,to_jsonb(locked.receipt) AS receipt_snapshot,locked.admission_event,locked.admission_received_at_ms FROM issuance_service.materialization_lock_journal($1,$2) locked")
         .bind(receipt_id).bind(org.to_string()).fetch_optional(&mut *tx).await.map_err(database_error)?.ok_or(AdminError::Unavailable)?;
     let receipt_snapshot: Value = row.try_get("receipt_snapshot").map_err(database_error)?;
     let binding_snapshot: Value = sqlx::query_scalar("SELECT to_jsonb(b) FROM issuance_service.external_observation_bindings b WHERE id=$1 AND organization_id=$2").bind(&binding_id).bind(org).fetch_one(&mut *tx).await.map_err(database_error)?;
@@ -311,8 +311,15 @@ pub async fn materialize(
     {
         return Err(AdminError::Conflict);
     }
-    let head: Option<(Uuid,i64)> = sqlx::query_as("SELECT receipt_id,sequence FROM issuance_service.external_observation_heads WHERE organization_id=$1 AND source_id=$2 AND binding_id=$3 FOR SHARE")
-        .bind(org.to_string()).bind(source).bind(&binding_id).fetch_optional(&mut *tx).await.map_err(database_error)?;
+    let head: Option<(Uuid, i64)> = sqlx::query_as(
+        "SELECT receipt_id,sequence FROM issuance_service.materialization_lock_head($1,$2,$3)",
+    )
+    .bind(org.to_string())
+    .bind(source)
+    .bind(&binding_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(database_error)?;
     if head != Some((receipt_id, sequence)) {
         return Err(AdminError::Conflict);
     }
@@ -411,11 +418,16 @@ pub async fn verify_materialization_storage(pool: &PgPool) -> Result<(), &'stati
         .execute(&mut *tx)
         .await
         .map_err(|_| FAILURE)?;
+    crate::external_observation_schema::validate_materialization_locks(&mut tx)
+        .await
+        .map_err(|_| FAILURE)?;
     for query in [
         "SELECT id,organization_id,application_id,subject_id,provider,fact_type,scope,assertion,verification,source,requirement_id,logical_key,source_revision,payload_hash,observed_at,effective_at,superseded_fact_id,created_at FROM issuance_service.evidence_facts LIMIT 0",
         "SELECT organization_id,application_id,logical_key,fact_id,updated_at FROM issuance_service.evidence_fact_heads LIMIT 0 FOR UPDATE",
         "SELECT id,organization_id,application_id,transaction_id,event_type,metadata,created_at FROM issuance_service.issuance_events LIMIT 0",
-        "SELECT receipt_id FROM issuance_service.external_observation_receipts LIMIT 0 FOR SHARE",
+        "SELECT revision FROM issuance_service.materialization_lock_binding(NULL::uuid,NULL::text,NULL::text) LIMIT 0",
+        "SELECT (receipt).receipt_id FROM issuance_service.materialization_lock_journal(NULL::uuid,NULL::text) LIMIT 0",
+        "SELECT receipt_id FROM issuance_service.materialization_lock_head(NULL::text,NULL::text,NULL::text) LIMIT 0",
     ] { sqlx::query(query).execute(&mut *tx).await.map_err(|_| FAILURE)?; }
     let allowed:bool=sqlx::query_scalar("SELECT has_table_privilege(current_user,'issuance_service.evidence_facts','INSERT') AND has_table_privilege(current_user,'issuance_service.evidence_fact_heads','INSERT') AND has_column_privilege(current_user,'issuance_service.evidence_fact_heads','fact_id','UPDATE') AND has_column_privilege(current_user,'issuance_service.evidence_fact_heads','updated_at','UPDATE') AND has_column_privilege(current_user,'issuance_service.applications','updated_at','UPDATE') AND has_table_privilege(current_user,'issuance_service.issuance_events','INSERT')").fetch_one(&mut *tx).await.map_err(|_| FAILURE)?;
     tx.rollback().await.map_err(|_| FAILURE)?;

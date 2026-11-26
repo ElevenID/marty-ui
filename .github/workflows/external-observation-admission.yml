@@ -4,6 +4,7 @@ on:
     paths:
       - 'rust/services/issuance/src/external_observation*.rs'
       - 'rust/services/issuance/migrations/0014_external_observation_authority.sql'
+      - 'rust/services/issuance/migrations/0019_observation_materialization_locks.sql'
       - 'rust/services/issuance/schema/external_observation_catalog*'
       - 'rust/services/issuance/src/migration.rs'
       - 'rust/services/issuance/src/lib.rs'
@@ -21,6 +22,7 @@ on:
     paths:
       - 'rust/services/issuance/src/external_observation*.rs'
       - 'rust/services/issuance/migrations/0014_external_observation_authority.sql'
+      - 'rust/services/issuance/migrations/0019_observation_materialization_locks.sql'
       - 'rust/services/issuance/schema/external_observation_catalog*'
       - 'rust/services/issuance/src/migration.rs'
       - 'rust/services/issuance/src/lib.rs'
