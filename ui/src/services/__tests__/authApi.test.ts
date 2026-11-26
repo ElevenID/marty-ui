@@ -291,14 +291,14 @@ describe('authApi', () => {
 
     it('sends session, organization and profile requests to the API with cookies', async () => {
       const fetchSpy = vi.spyOn(window, 'fetch')
-      server.use(
-        http.get(`${api}/v1/auth/me`, () => HttpResponse.json({ authenticated: true, user: mockUsers.admin })),
-        http.get(`${api}/v1/auth/me/organizations`, () => HttpResponse.json({ organizations: [mockOrganization] })),
-        http.patch(`${api}/v1/auth/me`, () => HttpResponse.json({ ok: true })),
-      )
+        .mockRejectedValue(new Error('Unexpected authentication transport request'))
+        .mockResolvedValueOnce(HttpResponse.json({ authenticated: true, user: mockUsers.admin }))
+        .mockResolvedValueOnce(HttpResponse.json({ organizations: [mockOrganization] }))
+        .mockResolvedValueOnce(HttpResponse.json({ ok: true }))
       expect((await getCurrentUser()).authenticated).toBe(true)
       expect(await getUserOrganizations()).toHaveLength(1)
       expect(await updateProfilePicture('data:image/png;base64,YQ==')).toEqual({ success: true })
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
       for (const path of ['/me', '/me/organizations']) {
         expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth${path}`, expect.objectContaining({ credentials: 'include' }))
       }
@@ -327,8 +327,10 @@ describe('authApi', () => {
 
     it('uses the same API origin for enrollment without changing its POST contract', async () => {
       const fetchSpy = vi.spyOn(window, 'fetch')
-      server.use(http.post(`${api}/v1/auth/passkeys/enroll`, () => HttpResponse.json({ email_sent: true })))
+        .mockRejectedValue(new Error('Unexpected authentication transport request'))
+        .mockResolvedValueOnce(HttpResponse.json({ email_sent: true }))
       await expect(startPasskeyEnrollment()).resolves.toEqual({ email_sent: true })
+      expect(fetchSpy).toHaveBeenCalledOnce()
       expect(fetchSpy).toHaveBeenCalledWith(`${api}/v1/auth/passkeys/enroll`, expect.objectContaining({
         method: 'POST', credentials: 'include',
         redirect: 'error',

@@ -44,6 +44,10 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 vi.mock('../../../../hooks/usePermissions', () => ({
   usePermissions: () => ({ isLoading: false, can: () => true }),
 }))
+// The optional wallet editor observes the same authenticated owner context.
+vi.mock('../../../../hooks/useAuth', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { id: 'owner-1' } }),
+}))
 
 vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router')>()
