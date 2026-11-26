@@ -39,6 +39,15 @@ pub struct Database {
 
 impl Database {
     pub fn start() -> Self {
+        Self::start_with_max_connections(36)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn start_feature_profile() -> Self {
+        Self::start_with_max_connections(100)
+    }
+
+    fn start_with_max_connections(max_connections: u16) -> Self {
         let bin = PathBuf::from(
             std::env::var_os("MARTY_TEST_POSTGRES_BIN_DIR")
                 .expect("set the absolute local PostgreSQL bin directory"),
@@ -83,7 +92,7 @@ impl Database {
             format!(
                 "listen_addresses='127.0.0.1'\nport={port}\nunix_socket_directories=''\n\
                  ssl=on\nssl_cert_file='server.pem'\nssl_key_file='server.key'\n\
-                 max_connections=36\nshared_buffers='16MB'\nstatement_timeout='30s'\n"
+                 max_connections={max_connections}\nshared_buffers='16MB'\nstatement_timeout='30s'\n"
             ),
         )
         .unwrap();

@@ -63,7 +63,7 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
         return;
     }
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let mut database = managed_postgres::Database::start();
+    let mut database = managed_postgres::Database::start_feature_profile();
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut bootstrap = loop {
         database.assert_running();
@@ -118,6 +118,7 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     )
     .await;
     let admin = connect(admin_options.clone(), 1).await;
+    assert_feature_connection_budget(&admin).await;
     let generated = credentials::generate_credentials().unwrap();
     credentials::validate_credentials(&generated).unwrap();
     let inventory = std::str::from_utf8(&generated[credentials::PASSWORD_INVENTORY]).unwrap();
@@ -546,6 +547,40 @@ async fn connect(options: PgConnectOptions, maximum: u32) -> PgPool {
         .connect_with(options.disable_statement_logging())
         .await
         .unwrap()
+}
+
+async fn assert_feature_connection_budget(admin: &PgPool) {
+    let compose: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../deploy-config/compose/selfhost-installer/feature-profile/compose.database.yml"
+    )))
+    .unwrap();
+    let limits: Vec<_> = compose["services"]["postgres"]["command"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|argument| argument.starts_with("max_connections="))
+        .collect();
+    assert_eq!(limits, ["max_connections=100"]);
+    let (maximum, reserved): (i32, i32) = sqlx::query_as(
+        "SELECT current_setting('max_connections')::int,
+                current_setting('superuser_reserved_connections')::int",
+    )
+    .fetch_one(admin)
+    .await
+    .unwrap();
+    assert_eq!(maximum, 100);
+    // Every retained runtime pool may reach two connections; Issuance's second
+    // process adds two more. Core migration and admin pools retain two and one.
+    let required = 2 * i32::try_from(credentials::RUNTIME_ROLES.len()).unwrap() + 2 + 2 + 1;
+    assert!(
+        maximum - reserved >= required,
+        "the owned feature database cannot admit its complete bounded pool inventory"
+    );
+    println!(
+        "native feature database capacity: {maximum}, reserved: {reserved}, pool bound: {required}"
+    );
 }
 
 fn setup_phase(database: &managed_postgres::Database, phase: &str, inventory: &str) -> bool {
