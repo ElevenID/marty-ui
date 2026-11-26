@@ -972,9 +972,6 @@ pub(crate) fn provision_runtime(
                 bundle,
                 "deploy-config/compose/selfhost-installer/feature-profile/compose.identities.yml",
             )?);
-            inputs
-                .writable_bind_roots
-                .insert(installation.join("feature-identity-output"));
             let (next, _) = crate::installer_feature_identity::bootstrap_feature_identities(
                 docker,
                 installation,

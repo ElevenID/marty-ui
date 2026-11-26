@@ -28,6 +28,10 @@ pub(crate) const ACTIVATION: &str = "feature-profile-activation.json";
 pub(crate) const DIRECTORY: &str = "feature-profile-secrets";
 pub(crate) const IDENTITY_SELECTION: &str = "feature-identities.json";
 pub(crate) const LAYER_ROOT: &str = "deploy-config/compose/selfhost-installer/feature-profile/";
+const IDENTITY_LAYER: &str =
+    "deploy-config/compose/selfhost-installer/feature-profile/compose.identities.yml";
+const IDENTITY_RENEWAL_LAYER: &str =
+    "deploy-config/compose/selfhost-installer/feature-profile/compose.identities-renew.yml";
 const SCHEMA: &str = "elevenid.installer-feature-profile/v1";
 const SELECTION_SCHEMA: &str = "elevenid.installer-feature-profile-selection/v1";
 const MAX_INPUT: usize = 65_536;
@@ -686,6 +690,14 @@ impl Selection {
                 require(![SOURCE, RECORD].contains(&name))?;
             }
         }
+        // The completed setup container retains its writable output mount.
+        // Every later observation must keep this exact selected owner root,
+        // even when the next job does not render the feature helper itself.
+        if self.identity_selection()?.is_some() {
+            inputs
+                .writable_bind_roots
+                .insert(inputs.installation.join(crate::installer_feature_identity::OUTPUT_DIRECTORY));
+        }
         Ok(())
     }
     pub(crate) fn layers(&self) -> Vec<&'static str> {
@@ -749,6 +761,21 @@ impl Selection {
                     crate::installer_application::bundle_bound(bundle, layer)?,
                 );
             }
+            // The maintenance union must describe every retained setup role.
+            // A renewed helper replaces this initial definition; neither is a
+            // runtime start selection or permission to execute setup again.
+            if self.identity_selection()?.is_some()
+                && !inputs.files.iter().any(|file| {
+                    [IDENTITY_LAYER, IDENTITY_RENEWAL_LAYER]
+                        .iter()
+                        .any(|layer| file.path == bundle.join(layer))
+                })
+            {
+                append_layer(
+                    inputs,
+                    crate::installer_application::bundle_bound(bundle, IDENTITY_LAYER)?,
+                );
+            }
         }
         inputs
             .readonly_bind_roots
@@ -795,8 +822,7 @@ impl Selection {
                 require(
                     (selected.contains(text)
                         || (self.identity_selection()?.is_some()
-                            && ["deploy-config/compose/selfhost-installer/feature-profile/compose.identities.yml",
-                                "deploy-config/compose/selfhost-installer/feature-profile/compose.identities-renew.yml"].contains(&text)))
+                            && [IDENTITY_LAYER, IDENTITY_RENEWAL_LAYER].contains(&text)))
                         && found.insert(text),
                 )?;
             }
