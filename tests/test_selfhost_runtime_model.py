@@ -180,7 +180,8 @@ def assert_public_image_loader_connected(reader):
         "ALTER FUNCTION issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text) OWNER TO marty",
         "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty",
         "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_authorization() OWNER TO marty",
-        "count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
+        "ALTER FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) OWNER TO marty",
+        "count(*) = 4 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
         "object.relkind IN ('r', 'p', 'S')",
         'record_database_stage("transfer-ownership")',
         'record_database_stage("inspect-ownership")',
@@ -329,6 +330,7 @@ def test_log_boundary_connectivity_rejects_weakened_retry_paths(
         "ownership",
         "ownership-proof",
         "routine-ownership",
+        "template-lock-ownership",
         "routine-proof",
         "ownership-seed",
         "ownership-stage",
@@ -342,6 +344,8 @@ def test_log_boundary_connectivity_rejects_weakened_retry_paths(
     ],
 )
 def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
+    assert_public_image_loader_connected(read)
+
     def changed(name):
         source = read(name)
         replacements = {
@@ -376,9 +380,13 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
                 PACKAGED,
                 "ALTER FUNCTION issuance_service.guard_explicit_jwt_vc_transaction() OWNER TO marty",
             ),
+            "template-lock-ownership": (
+                PACKAGED,
+                "ALTER FUNCTION issuance_service.verification_prerequisite_lock_template(text,text) OWNER TO marty",
+            ),
             "routine-proof": (
                 PACKAGED,
-                "count(*) = 3 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
+                "count(*) = 4 AND bool_and(pg_get_userbyid(proowner) = 'marty')",
             ),
             "ownership-seed": (
                 PACKAGED,

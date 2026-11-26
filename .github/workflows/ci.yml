@@ -1247,15 +1247,65 @@ jobs:
         run: |
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
-          # The hosted runner supplies native PostgreSQL binaries. This case
-          # owns a new random-port TLS-only cluster; it never uses or changes
-          # the shared Docker fixture or an existing/provider database.
-          MARTY_TEST_POSTGRES_BIN_DIR="$(pg_config --bindir)"
+          # Qualify the managed deployment's major, not the rolling runner's
+          # pg_config default. PostgreSQL 18 has a different constraint catalog.
+          # The runner already trusts PGDG; do not add a repository or key.
+          # Package installation must not create/start a system cluster.
+          MARTY_TEST_POSTGRES_BIN_DIR=/usr/lib/postgresql/15/bin
+          if [[ ! -x "$MARTY_TEST_POSTGRES_BIN_DIR/postgres" ]]; then
+            cluster_configuration=/etc/postgresql-common/createcluster.conf
+            service_policy=/usr/sbin/policy-rc.d
+            test -f "$cluster_configuration" && test ! -L "$cluster_configuration"
+            test ! -L "$service_policy"
+            clusters_before="$(pg_lsclusters --no-header)"
+            if grep -Eq '^[[:space:]]*15[[:space:]]' <<< "$clusters_before"; then
+              echo 'Refusing to install missing binaries over an existing PostgreSQL 15 cluster' >&2
+              exit 1
+            fi
+            setup_backup="$(mktemp -d "$RUNNER_TEMP/native-feature-pg-setup.XXXXXX")"
+            sudo cp --preserve=all -- "$cluster_configuration" "$setup_backup/createcluster.conf"
+            service_policy_existed=false
+            if [[ -e "$service_policy" ]]; then
+              test -f "$service_policy"
+              sudo cp --preserve=all -- "$service_policy" "$setup_backup/policy-rc.d"
+              service_policy_existed=true
+            fi
+            restore_postgres_setup() {
+              local restore_status=0
+              sudo cp --preserve=all -- "$setup_backup/createcluster.conf" "$cluster_configuration" || restore_status=1
+              if [[ "$service_policy_existed" == true ]]; then
+                sudo cp --preserve=all -- "$setup_backup/policy-rc.d" "$service_policy" || restore_status=1
+              else
+                sudo rm -f -- "$service_policy" || restore_status=1
+              fi
+              if [[ "$restore_status" == 0 ]]; then
+                sudo rm -f -- "$setup_backup/createcluster.conf" "$setup_backup/policy-rc.d"
+                rmdir -- "$setup_backup"
+              fi
+              return "$restore_status"
+            }
+            trap restore_postgres_setup EXIT
+            printf '#!/bin/sh\nexit 101\n' | sudo tee "$service_policy" >/dev/null
+            sudo chmod 0755 "$service_policy"
+            printf '\ncreate_main_cluster = false\n' | sudo tee -a "$cluster_configuration" >/dev/null
+            sudo apt-get update -qq
+            sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y \
+              --no-install-recommends --no-upgrade --no-remove postgresql-15 postgresql-client-15
+            [[ "$(pg_lsclusters --no-header)" == "$clusters_before" ]] || {
+              echo 'Native PostgreSQL package installation changed a system cluster' >&2
+              exit 1
+            }
+            restore_postgres_setup
+            trap - EXIT
+          fi
           export MARTY_TEST_POSTGRES_BIN_DIR
           for executable_name in initdb postgres pg_ctl psql; do
             test -x "$MARTY_TEST_POSTGRES_BIN_DIR/$executable_name"
           done
           "$MARTY_TEST_POSTGRES_BIN_DIR/postgres" --version
+          "$MARTY_TEST_POSTGRES_BIN_DIR/postgres" --version | grep -Eq '^postgres \(PostgreSQL\) 15\.'
+          # This case owns a new random-port TLS-only cluster. It never uses or
+          # changes the shared Docker fixture or an existing/provider database.
           executable="$(resolve_recorded_contract_executable marty-selfhost-acceptance managed_postgres_contract)"
           test_name='feature_profile::fresh_native_feature_roles_qualify_over_verified_tls'
           "$executable" "$test_name" --ignored --exact --list | grep -Fx "$test_name: test"

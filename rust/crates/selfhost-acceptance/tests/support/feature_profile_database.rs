@@ -83,8 +83,8 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
         .await
         .unwrap();
     assert!(
-        version >= 150000,
-        "the native profile requires PostgreSQL 15 or later"
+        (150000..160000).contains(&version),
+        "the native feature qualification requires the managed PostgreSQL 15 major"
     );
     println!("native feature PostgreSQL version: {version}");
     sqlx::raw_sql(
