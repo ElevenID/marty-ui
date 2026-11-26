@@ -351,3 +351,72 @@ fn adapter_pin_is_the_authenticated_image_digest_and_inputs_never_contain_creden
     assert!(!text.contains("FEATURE_USE_FLOW_DEFINITION_ID"));
     assert!(text.contains("FEATURE_POSTGRES_TLS_DIR="));
 }
+
+#[test]
+fn feature_secret_targets_accept_compose_canonical_paths() {
+    // Compose 5.6.1 resolves the short secret syntax used by the database and
+    // delegation layers to absolute targets under /run/secrets.
+    for source in ["postgres_password", "grpc_service_token"] {
+        for secret in [
+            json!(source),
+            json!({"source":source}),
+            json!({"source":source,"target":null}),
+            json!({"source":source,"target":source}),
+            json!({"source":source,"target":format!("/run/secrets/{source}")}),
+        ] {
+            exact_secrets(&json!({"secrets":[secret]}), &[source]).unwrap();
+        }
+    }
+    exact_secrets(&json!({}), &[]).unwrap();
+    exact_secrets(&json!({"secrets":[]}), &[]).unwrap();
+    let delegated_use_secrets = [
+        "grpc_service_token",
+        "issuance_api_key",
+        "signing_keys_issuer_sign_key",
+        "workload_identity_ca_cert",
+        "openbao_tls_ca_cert",
+    ];
+    let canonical_secrets: Vec<_> = delegated_use_secrets
+        .iter()
+        .map(|source| json!({"source":source,"target":format!("/run/secrets/{source}")}))
+        .collect();
+    exact_secrets(
+        &json!({"secrets":canonical_secrets}),
+        &delegated_use_secrets,
+    )
+    .unwrap();
+}
+
+#[test]
+fn feature_secret_targets_reject_aliases_and_recipient_changes() {
+    for source in ["postgres_password", "grpc_service_token"] {
+        for target in [
+            json!("another_credential"),
+            json!("/run/secrets/another_credential"),
+            json!(format!("/elsewhere/{source}")),
+            json!(format!("/run/secrets/./{source}")),
+            json!(format!("/run/secrets/../{source}")),
+            json!(format!("/run/secrets//{source}")),
+            json!(format!("/run/secrets/{source}/")),
+            json!(format!("run/secrets/{source}")),
+            json!(7),
+        ] {
+            assert!(exact_secrets(
+                &json!({"secrets":[{"source":source,"target":target}]}),
+                &[source]
+            )
+            .is_err());
+        }
+        let canonical = json!({"source":source,"target":format!("/run/secrets/{source}")});
+        for secrets in [
+            json!([]),
+            json!([canonical.clone(), canonical.clone()]),
+            json!([source, canonical.clone()]),
+            json!([canonical.clone(), "another_credential"]),
+            json!([{"source":"another_credential","target":format!("/run/secrets/{source}")}]),
+        ] {
+            assert!(exact_secrets(&json!({"secrets":secrets}), &[source]).is_err());
+        }
+        assert!(exact_secrets(&json!({"secrets":[canonical]}), &[]).is_err());
+    }
+}
