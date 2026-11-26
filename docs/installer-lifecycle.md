@@ -27,6 +27,19 @@ Qualify this correction using a fresh installation from a signed release contain
 it. An unchanged generation or a refusal before a start intent is not a renewal
 or restart pass.
 
+An OpenBao custody refusal with reason `openbao_filesystem_device_changed`
+identifies a different kernel filesystem device number while the recorded
+directory inode, owner, group and permissions still match. The v1 custody
+receipt has no stable filesystem identifier, so this observation remains a
+refusal; matching directory metadata alone cannot prove historical filesystem
+identity. The diagnostic does not assert why the device number changed.
+Preserve the original owner and receipts and stop repeated resume attempts.
+Do not rewrite a receipt, change OpenBao ownership or permissions, replay
+initialization, or replace the retained binary to force acceptance. An
+authenticated recovery or migration must cover the OpenBao custody, static-seal
+and local-control bindings together before recovery can proceed. This diagnostic
+change provides no migration command and does not modify existing installations.
+
 Maintenance capabilities depend on the retained owners and selected generation.
 The recurring generation owner supports public ACME generations and
 installer-managed private-CA generations; imported foundation credentials remain
