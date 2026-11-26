@@ -20,6 +20,12 @@ function recover() {
     return value;
   } catch { remember(null); return null; }
 }
+function catalogFailure(error) {
+  if (error?.status === 404 && error?.response?.error === 'public_verification_unavailable') {
+    return { severity: 'info', message: 'This verification demonstration is not available on this site.' };
+  }
+  return { severity: 'warning', message: 'We couldn’t load the verification demonstration. Try again.' };
+}
 function failure(error) {
   const status = error?.status ?? error?.response?.status;
   if (status === 409) return 'The request or session changed. Review the current request and start a new verification.';
@@ -40,6 +46,7 @@ function resultMessage(session) {
 
 export default function PublicVerificationPage() {
   const [catalog, setCatalog] = useState(null);
+  const [catalogError, setCatalogError] = useState(null);
   const [scenarioId, setScenarioId] = useState('');
   const [choiceId, setChoiceId] = useState('');
   const [exampleId, setExampleId] = useState('');
@@ -79,7 +86,7 @@ export default function PublicVerificationPage() {
       if (saved?.id) api.session(saved.id, saved.key, { signal: controller.signal }).then(current => {
         if (active && version === generation.current) setSession(current);
       }).catch(() => { if (active && version === generation.current) setError('A previous session could not be read. Retry it or start a new verification.'); });
-    }).catch(() => { if (active) setError('The verification demonstration is currently unavailable. Please try again later.'); })
+    }).catch(cause => { if (active) setCatalogError(catalogFailure(cause)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; controller.abort(); generation.current += 1; };
   }, []);
@@ -178,6 +185,7 @@ export default function PublicVerificationPage() {
     <Typography component="h1" variant="h3" fontWeight={800} sx={{ mt: 2, mb: 2, fontSize: { xs: '2rem', sm: '3rem' }, lineHeight: 1.12 }}>See a credential get verified.</Typography>
     <Typography color="text.secondary" sx={{ maxWidth: 680, mb: 4 }}>Start with a signed fictional example. Change what the verifier requires and see what happens. No account or wallet installation is needed for the example.</Typography>
     {loading && <Box role="status"><CircularProgress size={24} /> Loading demonstration...</Box>}
+    {catalogError && !catalog && <Alert severity={catalogError.severity} sx={{ mb: 3 }}>{catalogError.message}</Alert>}
     {error && <Alert severity="warning" sx={{ mb: 3 }}>{error}</Alert>}
     {!loading && !catalog && <Button onClick={() => window.location.reload()}>Try again</Button>}
     {catalog && <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.1fr 1fr' }, gap: 3, alignItems: 'start' }}>
