@@ -574,6 +574,105 @@ fn assert_credential_denials(configuration: &workflows::Configuration, model: &V
     }
 }
 
+fn assert_source_schema_prerequisites(model: &Value) {
+    let services = model["services"].as_object().unwrap();
+    validate_database_setup(services).unwrap();
+    assert_eq!(
+        services["feature-flow-migrate"]["image"], services["flow"]["image"],
+        "Flow migration must use the same authenticated services image"
+    );
+    // Exercise the production admission guard against the missing source-owner
+    // edges which the real PostgreSQL fixture previously hid by pre-migrating.
+    for (consumer, producer) in [
+        ("feature-database-grants", "feature-delegation-migrate"),
+        ("feature-database-grants", "feature-credential-migrate"),
+        ("feature-database-grants", "feature-flow-migrate"),
+        ("feature-database-grants", "db-migrate"),
+        ("feature-database-grants", "issuance-migrations"),
+        ("feature-database-grants", "trust-profile"),
+        ("feature-flow-migrate", "db-migrate"),
+        ("feature-flow-migrate", "postgres"),
+        ("feature-flow-migrate", "deployment-profile"),
+    ] {
+        let mut missing = services.clone();
+        missing.get_mut(consumer).unwrap()["depends_on"]
+            .as_object_mut()
+            .unwrap()
+            .remove(producer);
+        assert!(
+            validate_database_setup(&missing).is_err(),
+            "missing {consumer} -> {producer}"
+        );
+        let mut early = services.clone();
+        early.get_mut(consumer).unwrap()["depends_on"][producer]["condition"] =
+            serde_json::json!("service_started");
+        assert!(
+            validate_database_setup(&early).is_err(),
+            "early {consumer} -> {producer}"
+        );
+        let mut optional = services.clone();
+        optional.get_mut(consumer).unwrap()["depends_on"][producer]["required"] =
+            serde_json::json!(false);
+        assert!(
+            validate_database_setup(&optional).is_err(),
+            "optional {consumer} -> {producer}"
+        );
+    }
+    let mut missing = services.clone();
+    missing.remove("feature-flow-migrate");
+    assert!(validate_database_setup(&missing).is_err());
+    let mut runtime_cycle = services.clone();
+    runtime_cycle.get_mut("feature-database-grants").unwrap()["depends_on"]["flow"] =
+        serde_json::json!({"condition":"service_healthy"});
+    assert!(validate_database_setup(&runtime_cycle).is_err());
+    for (field, value) in [
+        (
+            "command",
+            serde_json::json!(["exec /usr/local/bin/marty-flow"]),
+        ),
+        (
+            "entrypoint",
+            serde_json::json!(["/usr/local/bin/marty-flow"]),
+        ),
+        ("secrets", serde_json::json!(["postgres_password"])),
+        ("profiles", serde_json::json!([])),
+        ("restart", serde_json::json!("unless-stopped")),
+        ("user", serde_json::json!("0:0")),
+        (
+            "image",
+            serde_json::json!("example.test/another@sha256:changed"),
+        ),
+    ] {
+        let mut wrong = services.clone();
+        wrong.get_mut("feature-flow-migrate").unwrap()[field] = value;
+        assert!(
+            validate_database_setup(&wrong).is_err(),
+            "changed Flow setup {field}"
+        );
+    }
+    for (key, value) in [
+        (
+            "DATABASE_URL_TEMPLATE",
+            "postgresql://postgres:${MARTY_DB_PASSWORD}@postgres:5432/marty",
+        ),
+        (
+            "DATABASE_URL_TEMPLATE",
+            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty?sslmode=prefer",
+        ),
+        ("MARTY_DB_PASSWORD_FILE", "/run/secrets/postgres_password"),
+        ("MARTY_ORG_ID", "00000000-0000-4000-8000-000000000002"),
+        ("DATABASE_URL", "forbidden-config-only-fixture"),
+    ] {
+        let mut wrong = services.clone();
+        wrong.get_mut("feature-flow-migrate").unwrap()["environment"][key] =
+            serde_json::json!(value);
+        assert!(
+            validate_database_setup(&wrong).is_err(),
+            "changed Flow setup {key}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires the separately hash-pinned standalone Compose 5.6.1; config only"]
 fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
@@ -598,12 +697,45 @@ fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
         assert!(fixed["services"].get("ui").is_none());
         assert!(fixed["services"].get("keycloak").is_none());
         if !maintenance {
-            assert_eq!(fixed["services"].as_object().unwrap().len(), 33);
+            assert_eq!(fixed["services"].as_object().unwrap().len(), 34);
         }
         // This is the actual workflow admission guard, not a second copy of its
         // predicates. No retained credentials or runtime admission are invented.
         workflows.validate_model(&fixed).unwrap();
         assert_credential_denials(workflows, &fixed);
+        assert_source_schema_prerequisites(&fixed);
+        if maintenance {
+            // The retained owner selects ordinary service names and disables
+            // setup profiles. The new schema job must never join that restart.
+            let runtime: BTreeSet<_> = fixed["services"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(_, service)| service["labels"]["com.elevenid.installer.phase"] != "setup")
+                .map(|(role, _)| role.as_str())
+                .collect();
+            let selected: Vec<_> = runtime.iter().copied().collect();
+            let restarted = render_config(&executable, &bundle, &files, &env, &[], &selected);
+            let services = restarted["services"].as_object().unwrap();
+            assert_eq!(
+                services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                runtime
+            );
+            assert!(!services.contains_key("feature-flow-migrate"));
+            for service in services.values() {
+                for dependency in service["depends_on"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|deps| deps.keys())
+                {
+                    assert!(
+                        runtime.contains(dependency.as_str()),
+                        "restart reaches setup {dependency}"
+                    );
+                }
+            }
+            validate_database_setup(services).unwrap();
+        }
 
         // Reconstruct the pre-fix order using exactly the same packaged bytes
         // and environment: database and prerequisite maps preceded the reset.

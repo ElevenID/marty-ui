@@ -95,6 +95,28 @@ services:
         read_only: true
         bind: {create_host_path: false}
 
+  # Flow normally migrates at serving startup, but serving Flow waits for
+  # Issuance, which cannot start until feature grants complete. Run only its
+  # source-owned schema command first, with the existing marty owner over TLS.
+  feature-flow-migrate:
+    <<: *feature-setup
+    image: ${FEATURE_SERVICES_IMAGE:?signed service image required}
+    user: "10001:10001"
+    entrypoint: [/bin/sh, -ec]
+    command: [". /app/load-secrets-env.sh; require_secret_var MARTY_DB_PASSWORD; exec /usr/local/bin/marty-flow migrate"]
+    environment:
+      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty?sslmode=verify-full&sslrootcert=/run/feature-profile/feature_postgres_ca
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?native organization required}
+    secrets: [marty_db_password]
+    depends_on:
+      db-migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      # Preserve Flow's tenant-bound built-in deployment linkage and owner check.
+      deployment-profile: {condition: service_healthy}
+    volumes:
+      - *feature-ca
+
   feature-database-grants:
     <<: *feature-setup
     image: ${FEATURE_POSTGRES_IMAGE:?signed PostgreSQL image required}
@@ -104,8 +126,11 @@ services:
     depends_on:
       feature-delegation-migrate: {condition: service_completed_successfully}
       feature-credential-migrate: {condition: service_completed_successfully}
+      feature-flow-migrate: {condition: service_completed_successfully}
       db-migrate: {condition: service_completed_successfully}
       issuance-migrations: {condition: service_completed_successfully}
+      # This owner migrates its schema before exposing its health listener.
+      trust-profile: {condition: service_healthy}
     volumes:
       - *feature-code
       - *feature-ca

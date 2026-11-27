@@ -356,7 +356,11 @@ fn adapter_pin_is_the_authenticated_image_digest_and_inputs_never_contain_creden
 fn feature_secret_targets_accept_compose_canonical_paths() {
     // Compose 5.6.1 resolves the short secret syntax used by the database and
     // delegation layers to absolute targets under /run/secrets.
-    for source in ["postgres_password", "grpc_service_token"] {
+    for source in [
+        "postgres_password",
+        "grpc_service_token",
+        "marty_db_password",
+    ] {
         for secret in [
             json!(source),
             json!({"source":source}),
@@ -389,7 +393,11 @@ fn feature_secret_targets_accept_compose_canonical_paths() {
 
 #[test]
 fn feature_secret_targets_reject_aliases_and_recipient_changes() {
-    for source in ["postgres_password", "grpc_service_token"] {
+    for source in [
+        "postgres_password",
+        "grpc_service_token",
+        "marty_db_password",
+    ] {
         for target in [
             json!("another_credential"),
             json!("/run/secrets/another_credential"),
@@ -418,5 +426,35 @@ fn feature_secret_targets_reject_aliases_and_recipient_changes() {
             assert!(exact_secrets(&json!({"secrets":secrets}), &[source]).is_err());
         }
         assert!(exact_secrets(&json!({"secrets":[canonical]}), &[]).is_err());
+    }
+}
+
+#[test]
+fn flow_schema_setup_requires_only_its_public_feature_ca() {
+    let root = root();
+    let selected = selected(config());
+    let ca = json!({"type":"bind",
+        "source":root.path().join(DIRECTORY).join("feature_postgres_ca"),
+        "target":"/run/feature-profile/feature_postgres_ca","read_only":true,
+        "bind":{"create_host_path":false}});
+    let model = json!({"feature-flow-migrate":{"volumes":[ca.clone()]}});
+    selected
+        .validate_feature_mounts(root.path(), model.as_object().unwrap())
+        .unwrap();
+    for volumes in [
+        json!([]),
+        json!([ca.clone(), ca.clone()]),
+        json!([{"type":"bind","source":root.path().join(DIRECTORY),
+            "target":"/run/feature-profile","read_only":true,
+            "bind":{"create_host_path":false}}]),
+        json!([{"type":"bind",
+            "source":root.path().join(DIRECTORY).join("feature_database_passwords"),
+            "target":"/run/feature-profile/feature_database_passwords","read_only":true,
+            "bind":{"create_host_path":false}}]),
+    ] {
+        let wrong = json!({"feature-flow-migrate":{"volumes":volumes}});
+        assert!(selected
+            .validate_feature_mounts(root.path(), wrong.as_object().unwrap())
+            .is_err());
     }
 }
