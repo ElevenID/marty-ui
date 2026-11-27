@@ -12,9 +12,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/ci/qualify-installer-compose-model.sh"
+FEATURE_CASE = "installer_features::native_tests::native_compose_full_profile_keeps_restricted_issuance_credentials"
 CASES = (
     "native_filtering_merge_and_restart_layer_semantics",
     "packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart",
+    FEATURE_CASE,
 )
 PINS = {
     "x86_64": "47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0",
@@ -47,8 +49,13 @@ def test_both_release_paths_require_the_shared_native_gate(workflow, job, target
     assert "installer_application_model" not in text
     target_source = ROOT / "rust/crates/deployment-catalog/tests/installer_compose_native.rs"
     native = target_source.read_text()
-    for case in CASES:
+    for case in CASES[:2]:
         assert len(re.findall(rf"^fn {case}\(\)", native, re.MULTILINE)) == 1
+    feature_source = ROOT / "rust/crates/deployment-catalog/src/installer_features_native_tests.rs"
+    feature_case = FEATURE_CASE.rsplit("::", 1)[1]
+    assert len(re.findall(rf"^fn {feature_case}\(\)", feature_source.read_text(), re.MULTILINE)) == 1
+    feature_module = (ROOT / "rust/crates/deployment-catalog/src/installer_features.rs").read_text()
+    assert '#[path = "installer_features_native_tests.rs"]\nmod native_tests;' in feature_module
     assert native.count("assert_actual_installer_layers(&executable, &bundle,") == 2
 
 
@@ -61,6 +68,7 @@ def test_gate_keeps_independent_architecture_pins_and_checks_before_execution():
     assert script.index('chmod 700 "$installer_compose"') < script.index('"$installer_compose" version --short')
     assert '"${installer_compose_version#v}" == 5.6.1' in script
     assert "--test installer_compose_native" in script
+    assert "installer_test_target=(--lib)" in script
     assert '--ignored --exact "$installer_case"' in script
     assert "docker compose" not in script and "--features" not in script
     subprocess.run(["bash", "-n", str(GATE)], check=True)
@@ -92,36 +100,40 @@ elif name == "sha256sum":
         raise SystemExit(1)
 elif name == "cargo":
     assert args[0:2] == ["test", "--locked"]
-    assert args[args.index("--test") + 1] == "installer_compose_native"
     assert "--ignored" in args and "--exact" in args
     assert os.environ["MARTY_INSTALLER_COMPOSE_EXECUTABLE"].endswith("/docker-compose")
     case = args[args.index("--exact") + 1]
-    second = case.startswith("packaged_source_")
-    # Fail the second invocation so a prior passing test cannot mask it.
-    if second and fault == "cargo_failure":
+    if case.startswith("installer_features::native_tests::"):
+        assert "--lib" in args and "--test" not in args
+    else:
+        assert args[args.index("--test") + 1] == "installer_compose_native"
+        assert "--lib" not in args
+    selected = case == os.environ["GATE_FAIL_CASE"]
+    # Fail each selected invocation independently, including the new library case.
+    if selected and fault == "cargo_failure":
         print("test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.1s")
         raise SystemExit(101)
-    if second and fault == "zero_selection":
+    if selected and fault == "zero_selection":
         print("test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.0s")
-    elif second and fault == "ignored":
+    elif selected and fault == "ignored":
         print(f"test {case} ... ignored")
         print("test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 2 filtered out; finished in 0.0s")
     else:
-        print(f"test {'wrong_case' if second and fault == 'wrong_case' else case} ... ok")
-        if not (second and fault == "missing_summary"):
+        print(f"test {'wrong_case' if selected and fault == 'wrong_case' else case} ... ok")
+        if not (selected and fault == "missing_summary"):
             print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.1s")
 elif name == "tee":
     content = sys.stdin.read()
     Path(args[0]).write_text(content)
     print(content, end="")
-    if fault == "log_failure":
+    if fault == "log_failure" and Path(args[0]).stem == os.environ["GATE_FAIL_CASE"]:
         raise SystemExit(1)
 else:
     raise AssertionError(name)
 '''
 
 
-def run_gate(tmp_path, arch="x86_64", fault="none", optimize=""):
+def run_gate(tmp_path, arch="x86_64", fault="none", optimize="", failed_case=FEATURE_CASE):
     executables = tmp_path / "bin"
     executables.mkdir()
     for name in ("uname", "curl", "sha256sum", "cargo", "tee"):
@@ -139,6 +151,7 @@ def run_gate(tmp_path, arch="x86_64", fault="none", optimize=""):
             "GATE_ARCH": arch,
             "GATE_EXPECTED_PIN": PINS.get(arch, "unsupported"),
             "GATE_FAULT": fault,
+            "GATE_FAIL_CASE": failed_case,
             "GATE_CALLS": str(calls),
             "PYTHONOPTIMIZE": optimize,
         },
@@ -150,7 +163,7 @@ def run_gate(tmp_path, arch="x86_64", fault="none", optimize=""):
 
 
 @pytest.mark.parametrize("arch", PINS)
-def test_supported_architectures_execute_both_exact_cases(tmp_path, arch):
+def test_supported_architectures_execute_all_exact_cases(tmp_path, arch):
     result, calls = run_gate(tmp_path, arch=arch)
     assert result.returncode == 0, result.stdout + result.stderr
     cargo = [call["args"] for call in calls if call["tool"] == "cargo"]
@@ -175,11 +188,13 @@ def test_unsupported_architecture_never_downloads_or_executes(tmp_path):
 @pytest.mark.parametrize(
     "fault", ["cargo_failure", "zero_selection", "ignored", "wrong_case", "missing_summary", "log_failure"]
 )
-def test_each_case_requires_observed_success_and_preserved_log(tmp_path, fault):
-    result, _ = run_gate(tmp_path, fault=fault)
+@pytest.mark.parametrize("case", CASES)
+def test_each_case_requires_observed_success_and_preserved_log(tmp_path, fault, case):
+    result, _ = run_gate(tmp_path, fault=fault, failed_case=case)
     assert result.returncode != 0, result.stdout + result.stderr
 
 
-def test_optimized_python_cannot_disable_zero_selection_guard(tmp_path):
-    result, _ = run_gate(tmp_path, fault="zero_selection", optimize="1")
+@pytest.mark.parametrize("case", CASES)
+def test_optimized_python_cannot_disable_zero_selection_guard(tmp_path, case):
+    result, _ = run_gate(tmp_path, fault="zero_selection", optimize="1", failed_case=case)
     assert result.returncode != 0, result.stdout + result.stderr

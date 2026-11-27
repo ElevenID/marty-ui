@@ -33,17 +33,22 @@ export MARTY_INSTALLER_COMPOSE_EXECUTABLE="$installer_compose"
 export CARGO_TERM_COLOR=never
 for installer_case in \
   native_filtering_merge_and_restart_layer_semantics \
-  packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart; do
+  packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_on_restart \
+  installer_features::native_tests::native_compose_full_profile_keeps_restricted_issuance_credentials; do
+  installer_test_target=(--test installer_compose_native)
+  if [[ "$installer_case" == installer_features::native_tests::* ]]; then
+    installer_test_target=(--lib)
+  fi
   installer_log="$installer_gate_dir/$installer_case.log"
   set +e
   cargo test --locked --manifest-path rust/Cargo.toml --target-dir "$installer_target_dir" \
-    -p marty-deployment-catalog --test installer_compose_native -- \
+    -p marty-deployment-catalog "${installer_test_target[@]}" -- \
     --ignored --exact "$installer_case" --test-threads=1 --color never 2>&1 | tee "$installer_log"
   installer_status=("${PIPESTATUS[@]}")
   set -e
   [[ "${installer_status[0]}" == 0 && "${installer_status[1]}" == 0 ]] || exit 1
   # Cargo/libtest exits zero for an unknown exact filter. Require this case and
-  # exactly one passing, nonignored test, independently for both invocations.
+  # exactly one passing, nonignored test, independently for every invocation.
   python3 - "$installer_log" "$installer_case" <<'PY'
 import re
 import sys
