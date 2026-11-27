@@ -15,6 +15,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d"
+CONSOLE_ORIGIN = "https://console.probe.example.invalid"
 
 
 def docker(*arguments: str) -> str:
@@ -24,16 +25,51 @@ def docker(*arguments: str) -> str:
     return result.stdout.strip()
 
 
-def request(base: str, path: str) -> tuple[int, str]:
+def request(
+    base: str, path: str, *, origin: str | None = None,
+) -> tuple[int, str, dict[str, list[str]]]:
+    command = [
+        "docker", "exec", base, "wget", "-Y", "off", "-S", "-O", "-",
+        "--header", "X-API-Key: mk_test_edge-fixture",
+    ]
+    if origin is not None:
+        command.extend(["--header", "Origin: " + origin])
     result = subprocess.run(
-        ["docker", "exec", base, "wget", "-Y", "off", "-S", "-O", "-",
-         "--header", "X-API-Key: mk_test_edge-fixture", "http://127.0.0.1" + path],
+        [*command, "http://127.0.0.1" + path],
         capture_output=True, text=True, timeout=5,
     )
-    codes = re.findall(r"HTTP/1\.[01]\s+(\d{3})", result.stderr)
-    if not codes:
+    status: int | None = None
+    headers: dict[str, list[str]] = {}
+    for line in result.stderr.splitlines():
+        response = re.match(r"\s*HTTP/1\.[01]\s+(\d{3})(?:\s|$)", line)
+        if response:
+            status = int(response[1])
+            headers = {}
+        elif status is not None:
+            header = re.match(r"\s+([^:\s]+):[ \t]*(.*)", line)
+            if header:
+                headers.setdefault(header[1].lower(), []).append(header[2].strip())
+    if status is None:
         raise OSError("Edge HTTP fixture did not return a status")
-    return int(codes[-1]), result.stdout
+    return status, result.stdout, headers
+
+
+def require_openapi_cors(base: str) -> None:
+    for origin in (CONSOLE_ORIGIN, "https://untrusted.example.invalid", "null", None):
+        status, body, headers = request(base, "/openapi.json", origin=origin)
+        if status != 200 or json.loads(body) != {
+            "fixture": "backend", "uri": "/openapi.json", "key": "mk_test_edge-fixture",
+        }:
+            raise RuntimeError("OpenAPI CORS fixture did not reach its upstream")
+        allowed = origin == CONSOLE_ORIGIN
+        if (headers.get("access-control-allow-origin", []) != ([CONSOLE_ORIGIN] if allowed else [])
+                or headers.get("access-control-allow-credentials", []) != (["true"] if allowed else [])):
+            raise RuntimeError("OpenAPI edge changed the upstream CORS decision")
+        if allowed:
+            varies = {token.strip().lower()
+                      for value in headers.get("vary", []) for token in value.split(",")}
+            if "origin" not in varies:
+                raise RuntimeError("OpenAPI edge lost upstream Vary: Origin")
 
 
 def probe() -> dict:
@@ -55,8 +91,15 @@ def probe() -> dict:
         ]:
             (state / target).write_bytes((ROOT / source).read_bytes().replace(b"\r\n", b"\n"))
         (state / "backend.conf").write_text(
+            'map $http_origin $cors_origin { default ""; '
+            f'"{CONSOLE_ORIGIN}" "{CONSOLE_ORIGIN}"; }}\n'
+            'map $cors_origin $cors_credentials { default ""; '
+            f'"{CONSOLE_ORIGIN}" "true"; }}\n'
             'server { listen 80; location = /health/ready { return 503; } '
             'location / { default_type application/json; '
+            'add_header Access-Control-Allow-Origin $cors_origin always; '
+            'add_header Access-Control-Allow-Credentials $cors_credentials always; '
+            'add_header Vary Origin always; '
             'return 200 \'{"fixture":"backend","uri":"$request_uri",'
             '"key":"$http_x_api_key"}\'; } }\n', encoding="utf-8")
 
@@ -112,12 +155,13 @@ def probe() -> dict:
         _, base = edge("disabled", "false")
         for path in ("/ready", "/v1/api-keys?organization_id=fixture", "/openapi.json",
                      "/docs", "/redoc", "/.well-known/openid-credential-issuer", "/credentials/example"):
-            status, body = request(base, path)
+            status, body, _ = request(base, path)
             if status != 200 or json.loads(body) != {
                 "fixture": "backend", "uri": path, "key": "mk_test_edge-fixture",
             }:
                 raise RuntimeError("API route did not reach its upstream: " + path)
             checked.append(path)
+        require_openapi_cors(base)
         if request(base, "/health/ready")[0] != 503:
             raise RuntimeError("Edge concealed failed upstream readiness")
         for path in ("/", "/console", "/console/org", "/canvas/lti/experience", "/.well-known/ai-plugin.json"):
@@ -126,6 +170,7 @@ def probe() -> dict:
         _, enabled = edge("default", None)
         if request(enabled, "/")[0] != 200:
             raise RuntimeError("Default console routing regressed")
+        require_openapi_cors(enabled)
         edge("invalid", "invalid")
         edge("empty", "")
     except Exception as error:
@@ -162,6 +207,7 @@ def probe() -> dict:
     return {"image": IMAGE, "api_routes": checked, "console_absent": True,
             "ui_routes_404": True, "default_console_preserved": True,
             "failed_readiness_preserved": True, "invalid_flag_rejected": True,
+            "openapi_gateway_cors_preserved": True, "openapi_edge_cors_grant_absent": True,
             "owned_teardown_verified": True, "backend_qualification": False}
 
 

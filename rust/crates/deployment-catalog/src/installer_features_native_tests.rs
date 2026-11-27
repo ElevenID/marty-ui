@@ -683,6 +683,36 @@ fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
     let selection = full_selection();
     let workflows = selection.configuration.workflows.as_ref().unwrap();
     let (bundle, env, cloudflare) = source_fixture(&executable, root, &selection);
+    let baseline_ready = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../docker-compose.selfhost.prod.yml"
+    ))
+    .lines()
+    .find_map(|line| {
+        line.trim()
+            .strip_prefix("GATEWAY_REQUIRED_READY_SERVICES: ")
+    })
+    .unwrap();
+    let mut expected_ready: BTreeSet<_> = baseline_ready.split(',').collect();
+    assert_eq!(expected_ready.len(), baseline_ready.split(',').count());
+    for name in ["delegated-authority", "delegated-commands"] {
+        assert!(
+            expected_ready.insert(name),
+            "{name} unexpectedly in baseline"
+        );
+    }
+    let assert_gateway_readiness = |model: &Value| {
+        let gateway = &model["services"]["gateway"]["environment"];
+        assert_eq!(gateway["MARTY_DELEGATION_APPROVAL_ENABLED"], "true");
+        assert_eq!(gateway["MARTY_DELEGATION_COMMANDS_ENABLED"], "true");
+        let configured = gateway["GATEWAY_REQUIRED_READY_SERVICES"].as_str().unwrap();
+        let actual: BTreeSet<_> = configured.split(',').collect();
+        assert_eq!(actual.len(), configured.split(',').count());
+        assert_eq!(
+            actual, expected_ready,
+            "declared readiness must include both enabled Gateway registry owners"
+        );
+    };
     for maintenance in [false, true] {
         let inputs = selected_inputs(root, &bundle, &env, &cloudflare, &selection, maintenance);
         let files: Vec<_> = inputs.files.iter().map(|file| file.path.clone()).collect();
@@ -691,6 +721,7 @@ fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
         }
         let profiles: Vec<_> = inputs.profiles.iter().map(String::as_str).collect();
         let fixed = render_config(&executable, &bundle, &files, &env, &profiles, &[]);
+        assert_gateway_readiness(&fixed);
         assert!(fixed["services"].get("issuance").is_some());
         assert!(fixed["services"].get("issuance-native").is_some());
         assert!(fixed["services"].get("cloudflared").is_some());
@@ -716,6 +747,7 @@ fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
                 .collect();
             let selected: Vec<_> = runtime.iter().copied().collect();
             let restarted = render_config(&executable, &bundle, &files, &env, &[], &selected);
+            assert_gateway_readiness(&restarted);
             let services = restarted["services"].as_object().unwrap();
             assert_eq!(
                 services.keys().map(String::as_str).collect::<BTreeSet<_>>(),
