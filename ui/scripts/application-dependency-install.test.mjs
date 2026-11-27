@@ -10,13 +10,52 @@ import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   APPLICATION_INSTALL_INPUTS, installApplicationDependencies,
-  inspectInstalledApplicationDependencies, runOwnedInstallCommand,
+  inspectInstalledApplicationDependencies, isWithinDependencyDirectory, runOwnedInstallCommand,
 } from './application-dependency-install.mjs';
 import { APPLICATION_PROFILE_POSTINSTALL, APPLICATION_REMOVED_DEPENDENCY_ROOTS } from './application-dependency-profile.mjs';
 
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const sdkName = '@elevenid/marty-api-core';
 const postinstall = 'node scripts/patch-prerenderer-ts-deepmerge.cjs && node scripts/patch-checker-worker-cleanup.mjs';
+
+for (const [label, paths, root] of [
+  ['POSIX', path.posix, '/workspace/ui/node_modules'],
+  ['Windows', path.win32, 'C:\\workspace\\ui\\node_modules'],
+]) {
+  test(`${label} dependency containment accepts packages and rejects directory escapes`, () => {
+    for (const child of ['package', '@scope/package', 'package/node_modules/nested']) {
+      assert.equal(isWithinDependencyDirectory(root, paths.join(root, child), paths), true, child);
+    }
+    for (const location of [
+      root,
+      paths.dirname(root),
+      `${root}-other/package`,
+      paths.join(root, '../../outside'),
+    ]) {
+      assert.equal(isWithinDependencyDirectory(root, location, paths), false, location);
+    }
+  });
+}
+
+test('Windows dependency containment handles casing, separators, drives, and UNC shares', () => {
+  const root = 'C:\\workspace\\ui\\node_modules';
+  for (const location of [
+    'c:\\WORKSPACE\\ui\\node_modules\\package',
+    'C:/workspace/ui/node_modules/@scope/package',
+  ]) {
+    assert.equal(isWithinDependencyDirectory(root, location, path.win32), true, location);
+  }
+  for (const location of [
+    'D:\\workspace\\ui\\node_modules\\package',
+    '\\\\server\\share\\ui\\node_modules\\package',
+  ]) {
+    assert.equal(isWithinDependencyDirectory(root, location, path.win32), false, location);
+  }
+  const unc = '\\\\server\\share\\ui\\node_modules';
+  assert.equal(isWithinDependencyDirectory(unc, `${unc}\\package`, path.win32), true);
+  assert.equal(isWithinDependencyDirectory(unc,
+    '\\\\server\\other\\ui\\node_modules\\package', path.win32), false);
+});
 
 function put(root, relative, content) {
   const filename = path.join(root, relative);

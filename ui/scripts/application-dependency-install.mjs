@@ -69,6 +69,13 @@ function ordinaryDirectory(directory) {
   return absolute;
 }
 
+export function isWithinDependencyDirectory(root, location, paths = path) {
+  const relative = paths.relative(root, location);
+  return relative !== '' && relative !== '..'
+    && !relative.startsWith(`..${paths.sep}`)
+    && !paths.isAbsolute(relative);
+}
+
 function absent(filename) {
   try { lstatSync(filename); } catch (error) {
     if (error.code === 'ENOENT') return true;
@@ -209,7 +216,7 @@ function verifyRemovedPackagesAbsent(uiRoot, graph) {
 }
 
 function installedGraph(uiRoot, manifest, lock) {
-  ordinaryDirectory(path.join(uiRoot, 'node_modules'));
+  const dependencyDirectory = ordinaryDirectory(path.join(uiRoot, 'node_modules'));
   const installed = document(uiRoot, 'node_modules/.package-lock.json');
   require(installed.lockfileVersion === 3 && installed.packages, 'npm did not record its installed dependency graph');
   const records = [];
@@ -222,7 +229,8 @@ function installedGraph(uiRoot, manifest, lock) {
     require(expected && ['version', 'resolved', 'integrity'].every((key) => row[key] === expected[key]),
       `Installed package differs from the committed lock: ${relative}`);
     const location = ordinaryDirectory(path.join(uiRoot, relative));
-    require(location.startsWith(`${uiRoot}/node_modules/`), 'Installed package escaped its fresh dependency directory');
+    require(isWithinDependencyDirectory(dependencyDirectory, location),
+      'Installed package escaped its fresh dependency directory');
     records.push({ path: relative, version: row.version, resolved: row.resolved, integrity: row.integrity });
   }
   for (const name of Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })) {
