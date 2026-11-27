@@ -239,18 +239,27 @@ fn source_fixture(
         }))
         .unwrap(),
     );
-    let bundle = marty_selfhost_bundle::package_with_image_lock(
+    let packaged = marty_selfhost_bundle::package_with_image_lock(
         &marty_selfhost_bundle::Options {
             repo: source.clone(),
-            output: root.join("source-package"),
-            archive: None,
+            output: root.join("packaged/selfhost-prepared"),
+            archive: Some(root.join("source-package.zip")),
             replace: false,
         },
         |stage, arguments| Ok(invoke(executable, stage, root, arguments)),
         &image_lock,
     )
-    .unwrap()
-    .output;
+    .unwrap();
+    // The source packager runs under the gate's restrictive umask. Exercise
+    // the real extraction boundary, which establishes public bundle modes
+    // inside a private destination before the production layer binder reads.
+    let archive = packaged.archive.unwrap();
+    let bundle = crate::installer_artifacts::extract_bundle(
+        &archive,
+        &root.join("extracted"),
+        &digest(&fs::read(&archive).unwrap()),
+    )
+    .unwrap();
     let mut values = BTreeMap::<String, String>::new();
     for line in fs::read_to_string(bundle.join(".env.selfhost.production.example"))
         .unwrap()
