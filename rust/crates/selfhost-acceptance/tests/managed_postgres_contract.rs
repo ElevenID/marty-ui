@@ -278,6 +278,14 @@ async fn assert_restricted_role(pool: &PgPool) {
 }
 
 async fn migrate_all(pool: &PgPool, envelope: &marty_notification::webhook::WebhookSecretEnvelope) {
+    migrate_schemas(pool, envelope, true).await;
+}
+
+async fn migrate_schemas(
+    pool: &PgPool,
+    envelope: &marty_notification::webhook::WebhookSecretEnvelope,
+    include_flow_and_trust: bool,
+) {
     let organization_id = uuid::Uuid::from_u128(1);
     marty_revocation_profile::migrate_and_seed(
         pool,
@@ -300,9 +308,11 @@ async fn migrate_all(pool: &PgPool, envelope: &marty_notification::webhook::Webh
     marty_credential_template::migration::migrate_credential_template_schema(pool)
         .await
         .unwrap();
-    marty_trust_profile::migration::run_migrations(pool)
-        .await
-        .unwrap();
+    if include_flow_and_trust {
+        marty_trust_profile::migration::run_migrations(pool)
+            .await
+            .unwrap();
+    }
     marty_notification::migration::migrate(pool, envelope)
         .await
         .unwrap();
@@ -315,9 +325,11 @@ async fn migrate_all(pool: &PgPool, envelope: &marty_notification::webhook::Webh
     marty_deployment_profile::migration::run_migrations(pool, organization_id)
         .await
         .unwrap();
-    marty_flow::migrate_flow_schema_for_organization(pool, organization_id)
-        .await
-        .unwrap();
+    if include_flow_and_trust {
+        marty_flow::migrate_flow_schema_for_organization(pool, organization_id)
+            .await
+            .unwrap();
+    }
     marty_device_registration::migration::migrate(pool)
         .await
         .unwrap();

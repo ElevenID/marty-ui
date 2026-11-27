@@ -1,8 +1,8 @@
 //! Exact native feature bootstrap SQL against an owned TLS-only PostgreSQL.
 //! No provider URL, account, container, or existing database is accepted.
 use super::{
-    assert_tls_rejected, installer_feature_database as credentials, managed_postgres, migrate_all,
-    CertificateRejection,
+    assert_tls_rejected, installer_feature_database as credentials, managed_postgres,
+    migrate_schemas, CertificateRejection,
 };
 use marty_delegated_authority::{
     approval::organization_principal, command_postgres::PgOrganizationCommandService,
@@ -143,7 +143,9 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     )
     .await;
     let envelope = marty_notification::webhook::WebhookSecretEnvelope::from_environment().unwrap();
-    migrate_all(&core, &envelope).await;
+    // Keep the production prerequisite gap observable: the shared bootstrap
+    // and Issuance owner do not create the Flow or Trust Profile schemas.
+    migrate_schemas(&core, &envelope, false).await;
     for role in credentials::MIGRATION_ROLES {
         let owner = connect(role_options(&database, &generated, role), 1).await;
         match *role {
@@ -165,6 +167,35 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     )
     .await;
     ungranted.close().await;
+    for schema in ["flow_service", "trust_profile_service"] {
+        let missing: bool = sqlx::query_scalar("SELECT to_regnamespace($1) IS NULL")
+            .bind(schema)
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+        assert!(
+            missing,
+            "{schema} was pre-created and hides its setup prerequisite"
+        );
+    }
+    assert!(
+        !setup_phase(&database, "grants", inventory),
+        "feature grants must refuse before the Flow owner migration"
+    );
+    assert_grants_transaction_rolled_back(&admin).await;
+    // Same source-owned migration invoked by the bounded marty-flow migrate
+    // command, using the original marty owner and the selected tenant.
+    marty_flow::migrate_flow_schema_for_organization(&core, uuid::Uuid::from_u128(1))
+        .await
+        .unwrap();
+    assert!(
+        !setup_phase(&database, "grants", inventory),
+        "feature grants must wait for the Trust Profile schema owner too"
+    );
+    assert_grants_transaction_rolled_back(&admin).await;
+    marty_trust_profile::migration::run_migrations(&core)
+        .await
+        .unwrap();
     assert!(setup_phase(&database, "grants", inventory));
 
     let mut pools = BTreeMap::new();
@@ -369,6 +400,22 @@ async fn fresh_native_feature_roles_qualify_over_verified_tls() {
     database.stop();
     println!(
         "native feature profile: exact bootstrap, migrations, TLS, 24 runtime roles and negative boundaries passed"
+    );
+}
+
+async fn assert_grants_transaction_rolled_back(admin: &PgPool) {
+    let unchanged: bool = sqlx::query_scalar(
+        "SELECT NOT has_table_privilege('feature_approval_runtime',
+                  'delegated_authority_service.delegation_grants','SELECT')
+            AND has_database_privilege('feature_delegation_owner','marty','CREATE')
+            AND has_database_privilege('feature_credential_owner','marty','CREATE')",
+    )
+    .fetch_one(admin)
+    .await
+    .unwrap();
+    assert!(
+        unchanged,
+        "a refused grants phase left partial runtime authority or revoked an owner"
     );
 }
 

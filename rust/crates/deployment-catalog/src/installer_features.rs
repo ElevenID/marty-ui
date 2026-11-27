@@ -35,6 +35,8 @@ const IDENTITY_RENEWAL_LAYER: &str =
 const SCHEMA: &str = "elevenid.installer-feature-profile/v1";
 const SELECTION_SCHEMA: &str = "elevenid.installer-feature-profile-selection/v1";
 const MAX_INPUT: usize = 65_536;
+const FLOW_MIGRATION_COMMAND: &str = ". /app/load-secrets-env.sh; require_secret_var MARTY_DB_PASSWORD; exec /usr/local/bin/marty-flow migrate";
+const FLOW_MIGRATION_DATABASE_TEMPLATE: &str = "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty?sslmode=verify-full&sslrootcert=/run/feature-profile/feature_postgres_ca";
 
 pub(crate) fn append_layer(inputs: &mut ComposeInputs, layer: crate::installer_compose::BoundFile) {
     let index = if inputs.files.last().is_some_and(|file| {
@@ -1010,6 +1012,7 @@ impl Selection {
             role.starts_with("feature-database-")
                 || role.starts_with("feature-delegation-")
                 || role.starts_with("feature-credential-")
+                || role == "feature-flow-migrate"
                 || service["volumes"].as_array().is_some_and(|volumes| {
                     volumes.iter().any(|volume| {
                         volume["source"].as_str().is_some_and(|source| {
@@ -1044,6 +1047,7 @@ impl Selection {
             crate::installer_feature_database::validate_credentials(&database)?;
         }
         self.validate_feature_mounts(installation, services)?;
+        validate_database_setup(services)?;
         for (role, service) in services {
             if let Some((key, cap)) = core_pool_limit(role) {
                 // Bootstrap models deliberately have no database layer.
@@ -1567,6 +1571,7 @@ impl Selection {
                 || role == "delegation-commands"
                 || role == "delegated-use"
                 || role == "installer-ingress"
+                || role == "feature-flow-migrate"
             {
                 require(observed == allowed.iter().map(String::as_str).collect())?;
             }
@@ -1603,6 +1608,7 @@ impl Selection {
                 "feature_postgres_ca".into(),
             ]),
             "feature-database-grants" => BTreeSet::from(["feature_postgres_ca".into()]),
+            "feature-flow-migrate" => BTreeSet::from(["feature_postgres_ca".into()]),
             "feature-delegation-migrate" => db(&["delegation_owner"]),
             "feature-credential-migrate" => db(&["credential_owner"]),
             "delegation-approval" if self.configuration.agent_trust.is_some() => db(&[
@@ -1741,6 +1747,98 @@ impl Selection {
         }
         names
     }
+}
+
+/// Setup must finish source-owned schemas before applying the fixed grants.
+/// Serving Flow cannot be a prerequisite: it already waits for Issuance, which
+/// waits for grants. Bootstrap-only and retained runtime-only models omit these
+/// setup services and must not acquire new setup dependencies.
+fn validate_database_setup(services: &serde_json::Map<String, Value>) -> Result<()> {
+    if let Some(grants) = services.get("feature-database-grants") {
+        for (role, condition) in [
+            (
+                "feature-delegation-migrate",
+                "service_completed_successfully",
+            ),
+            (
+                "feature-credential-migrate",
+                "service_completed_successfully",
+            ),
+            ("feature-flow-migrate", "service_completed_successfully"),
+            ("db-migrate", "service_completed_successfully"),
+            ("issuance-migrations", "service_completed_successfully"),
+            ("trust-profile", "service_healthy"),
+        ] {
+            require(
+                services.contains_key(role)
+                    && grants["depends_on"][role]["condition"] == condition
+                    && (grants["depends_on"][role]["required"].is_null()
+                        || grants["depends_on"][role]["required"] == true),
+            )?;
+        }
+        require(
+            grants["depends_on"]
+                .as_object()
+                .is_some_and(|deps| deps.len() == 6),
+        )?;
+    }
+    if let Some(service) = services.get("feature-flow-migrate") {
+        exact_secrets(service, &["marty_db_password"])?;
+        require(
+            service["entrypoint"] == serde_json::json!(["/bin/sh", "-ec"])
+                && service["command"] == serde_json::json!([FLOW_MIGRATION_COMMAND])
+                && service["profiles"] == serde_json::json!(["installer-init"])
+                && service["labels"]["com.elevenid.installer.phase"] == "setup"
+                && service["restart"] == "no"
+                && service["read_only"] == true
+                && service["user"] == "10001:10001"
+                && service["ports"].as_array().is_none_or(Vec::is_empty),
+        )?;
+        for (role, condition) in [
+            ("db-migrate", "service_completed_successfully"),
+            ("postgres", "service_healthy"),
+            ("deployment-profile", "service_healthy"),
+        ] {
+            require(
+                services.contains_key(role)
+                    && service["depends_on"][role]["condition"] == condition
+                    && (service["depends_on"][role]["required"].is_null()
+                        || service["depends_on"][role]["required"] == true),
+            )?;
+        }
+        require(
+            service["depends_on"]
+                .as_object()
+                .is_some_and(|deps| deps.len() == 3),
+        )?;
+        let environment = service["environment"].as_object().ok_or(REFUSED)?;
+        require(environment.len() == 3)?;
+        expect(
+            service,
+            "MARTY_DB_PASSWORD_FILE",
+            "/run/secrets/marty_db_password",
+        )?;
+        // Compose's config and execution representations preserve one or two
+        // dollar signs for this one loader-owned slot. No other URI is allowed.
+        let template = service["environment"]["DATABASE_URL_TEMPLATE"]
+            .as_str()
+            .ok_or(REFUSED)?;
+        require(
+            template == FLOW_MIGRATION_DATABASE_TEMPLATE
+                || template == FLOW_MIGRATION_DATABASE_TEMPLATE.replace("${", "$${"),
+        )?;
+        let organization = service["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .ok_or(REFUSED)?;
+        require(uuid::Uuid::parse_str(organization).is_ok_and(|id| !id.is_nil()))?;
+        if let Some(flow) = services.get("flow") {
+            require(
+                flow["environment"]["MARTY_ORG_ID"] == organization
+                    && service["image"] == flow["image"],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn exact_secrets(service: &Value, expected: &[&str]) -> Result<()> {
