@@ -1339,7 +1339,7 @@ jobs:
             --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -2632,27 +2632,27 @@ jobs:
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-openbao-didcomm-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
           format: cyclonedx-json
@@ -3032,7 +3032,7 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ steps.addon.outputs.image }}@${{ steps.image.outputs.digest }}
           format: cyclonedx-json
