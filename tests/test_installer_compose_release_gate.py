@@ -1,4 +1,4 @@
-"""Keep both signed-release paths on the supported, actually executed parser gate."""
+"""Keep PR and signed-release paths on the supported, executed parser gate."""
 
 import json
 import os
@@ -27,11 +27,12 @@ PINS = {
 @pytest.mark.parametrize(
     ("workflow", "job", "target"),
     [
+        ("ci.yml", "rust-lint-policy", '"$GITHUB_WORKSPACE/rust/target"'),
         ("nightly-release.yml", "prepare-native", '"$RUNNER_TEMP/tools"'),
         ("cd.yml", "build-operator-catalog", '"$GITHUB_WORKSPACE/rust/target"'),
     ],
 )
-def test_both_release_paths_require_the_shared_native_gate(workflow, job, target):
+def test_pr_and_release_paths_require_the_shared_native_gate(workflow, job, target):
     text = (ROOT / ".github/workflows" / workflow).read_text()
     steps = yaml.safe_load(text)["jobs"][job]["steps"]
     [gate] = [s for s in steps if s.get("name") == "Require real Compose installer model compatibility"]
@@ -57,6 +58,30 @@ def test_both_release_paths_require_the_shared_native_gate(workflow, job, target
     feature_module = (ROOT / "rust/crates/deployment-catalog/src/installer_features.rs").read_text()
     assert '#[path = "installer_features_native_tests.rs"]\nmod native_tests;' in feature_module
     assert native.count("assert_actual_installer_layers(&executable, &bundle,") == 2
+
+
+def test_pr_gate_reuses_prefetched_dependencies_without_a_source_credential():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["rust-lint-policy"]
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["permissions"] == {"contents": "read"}
+    assert job["needs"] == ["changes", "release-preflight"]
+    assert job["if"] == "needs.changes.outputs.rust == 'true'"
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    authorize = names.index("Authorize private fork access")
+    fetch = names.index("Fetch locked private fork dependencies")
+    compile_ = names.index("Lint Rust services")
+    boundary = names.index("Test the opt-in unsigned installer development boundary")
+    gate = names.index("Require real Compose installer model compatibility")
+    assert authorize < fetch < compile_ < boundary
+    assert gate == boundary + 1
+    assert steps[gate]["env"] == {"CARGO_NET_OFFLINE": "true"}
+    assert "PRIVATE_FORKS_READ_TOKEN" not in workflow.get("env", {})
+    assert "PRIVATE_FORKS_READ_TOKEN" not in job.get("env", {})
+    assert "PRIVATE_FORKS_READ_TOKEN" not in str(steps[gate])
+    assert "secrets." not in str(steps[gate])
+    assert "working-directory" not in steps[gate]
 
 
 def test_gate_keeps_independent_architecture_pins_and_checks_before_execution():

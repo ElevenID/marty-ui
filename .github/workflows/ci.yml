@@ -2231,6 +2231,13 @@ jobs:
       - name: Test the opt-in unsigned installer development boundary
         working-directory: rust
         run: cargo test --locked --offline -p marty-deployment-catalog --features installer-development --lib
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        env:
+          CARGO_NET_OFFLINE: 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/ci/qualify-installer-compose-model.sh "$GITHUB_WORKSPACE/rust/target"
       - name: Lint frozen Rust feature-regression probe
         shell: bash
         run: |
