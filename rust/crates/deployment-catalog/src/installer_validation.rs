@@ -437,6 +437,7 @@ pub fn run(installation: &Path, docker: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn automatic_validation_records_failure_under_existing_writer_lock() {
         use crate::installer_state::{Identity, InstallerState, RuntimeBinding};
@@ -519,6 +520,56 @@ esac
         assert!(!readiness_valid(&ready, &required));
         ready["services"]["unexpected"] = json!({"status":"healthy"});
         assert!(!readiness_valid(&ready, &required));
+
+        let agent = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../deploy-config/compose/selfhost-installer/feature-profile/compose.agent-trust.yml"
+        ));
+        let agent_raw = agent
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("GATEWAY_REQUIRED_READY_SERVICES: ")
+            })
+            .unwrap();
+        let selected_required = parse_required_services(agent_raw).unwrap();
+        let mut expected_selected: BTreeSet<_> = required.iter().map(String::as_str).collect();
+        for name in ["delegated-authority", "delegated-commands"] {
+            assert!(expected_selected.insert(name));
+        }
+        assert_eq!(
+            selected_required
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected_selected
+        );
+        let mut selected_services = serde_json::Map::new();
+        for name in &expected_selected {
+            selected_services.insert((*name).to_owned(), json!({"status":"healthy"}));
+        }
+        let selected_ready = json!({
+            "status":"ready", "service":"api-gateway", "services":selected_services
+        });
+        assert!(!readiness_valid(&selected_ready, &required));
+        assert!(readiness_valid(&selected_ready, &selected_required));
+        for name in ["delegated-authority", "delegated-commands"] {
+            let mut missing = selected_ready.clone();
+            missing["services"].as_object_mut().unwrap().remove(name);
+            assert!(
+                !readiness_valid(&missing, &selected_required),
+                "{name} missing"
+            );
+            let mut unhealthy = selected_ready.clone();
+            unhealthy["services"][name]["status"] = json!("unhealthy");
+            assert!(
+                !readiness_valid(&unhealthy, &selected_required),
+                "{name} unhealthy"
+            );
+        }
+        let mut unexpected = selected_ready.clone();
+        unexpected["services"]["unexpected"] = json!({"status":"healthy"});
+        assert!(!readiness_valid(&unexpected, &selected_required));
         for bad in ["", "auth,auth", "auth, signing-keys", "foreign/path"] {
             assert!(parse_required_services(bad).is_err());
         }

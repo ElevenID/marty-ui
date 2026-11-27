@@ -34,6 +34,7 @@ services:
       MARTY_AGENT_ENROLLMENT_ENABLED: "true"
       MARTY_DELEGATION_APPROVAL_ENABLED: "true"
       MARTY_DELEGATION_COMMANDS_ENABLED: "true"
+      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native,delegated-authority,delegated-commands
       DELEGATED_AUTHORITY_SERVICE_URL: http://delegation-approval:8019
       DELEGATED_COMMAND_SERVICE_URL: http://delegation-commands:8020
     depends_on:

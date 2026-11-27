@@ -189,6 +189,46 @@ pub(crate) fn render_for_application(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openapi_preserves_gateway_cors_for_every_installer_route_mode() {
+        for managed_keycloak in [true, false] {
+            for application in [None, Some("https://console.example.com")] {
+                let output = render_for_application(
+                    TEMPLATE,
+                    "https://api.example.com",
+                    managed_keycloak,
+                    application,
+                )
+                .unwrap();
+                let openapi = output
+                    .split_once("    location = /openapi.json {\n")
+                    .unwrap()
+                    .1
+                    .split_once("\n    }")
+                    .unwrap()
+                    .0;
+                assert!(openapi.contains("proxy_pass http://$backend_api/openapi.json;"));
+                for line in openapi.lines() {
+                    let directive = line.trim().to_ascii_lowercase();
+                    assert!(
+                        !directive.starts_with("add_header access-control-"),
+                        "OpenAPI ingress must preserve Gateway CORS authority: {line}"
+                    );
+                    assert!(
+                        !directive.starts_with("proxy_hide_header access-control-")
+                            && !directive.starts_with("proxy_hide_header vary"),
+                        "OpenAPI ingress must retain upstream CORS response headers: {line}"
+                    );
+                    assert!(
+                        !directive.starts_with("proxy_set_header origin "),
+                        "OpenAPI ingress must forward the original Origin: {line}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn external_application_replaces_every_ui_upstream_with_a_bounded_handoff() {
         let output = render_for_application(
