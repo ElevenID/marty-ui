@@ -743,6 +743,20 @@ impl Selection {
                 "compose.delegated-use.yml"
             ));
         }
+        // Compose 5.6.1 can retain a base environment value when !reset follows
+        // an intermediate environment map. The Issuance boundary must reset its
+        // broad database credentials before pool, prerequisite, or future feature
+        // overlays merge either serving alias. Keep every other layer in order.
+        if let Some(index) = layers.iter().position(|layer| {
+            *layer
+                == concat!(
+                    "deploy-config/compose/selfhost-installer/feature-profile/",
+                    "compose.workflow-issuance.yml"
+                )
+        }) {
+            let reset = layers.remove(index);
+            layers.insert(0, reset);
+        }
         layers
     }
     pub(crate) fn append_layers(&self, inputs: &mut ComposeInputs, bundle: &Path) -> Result<()> {
@@ -1851,3 +1865,7 @@ fn command_databases() -> Vec<(&'static str, String)> {
 #[cfg(test)]
 #[path = "installer_features_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "installer_features_native_tests.rs"]
+mod native_tests;
