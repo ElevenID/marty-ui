@@ -46,7 +46,7 @@ jobs:
           python-version: "3.12"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         if: inputs.mode == 'create-qualified-tag'
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
         if: inputs.mode == 'create-qualified-tag'
       - name: Prepare the existing installer-pinned publication verifier
         if: inputs.mode == 'create-qualified-tag'
