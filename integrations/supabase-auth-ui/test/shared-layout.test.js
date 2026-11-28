@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHeader, DEFAULT_BRAND } from "../../../ui/src/shared/web-layout/header.mjs";
 import { renderAuthLayout, renderAuthStyles, renderKeycloakAuthLayout } from "../../../ui/src/shared/web-layout/html.mjs";
@@ -57,6 +57,38 @@ test("standalone consumers reject drift from the pinned shared source snapshot",
     expect(verifyHeaderSource(directory)).toEqual(receipt);
     writeFileSync(join(temporary, "header.css"), "/* unreviewed drift */\n");
     expect(() => verifyHeaderSource(directory)).toThrow("differs from its pinned snapshot");
+  } finally {
+    rmSync(temporary, { recursive: true });
+  }
+});
+
+test("a Git checkout with autocrlf preserves pinned source and generated auth bytes", () => {
+  const temporary = mkdtempSync(join(tmpdir(), "elevenid-layout-checkout-"));
+  const source = join(temporary, "source"), checkout = join(temporary, "checkout");
+  const files = [".gitattributes", "scripts/sync-web-layout.mjs", "ui/src/components/layouts/AppHeader.jsx",
+    ...[...SHARED_HEADER_FILES, "source.json", "html.mjs", "auth-page.css"].map((name) => `ui/src/shared/web-layout/${name}`),
+    ...["config/keycloak/themes/11id/login", "deploy/helm/marty/files/keycloak/themes/11id/login"]
+      .flatMap((theme) => [`${theme}/auth-layout.ftl`, `${theme}/resources/css/auth-layout.css`]),
+  ];
+  try {
+    mkdirSync(source); mkdirSync(checkout);
+    for (const path of files) {
+      const target = join(source, path);
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(new URL(path, root), target);
+    }
+    const git = (...args) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: source });
+      if (result.exitCode !== 0) throw new Error(`Git checkout fixture failed: ${result.stderr.toString()}`);
+    };
+    git("init", "--quiet");
+    git("config", "core.autocrlf", "true");
+    git("add", "--", ...files);
+    git("checkout-index", "--all", `--prefix=${checkout.replaceAll("\\", "/")}/`);
+    for (const path of files) expect(readFileSync(join(checkout, path)).includes(Buffer.from("\r\n"))).toBe(false);
+    expect(verifyHeaderSource(pathToFileURL(`${checkout}/ui/src/shared/web-layout/`))).toEqual(verifyHeaderSource(shared));
+    const checked = Bun.spawnSync([process.execPath, join(checkout, "scripts/sync-web-layout.mjs"), "--check"], { cwd: checkout });
+    expect(checked.exitCode).toBe(0);
   } finally {
     rmSync(temporary, { recursive: true });
   }

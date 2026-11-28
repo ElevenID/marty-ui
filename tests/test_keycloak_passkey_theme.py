@@ -43,9 +43,9 @@ def passkey_renderer(email_renderer):
     assert hashlib.sha256(error_template).hexdigest() == ERROR_SHA256
     for directory in (parent, empty):
         (directory / "error.ftl").write_bytes(error_template)
-    subprocess.run([shutil.which("javac"), "-J-Xmx128m", "-cp", classpath,
+    subprocess.run([shutil.which("javac"), "-J-Xmx128m", "-encoding", "UTF-8", "-cp", classpath,
                     "-d", str(working), str(ROOT / "tests/java/KeycloakPasskeyThemeContract.java")],
-                   check=True, capture_output=True, text=True, timeout=30)
+                   check=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
     return ([email_renderer[0], "-Xmx96m", "-cp", classpath,
              "KeycloakPasskeyThemeContract", str(ROOT / "config/keycloak/themes/11id/login")],
             parent, empty)
@@ -59,7 +59,7 @@ def test_native_passkeys_preserve_password_google_badge_and_recovery(passkey_ren
     command, parent, empty = passkey_renderer
     result = subprocess.run([*command, str(parent if enabled else empty), template,
                              "enabled" if enabled else "disabled", mode],
-                            capture_output=True, text=True, timeout=20)
+                            capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert result.returncode == 0, result.stderr
     html = result.stdout
     assert html.count('id="kc-form-login"') == 1
@@ -94,7 +94,7 @@ def test_native_error_page_stays_visible_and_uses_registered_app_link(passkey_re
 
     command, _, empty = passkey_renderer
     result = subprocess.run([*command, str(empty), "error.ftl", "disabled", mode],
-                            capture_output=True, text=True, timeout=20)
+                            capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert result.returncode == 0, result.stderr
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel="chrome", headless=True)

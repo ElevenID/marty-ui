@@ -60,7 +60,7 @@ export function validateApplicationReleaseConsumer(consumer, { manifest, baselin
     assert.deepEqual({ bytes: consumer.inputs[name]?.bytes, sha256: consumer.inputs[name]?.sha256 }, identity(snapshots[name]));
   }
   assert.deepEqual(consumer.baseline, validateApplicationPackageBaseline(baseline, manifest));
-  assert.deepEqual(consumer.output_comparison, compareApplicationPackageOutput(consumer.output, baseline));
+  assert.deepEqual(consumer.output_comparison, compareApplicationPackageOutput(consumer.output, baseline, manifest));
   assert.deepEqual(consumer.runtime_context, { ...verified.manifest, path: verified.root, manifest_sha256: verified.manifest_sha256 });
   assert.deepEqual(consumer.runtime_context.output_inventory, consumer.output);
   assert.deepEqual(consumer.runtime_context.resource_result, consumer.resources);

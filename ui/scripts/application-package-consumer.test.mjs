@@ -23,6 +23,7 @@ import {
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const COMMIT = 'a'.repeat(40);
 const SDK = 'assets/marty_api_client_bg-fixture.wasm';
+const STYLESHEET = 'assets/bootstrapApp-fixture.css';
 const digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const identity = (value) => digest(canonicalJson(value));
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -56,6 +57,7 @@ function allFiles(root, prefix = '') {
 function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = false } = {}) {
   const profile = {
     current: ['contracts/application-source-export.json', 414],
+    'before-shared-web-layout': ['contracts/application-source-export-history/before-shared-web-layout-v1.json', 414],
     'before-managed-wallet-setup': ['contracts/application-source-export-history/before-managed-wallet-setup-v1.json', 392],
     initial: ['contracts/application-source-export-history/initial-v1.json', 296],
     'before-delegation-ux-states': ['contracts/application-source-export-history/before-delegation-ux-states-v1.json', 321],
@@ -108,6 +110,9 @@ function fixture(t, { beforeCommand, afterCommand, afterInventory, historical = 
     surface: 'application', source_sha: COMMIT, route_contract: routeContract })));
   outputBytes.set(SDK, Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
   for (let index = 0; index < 30; index++) outputBytes.set(`assets/chunk-${String(index).padStart(2, '0')}.js`, Buffer.from(`export const n = ${index};\n`));
+  if (contractPath === 'contracts/application-source-export.json') {
+    outputBytes.set(STYLESHEET, Buffer.from('.elevenid-shared-header { display: block; }\n'));
+  }
   for (const [name, bytes] of outputBytes) write(baselineRoot, `ui/dist-application/${name}`, bytes,
     APPLICATION_RETAINED_PUBLIC_FILES.includes(name) ? 0o600 : 0o644);
   const output = verifyApplicationClosureOutput(baselineRoot, plan);
@@ -207,9 +212,9 @@ test('restored fixture exercises ordinary commands, exact byte output and runtim
   assert.equal(result.fixture, true);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
   assert.equal(result.tests.test_count, 414);
-  assert.equal(result.output_comparison.output_files, 88);
+  assert.equal(result.output_comparison.output_files, 89);
   assert.equal(result.output_comparison.mode_transformations.length, 54);
-  assert.equal(result.runtime_comparison.payload_files, 92);
+  assert.equal(result.runtime_comparison.payload_files, 93);
   assert.equal(result.runtime_comparison.payload_records_identical, true);
   assert.notEqual(result.runtime_comparison.baseline_manifest_sha256, result.runtime_comparison.consumer_manifest_sha256);
   assert.deepEqual(result.preservation, { pinned_inputs_unchanged: true, restored_source_unchanged: true });
@@ -254,6 +259,8 @@ test('the approved historical package keeps its original 24-file, 296-assertion 
   assert.equal(result.status, 'fixture-passed', JSON.stringify(result.failure));
   assert.equal(result.tests.completed_files.length, 24);
   assert.equal(result.tests.test_count, 296);
+  assert.equal(result.output_comparison.output_files, 88);
+  assert.equal(result.runtime_comparison.payload_files, 92);
   assert.ok(Object.values(result.qualification).every((value) => value === false));
   const arbitrary = structuredClone(input.manifest);
   arbitrary.test_profile.files.pop();
@@ -265,6 +272,7 @@ test('the approved historical package keeps its original 24-file, 296-assertion 
 
 test('release input validation keeps exact current and historical test profiles', async (t) => {
   const current = fixture(t);
+  const beforeLayout = fixture(t, { historical: 'before-shared-web-layout' });
   const previous = fixture(t, { historical: 'before-delegation-ux-states' });
   const historical = fixture(t, { historical: true });
   const predecessor = fixture(t, { historical: 'before-static-auth-origins' });
@@ -272,6 +280,7 @@ test('release input validation keeps exact current and historical test profiles'
   const mainUx = fixture(t, { historical: 'main-delegation-ux-states' });
   const nativeAuth = fixture(t, { historical: 'before-main-ux-integration' });
   const beforeWallet = fixture(t, { historical: 'before-managed-wallet-setup' });
+  assert.deepEqual(current.manifest.test_profile, beforeLayout.manifest.test_profile);
   assert.deepEqual(beforeWallet.manifest.test_profile.files, nativeAuth.manifest.test_profile.files);
   assert.deepEqual(mainUx.manifest.test_profile.files, previous.manifest.test_profile.files);
   assert.deepEqual(previous.manifest.test_profile, predecessor.manifest.test_profile);
@@ -306,13 +315,15 @@ test('release input validation keeps exact current and historical test profiles'
   ]);
   // The current owner-configuration suite has its own exact policy. Every
   // historical package keeps its original inventory and assertion count.
-  const profiles = [[current, 414], [beforeWallet, 392], [nativeAuth, 390], [beforeConsole, 383], [mainUx, 323],
+  const profiles = [[current, 414], [beforeLayout, 414], [beforeWallet, 392], [nativeAuth, 390], [beforeConsole, 383], [mainUx, 323],
     [previous, 321], [predecessor, 321], [historical, 296]];
   for (const [input, assertions] of profiles) {
     const otherAssertions = [...new Set(profiles.map(([, count]) => count))].filter((count) => count !== assertions);
     const report = await input.run();
     assert.equal(report.status, 'fixture-passed', JSON.stringify(report.failure));
     assert.equal(report.fixture, true);
+    assert.equal(report.output_comparison.output_files, input === current ? 89 : 88);
+    assert.equal(report.runtime_comparison.payload_files, input === current ? 93 : 92);
     assert.ok(Object.values(report.qualification).every((value) => value === false));
     // Construct inert validator arguments in memory. The injected execution and
     // its persisted report remain nonqualifying; no production receipt is made.
@@ -354,22 +365,63 @@ test('release input validation keeps exact current and historical test profiles'
   }
 });
 
+test('source contract binds the stylesheet output shape even when every dependent inventory digest is recomputed', (t) => {
+  const current = fixture(t);
+  const historical = fixture(t, { historical: 'before-shared-web-layout' });
+  for (const input of [current, historical]) validateApplicationPackageBaseline(input.baseline, input.manifest);
+  const stylesheet = current.baseline.output.files.find((row) => row.path === STYLESHEET);
+  assert.ok(stylesheet);
+  const changes = [
+    [current, (files) => files.filter((row) => row.path !== STYLESHEET)],
+    [current, (files) => files.map((row) => row.path === STYLESHEET ? { ...row, path: 'assets/extra.js' } : row)],
+    [current, (files) => [...files, { ...stylesheet, path: 'assets/extra.css' }]],
+    [historical, (files) => [...files, stylesheet]],
+    [historical, (files) => files.map((row) => row.path === 'assets/chunk-00.js' ? stylesheet : row)],
+  ];
+  for (const [input, change] of changes) {
+    const baseline = structuredClone(input.baseline);
+    baseline.output.files = change(baseline.output.files).sort((a, b) => a.path.localeCompare(b.path, 'en'));
+    baseline.output.inventory_sha256 = identity(baseline.output.files);
+    baseline.resources.result.served_resources = baseline.output.files
+      .filter((row) => row.path !== 'marty-web-routes.json')
+      .map((row) => ({ ...byteRecord(row), status: 200,
+        content_type: APPLICATION_RESOURCE_MIME_TYPES[path.extname(row.path)][0] }));
+    const context = baseline.runtime_context;
+    context.output_inventory = baseline.output;
+    context.resource_result = baseline.resources.result;
+    context.context_inventory = [...baseline.output.files.map((row) => ({ ...row, path: `html/${row.path}`, mode: 0o644 })),
+      ...context.source_inputs.map((row) => ({ path: row.target, bytes: row.bytes, sha256: row.sha256, mode: row.packaged_mode }))]
+      .sort((a, b) => a.path.localeCompare(b.path, 'en'));
+    const { path: _path, manifest_sha256: _digest, ...rawContext } = context;
+    context.manifest_sha256 = digest(json(rawContext));
+    assert.throws(() => validateApplicationPackageBaseline(baseline, input.manifest), /baseline output inventory is invalid/);
+  }
+});
+
 test('only the exact 54 public modes may change; output bytes, paths, unexpected modes and resource records remain bound', (t) => {
   const input = fixture(t);
   const output = structuredClone(input.baseline.output);
   for (const row of output.files) row.mode = 0o644;
   output.inventory_sha256 = identity(output.files);
-  assert.equal(compareApplicationPackageOutput(output, input.baseline).mode_transformations.length, 54);
+  assert.equal(compareApplicationPackageOutput(output, input.baseline, input.manifest).mode_transformations.length, 54);
+  assert.throws(() => compareApplicationPackageOutput(output, input.baseline), /unapproved source contract/);
+  const unknown = structuredClone(input.manifest);
+  unknown.contract.sha256 = `sha256:${'0'.repeat(64)}`;
+  assert.throws(() => compareApplicationPackageOutput(output, input.baseline, unknown), /unapproved source contract/);
   for (const change of [
     (value) => { value.files[0].sha256 = `sha256:${'0'.repeat(64)}`; },
     (value) => { value.files[0].bytes++; },
     (value) => { value.files[0].path = 'unexpected.json'; },
     (value) => { value.files.find((row) => row.path.startsWith('assets/')).mode = 0o600; },
     (value) => { value.files.find((row) => row.path === 'config.json').mode = 0o755; },
+    (value) => { value.files.find((row) => row.path === STYLESHEET).sha256 = `sha256:${'0'.repeat(64)}`; },
+    (value) => { value.files.find((row) => row.path === STYLESHEET).bytes++; },
+    (value) => { value.files.find((row) => row.path === STYLESHEET).path = 'assets/replaced.css'; },
+    (value) => { value.files.find((row) => row.path === STYLESHEET).mode = 0o755; },
     (value) => { value.public_resources.pop(); },
   ]) {
     const changed = structuredClone(output); change(changed); changed.inventory_sha256 = identity(changed.files);
-    assert.throws(() => compareApplicationPackageOutput(changed, input.baseline));
+    assert.throws(() => compareApplicationPackageOutput(changed, input.baseline, input.manifest));
   }
 });
 

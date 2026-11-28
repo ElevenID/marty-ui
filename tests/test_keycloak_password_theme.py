@@ -30,15 +30,15 @@ def render(tmp_path_factory):
     data = load_freemarker_jar("KEYCLOAK_LOGIN_FREEMARKER_JAR", "KEYCLOAK_EMAIL_FREEMARKER_JAR")
     jar = working / "freemarker.jar"
     jar.write_bytes(data)
-    subprocess.run([javac, "-J-Xmx128m", "-cp", str(jar), "-d", str(working),
+    subprocess.run([javac, "-J-Xmx128m", "-encoding", "UTF-8", "-cp", str(jar), "-d", str(working),
                     str(ROOT / "tests/java/KeycloakLoginThemeContract.java")],
-                   check=True, capture_output=True, text=True, timeout=30)
+                   check=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
 
     @lru_cache(maxsize=None)
     def rendered(scenario, locale="en"):
         result = subprocess.run([java, "-Xmx96m", "-cp", str(working) + os.pathsep + str(jar),
                                  "KeycloakLoginThemeContract", str(THEME), scenario, locale],
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, encoding="utf-8", timeout=20)
         assert result.returncode == 0, result.stderr
         return result.stdout
 
@@ -342,11 +342,18 @@ def test_native_otp_has_one_card_a_clear_heading_and_intact_code_input(load_page
         assert page.locator("#input-error-otp-code").inner_text() == "Invalid authenticator code"
 
 
-@pytest.mark.parametrize("locale", ["en", "de", "nl", "ja", "es", "fr"])
-def test_native_otp_heading_and_hint_resolve_for_each_supported_locale(load_page, locale):
+@pytest.mark.parametrize("locale,title,hint", [
+    ("en", "Verify it's you", "Enter the code from your authenticator app to continue."),
+    ("de", "Identität bestätigen", "Geben Sie den Code aus Ihrer Authenticator-App ein, um fortzufahren."),
+    ("nl", "Bevestig je identiteit", "Voer de code uit je authenticator-app in om door te gaan."),
+    ("ja", "本人確認", "続行するには、認証アプリに表示されたコードを入力してください。"),
+    ("es", "Verifica tu identidad", "Introduce el código de tu aplicación de autenticación para continuar."),
+    ("fr", "Vérifiez votre identité", "Saisissez le code de votre application d'authentification pour continuer."),
+])
+def test_native_otp_heading_and_hint_resolve_for_each_supported_locale(load_page, locale, title, hint):
     page = load_page("otp", locale)
-    assert "mfaVerificationTitle" not in page.locator("h1#kc-page-title").inner_text()
-    assert "mfaAuthenticatorHint" not in page.locator(".elevenid-context-hint").inner_text()
+    assert page.locator("h1#kc-page-title").inner_text() == title
+    assert page.locator(".elevenid-context-hint").inner_text() == hint
 
 
 @pytest.mark.parametrize("scenario,locale,expected", [
