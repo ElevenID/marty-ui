@@ -1608,8 +1608,58 @@ fn require_completed_stamps(
 /// Observe completed qualification without Docker, ownership changes, deletion
 /// authority or release admission. Retained bytes and their hashes stay intact.
 pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<String, String>> {
+    completed_proof(view, false)
+}
+
+/// Read-only custody for an already admitted installed owner. This grants no
+/// provisioning, creation, deletion or release-qualification authority.
+pub(crate) fn inspect_retained_completed(
+    view: &LockedInspection,
+) -> Result<(String, BTreeMap<String, String>)> {
+    let proof = completed_proof(view, true)?;
+    let intent_bytes = view.read_evidence(INTENT)?;
+    require(proof.get(INTENT) == Some(&sha(&intent_bytes)))?;
+    let intent: Intent = serde_json::from_slice(&intent_bytes).map_err(|_| REFUSED)?;
+    let evidence = open_dir(view.installation_directory(), "evidence")?;
+    let parent = open_dir(&evidence, &intent.parent_name)?;
+    let child = open_dir(&parent, "child")?;
+    let mut files = BTreeMap::new();
+    for name in [
+        "request.json",
+        "transition-output.json",
+        "restore-output.json",
+    ] {
+        files.insert(
+            format!("evidence/{}/{name}", intent.parent_name),
+            sha(&read_file(&parent, name, 16384)?),
+        );
+    }
+    files.insert(
+        format!("evidence/{}/child/marker", intent.parent_name),
+        sha(&read_file(&child, "marker", 256)?),
+    );
+    // Native directory identity is pinned for this handoff as well as the
+    // original stable-filesystem/custody proof checked by completed_proof.
+    files.insert(
+        format!("evidence/{}/", intent.parent_name),
+        sha(&encoded(&stamp(&parent)?)?),
+    );
+    files.insert(
+        format!("evidence/{}/child/", intent.parent_name),
+        sha(&encoded(&stamp(&child)?)?),
+    );
+    view.require_unchanged()?;
+    Ok((intent.parent_name, files))
+}
+
+fn completed_proof(view: &LockedInspection, retained: bool) -> Result<BTreeMap<String, String>> {
     let journal = view.journal();
-    require(journal.phase() == Phase::Provisioning)?;
+    require(if retained {
+        journal.phase() == Phase::Ready
+            && matches!(journal.execution_scope(), ExecutionScope::Unclassified)
+    } else {
+        journal.phase() == Phase::Provisioning
+    })?;
     let binding = journal.runtime().ok_or(REFUSED)?;
     binding.validate()?;
     require(binding.profile == crate::installer_state::RuntimeProfile::Rootless)?;
@@ -1631,6 +1681,25 @@ pub(crate) fn require_completed(view: &LockedInspection) -> Result<BTreeMap<Stri
             let mut evidence = BTreeMap::new();
             for name in ["candidate-test-inventory.json", "installer-inventory.json"] {
                 evidence.insert(name.into(), sha(&inventory_bytes));
+                for suffix in [".sigstore.json", ".provenance.jsonl"] {
+                    let name = format!("{name}{suffix}");
+                    evidence.insert(name.clone(), sha(&view.read_evidence(&name)?));
+                }
+            }
+            evidence
+        }
+        ExecutionScope::Unclassified if retained => {
+            let admission_bytes = view.read_evidence("installer-admission.json")?;
+            crate::installer_release::bind_release(
+                &admission_bytes,
+                &inventory_bytes,
+                &inventory.artifact("marty-deploy-linux-amd64")?.sha256,
+                &journal.identity().source_sha,
+                &journal.identity().release_tag,
+            )?;
+            let mut evidence = BTreeMap::new();
+            for name in ["installer-admission.json", "installer-inventory.json"] {
+                evidence.insert(name.into(), sha(&view.read_evidence(name)?));
                 for suffix in [".sigstore.json", ".provenance.jsonl"] {
                     let name = format!("{name}{suffix}");
                     evidence.insert(name.clone(), sha(&view.read_evidence(&name)?));

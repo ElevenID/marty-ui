@@ -5,9 +5,11 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
-    installer_compose::ComposeSession,
-    installer_doctor, installer_generation_maintenance, installer_json,
-    installer_release as release,
+    installer_compose::{
+        ComposeInputs, ComposeReceipt, ComposeSession, GenerationOperation, ProjectResources,
+    },
+    installer_doctor, installer_generation_binding as generation, installer_generation_maintenance,
+    installer_json, installer_release as release,
     installer_state::{
         ExecutionScope, Identity, LockedInspection, LockedMaintenance, Phase, RuntimeBinding,
         RuntimeProfile,
@@ -31,6 +33,7 @@ const SELECTOR: &str = "operator-owner-current.json";
 const MAX_RECORD: usize = 4 * 1024 * 1024;
 const MAX_ATTEMPTS: u64 = 32;
 const ORIGINAL_SOURCE: &str = "b7c7055830722d10512ccac042b1e0abe0e1ecec";
+const MANAGED_RECOVERY_SOURCE: &str = "2ed9e4244cae46dc3678209653c22ae91c678583";
 const ASSETS: [&str; 6] = [
     "installer-admission.json",
     "installer-admission.json.sigstore.json",
@@ -65,6 +68,12 @@ fn record(sequence: u64, kind: &str) -> String {
 /// The target binary itself declares the compatibility policy. The caller
 /// cannot provide a replacement contract, schema migration or product model.
 pub fn contract() -> Value {
+    json!({"schema":"elevenid.installer-operator-compatibility-catalog/v2",
+        "profiles":[legacy_contract(), managed_recovery_contract()]})
+}
+
+// Keep the original profile byte-for-byte compatible with retained v1 intents.
+fn legacy_contract() -> Value {
     json!({"schema":"elevenid.installer-operator-compatibility/v1",
         "operation":"retained-linux-operator-only", "platform":"linux/amd64",
         "original_source_sha":ORIGINAL_SOURCE,
@@ -75,6 +84,23 @@ pub fn contract() -> Value {
         "database_schema":"unchanged", "database_migration":false, "credential_issuance":false,
         "key_custody_change":false, "bootstrap_operator_replacement":false,
         "credential_successors":"existing-verified-lineage", "scheduler_takeover":"explicit-quiescent-predecessor"})
+}
+
+fn managed_recovery_contract() -> Value {
+    let mut value = legacy_contract();
+    value["schema"] = json!("elevenid.installer-operator-compatibility/v2");
+    value["original_source_sha"] = json!(MANAGED_RECOVERY_SOURCE);
+    value["pending_generation_handoff"] = json!("completed-managed-attempt-zero-before-binding");
+    value["pending_generation_custody"] = json!("exact-read-only-evidence-and-output-snapshot");
+    value
+}
+
+fn contract_for(source: &str) -> Result<Value> {
+    match source {
+        ORIGINAL_SOURCE => Ok(legacy_contract()),
+        MANAGED_RECOVERY_SOURCE => Ok(managed_recovery_contract()),
+        _ => Err(REFUSED.into()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +143,21 @@ struct Transition {
     session_sha256: String,
     generation_selector_sha256: Option<String>,
     resources_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed_producer_recovery: Option<ManagedProducerRecovery>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedProducerRecovery {
+    schema: String,
+    sequence: u64,
+    attempt: u64,
+    parent_binding_sha256: String,
+    candidate_sha256: String,
+    helper_sha256: String,
+    outputs_sha256: BTreeMap<String, String>,
+    preserved_files_sha256: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,7 +261,7 @@ fn retained(view: &LockedInspection, installation: &Path) -> Result<Retained> {
     require(
         journal.phase() == Phase::Ready
             && matches!(journal.execution_scope(), ExecutionScope::Unclassified)
-            && journal.identity().source_sha == ORIGINAL_SOURCE,
+            && contract_for(&journal.identity().source_sha).is_ok(),
     )?;
     let runtime = journal.runtime().ok_or(REFUSED)?.clone();
     require(runtime.profile == RuntimeProfile::Rootless)?;
@@ -243,7 +284,8 @@ fn retained(view: &LockedInspection, installation: &Path) -> Result<Retained> {
     let lifecycle = view.read_evidence("lifecycle-configuration.json")?;
     let lifecycle_value = installer_json::decode(&lifecycle).map_err(|_| REFUSED)?;
     require(
-        lifecycle_value["schema"] == contract()["lifecycle_schema"]
+        lifecycle_value["schema"]
+            == contract_for(&journal.identity().source_sha)?["lifecycle_schema"]
             && lifecycle_value["installation_id"] == journal.installation_id().to_string()
             && lifecycle_value["operator_sha256"] == original_operator.sha256,
     )?;
@@ -267,10 +309,7 @@ fn retained(view: &LockedInspection, installation: &Path) -> Result<Retained> {
 }
 
 fn transition(view: &LockedInspection, installation: &Path, docker: &Path) -> Result<Transition> {
-    require(!installer_generation_maintenance::has_pending_generation(
-        view,
-        installation,
-    )?)?;
+    let pending = installer_generation_maintenance::has_pending_generation(view, installation)?;
     crate::installer_root_retirement::require_no_pending_for_generation(view)?;
     let history = crate::installer_uninstall::status(view)?;
     require(
@@ -281,6 +320,9 @@ fn transition(view: &LockedInspection, installation: &Path, docker: &Path) -> Re
     )?;
     let saved = installer_doctor::load_session(view, installation)?;
     require(saved.schema == "elevenid.installer-compose-session/v1")?;
+    if pending {
+        return managed_producer_transition(view, installation, docker, &saved);
+    }
     let mut inputs = saved.inputs.clone();
     inputs.services = saved
         .receipt
@@ -318,6 +360,240 @@ fn transition(view: &LockedInspection, installation: &Path, docker: &Path) -> Re
         session_sha256: digest(&saved)?,
         generation_selector_sha256: selector.as_deref().map(release::sha256),
         resources_sha256: digest(&resources)?,
+        managed_producer_recovery: None,
+    })
+}
+
+// This is a read-only handoff of one already completed producer, not authority
+// to finish it. The corrected selected owner later uses ordinary generation
+// reconciliation, including immutable supersession when the candidate is stale.
+fn pending_custody(
+    installation: &Path,
+    scope: installer_generation_maintenance::attempt::Attempt,
+    retained_canary: Option<&(String, BTreeMap<String, String>)>,
+) -> Result<BTreeMap<String, String>> {
+    require(scope.sequence > 0 && scope.number == 0)?;
+    let evidence = Directory::open(&installation.join("evidence"))?;
+    let names = evidence.names()?;
+    let allowed: BTreeSet<String> = [
+        "intent",
+        "managed-renewal-plan",
+        "producer",
+        "helper",
+        "candidate",
+    ]
+    .into_iter()
+    .map(|kind| scope.record(kind))
+    .chain(std::iter::once(scope.environment_name("helper")))
+    .collect();
+    require(allowed.is_subset(&names))?;
+    let prefix = format!("generation-{:020}-", scope.sequence);
+    let native_prefix = format!("generation-compose-{}-", scope.operation_prefix());
+    for name in &names {
+        if name.starts_with(&prefix) {
+            // In particular: no binding, binding-pending, activation, feature
+            // renewal or supersession evidence may exist for this attempt.
+            require(allowed.contains(name))?;
+        }
+        if let Some(suffix) = name.strip_prefix(&native_prefix) {
+            let operation = suffix
+                .strip_suffix("-intent.json")
+                .or_else(|| suffix.strip_suffix("-result.json"))
+                .ok_or(REFUSED)?;
+            let (phase, ordinal) = operation.rsplit_once('-').ok_or(REFUSED)?;
+            require(
+                [
+                    "infrastructure",
+                    "stop",
+                    "create",
+                    "observe-created",
+                    "start",
+                    "wait",
+                ]
+                .contains(&phase)
+                    && ordinal.len() == 6
+                    && ordinal.bytes().all(|value| value.is_ascii_digit()),
+            )?;
+        }
+    }
+    let mut result = BTreeMap::new();
+    // Pin the original evidence closure as well as the pending attempt. Only
+    // this owner transaction's new records are excluded from the comparison.
+    for name in names.iter().filter(|name| {
+        name.as_str() != SELECTOR
+            && !name.starts_with("operator-upgrade-")
+            && !name.starts_with("partial-operator-upgrade-")
+            && retained_canary.is_none_or(|(parent, _)| name.as_str() != parent.as_str())
+    }) {
+        let bytes = evidence.read(name, MAX_RECORD, 0o600)?.ok_or(REFUSED)?;
+        result.insert(format!("evidence/{name}"), release::sha256(&bytes));
+    }
+    if let Some((parent, files)) = retained_canary {
+        require(names.contains(parent) && !files.is_empty())?;
+        result.extend(files.clone());
+    }
+    let work = scope.work(installation);
+    for relative in ["current", "identity", "transfer/delivered"] {
+        let directory = Directory::open(&work.join(relative))?;
+        let files = directory.names()?;
+        require(!files.is_empty())?;
+        for name in &files {
+            let record = relative == "identity"
+                || ["pending.json", "validated.json", "completed.json"].contains(&name.as_str());
+            let mode = if record { 0o600 } else { 0o444 };
+            let maximum = if record { MAX_RECORD } else { 64 * 1024 };
+            let bytes = directory.read(name, maximum, mode)?.ok_or(REFUSED)?;
+            result.insert(format!("work/{relative}/{name}"), release::sha256(&bytes));
+        }
+        require(directory.names()? == files)?;
+        directory.require()?;
+    }
+    require(evidence.names()? == names)?;
+    evidence.require()?;
+    Ok(result)
+}
+
+fn require_completed_census(
+    expected: &ProjectResources,
+    observed: &ProjectResources,
+    rows: &[Value],
+) -> Result<()> {
+    require(expected == observed && rows.len() == observed.containers.len())?;
+    let mut seen = BTreeSet::new();
+    for row in rows {
+        let role = row["Service"].as_str().ok_or(REFUSED)?;
+        let container = observed.containers.get(role).ok_or(REFUSED)?;
+        require(seen.insert(role) && row["ID"] == container.id)?;
+        if role == "installer-generation" {
+            require(
+                container.setup
+                    && container
+                        .setup_execution
+                        .as_ref()
+                        .is_some_and(|execution| execution.completed_without_restart)
+                    && row["State"] == "exited"
+                    && row["ExitCode"] == 0,
+            )?;
+        } else if container.setup {
+            require(
+                row["State"] == "created" || (row["State"] == "exited" && row["ExitCode"] == 0),
+            )?;
+        }
+    }
+    require(seen.contains("installer-generation"))
+}
+
+fn managed_pending_scope(
+    source: &str,
+    selected_sequence: u64,
+    pending: &Value,
+) -> Result<installer_generation_maintenance::attempt::Attempt> {
+    let scope = installer_generation_maintenance::attempt::Attempt::new(
+        selected_sequence.checked_add(1).ok_or(REFUSED)?,
+        0,
+    );
+    require(
+        source == MANAGED_RECOVERY_SOURCE
+            && pending["sequence"] == scope.sequence
+            && pending["attempt"] == 0
+            && pending["stage"] == "producer_completed",
+    )?;
+    Ok(scope)
+}
+
+fn managed_producer_transition(
+    view: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+    saved: &installer_doctor::SavedSession,
+) -> Result<Transition> {
+    require(view.journal().identity().source_sha == MANAGED_RECOVERY_SOURCE)?;
+    let parent = generation::load_verified(
+        installation,
+        &view.journal().installation_id().to_string(),
+        &view.journal().runtime().ok_or(REFUSED)?.engine_id,
+    )?
+    .ok_or(REFUSED)?;
+    require(parent.managed_ingress() && !parent.public_ingress())?;
+    // Status uses the generation owner's read-only admission: exact selected
+    // parent, saved plan, source and enrollment identities and helper inputs.
+    let status = installer_generation_maintenance::status_locked(view, installation)?;
+    let pending = &status["pending_generation"];
+    let scope = managed_pending_scope(
+        &view.journal().identity().source_sha,
+        parent.sequence(),
+        pending,
+    )?;
+    let canary = crate::installer_rootless_storage_canary::inspect_retained_completed(view)?;
+    let before = pending_custody(installation, scope, Some(&canary))?;
+    let evidence = Directory::open(&installation.join("evidence"))?;
+    let intent_bytes = evidence
+        .read(&scope.record("intent"), MAX_RECORD, 0o600)?
+        .ok_or(REFUSED)?;
+    let intent: Value = decode(&intent_bytes)?;
+    require(
+        intent["schema"] == "elevenid.installer-generation-maintenance-intent/v2"
+            && intent["public_plan_sha256"]
+                .as_str()
+                .is_none_or(str::is_empty)
+            && intent["managed_renewal_plan_sha256"]
+                .as_str()
+                .is_some_and(valid_sha)
+            && intent["recovery_baseline_sha256"].is_null()
+            && intent["oidc_secret_rotation_sha256"].is_null(),
+    )?;
+    let helper_bytes = evidence
+        .read(&scope.record("helper"), MAX_RECORD, 0o600)?
+        .ok_or(REFUSED)?;
+    let helper: ComposeReceipt = decode(&helper_bytes)?;
+    // Reuse the full generation proof instead of trusting a status label or
+    // copying candidate parsing. This validates create/start/wait authority,
+    // helper equality, all outputs and historical certificate integrity.
+    let candidate = generation::inspect_successor_candidate(
+        installation,
+        view,
+        &parent,
+        scope.number,
+        &helper.operation,
+        None,
+    )?;
+    let inputs: ComposeInputs =
+        serde_json::from_value(intent["helper_inputs"].clone()).map_err(|_| REFUSED)?;
+    let session =
+        ComposeSession::new_generation(docker, view.journal().runtime().ok_or(REFUSED)?, inputs)?;
+    require(
+        session.model() == &intent["helper_model"]
+            && session.configuration_sha256()
+                == intent["helper_configuration_sha256"]
+                    .as_str()
+                    .ok_or(REFUSED)?,
+    )?;
+    // The generation admission permits only its fixed helper to differ from
+    // the selected census; equality additionally pins its recorded new ID.
+    let resources = session.observe_generation_transition(GenerationOperation::Candidate)?;
+    require_completed_census(
+        helper.resources.as_ref().ok_or(REFUSED)?,
+        &resources,
+        &session.status()?,
+    )?;
+    let selector = view.diagnostic_record(installer_generation_maintenance::SELECTOR, true)?;
+    let canary = crate::installer_rootless_storage_canary::inspect_retained_completed(view)?;
+    require(selector.is_some() && pending_custody(installation, scope, Some(&canary))? == before)?;
+    view.require_unchanged()?;
+    Ok(Transition {
+        session_sha256: digest(saved)?,
+        generation_selector_sha256: selector.as_deref().map(release::sha256),
+        resources_sha256: digest(&resources)?,
+        managed_producer_recovery: Some(ManagedProducerRecovery {
+            schema: "elevenid.installer-operator-managed-producer-recovery/v1".into(),
+            sequence: scope.sequence,
+            attempt: scope.number,
+            parent_binding_sha256: parent.sha256()?,
+            candidate_sha256: candidate.receipt_sha256,
+            helper_sha256: release::sha256(&helper_bytes),
+            outputs_sha256: candidate.outputs_sha256,
+            preserved_files_sha256: before,
+        }),
     })
 }
 
@@ -360,12 +636,33 @@ fn validate_intent(
     previous: Option<&Selector>,
     predecessor: &Operator,
 ) -> Result<()> {
+    if let Some(pending) = &intent.transition.managed_producer_recovery {
+        require(
+            base.original_release.source_sha == MANAGED_RECOVERY_SOURCE
+                && pending.schema == "elevenid.installer-operator-managed-producer-recovery/v1"
+                && pending.sequence > 0
+                && pending.attempt == 0
+                && valid_sha(&pending.parent_binding_sha256)
+                && valid_sha(&pending.candidate_sha256)
+                && valid_sha(&pending.helper_sha256)
+                && !pending.outputs_sha256.is_empty()
+                && pending
+                    .outputs_sha256
+                    .values()
+                    .all(|value| valid_sha(value))
+                && !pending.preserved_files_sha256.is_empty()
+                && pending
+                    .preserved_files_sha256
+                    .values()
+                    .all(|value| valid_sha(value)),
+        )?;
+    }
     require(
         intent.schema == "elevenid.installer-operator-upgrade-intent/v1"
             && (1..=MAX_ATTEMPTS).contains(&intent.sequence)
             && &intent.retained == base
             && intent.previous.as_ref() == previous
-            && intent.compatibility == contract()
+            && intent.compatibility == contract_for(&base.original_release.source_sha)?
             && intent.target.sha256 != predecessor.sha256
             && intent.target.source_sha != predecessor.source_sha
             && release_order(&intent.target.release_tag)?
@@ -755,8 +1052,12 @@ fn activate(
     )?;
     verify_staged(installation, intent)?;
     let names = predecessor_units(&intent.retained, history);
-    select_with(state, intent, history, reconcile, || {
-        require_quiescent(installation, &names)
+    select_with(state, intent, history, reconcile, |view| {
+        require_quiescent(installation, &names)?;
+        require(
+            retained(view, installation)? == intent.retained
+                && transition(view, installation, &intent.docker)? == intent.transition,
+        )
     })
 }
 
@@ -765,7 +1066,7 @@ fn select_with(
     intent: &Intent,
     history: &History,
     reconcile: bool,
-    mut quiescent: impl FnMut() -> Result<()>,
+    mut quiescent: impl FnMut(&LockedInspection) -> Result<()>,
 ) -> Result<()> {
     let installation = &intent.retained.installation;
     let staged = staged_for(intent)?;
@@ -777,7 +1078,7 @@ fn select_with(
         selected == previous_bytes.as_deref()
             || (reconcile && selected == Some(next_bytes.as_slice())),
     )?;
-    quiescent()?;
+    quiescent(state.inspection())?;
     if !history.attempts.last().ok_or(REFUSED)?.activation {
         persist(
             state,
@@ -799,7 +1100,7 @@ fn select_with(
                 intent.sequence,
                 |boundary| {
                     if boundary == 1 {
-                        quiescent()?;
+                        quiescent(view)?;
                     }
                     Ok(())
                 },
@@ -1097,7 +1398,7 @@ pub fn run(args: &[String], build_identity: &str) -> Result<String> {
                     .iter()
                     .map(|(k, v)| (k.clone(), release::sha256(v)))
                     .collect(),
-                compatibility: contract(),
+                compatibility: contract_for(&base.original_release.source_sha)?,
                 docker: args.docker.clone(),
                 unit_files: units
                     .iter()

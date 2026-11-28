@@ -23,9 +23,12 @@ An older retained operator can refuse this infrastructure-only start before any
 start intent is written because its reduced model omits the bound ingress. Preserve
 that installation and its evidence. The lifecycle configuration binds the original
 signed operator and inventory; replacing that binary is not a supported upgrade.
-Qualify this correction using a fresh installation from a signed release containing
-it. An unchanged generation or a refusal before a start intent is not a renewal
-or restart pass.
+An explicitly admitted operator successor can instead preserve the original binary,
+product and evidence through the source-specific profiles documented in
+[operator-only recovery](installer-operator-recovery.md). A source or retained state
+outside those profiles still requires a separately supported migration or a fresh
+installation from a signed corrected release. An unchanged generation or a refusal
+before a start intent is not a renewal or restart pass.
 
 An OpenBao custody refusal with reason `openbao_filesystem_device_changed`
 identifies a different kernel filesystem device number while the recorded

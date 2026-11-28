@@ -1,5 +1,104 @@
 //! Synthetic completed observations exercise the read-only evidence admission;
 //! this fixture does not claim a Docker or user-namespace qualification run.
+
+fn retained_fixture(ready: bool, unclassified: bool) -> (tempfile::TempDir, PathBuf) {
+    let (files, installation, mut state) = completed_fixture(&hosting(), false);
+    let inventory = fs::read(installation.join("evidence/installer-inventory.json")).unwrap();
+    let operator = fs::read(installation.join("marty-deploy")).unwrap();
+    let admission = encoded(&json!({
+        "schema":"elevenid.installer-admission/v1",
+        "repository":crate::installer_release::REPOSITORY,"platform":"linux/amd64",
+        "status":"accepted","source_sha":"a".repeat(40),
+        "release_tag":"v1.2.3-nightly.20261031.42",
+        "inventory_sha256":sha(&inventory),"operator_sha256":sha(&operator),
+        "build_run_id":42,"build_run_attempt":2,
+        "promotion_source_sha":"f".repeat(40),"promotion_run_id":43,"promotion_run_attempt":1,
+        "acceptance":{
+            "staged":{"sha256":"b".repeat(64),"run_id":40,"run_attempt":1},
+            "published":{"sha256":"c".repeat(64),"run_id":41,"run_attempt":1}
+        }
+    }))
+    .unwrap();
+    state
+        .write_evidence("installer-admission.json", &admission)
+        .unwrap();
+    for suffix in [".sigstore.json", ".provenance.jsonl"] {
+        state
+            .write_evidence(
+                &format!("installer-admission.json{suffix}"),
+                b"synthetic already-authenticated admission proof",
+            )
+            .unwrap();
+    }
+    drop(state);
+    // This constructs a synthetic retained journal solely for read-only tests.
+    // Production has no scope/phase conversion or receipt-rewrite interface.
+    let journal = installation.join("installation.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&journal).unwrap()).unwrap();
+    if ready {
+        value["phase"] = json!("ready");
+    }
+    if unclassified {
+        value["scope"] = json!({"kind":"unclassified"});
+    }
+    fs::write(&journal, encoded(&value).unwrap()).unwrap();
+    (files, installation)
+}
+
+#[test]
+#[ignore = "requires an ordinary nonroot OS identity for the rootless evidence fixture"]
+fn retained_completed_canary_observation_preserves_tree_and_original_qualification_gate() {
+    let (_files, installation) = retained_fixture(true, true);
+    let original = fs::read(installation.join("installation.json")).unwrap();
+    let view = LockedInspection::open(&installation).unwrap();
+    let (name, hashes) = inspect_retained_completed(&view).unwrap();
+    assert!(name.starts_with("rootless-canary-"));
+    assert_eq!(hashes.len(), 6);
+    for relative in [
+        "request.json",
+        "transition-output.json",
+        "restore-output.json",
+        "child/marker",
+    ] {
+        let bytes = fs::read(installation.join("evidence").join(&name).join(relative)).unwrap();
+        assert_eq!(hashes[&format!("evidence/{name}/{relative}")], sha(&bytes));
+    }
+    assert!(require_completed(&view).is_err());
+    assert_eq!(inspect_retained_completed(&view).unwrap(), (name, hashes));
+    assert_eq!(
+        fs::read(installation.join("installation.json")).unwrap(),
+        original
+    );
+}
+
+#[test]
+#[ignore = "requires an ordinary nonroot OS identity for the rootless evidence fixture"]
+fn retained_completed_canary_requires_ready_unclassified_and_exact_original_tree() {
+    for (ready, unclassified) in [(false, false), (false, true), (true, false)] {
+        let (_files, installation) = retained_fixture(ready, unclassified);
+        let view = LockedInspection::open(&installation).unwrap();
+        assert!(inspect_retained_completed(&view).is_err());
+        if !ready && !unclassified {
+            require_completed(&view).unwrap();
+        }
+    }
+    for change in 0..3 {
+        let (_files, installation) = retained_fixture(true, true);
+        let view = LockedInspection::open(&installation).unwrap();
+        let (name, _) = inspect_retained_completed(&view).unwrap();
+        let parent = installation.join("evidence").join(name);
+        match change {
+            0 => fs::write(parent.join("child/marker"), b"changed marker").unwrap(),
+            1 => fs::write(parent.join("unknown"), b"foreign file").unwrap(),
+            _ => {
+                let path = parent.join("restore-output.json");
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+        assert!(inspect_retained_completed(&view).is_err(), "case {change}");
+    }
+}
+
 use super::*;
 use crate::installer_state::{
     AcceptanceScope, CandidateTestScope, Identity, RuntimeBinding, RuntimeProfile,

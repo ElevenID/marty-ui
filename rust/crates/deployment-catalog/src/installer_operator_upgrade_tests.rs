@@ -1,5 +1,376 @@
 //! Synthetic public release records exercise native private-file ownership and
 //! transaction admission. These are not signed-release or installed-host proof.
+
+#[test]
+fn pending_custody_rejects_unknown_directories_and_pins_only_authenticated_canary_tree() {
+    let f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+    let scope = pending_files(&f);
+    let name = "rootless-canary-11111111111141118111111111111111";
+    let directory = f.installation.join("evidence").join(name);
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(pending_custody(&f.installation, scope, None).is_err());
+    // The real adapter is tested against complete canary receipts separately;
+    // this injected result exercises exact directory selection and hash pinning.
+    let canary = (
+        name.into(),
+        BTreeMap::from([(format!("evidence/{name}/child/marker"), "f".repeat(64))]),
+    );
+    let before = pending_custody(&f.installation, scope, Some(&canary)).unwrap();
+    assert_eq!(
+        before[&format!("evidence/{name}/child/marker")],
+        "f".repeat(64)
+    );
+    let mut changed = canary.clone();
+    changed
+        .1
+        .insert(format!("evidence/{name}/child/marker"), "e".repeat(64));
+    assert_ne!(
+        pending_custody(&f.installation, scope, Some(&changed)).unwrap(),
+        before
+    );
+    let other = f.installation.join("evidence/foreign-directory");
+    fs::create_dir(&other).unwrap();
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(pending_custody(&f.installation, scope, Some(&canary)).is_err());
+}
+
+fn pending_files(f: &Fixture) -> installer_generation_maintenance::attempt::Attempt {
+    let scope = installer_generation_maintenance::attempt::Attempt::new(2, 0);
+    let evidence = f.installation.join("evidence");
+    for kind in [
+        "intent",
+        "managed-renewal-plan",
+        "producer",
+        "helper",
+        "candidate",
+    ] {
+        put(
+            &evidence.join(scope.record(kind)),
+            b"synthetic immutable pending evidence",
+            0o600,
+        );
+    }
+    put(
+        &evidence.join(scope.environment_name("helper")),
+        b"PUBLIC_FIXTURE=true\n",
+        0o600,
+    );
+    // Infrastructure retries are retained before and after the successful
+    // producer; their presence does not authorize another helper execution.
+    // Quiescing the old boot unit uses its supported shutdown and retains
+    // stop receipts. Neither native phase begins generation activation.
+    for phase in ["infrastructure", "stop"] {
+        for kind in ["intent", "result"] {
+            put(
+                &evidence.join(format!(
+                    "generation-compose-{}-{kind}.json",
+                    scope.operation(phase, 2)
+                )),
+                b"synthetic retained infrastructure or stop evidence",
+                0o600,
+            );
+        }
+    }
+    let work = scope.work(&f.installation);
+    for relative in ["current", "identity", "transfer/delivered"] {
+        let path = work.join(relative);
+        fs::create_dir_all(&path).unwrap();
+        let mut current = path.as_path();
+        while current != f.installation {
+            fs::set_permissions(current, fs::Permissions::from_mode(0o700)).unwrap();
+            current = current.parent().unwrap();
+        }
+    }
+    put(
+        &work.join("current/workload_token"),
+        b"original opaque fixture",
+        0o444,
+    );
+    put(
+        &work.join("identity/renewal-secret-id"),
+        b"retained opaque fixture",
+        0o600,
+    );
+    put(
+        &work.join("transfer/delivered/workload_token"),
+        b"candidate opaque fixture",
+        0o444,
+    );
+    for name in ["pending.json", "validated.json", "completed.json"] {
+        put(&work.join("transfer/delivered").join(name), b"{}", 0o600);
+    }
+    scope
+}
+
+fn pending_transition(
+    f: &Fixture,
+    scope: installer_generation_maintenance::attempt::Attempt,
+) -> Transition {
+    let mut transition = f.intent.transition.clone();
+    let files = pending_custody(&f.installation, scope, None).unwrap();
+    transition.managed_producer_recovery = Some(ManagedProducerRecovery {
+        schema: "elevenid.installer-operator-managed-producer-recovery/v1".into(),
+        sequence: scope.sequence,
+        attempt: 0,
+        parent_binding_sha256: "b".repeat(64),
+        candidate_sha256: files[&format!("evidence/{}", scope.record("candidate"))].clone(),
+        helper_sha256: files[&format!("evidence/{}", scope.record("helper"))].clone(),
+        outputs_sha256: BTreeMap::from([(
+            "workload_token".into(),
+            files["work/transfer/delivered/workload_token"].clone(),
+        )]),
+        preserved_files_sha256: files,
+    });
+    transition
+}
+
+#[test]
+fn recovery_profile_preserves_legacy_bytes_and_rejects_unknown_source_or_active_attempt() {
+    let legacy = Fixture::new();
+    let bytes = encode(&legacy.intent).unwrap();
+    assert!(!String::from_utf8(bytes.clone())
+        .unwrap()
+        .contains("managed_producer_recovery"));
+    assert_eq!(encode(&decode::<Intent>(&bytes).unwrap()).unwrap(), bytes);
+    assert_eq!(contract_for(ORIGINAL_SOURCE).unwrap(), legacy_contract());
+    assert_eq!(
+        contract_for(MANAGED_RECOVERY_SOURCE).unwrap(),
+        managed_recovery_contract()
+    );
+    assert!(contract_for(&"f".repeat(40)).is_err());
+
+    let completed = json!({"sequence":2,"attempt":0,"stage":"producer_completed"});
+    assert_eq!(
+        managed_pending_scope(MANAGED_RECOVERY_SOURCE, 1, &completed)
+            .unwrap()
+            .sequence,
+        2
+    );
+    for source in [ORIGINAL_SOURCE, "unknown"] {
+        assert!(managed_pending_scope(source, 1, &completed).is_err());
+    }
+    for stage in [
+        "producer_pending",
+        "producer_start_outcome_unobserved",
+        "runtime_replacement_pending",
+        "selection_pending",
+        "supersession_pending",
+        "managed_preparation_saved",
+    ] {
+        let mut changed = completed.clone();
+        changed["stage"] = json!(stage);
+        assert!(managed_pending_scope(MANAGED_RECOVERY_SOURCE, 1, &changed).is_err());
+    }
+    for changed in [
+        json!({"sequence":3,"attempt":0,"stage":"producer_completed"}),
+        json!({"sequence":2,"attempt":1,"stage":"producer_completed"}),
+        json!({"sequence":2,"stage":"producer_completed"}),
+    ] {
+        assert!(managed_pending_scope(MANAGED_RECOVERY_SOURCE, 1, &changed).is_err());
+    }
+    assert!(managed_pending_scope(MANAGED_RECOVERY_SOURCE, u64::MAX, &completed).is_err());
+}
+
+#[test]
+fn completed_managed_custody_survives_operator_selection_without_rewriting_pending_or_original() {
+    let mut f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+    let scope = pending_files(&f);
+    f.intent.transition = pending_transition(&f, scope);
+    let before = pending_custody(&f.installation, scope, None).unwrap();
+    validate_intent(
+        &f.intent,
+        &f.intent.retained,
+        None,
+        &f.intent.retained.original_operator,
+    )
+    .unwrap();
+    f.stage();
+    assert_eq!(
+        pending_custody(&f.installation, scope, None).unwrap(),
+        before
+    );
+    let mut held = LockedMaintenance::open(&f.installation).unwrap();
+    let h = history(held.inspection(), &f.installation).unwrap();
+    let observed = Cell::new(0);
+    select_with(&mut held, &f.intent, &h, false, |_| {
+        observed.set(observed.get() + 1);
+        require(pending_custody(&f.installation, scope, None)? == before)
+    })
+    .unwrap();
+    assert_eq!(observed.get(), 2);
+    assert_eq!(
+        status_locked(held.inspection(), &f.installation).unwrap()["phase"],
+        "selected"
+    );
+    assert_eq!(
+        pending_custody(&f.installation, scope, None).unwrap(),
+        before
+    );
+    f.originals_unchanged();
+}
+
+#[test]
+fn pending_handoff_refuses_binding_activation_supersession_and_native_activation_races() {
+    for suffix in [
+        "binding",
+        "binding-pending",
+        "activation-intent",
+        "activation",
+        "supersession-intent",
+    ] {
+        let f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+        let scope = pending_files(&f);
+        pending_custody(&f.installation, scope, None).unwrap();
+        put(
+            &f.installation.join("evidence").join(scope.record(suffix)),
+            b"racing record",
+            0o600,
+        );
+        assert!(
+            pending_custody(&f.installation, scope, None).is_err(),
+            "{suffix}"
+        );
+    }
+    let f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+    let scope = pending_files(&f);
+    put(
+        &f.installation.join("evidence").join(format!(
+            "generation-compose-{}-intent.json",
+            scope.operation("activate-create", 0)
+        )),
+        b"racing native activation",
+        0o600,
+    );
+    assert!(pending_custody(&f.installation, scope, None).is_err());
+}
+
+#[test]
+fn pending_handoff_rechecks_changed_candidate_or_binding_at_atomic_publication() {
+    for change in 0..3 {
+        let mut f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+        let scope = pending_files(&f);
+        f.intent.transition = pending_transition(&f, scope);
+        let before = pending_custody(&f.installation, scope, None).unwrap();
+        f.stage();
+        let mut held = LockedMaintenance::open(&f.installation).unwrap();
+        let h = history(held.inspection(), &f.installation).unwrap();
+        let calls = Cell::new(0);
+        assert!(select_with(&mut held, &f.intent, &h, false, |_| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                let path = match change {
+                    0 => f
+                        .installation
+                        .join("evidence")
+                        .join(scope.record("candidate")),
+                    1 => scope
+                        .work(&f.installation)
+                        .join("transfer/delivered/workload_token"),
+                    _ => f
+                        .installation
+                        .join("evidence")
+                        .join(scope.record("binding")),
+                };
+                if change == 1 {
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+                put(
+                    &path,
+                    b"changed after initial admission",
+                    if change == 1 { 0o444 } else { 0o600 },
+                );
+            }
+            require(pending_custody(&f.installation, scope, None)? == before)
+        })
+        .is_err());
+        assert!(!f.installation.join("evidence").join(SELECTOR).exists());
+        assert_eq!(calls.get(), 2);
+    }
+}
+
+#[test]
+fn recovery_profile_still_requires_quiescent_predecessors_before_selection() {
+    let mut f = Fixture::with_source(MANAGED_RECOVERY_SOURCE);
+    let scope = pending_files(&f);
+    f.intent.transition = pending_transition(&f, scope);
+    f.stage();
+    let mut held = LockedMaintenance::open(&f.installation).unwrap();
+    let h = history(held.inspection(), &f.installation).unwrap();
+    assert!(select_with(&mut held, &f.intent, &h, false, |_| {
+        Err("predecessor unit is active or enabled".into())
+    })
+    .is_err());
+    assert!(!f.installation.join("evidence").join(SELECTOR).exists());
+    assert!(!f
+        .installation
+        .join("evidence")
+        .join(record(1, "activation"))
+        .exists());
+    f.originals_unchanged();
+}
+
+#[test]
+fn completed_helper_census_rejects_restart_replacement_and_live_execution() {
+    let f = Fixture::new();
+    let saved: installer_doctor::SavedSession =
+        decode(&fs::read(f.installation.join("evidence/compose-session.json")).unwrap()).unwrap();
+    let mut expected = saved.receipt.resources.unwrap();
+    let mut helper = expected.containers["gateway"].clone();
+    helper.id = "3".repeat(64);
+    helper.service = "installer-generation".into();
+    helper.setup = true;
+    helper.setup_execution = Some(crate::installer_compose::SetupExecution {
+        started_at: "2026-11-28T00:00:01Z".into(),
+        finished_at: "2026-11-28T00:00:02Z".into(),
+        completed_without_restart: true,
+    });
+    expected
+        .containers
+        .insert(helper.service.clone(), helper.clone());
+    let rows = vec![
+        json!({"Service":"gateway","ID":expected.containers["gateway"].id,"State":"running","Health":"unhealthy"}),
+        json!({"Service":"installer-generation","ID":helper.id,"State":"exited","ExitCode":0}),
+    ];
+    // An unhealthy retained runtime is the recovery use case; it confers no
+    // authority to replace it during operator selection.
+    require_completed_census(&expected, &expected, &rows).unwrap();
+    for change in 0..4 {
+        let mut observed = expected.clone();
+        match change {
+            0 => {
+                observed
+                    .containers
+                    .get_mut("installer-generation")
+                    .unwrap()
+                    .id = "4".repeat(64)
+            }
+            1 => {
+                observed
+                    .containers
+                    .get_mut("installer-generation")
+                    .unwrap()
+                    .setup_execution
+                    .as_mut()
+                    .unwrap()
+                    .started_at = "later".into()
+            }
+            2 => observed.containers.get_mut("gateway").unwrap().id = "4".repeat(64),
+            _ => {
+                observed.volumes.insert("foreign-volume".into());
+            }
+        }
+        assert!(require_completed_census(&expected, &observed, &rows).is_err());
+    }
+    let mut running = rows.clone();
+    running[1]["State"] = json!("running");
+    assert!(require_completed_census(&expected, &expected, &running).is_err());
+    let mut failed = rows.clone();
+    failed[1]["ExitCode"] = json!(1);
+    assert!(require_completed_census(&expected, &expected, &failed).is_err());
+    assert!(require_completed_census(&expected, &expected, &rows[..1]).is_err());
+}
+
 use super::*;
 use crate::{
     installer_compose::{
@@ -70,14 +441,17 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_source(ORIGINAL_SOURCE)
+    }
+    fn with_source(source: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let installation = root.path().join("installation");
         let old_binary = b"synthetic retained bootstrap operator";
-        let old_files = release_files(ORIGINAL_SOURCE, "v1.0.0", old_binary);
-        let old = operator(&old_files, old_binary, ORIGINAL_SOURCE, "v1.0.0");
+        let old_files = release_files(source, "v1.0.0", old_binary);
+        let old = operator(&old_files, old_binary, source, "v1.0.0");
         let identity = Identity {
-            source_sha: ORIGINAL_SOURCE.into(),
+            source_sha: source.into(),
             release_tag: "v1.0.0".into(),
             inventory_sha256: format!("sha256:{}", old.inventory_sha256),
         };
@@ -219,6 +593,7 @@ impl Fixture {
                 session_sha256: digest(&saved).unwrap(),
                 generation_selector_sha256: None,
                 resources_sha256: digest(&saved.receipt.resources).unwrap(),
+                managed_producer_recovery: None,
             },
             previous: None,
             target: target.clone(),
@@ -226,7 +601,7 @@ impl Fixture {
                 .iter()
                 .map(|(k, v)| (k.clone(), release::sha256(v)))
                 .collect(),
-            compatibility: contract(),
+            compatibility: contract_for(source).unwrap(),
             docker: "/usr/bin/docker".into(),
             unit_files: units
                 .iter()
@@ -278,14 +653,21 @@ impl Fixture {
 
 #[test]
 fn compiled_contract_and_arguments_exclude_product_schema_and_authority_changes() {
-    assert_eq!(contract()["original_source_sha"], ORIGINAL_SOURCE);
+    assert_eq!(legacy_contract()["original_source_sha"], ORIGINAL_SOURCE);
+    assert_eq!(contract()["profiles"][0], legacy_contract());
+    assert_eq!(contract()["profiles"][1], managed_recovery_contract());
+    assert_eq!(
+        managed_recovery_contract()["original_source_sha"],
+        MANAGED_RECOVERY_SOURCE
+    );
     for field in [
         "database_migration",
         "credential_issuance",
         "key_custody_change",
         "bootstrap_operator_replacement",
     ] {
-        assert_eq!(contract()[field], false);
+        assert_eq!(legacy_contract()[field], false);
+        assert_eq!(managed_recovery_contract()[field], false);
     }
     let good: Vec<String> = [
         "stage",
@@ -487,13 +869,13 @@ fn unavailable_or_changed_predecessor_observation_never_selects_and_poisoning_re
     f.stage();
     let mut held = LockedMaintenance::open(&f.installation).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
-    assert!(select_with(&mut held, &f.intent, &h, false, || Err(
+    assert!(select_with(&mut held, &f.intent, &h, false, |_| Err(
         "user manager unavailable".into()
     ))
     .is_err());
     assert!(!f.installation.join("evidence").join(SELECTOR).exists());
     let count = Cell::new(0);
-    assert!(select_with(&mut held, &f.intent, &h, false, || {
+    assert!(select_with(&mut held, &f.intent, &h, false, |_| {
         count.set(count.get() + 1);
         if count.get() == 1 {
             Ok(())
@@ -513,7 +895,7 @@ fn unavailable_or_changed_predecessor_observation_never_selects_and_poisoning_re
         status_locked(held.inspection(), &f.installation).unwrap()["phase"],
         "selection_pending"
     );
-    select_with(&mut held, &f.intent, &h, true, || Ok(())).unwrap();
+    select_with(&mut held, &f.intent, &h, true, |_| Ok(())).unwrap();
     assert_eq!(
         status_locked(held.inspection(), &f.installation).unwrap()["phase"],
         "selected"
@@ -527,7 +909,7 @@ fn selected_owner_is_explicit_and_a_different_running_binary_cannot_mutate() {
     f.stage();
     let mut held = LockedMaintenance::open(&f.installation).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
-    select_with(&mut held, &f.intent, &h, false, || Ok(())).unwrap();
+    select_with(&mut held, &f.intent, &h, false, |_| Ok(())).unwrap();
     let status = status_locked(held.inspection(), &f.installation).unwrap();
     assert_eq!(status["phase"], "selected");
     assert_eq!(
@@ -552,7 +934,7 @@ fn completed_reconciliation_observes_durable_selection_without_republication() {
     f.stage();
     let mut held = LockedMaintenance::open(&f.installation).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
-    select_with(&mut held, &f.intent, &h, false, || Ok(())).unwrap();
+    select_with(&mut held, &f.intent, &h, false, |_| Ok(())).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
     let path = f.installation.join("evidence").join(SELECTOR);
     let before = fs::metadata(&path).unwrap();
@@ -599,7 +981,7 @@ fn consecutive_successors_require_the_exact_predecessor_and_preserve_both_owners
     f.stage();
     let mut held = LockedMaintenance::open(&f.installation).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
-    select_with(&mut held, &f.intent, &h, false, || Ok(())).unwrap();
+    select_with(&mut held, &f.intent, &h, false, |_| Ok(())).unwrap();
     let first_selector = fs::read(f.installation.join("evidence").join(SELECTOR)).unwrap();
     let first_binary = fs::read(f.intent.target.path(&f.installation)).unwrap();
     let h = history(held.inspection(), &f.installation).unwrap();
@@ -671,7 +1053,7 @@ fn consecutive_successors_require_the_exact_predecessor_and_preserve_both_owners
         .unit_files
         .keys()
         .all(|name| !predecessors.contains(name)));
-    select_with(&mut held, &intent, &staged, false, || Ok(())).unwrap();
+    select_with(&mut held, &intent, &staged, false, |_| Ok(())).unwrap();
     let complete = history(held.inspection(), &f.installation).unwrap();
     assert_eq!(complete.selected().unwrap().intent.sequence, 2);
     assert_eq!(
