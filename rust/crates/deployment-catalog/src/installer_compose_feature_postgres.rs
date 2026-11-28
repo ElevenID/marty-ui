@@ -5,6 +5,15 @@ use super::*;
 const ROLES: [&str; 2] = ["postgres", "installer-ingress"];
 const PREFIX: &str = "feature-postgres-carrier-compose-";
 
+impl ComposeInputs {
+    /// Keep the complete model while limiting carrier execution to its two roles.
+    pub(crate) fn for_feature_postgres_carrier(&self) -> Self {
+        let mut inputs = self.clone();
+        inputs.services = ROLES.into_iter().map(str::to_owned).collect();
+        inputs
+    }
+}
+
 fn role_state<'a>(rows: &'a [Value], role: &str, id: &str) -> Result<&'a str> {
     let matches: Vec<_> = rows.iter().filter(|row| row["Service"] == role).collect();
     require(matches.len() == 1 && matches[0]["ID"] == id)?;
