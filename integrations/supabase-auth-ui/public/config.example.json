@@ -2,7 +2,7 @@
   "schema": "elevenid.supabase-auth-ui/v1",
   "supabaseUrl": "https://supabase.example.invalid",
   "publishableKey": "sb_publishable_SYNTHETIC_NOT_A_REAL_KEY_0123456789",
-  "brand": "ElevenID",
+  "brand": "ElevenID LLC",
   "clients": [
     {
       "id": "11111111-1111-4111-8111-111111111111",

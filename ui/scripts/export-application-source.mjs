@@ -17,8 +17,10 @@ const CONTRACT = 'contracts/application-source-export.json';
 // Source maps may evolve without changing the archive grammar. Each accepted
 // map, including the initial package, is pinned to exact reviewed bytes.
 const SOURCE_CONTRACTS = Object.freeze([
-  Object.freeze({ path: CONTRACT, sha256: 'sha256:9ce0566753207d1ab3fc87c4c8a9fd01b06d9eb384dd62d9ea5197d403dafeae',
-    files: 592, test_files: 32, assertions: 414 }),
+  Object.freeze({ path: CONTRACT, sha256: 'sha256:5877a66bad9ea4331151f7399d1aa21e5cf5460bce45a84dd20abceb5384b9cd',
+    files: 599, test_files: 32, assertions: 414 }),
+  Object.freeze({ path: 'contracts/application-source-export-history/before-shared-web-layout-v1.json',
+    sha256: 'sha256:9ce0566753207d1ab3fc87c4c8a9fd01b06d9eb384dd62d9ea5197d403dafeae', files: 592, test_files: 32, assertions: 414 }),
   Object.freeze({ path: 'contracts/application-source-export-history/before-managed-wallet-setup-v1.json',
     sha256: 'sha256:647d0054ac2d7a22810ba04610804cae05ea88771f619760c54f5b807e1ece1a',
     files: 586, test_files: 30, assertions: 392 }),

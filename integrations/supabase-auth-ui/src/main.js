@@ -6,6 +6,7 @@ import { consumeRecoveryRequest, RecoveryController } from "./recovery.js";
 import { renderRecoveryView } from "./recovery-view.js";
 import { AccountSetupController, consumeSetupRequest } from "./account-setup.js";
 import { renderSetupView } from "./account-setup-view.js";
+import { postNativeCallback } from "./native-callback.js";
 
 const root = document.getElementById("app");
 let controller;
@@ -43,6 +44,7 @@ try {
       verifyTotp: (factor, code) => controller.verifyTotp(factor, code),
       savePassword: (password, confirmation) => controller.savePassword(password, confirmation),
       signIn: () => { controller.dispose(); window.location.replace(config.accountLifecycle.signInUri); },
+      register: () => { controller.dispose(); window.location.replace("/account/register"); },
       restart: () => { controller?.dispose(); window.location.replace("/account/recover"); },
     };
     const renderRecovery = (state) => renderRecoveryView(document, root, state, recoveryActions);
@@ -84,25 +86,8 @@ try {
       createClient: createProviderClient,
       onChange: render,
       navigate: (url) => window.location.replace(url),
-      postCallback: ({ action, fields }) => {
-        // Top-level POST lets Auth set its application cookie without CORS or
-        // third-party cookies. Tokens never enter a URL or rendered UI state.
-        const form = document.createElement("form");
-        form.method = "post";
-        form.action = action;
-        form.hidden = true;
-        form.autocomplete = "off";
-        for (const [name, value] of Object.entries(fields)) {
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = name;
-          input.value = value;
-          form.append(input);
-        }
-        document.body.append(form);
-        try { HTMLFormElement.prototype.submit.call(form); }
-        finally { form.remove(); }
-      },
+      // Top-level POST sets the application's cookie without CORS or token URLs.
+      postCallback: (handoff) => postNativeCallback(document, window, handoff),
     });
     render(controller.state);
   }

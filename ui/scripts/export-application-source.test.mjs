@@ -189,6 +189,8 @@ test('historical source-map selection preserves its exact inventory and rejects 
       sha256: 'sha256:056ec105dd008be974f443259858f622f02967f539975ac1245507315eac8b94' },
     { path: 'before-managed-wallet-setup-v1.json', files: 586, assertions: 392,
       sha256: 'sha256:647d0054ac2d7a22810ba04610804cae05ea88771f619760c54f5b807e1ece1a' },
+    { path: 'before-shared-web-layout-v1.json', files: 592, assertions: 414,
+      sha256: 'sha256:9ce0566753207d1ab3fc87c4c8a9fd01b06d9eb384dd62d9ea5197d403dafeae' },
   ]) {
   const legacyBytes = readFileSync(path.join(ROOT, 'contracts/application-source-export-history', accepted.path));
   const legacyContract = parseApplicationSourceJson(legacyBytes);
@@ -267,8 +269,8 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.deepEqual(readFileSync(first.archivePath), readFileSync(second.archivePath));
   assert.deepEqual(readFileSync(first.manifestPath), readFileSync(second.manifestPath));
   const manifest = parseApplicationSourceJson(readFileSync(first.manifestPath));
-  assert.equal(manifest.files.length, 592);
-  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 593);
+  assert.equal(manifest.files.length, 599);
+  assert.equal(decodeApplicationSourceZip(readFileSync(first.archivePath)).length, 600);
   assert.equal(manifest.source.commit, git(root, 'rev-parse', 'HEAD').trim());
   const restore = (destination, options = {}) => restoreApplicationSourcePackage({ ...first,
     expectedArchiveSha256: receipt.archive.sha256, expectedManifestSha256: receipt.manifest.sha256, destination, ...options });
@@ -277,7 +279,19 @@ test('the exact source map exports deterministically and restores a closed ordin
   assert.equal(existsSync(path.join(destination, 'ui/scripts/application-package-consumer.mjs')), false);
   assert.deepEqual(readFileSync(path.join(destination, 'ui/package.json')),
     readFileSync(path.join(root, 'ui/profiles/application/package.json')));
-  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, 592);
+  assert.equal(validateApplicationSourceInventory({ destination, manifest }).files, 599);
+  for (const sharedInput of [
+    'ui/src/components/layouts/AppHeader.jsx',
+    'ui/src/shared/web-layout/auth-page.css',
+    'ui/src/shared/web-layout/header.css',
+    'ui/src/shared/web-layout/header.mjs',
+    'ui/src/shared/web-layout/html.mjs',
+    'ui/src/shared/web-layout/source.json',
+    'ui/src/shared/web-layout/verify-source.mjs',
+  ]) {
+    assert.ok(manifest.files.some((entry) => entry.source === sharedInput && entry.path === sharedInput));
+    assert.deepEqual(readFileSync(path.join(destination, sharedInput)), readFileSync(path.join(root, sharedInput)));
+  }
   assert.equal(lstatSync(path.join(destination, APPLICATION_SOURCE_MANIFEST_PATH)).mode & 0o777, 0o644);
 
   await t.test('restore rejects incorrect pins and existing destinations without modifying them', () => {
@@ -388,7 +402,7 @@ test('the exact source map exports deterministically and restores a closed ordin
       assert.deepEqual(readFileSync(path.join(selected.root, 'ui/bun.lock')), lockBytes);
       assert.equal(lstatSync(path.join(selected.root, 'LICENSE')).mode & 0o777, 0o644);
       const plan = await planApplicationSourceExport({ repositoryRoot: selected.root });
-      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, 592);
+      assert.equal(plan.manifest.fixture, true); assert.equal(plan.manifest.files.length, 599);
       assert.equal(plan.plan.source.working_tree_dirty, false);
     } finally {
       writeFileSync(packagePath, packageBytes); writeFileSync(lockPath, lockBytes);

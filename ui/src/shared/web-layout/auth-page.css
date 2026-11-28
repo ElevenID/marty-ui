@@ -1,0 +1,24 @@
+:root {
+  --elevenid-primary: #1976d2;
+  --elevenid-canvas: #f3f4f6;
+}
+
+.elevenid-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 16px 60px;
+  min-height: calc(100vh - 64px);
+}
+
+.elevenid-content {
+  width: 100%;
+  max-width: 520px;
+}
+
+@media (max-width: 768px) {
+  .elevenid-page {
+    padding: 24px 12px 40px;
+    min-height: calc(100vh - 56px);
+  }
+}

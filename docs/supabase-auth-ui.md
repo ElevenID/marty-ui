@@ -105,7 +105,7 @@ when preparing a real build. That file's contents are published as
   "schema": "elevenid.supabase-auth-ui/v1",
   "supabaseUrl": "https://PROJECT_REF.supabase.co",
   "publishableKey": "sb_publishable_REPLACE_WITH_THE_PUBLIC_PROJECT_KEY",
-  "brand": "ElevenID",
+  "brand": "ElevenID LLC",
   "clients": [
     {
       "id": "11111111-1111-4111-8111-111111111111",
@@ -367,6 +367,37 @@ These tests do not establish browser appearance, deployed header behavior or
 hosted provider interoperability.
 
 ## Cloudflare Pages and provider wiring
+
+### Separate API and console origins
+
+When the native callback accepts the POST at one origin and issues a redirect
+to a different console origin, use `elevenid.supabase-auth-ui/v4`. It retains
+the v3 account lifecycle fields and requires `postRedirectOrigins`, a bounded
+list of unique exact HTTPS origins, for example:
+
+```json
+"postRedirectOrigins": ["https://console.example.invalid"]
+```
+
+The build adds those origins to `form-action` alongside the registered native
+callback origins. This allows the browser's subsequent redirect navigation;
+the callback helper still sends code, state and native MFA proof only to the
+exact registered callback URI. Callback validation, provider verification,
+Origin validation and MFA requirements are unchanged. Wildcards, schemes,
+paths, query strings, credentials, nondefault ports and duplicate origins are
+rejected. v1–v3 configuration behavior remains unchanged.
+
+Without the final origin, a browser can accept the callback POST and its
+session cookie, then block the console redirect and leave the auth page at
+“Returning”. `tests/test_native_auth_callback.py` exercises that three-origin
+case with the actual production form helper and generated policies, including
+the blocked v3 control, permitted v4 console and an unlisted origin that stays
+blocked. It uses synthetic data and intercepted requests, not a live provider.
+
+For an actual deployment, retain the reviewed callback/provider/client values,
+set the schema to v4, set `brand` to `ElevenID LLC`, and supply only the intended
+console origin in `postRedirectOrigins` before rebuilding. The synthetic full
+example is `public/config.split-origin.example.json`.
 
 Prepare a Pages static deployment containing the complete `dist/` output.
 Deployment, custom-domain setup and changes to Supabase are separate operator

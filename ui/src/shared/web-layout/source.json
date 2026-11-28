@@ -1,0 +1,23 @@
+{
+  "schema": "elevenid.shared-web-header/v1",
+  "owner": "ElevenID/marty-ui",
+  "sourceDirectory": "ui/src/shared/web-layout",
+  "revision": "c56d6a7f061fe37ae4752a978e69dc235933d0fbc3c1705d032ee011b0fa98a4",
+  "files": [
+    {
+      "path": "header.mjs",
+      "bytes": 1050,
+      "sha256": "d01816f8d9485c292df6228faeb80dae91f8bed1e5686f22f39a279a4f539302"
+    },
+    {
+      "path": "header.css",
+      "bytes": 1157,
+      "sha256": "a1784cde6cbad6e151f053ea699e50808f200acde2eecd0afafefd764bb6b07b"
+    },
+    {
+      "path": "verify-source.mjs",
+      "bytes": 1261,
+      "sha256": "6bd496c09e4d5ee8f71bf04adc62a46e7c5d51702d3df00e19f33759c9a340d8"
+    }
+  ]
+}

@@ -191,7 +191,14 @@ describe('ConsoleHeaderBar', () => {
       <MemoryRouter><ConsoleHeaderBar onMobileMenuToggle={vi.fn()} /></MemoryRouter>
     )
     const header = screen.getByRole('banner')
+    expect(header).toHaveClass('elevenid-appbar')
+    expect(header.querySelector('.elevenid-toolbar')).toBeInTheDocument()
+    const brand = within(header).getByRole('link', { name: 'ElevenID LLC' })
+    expect(brand).toHaveAttribute('href', '/')
+    expect(header.querySelector('#brand-name')).toContainElement(brand)
     const bell = within(header).getByRole('button', { name: 'notifications' })
+    expect(header.querySelector('.elevenid-toolbar-actions')).toContainElement(bell)
+    expect(header.querySelector('.elevenid-toolbar-actions')).toContainElement(within(header).getByTestId('console-account-menu-button'))
     await waitFor(() => expect(within(bell).getByText('3')).toBeInTheDocument())
     expect(mockGetUnreadCount).toHaveBeenCalledWith('org-123', 'user-123')
     expect(within(header).getByTestId('language-switcher')).toBeVisible()
@@ -199,7 +206,7 @@ describe('ConsoleHeaderBar', () => {
     if (width < 900) {
       expect(within(header).getByRole('button', { name: 'MO' })).toBeVisible()
       expect(within(header).getByRole('button', { name: 'open drawer' })).toBeVisible()
-    }
+    } else expect(within(header).getByRole('button', { name: 'Logout', exact: true })).toBeVisible()
     await user.click(bell)
     expect(await screen.findByText('Notification for org-123')).toBeVisible()
     expect(mockListNotifications).toHaveBeenCalledWith({ organization_id: 'org-123', recipient_id: 'user-123', limit: 10 })
@@ -218,6 +225,8 @@ describe('ConsoleHeaderBar', () => {
       <MemoryRouter><MobileNavigationHarness /></MemoryRouter>
     )
     const header = screen.getByRole('banner')
+    expect(header).toHaveClass('elevenid-appbar')
+    expect(header.querySelector('.elevenid-toolbar-center')).toBeNull()
     expect(within(header).queryByRole('button', { name: 'Me' })).not.toBeInTheDocument()
     expect(within(header).queryByRole('button', { name: 'Org' })).not.toBeInTheDocument()
     if (width < 380) expect(within(header).queryByAltText('ElevenID LLC')).not.toBeInTheDocument()
@@ -228,6 +237,7 @@ describe('ConsoleHeaderBar', () => {
     const bell = within(header).getByRole('button', { name: 'notifications' })
     await waitFor(() => expect(within(bell).getByText('3')).toBeInTheDocument())
     const drawerButton = within(header).getByRole('button', { name: 'open drawer' })
+    expect(header.querySelector('#brand-name')).toContainElement(drawerButton)
     expect(drawerButton).toHaveStyle({ marginLeft: '0px' })
     await user.click(drawerButton)
     const modeSwitcher = within(screen.getByRole('group'))
@@ -292,6 +302,10 @@ describe('ConsoleHeaderBar', () => {
 
     const meToggle = screen.getByRole('button', { name: 'Me' })
     const orgToggle = screen.getByRole('button', { name: 'Org' })
+    const header = screen.getByRole('banner')
+    expect(header).toHaveClass('elevenid-appbar')
+    expect(header.querySelector('.elevenid-toolbar-center')).toContainElement(meToggle)
+    expect(header.querySelector('.elevenid-toolbar-center')).toContainElement(orgToggle)
 
     expect(screen.getByAltText('ElevenID LLC')).toHaveAttribute('src', '/apple-touch-icon.png')
     expect(screen.queryByText('ElevenID LLC')).not.toBeInTheDocument()
@@ -303,7 +317,7 @@ describe('ConsoleHeaderBar', () => {
     expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument()
   })
 
-  it('routes the account settings action to the org settings page in org mode', async () => {
+  it('routes the org account settings action and retains sign out', async () => {
     const { user } = renderWithoutRouter(
       <MemoryRouter>
         <ConsoleHeaderBar onMobileMenuToggle={vi.fn()} />
@@ -315,6 +329,8 @@ describe('ConsoleHeaderBar', () => {
     expect(screen.getByText('Maree')).toBeInTheDocument()
     expect(screen.queryByText('Marty Org')).not.toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveAttribute('href', '/console/org/settings')
+    await user.click(screen.getByRole('menuitem', { name: 'Sign out' }))
+    expect(mockLogout).toHaveBeenCalledTimes(1)
   })
 
   it.each([

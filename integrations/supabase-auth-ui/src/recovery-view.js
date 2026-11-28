@@ -35,10 +35,19 @@ export function renderRecoveryView(document, root, state, actions) {
     form.append(email.wrapper, submit);
     form.addEventListener("submit", (event) => { event.preventDefault(); void actions.requestEmail(email.input.value); });
     content.append(form);
+    if (actions.register) {
+      const accountActions = element("div", "actions");
+      accountActions.append(button("New here? Create an account", actions.register));
+      content.append(accountActions);
+    }
   } else if (state.phase === "sent") {
     heading.textContent = "Check your email";
-    intro("If the account can be recovered, a recovery email is on its way. Use the newest link. You can close this page.");
-    content.append(button("Return to sign in", actions.signIn));
+    intro("If the account can be recovered, you will receive a recovery email. Check your inbox and spam folder, and use the newest link.");
+    content.append(element("p", "help", "If no message arrives, check the address you entered. If you have not created an account on this sign-in service, create one first."));
+    const accountActions = element("div", "actions");
+    accountActions.append(button("Return to sign in", actions.signIn));
+    if (actions.register) accountActions.append(button("New here? Create an account", actions.register));
+    content.append(accountActions);
   } else if (state.phase === "confirm") {
     heading.textContent = "Continue password recovery";
     intro("Continue to verify this one-time recovery link. Your password has not changed.");
