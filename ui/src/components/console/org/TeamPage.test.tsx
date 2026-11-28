@@ -239,6 +239,62 @@ describe('TeamPage', () => {
     await openRoleDialog(user)
   })
 
+  it('assigns a default-organization role while preserving membership and existing roles', async () => {
+    const organizationId = '00000000-0000-0000-0000-000000000001'
+    mockUseConsole.mockReturnValue({ activeOrgId: organizationId })
+    mockListMembers.mockResolvedValue([
+      {
+        id: 'test-member',
+        user_id: 'test-user',
+        email: 'test-admin@example.com',
+        roles: [{ id: 'role_applicant', name: 'applicant', display_name: 'Applicant' }],
+        status: 'active',
+        is_owner: false,
+      },
+      {
+        id: 'pending-invite',
+        email: 'pending@example.com',
+        roles: [{ id: 'role_applicant', name: 'applicant', display_name: 'Applicant' }],
+        status: 'invited',
+        is_owner: false,
+      },
+    ])
+    mockListRoles.mockResolvedValue({ roles: [
+      { id: 'role_applicant', name: 'applicant', display_name: 'Applicant' },
+      { id: 'role_admin', name: 'admin', display_name: 'Admin' },
+    ] })
+    const { user } = renderWithRouter(<TeamPage />)
+    const cells = await screen.findAllByText('test-admin@example.com')
+    const member = cells[0].closest('tr') as HTMLElement
+    const invitation = screen.getByText('pending@example.com').closest('tr') as HTMLElement
+    expect(within(invitation).queryByRole('button')).not.toBeInTheDocument()
+    await user.click(within(member).getByRole('button'))
+    expect(screen.queryByText('org.team.members.actions.remove')).not.toBeInTheDocument()
+    await user.click(screen.getByText('org.team.members.actions.changeRole'))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('checkbox', { name: 'Applicant' })).toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: 'Admin' })).not.toBeChecked()
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Admin' }))
+    await user.click(within(dialog).getByRole('button', { name: 'org.team.dialog.changeRole.update' }))
+    await waitFor(() => expect(mockSetMemberRoles).toHaveBeenCalledExactlyOnceWith(
+      organizationId, 'test-member', ['role_applicant', 'role_admin'],
+    ))
+    await waitFor(() => expect(mockRefreshPermissions).toHaveBeenCalledOnce())
+    expect(mockInviteMember).not.toHaveBeenCalled()
+    expect(mockRemoveMember).not.toHaveBeenCalled()
+  })
+
+  it.each(['role:view', 'role:assign'])('keeps default-organization role editing unavailable without %s', async missingPermission => {
+    mockUseConsole.mockReturnValue({ activeOrgId: '00000000-0000-0000-0000-000000000001' })
+    mockHasPermission.mockImplementation((resource: string, action: string) => `${resource}:${action}` !== missingPermission)
+    renderWithRouter(<TeamPage />)
+    const cells = await screen.findAllByText('alex@example.com')
+    expect(within(cells[0].closest('tr') as HTMLElement).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(mockSetMemberRoles).not.toHaveBeenCalled()
+    expect(mockRemoveMember).not.toHaveBeenCalled()
+  })
+
   it('keeps team:manage separate from native role:assign', async () => {
     mockHasPermission.mockImplementation((resource: string, action: string) =>
       (resource === 'team' && ['view', 'manage'].includes(action)) || (resource === 'role' && action === 'view'))
