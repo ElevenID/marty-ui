@@ -3059,6 +3059,15 @@ jobs:
       - name: Install Python browser transport runtime
         if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: python -m playwright install --with-deps --only-shell chromium
+      - name: Set up the native auth callback build runtime
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.4"
+      - name: Install locked native auth callback build dependencies
+        if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        working-directory: integrations/supabase-auth-ui
+        run: bun install --frozen-lockfile --ignore-scripts
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |
@@ -3152,7 +3161,7 @@ jobs:
           cat /sys/fs/cgroup/memory.events 2>/dev/null || true
           grep '^oom_kill ' /proc/vmstat 2>/dev/null || true
           trap 'status=$?; printf "release-contract memory counters after:\n"; cat /sys/fs/cgroup/memory.events 2>/dev/null || true; grep "^oom_kill " /proc/vmstat 2>/dev/null || true; exit "$status"' EXIT
-          python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20
+          python -X faulthandler -m pytest tests -n 2 --dist=loadscope -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
         if: needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash

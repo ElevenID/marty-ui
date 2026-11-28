@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import {
-  AppBar,
   Avatar,
   Box,
   Button,
@@ -15,7 +14,6 @@ import {
   ListItemText,
   Menu,
   MenuItem,
-  Toolbar,
   Tooltip,
   Typography,
   useMediaQuery,
@@ -31,6 +29,7 @@ import NotificationsIcon from '@mui/icons-material/Notifications';
 
 import { AuthContext } from '../../contexts/AuthContext';
 import { BrandingContext } from '../../contexts/BrandingContext';
+import AppHeader from '../../components/layouts/AppHeader';
 import {
   DISABLE_PUBLIC_LOGIN_BUTTON,
   SHOW_PUBLIC_LOGIN_BUTTON,
@@ -133,20 +132,11 @@ function AppShell({ children, showAppBar = true }) {
       <CssBaseline />
       {adminImpersonationEnabled && isAuthenticated && <ImpersonationBanner />}
       {showAppBar && publicEnabled && (
-        <AppBar position="static">
-          <Toolbar>
-            {branding.logoUrl && (
-              <Box component="img" src={branding.logoUrl} alt={branding.appName} sx={{ height: 32, mr: 2 }} />
-            )}
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              {branding.appName}
-            </Typography>
-
+        <AppHeader brandName={branding.appName} logoUrl={branding.logoUrl} primaryColor={branding.primaryColor}>
             <LanguageSwitcher
               variant="standard"
               compact={compactHeader}
               sx={{
-                mr: { xs: 1, sm: 2 },
                 '& .MuiInputBase-root': {
                   color: 'common.white',
                 },
@@ -313,8 +303,7 @@ function AppShell({ children, showAppBar = true }) {
                 </Tooltip>
               ) : null}
             </Box>
-          </Toolbar>
-        </AppBar>
+        </AppHeader>
       )}
 
       {children}

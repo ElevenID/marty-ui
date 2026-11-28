@@ -5,6 +5,8 @@ OAuth consent for explicitly registered ElevenID and Rifare clients. The opt-in
 v3 configuration also supplies signup, email confirmation, initial authenticator
 enrollment and password recovery pages; live delivery and
 provider settings require separate qualification.
+The v4 configuration additionally pins final redirect origins when an API
+callback sends the browser to a separately hosted console.
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -12,12 +14,18 @@ bun test
 bun build.mjs --config public/config.example.json
 ```
 
-Build from a repository checkout. Keycloak and Pages use the same header, main
-landmark, responsive layout and brand colors from `config/keycloak/themes/11id/login/auth-layout.ftl`
-and `resources/css/auth-layout.css` under that directory. Keycloak supplies its
-language selector and provider forms through FreeMarker slots. The static build
-fills the content slot with the loading screen, then the browser renders the
-sign-in, TOTP and consent forms. The Helm chart packages the same theme files.
+Use `public/config.split-origin.example.json` as the synthetic v4 example.
+`postRedirectOrigins` contains exact HTTPS origins needed after the native
+callback POST; it does not register another destination for the MFA proof.
+
+Build from a repository checkout. The application, standalone website, Keycloak
+and Pages use the general header factory and styles in `ui/src/shared/web-layout`.
+Thin React and HTML adapters retain each consumer's actions. Keycloak's existing
+FreeMarker layout and stylesheet are generated from that source and packaged
+identically in Helm. The static builder checks those generated files and fills
+the content slot with the loading screen. Its HTML and runtime configuration
+both use `config.brand`; the public examples use **ElevenID LLC**. Read the
+[shared-layout guide](../../docs/shared-web-layout.md) before changing the source.
 
 The existing Fast Feedback CI lane installs the locked companion dependencies
 with hooks disabled, runs its full test suite and builds default and v3 examples.

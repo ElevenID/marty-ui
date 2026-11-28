@@ -178,7 +178,7 @@ function TeamContent({ organizationId, currentUser, reconcileMembershipRemoval }
   const canViewRoles = canView && currentPermission('role', 'view');
   const canInvite = canView && currentPermission('team', 'invite');
   const canManage = canView && !isMartyOrg && currentPermission('team', 'manage');
-  const canAssignRoles = canView && !isMartyOrg && currentPermission('role', 'assign');
+  const canAssignRoles = canView && currentPermission('role', 'assign');
   const canViewRequests = canView;
   const currentAccess = useRef({ canView });
   currentAccess.current = { canView };

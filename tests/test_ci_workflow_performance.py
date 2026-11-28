@@ -24,7 +24,7 @@ RELEASE_TEST_COMMAND = (
     "trap 'status=$?; printf \"release-contract memory counters after:\\n\"; "
     "cat /sys/fs/cgroup/memory.events 2>/dev/null || true; "
     "grep \"^oom_kill \" /proc/vmstat 2>/dev/null || true; exit \"$status\"' EXIT\n"
-    "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
+    "python -X faulthandler -m pytest tests -n 2 --dist=loadscope -v --tb=short --durations=20\n"
 )
 ROOT_OPTIONAL_SECRET_CASES = (
     "test_creates_exact_seven_empty_private_files",
@@ -235,6 +235,19 @@ def test_platform_release_contracts_have_linux_ci_dependencies():
     assert browser["if"] == steps["Run repository release checks"]["if"]
     assert job["steps"].index(steps["Install released test dependencies"]) < job["steps"].index(browser)
     assert job["steps"].index(browser) < job["steps"].index(steps["Run repository release checks"])
+    bun = steps["Set up the native auth callback build runtime"]
+    companion = steps["Install locked native auth callback build dependencies"]
+    assert bun["uses"] == "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6"
+    assert bun["with"]["bun-version"] == "1.4.4"
+    assert companion["working-directory"] == "integrations/supabase-auth-ui"
+    assert shlex.split(companion["run"]) == [
+        "bun", "install", "--frozen-lockfile", "--ignore-scripts",
+    ]
+    for bootstrap in (bun, companion):
+        assert bootstrap["if"] == steps["Run repository release checks"]["if"]
+        assert not bootstrap.get("continue-on-error", False)
+    assert job["steps"].index(bun) < job["steps"].index(companion)
+    assert job["steps"].index(companion) < job["steps"].index(steps["Run repository release checks"])
     assert (
         steps["Run repository release checks"]["run"]
         == RELEASE_TEST_COMMAND

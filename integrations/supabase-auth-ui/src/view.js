@@ -75,8 +75,9 @@ export function renderView(document, root, state, actions) {
     email.input.autocapitalize = "none";
     const password = field("Password", "password", "password", "current-password");
     password.input.maxLength = 1024;
-    const submit = element("button", "primary", "Sign in");
+    const submit = element("button", "primary", state.busy ? "Signing in…" : "Sign in");
     submit.type = "submit";
+    submit.disabled = state.busy;
     form.append(email.wrapper, password.wrapper, submit);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -86,9 +87,15 @@ export function renderView(document, root, state, actions) {
     });
     content.append(form);
     if (actions.recover) {
-      content.append(button("Forgot your password?", "text-button", actions.recover));
-      content.append(button("Create an account", "text-button", actions.register));
-      content.append(button("Set up an authenticator", "text-button", actions.security));
+      const accountActions = element("div", "actions");
+      accountActions.setAttribute("role", "group");
+      accountActions.setAttribute("aria-label", "Account help");
+      accountActions.append(
+        button("Forgot your password?", "secondary", actions.recover),
+        button("Create an account", "secondary", actions.register),
+        button("Set up an authenticator", "secondary", actions.security),
+      );
+      content.append(accountActions);
     } else content.append(element("p", "help", "Need an account, a password reset or authenticator setup? Contact your operator. This page supports existing, verified accounts."));
   } else if (state.phase === "checking") {
     heading.textContent = "Checking your account";

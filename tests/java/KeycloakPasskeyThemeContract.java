@@ -7,6 +7,7 @@ import freemarker.template.Configuration;
 import freemarker.template.TemplateExceptionHandler;
 import freemarker.template.TemplateMethodModelEx;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
@@ -62,6 +63,7 @@ public final class KeycloakPasskeyThemeContract {
         }
         StringWriter result = new StringWriter();
         config.getTemplate(args[2], "UTF-8").process(data, result);
-        System.out.print(result);
+        System.out.write(result.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.flush();
     }
 }

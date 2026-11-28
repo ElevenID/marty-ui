@@ -7,8 +7,6 @@
 
 import { useState } from 'react';
 import {
-  AppBar,
-  Toolbar,
   Box,
   IconButton,
   Typography,
@@ -46,6 +44,7 @@ import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import NotificationBell from '../common/NotificationBell';
+import AppHeader from '../layouts/AppHeader';
 
 const DEFAULT_MOBILE_LOGO_SRC = '/apple-touch-icon.png';
 
@@ -217,80 +216,94 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   };
 
   return (
-    <AppBar
-      position="fixed"
-      elevation={1}
+    <Box
       sx={{
-        bgcolor: 'primary.main',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
         zIndex: theme.zIndex.drawer + 1,
+        // The general header owns structure. The console retains its fixed
+        // drawer boundary, native toolbar breakpoints and compact controls.
+        '& .elevenid-appbar': { boxShadow: theme.shadows[1] },
+        '& .elevenid-toolbar': {
+          ...theme.mixins.toolbar,
+          justifyContent: 'space-between',
+          gap: isMobile ? 0.5 : 1,
+          px: { xs: 1, sm: 2 },
+        },
+        '& .elevenid-brand': { flexGrow: 0, flexShrink: isMobile ? 0 : 1 },
+        '& .elevenid-toolbar-center': { display: 'flex', alignItems: 'center' },
+        '& .elevenid-toolbar-actions': { gap: 0, minWidth: 0 },
       }}
     >
-      <Toolbar sx={{ justifyContent: 'space-between', gap: isMobile ? 0.5 : 1, px: { xs: 1, sm: 2 } }}>
-        {/* Left side: Mobile menu + Logo */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.75 : 1, minWidth: 0, flexShrink: isMobile ? 0 : 1 }}>
-          {isMobile && (
-            <IconButton
-              color="inherit"
-              aria-label="open drawer"
-              onClick={onMobileMenuToggle}
-              sx={{
-                color: 'text.primary',
-                bgcolor: 'common.white',
-                border: '1px solid',
-                borderColor: 'grey.300',
-                '&:hover': {
-                  bgcolor: 'grey.100',
-                  borderColor: 'grey.400',
-                },
-              }}
-            >
-              <MenuIcon />
-            </IconButton>
-          )}
-          {isMobile && !isSmallPhone && (
-            <Box
-              component={RouterLink}
-              to="/"
-              aria-label={branding.appName}
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                textDecoration: 'none',
-              }}
-            >
-              <Box
-                component="img"
-                src={brandLogoSrc}
-                alt={branding.appName}
+      <AppHeader
+        brandName={branding.appName}
+        primaryColor={theme.palette.primary.main}
+        brandContent={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.75 : 1, minWidth: 0, flexShrink: isMobile ? 0 : 1 }}>
+            {isMobile && (
+              <IconButton
+                color="inherit"
+                aria-label="open drawer"
+                onClick={onMobileMenuToggle}
                 sx={{
-                  width: 30,
-                  height: 30,
-                  objectFit: 'contain',
+                  color: 'text.primary',
                   bgcolor: 'common.white',
-                  borderRadius: 1,
-                  p: 0.25,
+                  border: '1px solid',
+                  borderColor: 'grey.300',
+                  '&:hover': {
+                    bgcolor: 'grey.100',
+                    borderColor: 'grey.400',
+                  },
                 }}
-              />
-            </Box>
-          )}
-          {!isMobile && (
-            <Typography
-              variant="h6"
-              component={RouterLink}
-              to="/"
-              sx={{
-                color: 'white',
-                textDecoration: 'none',
-                fontWeight: 600,
-              }}
-            >
-              {branding.appName}
-            </Typography>
-          )}
-        </Box>
-
-        {/* Narrow screens use the console switcher in the navigation drawer. */}
-        {isMobile && !isNarrow && showConsoleSwitcher && (
+              >
+                <MenuIcon />
+              </IconButton>
+            )}
+            {isMobile && !isSmallPhone && (
+              <Box
+                component={RouterLink}
+                to="/"
+                aria-label={branding.appName}
+                sx={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  textDecoration: 'none',
+                }}
+              >
+                <Box
+                  component="img"
+                  src={brandLogoSrc}
+                  alt={branding.appName}
+                  sx={{
+                    width: 30,
+                    height: 30,
+                    objectFit: 'contain',
+                    bgcolor: 'common.white',
+                    borderRadius: 1,
+                    p: 0.25,
+                  }}
+                />
+              </Box>
+            )}
+            {!isMobile && (
+              <Typography
+                variant="h6"
+                component={RouterLink}
+                to="/"
+                sx={{
+                  color: 'white',
+                  textDecoration: 'none',
+                  fontWeight: 600,
+                }}
+              >
+                {branding.appName}
+              </Typography>
+            )}
+          </Box>
+        }
+        center={isMobile && !isNarrow && showConsoleSwitcher && (
           <ToggleButtonGroup
             value={mode}
             exclusive
@@ -327,7 +340,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             )}
           </ToggleButtonGroup>
         )}
-
+      >
         {/* Right side: Language, organization, notifications, and account */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.5 : 1, minWidth: 0, flexShrink: 0 }}>
           <LanguageSwitcher
@@ -591,7 +604,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             <ListItemText>Sign out</ListItemText>
           </MenuItem>
         </Menu>
-      </Toolbar>
-    </AppBar>
+      </AppHeader>
+    </Box>
   );
 }

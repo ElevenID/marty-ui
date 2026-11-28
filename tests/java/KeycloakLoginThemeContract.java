@@ -194,6 +194,8 @@ public final class KeycloakLoginThemeContract {
 
         StringWriter result = new StringWriter();
         config.getTemplate(PAGES.get(scenario), "UTF-8").process(data, result);
-        System.out.print(result);
+        // Windows console encoding can differ from both the template and Python.
+        System.out.write(result.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.flush();
     }
 }

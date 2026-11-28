@@ -22,8 +22,8 @@ def renderer(tmp_path_factory):
     jar = working / "freemarker-2.3.35.jar"
     jar.write_bytes(data)
     source = ROOT / "tests/java/KeycloakEmailLayoutContract.java"
-    subprocess.run([javac, "-J-Xmx128m", "-cp", str(jar), "-d", str(working), str(source)],
-                   check=True, capture_output=True, text=True, timeout=30)
+    subprocess.run([javac, "-J-Xmx128m", "-encoding", "UTF-8", "-cp", str(jar), "-d", str(working), str(source)],
+                   check=True, capture_output=True, text=True, encoding="utf-8", timeout=30)
     return [java, "-Xmx96m", "-cp", str(working) + os.pathsep + str(jar),
             "KeycloakEmailLayoutContract",
             str(ROOT / "config/keycloak/themes/11id/email/html/template.ftl")]
@@ -31,7 +31,7 @@ def renderer(tmp_path_factory):
 
 @pytest.mark.parametrize("action", ["VERIFY", "RESET"])
 def test_inherited_action_email_uses_nested_body_without_realm_url(renderer, action):
-    result = subprocess.run([*renderer, action], capture_output=True, text=True, timeout=20)
+    result = subprocess.run([*renderer, action], capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert result.returncode == 0, result.stderr
     html = result.stdout
     assert html.count(action + "_BODY_SENTINEL") == 1

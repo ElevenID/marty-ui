@@ -2673,6 +2673,13 @@
       ]
     },
     {
+      "source": "ui/src/components/layouts/AppHeader.jsx",
+      "path": "ui/src/components/layouts/AppHeader.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
       "source": "ui/src/components/layouts/AuthenticatedLayout.jsx",
       "path": "ui/src/components/layouts/AuthenticatedLayout.jsx",
       "roles": [
@@ -3956,6 +3963,48 @@
     {
       "source": "ui/src/services/zkVerificationApi.jsx",
       "path": "ui/src/services/zkVerificationApi.jsx",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/auth-page.css",
+      "path": "ui/src/shared/web-layout/auth-page.css",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/header.css",
+      "path": "ui/src/shared/web-layout/header.css",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/header.mjs",
+      "path": "ui/src/shared/web-layout/header.mjs",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/html.mjs",
+      "path": "ui/src/shared/web-layout/html.mjs",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/source.json",
+      "path": "ui/src/shared/web-layout/source.json",
+      "roles": [
+        "application-or-shared-source"
+      ]
+    },
+    {
+      "source": "ui/src/shared/web-layout/verify-source.mjs",
+      "path": "ui/src/shared/web-layout/verify-source.mjs",
       "roles": [
         "application-or-shared-source"
       ]

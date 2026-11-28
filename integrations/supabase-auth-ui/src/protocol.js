@@ -54,9 +54,10 @@ function callback(value, code) {
 }
 
 export function validateConfig(input) {
-  const lifecycle = record(input) && input.schema === "elevenid.supabase-auth-ui/v3";
-  closed(input, ["schema", "supabaseUrl", "publishableKey", "brand", "clients", ...(lifecycle ? ["accountLifecycle"] : [])], "configuration");
-  if (!["elevenid.supabase-auth-ui/v1", "elevenid.supabase-auth-ui/v2", "elevenid.supabase-auth-ui/v3"].includes(input.schema)) fail("configuration");
+  const lifecycle = record(input) && ["elevenid.supabase-auth-ui/v3", "elevenid.supabase-auth-ui/v4"].includes(input.schema);
+  const splitOrigin = record(input) && input.schema === "elevenid.supabase-auth-ui/v4";
+  closed(input, ["schema", "supabaseUrl", "publishableKey", "brand", "clients", ...(lifecycle ? ["accountLifecycle"] : []), ...(splitOrigin ? ["postRedirectOrigins"] : [])], "configuration");
+  if (!["elevenid.supabase-auth-ui/v1", "elevenid.supabase-auth-ui/v2", "elevenid.supabase-auth-ui/v3", "elevenid.supabase-auth-ui/v4"].includes(input.schema)) fail("configuration");
   const nativeModes = input.schema !== "elevenid.supabase-auth-ui/v1";
   const project = httpsUrl(input.supabaseUrl, "configuration");
   if (input.supabaseUrl !== project.origin) fail("configuration");
@@ -89,7 +90,18 @@ export function validateConfig(input) {
     if (signIn.pathname !== "/v1/auth/login" || !client?.redirectUris.some((uri) => uri === `${signIn.origin}/v1/auth/callback`)) fail("configuration");
     accountLifecycle = Object.freeze({ clientId, signInUri });
   }
-  return Object.freeze({ schema: input.schema, supabaseUrl: input.supabaseUrl, publishableKey: input.publishableKey, brand: input.brand, clients: Object.freeze(clients), ...(lifecycle ? { accountLifecycle } : {}) });
+  let postRedirectOrigins;
+  if (splitOrigin) {
+    if (!Array.isArray(input.postRedirectOrigins) || input.postRedirectOrigins.length < 1 || input.postRedirectOrigins.length > 16) fail("configuration");
+    const origins = new Set();
+    postRedirectOrigins = Object.freeze(input.postRedirectOrigins.map((value) => {
+      const parsed = httpsUrl(value, "configuration");
+      if (value !== parsed.origin || parsed.hostname.includes("*") || origins.has(value)) fail("configuration");
+      origins.add(value);
+      return value;
+    }));
+  }
+  return Object.freeze({ schema: input.schema, supabaseUrl: input.supabaseUrl, publishableKey: input.publishableKey, brand: input.brand, clients: Object.freeze(clients), ...(lifecycle ? { accountLifecycle } : {}), ...(splitOrigin ? { postRedirectOrigins } : {}) });
 }
 
 function query(search, allowed, code, maxLength) {

@@ -54,6 +54,10 @@ describe('shipped public-entry actions', () => {
     const navigate = vi.spyOn(handoff, 'redirectBrowser').mockReturnValue(true);
     shell();
     expect(screen.getByRole('link', { name: 'Console' })).toHaveAttribute('href', `${canonical}/console`);
+    const header = screen.getByRole('banner');
+    expect(header).toHaveClass('elevenid-appbar');
+    expect(header.querySelector('.elevenid-brand')).toHaveTextContent('Actual brand');
+    expect(header.querySelector('.elevenid-toolbar-actions')).toContainElement(screen.getByTestId('login-button'));
     expect(screen.getByTestId('public-entry-console')).toBeVisible();
     await userEvent.click(screen.getByTestId('login-button'));
     expect(navigate).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/marty\.example\.com:8443\/v1\/auth\/login\?/), { replace: false });

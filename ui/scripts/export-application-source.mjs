@@ -14,27 +14,36 @@ import {
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CONTRACT = 'contracts/application-source-export.json';
+const LEGACY_OUTPUT = Object.freeze({ files: 88, runtime_files: 92, stylesheets: 0 });
+const SHARED_LAYOUT_OUTPUT = Object.freeze({ files: 89, runtime_files: 93, stylesheets: 1 });
 // Source maps may evolve without changing the archive grammar. Each accepted
-// map, including the initial package, is pinned to exact reviewed bytes.
+// map, including the initial package, is pinned to exact reviewed bytes and its
+// reviewed output shape. The shared layout adds one emitted CSS asset.
 const SOURCE_CONTRACTS = Object.freeze([
-  Object.freeze({ path: CONTRACT, sha256: 'sha256:9ce0566753207d1ab3fc87c4c8a9fd01b06d9eb384dd62d9ea5197d403dafeae',
-    files: 592, test_files: 32, assertions: 414 }),
+  Object.freeze({ path: CONTRACT, sha256: 'sha256:5877a66bad9ea4331151f7399d1aa21e5cf5460bce45a84dd20abceb5384b9cd',
+    files: 599, test_files: 32, assertions: 414, output: SHARED_LAYOUT_OUTPUT }),
+  Object.freeze({ path: 'contracts/application-source-export-history/before-shared-web-layout-v1.json',
+    sha256: 'sha256:9ce0566753207d1ab3fc87c4c8a9fd01b06d9eb384dd62d9ea5197d403dafeae',
+    files: 592, test_files: 32, assertions: 414, output: LEGACY_OUTPUT }),
   Object.freeze({ path: 'contracts/application-source-export-history/before-managed-wallet-setup-v1.json',
     sha256: 'sha256:647d0054ac2d7a22810ba04610804cae05ea88771f619760c54f5b807e1ece1a',
-    files: 586, test_files: 30, assertions: 392 }),
+    files: 586, test_files: 30, assertions: 392, output: LEGACY_OUTPUT }),
   Object.freeze({ path: 'contracts/application-source-export-history/before-main-ux-integration-v1.json',
-    sha256: 'sha256:056ec105dd008be974f443259858f622f02967f539975ac1245507315eac8b94', files: 586, test_files: 30, assertions: 390 }),
+    sha256: 'sha256:056ec105dd008be974f443259858f622f02967f539975ac1245507315eac8b94',
+    files: 586, test_files: 30, assertions: 390, output: LEGACY_OUTPUT }),
   Object.freeze({ path: 'contracts/application-source-export-history/before-full-console-transport-v1.json',
-    sha256: 'sha256:9ab4ba2ea5f71d517f46fc5821c185b5a3fd64a8cc9442ab33f8fe14f35f1ca7', files: 585, test_files: 29, assertions: 383 }),
+    sha256: 'sha256:9ab4ba2ea5f71d517f46fc5821c185b5a3fd64a8cc9442ab33f8fe14f35f1ca7',
+    files: 585, test_files: 29, assertions: 383, output: LEGACY_OUTPUT }),
   Object.freeze({ path: 'contracts/application-source-export-history/main-delegation-ux-states-v1.json',
-    sha256: 'sha256:75a421eae97dc83221f52ee8b90c6898cd1247cfd3f662ddf5ede88b6a6c2749', files: 581, test_files: 26, assertions: 323 }),
+    sha256: 'sha256:75a421eae97dc83221f52ee8b90c6898cd1247cfd3f662ddf5ede88b6a6c2749',
+    files: 581, test_files: 26, assertions: 323, output: LEGACY_OUTPUT }),
   // The pre-delegation and pre-static-origin maps have identical approved bytes.
   Object.freeze({ path: 'contracts/application-source-export-history/before-delegation-ux-states-v1.json',
     sha256: 'sha256:7df5cfa6e3c37f9c1c3c3a8034559608971ad4dca60954013c5487e41b270f41',
-    files: 581, test_files: 26, assertions: 321 }),
+    files: 581, test_files: 26, assertions: 321, output: LEGACY_OUTPUT }),
   Object.freeze({ path: 'contracts/application-source-export-history/initial-v1.json',
     sha256: 'sha256:3b7fe6dfe7718c3d7bcc9d0fccf28c2e4d92a0bcdad1f592c86a51328669d8ad',
-    files: 575, test_files: 24, assertions: 296 }),
+    files: 575, test_files: 24, assertions: 296, output: LEGACY_OUTPUT }),
 ]);
 export const APPLICATION_SOURCE_MANIFEST_PATH = 'application-source-origin.json';
 const MANIFEST_SCHEMA = 'marty.application-source-package/v1';
@@ -230,6 +239,10 @@ export function applicationSourceTestPolicy(manifest) {
   const { contract, approved } = manifestContract(manifest);
   assert.deepEqual(manifest.test_profile, contract.test_profile, 'Application source test roster changed');
   return { test_profile: contract.test_profile, assertions: approved.assertions };
+}
+export function applicationSourceOutputPolicy(manifest) {
+  const { approved } = manifestContract(manifest);
+  return approved.output;
 }
 function gitInput(root, relative, state) {
   const entry = state.files.get(relative);

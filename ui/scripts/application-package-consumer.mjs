@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './web-surface-contract.mjs';
-import { applicationSourceTestPolicy } from './export-application-source.mjs';
+import { applicationSourceOutputPolicy, applicationSourceTestPolicy } from './export-application-source.mjs';
 import { APPLICATION_RETAINED_PUBLIC_FILES } from './application-public-assets.mjs';
 import { applicationInstallationEnvironment, runOwnedInstallCommand } from './application-dependency-install.mjs';
 import {
@@ -22,8 +22,6 @@ import {
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
-const EXPECTED_OUTPUT_FILES = 88;
-const EXPECTED_CONTEXT_FILES = 92;
 const PROFILE_INPUTS = ['ui/package.json', 'ui/package-lock.json'];
 const FALSE_QUALIFICATION = Object.freeze({
   source_package_verified: false, restored_source_preserved: false,
@@ -94,6 +92,7 @@ function reportMessages(error) {
 
 export function validateApplicationPackageBaseline(baseline, manifest) {
   const testPolicy = applicationSourceTestPolicy(manifest);
+  const outputPolicy = applicationSourceOutputPolicy(manifest);
   require(baseline?.schema === 'marty.application-source-closure-rehearsal/v5' && baseline.status === 'passed'
     && baseline.fixture !== true
     && baseline.plan?.schema === 'marty.application-source-closure-plan/v5', 'Consumer requires a passed v5 application baseline');
@@ -140,8 +139,7 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   }
   const selectedLock = manifest.files.find((row) => row.path === 'ui/package-lock.json');
   require(selectedLock && baseline.build.package_lock_sha256 === selectedLock.sha256, 'Consumer baseline selected lock differs');
-  require(baseline.output?.files?.length === EXPECTED_OUTPUT_FILES
-    && baseline.output.inventory_sha256 === identity(baseline.output.files), 'Consumer baseline output inventory is invalid');
+  validateOutputInventory(baseline.output, outputPolicy, 'Consumer baseline output inventory is invalid');
   assert.deepEqual(baseline.output.public_resources.map((row) => row.path), [...APPLICATION_RETAINED_PUBLIC_FILES], 'Baseline public resource set differs');
   assert.deepEqual(baseline.resources?.result?.public_resources, baseline.output.public_resources, 'Baseline resource proof differs');
   const context = baseline.runtime_context;
@@ -163,16 +161,21 @@ export function validateApplicationPackageBaseline(baseline, manifest) {
   const payload = [...baseline.output.files.map((row) => ({ ...row, path: `html/${row.path}`, mode: 0o644 })),
     ...currentRecipe.map((row) => ({ path: row.target, bytes: row.bytes, sha256: row.sha256, mode: row.packaged_mode }))]
     .sort((a, b) => a.path.localeCompare(b.path, 'en'));
-  require(payload.length === EXPECTED_CONTEXT_FILES, 'Baseline runtime payload count differs');
+  require(payload.length === outputPolicy.runtime_files, 'Baseline runtime payload count differs');
   assert.deepEqual(context.context_inventory, payload, 'Baseline runtime payload inventory differs');
   return { source_commit: source.commit, source_inventory_sha256: source.input_inventory_sha256,
     output_inventory_sha256: baseline.output.inventory_sha256, context_manifest_sha256: manifestSha256,
     runtime_payload_sha256: identity(payload), producer_only_source_inputs: producerOnlyInputs };
 }
 
-export function compareApplicationPackageOutput(output, baseline) {
-  require(output?.files?.length === EXPECTED_OUTPUT_FILES && output.inventory_sha256 === identity(output.files),
-    'Consumer output inventory is invalid');
+function validateOutputInventory(output, policy, message) {
+  require(Array.isArray(output?.files) && output.files.length === policy.files
+    && output.inventory_sha256 === identity(output.files)
+    && output.files.filter((row) => row.path.endsWith('.css')).length === policy.stylesheets, message);
+}
+
+export function compareApplicationPackageOutput(output, baseline, manifest) {
+  validateOutputInventory(output, applicationSourceOutputPolicy(manifest), 'Consumer output inventory is invalid');
   const publicPaths = new Set(APPLICATION_RETAINED_PUBLIC_FILES);
   require(publicPaths.size === 54, 'Consumer public mode contract changed');
   const transformations = [];
@@ -359,7 +362,7 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
     require(report.tests.test_count === applicationSourceTestPolicy(manifest).assertions, 'Consumer did not complete all approved selected assertions');
     phase = 'output-comparison';
     report.output = verifyApplicationClosureOutput(restored, baseline.plan);
-    report.output_comparison = compareApplicationPackageOutput(report.output, baseline);
+    report.output_comparison = compareApplicationPackageOutput(report.output, baseline, manifest);
     const wasm = report.output.files.filter((row) => /^assets\/marty_api_client_bg[-.A-Za-z0-9_]*\.wasm$/.test(row.path));
     require(wasm.length === 1 && wasm[0].bytes === installed.sdk.wasm.bytes && wasm[0].sha256 === installed.sdk.wasm.sha256,
       'Consumer emitted a different SDK WASM');
@@ -380,7 +383,7 @@ export async function consumeApplicationSourcePackage({ archivePath, manifestPat
       'Consumer runtime context changed during validation');
     assert.deepEqual(report.runtime_context.context_inventory, baseline.runtime_context.context_inventory,
       'Consumer normalized runtime payload differs from the profile baseline');
-    report.runtime_comparison = { payload_files: EXPECTED_CONTEXT_FILES,
+    report.runtime_comparison = { payload_files: report.runtime_context.context_inventory.length,
       payload_inventory_sha256: identity(report.runtime_context.context_inventory), payload_records_identical: true,
       baseline_manifest_sha256: baseline.runtime_context.manifest_sha256, consumer_manifest_sha256: report.runtime_context.manifest_sha256 };
     checkInputs();
