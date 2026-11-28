@@ -226,11 +226,14 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
     let file = open(dir, name, libc::O_RDONLY, 0)?;
     let m = file.metadata().map_err(|_| REFUSED)?;
     let mode = m.mode() & 0o7777;
+    // Match maintenance's private-evidence bound: complete native Compose
+    // receipts can exceed 256 KiB when many selected roles repeat labels.
+    let limit = if record { 4 * 1024 * 1024 } else { 65536 };
     require(
         m.is_file()
             && m.nlink() == 1
             && [unsafe { libc::geteuid() }, 0].contains(&m.uid())
-            && m.len() <= if record { 262144 } else { 65536 },
+            && m.len() <= limit,
     )?;
     require(if record {
         mode == 0o600
@@ -238,7 +241,7 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
         mode == 0o444 || (name == "openbao_tls_ca_cert" && mode == 0o644)
     })?;
     let mut bytes = Vec::new();
-    file.take(262145)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| REFUSED)?;
     require(
