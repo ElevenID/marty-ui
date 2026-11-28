@@ -1,6 +1,129 @@
 //! A complete local private-generation lineage over real certificate
 //! signatures and synthetic native receipts. This does not execute Docker,
 //! issue workload credentials, or qualify a deployed installation.
+
+fn retained_files(root: &Path) -> BTreeMap<PathBuf, (u32, String)> {
+    fn visit(root: &Path, directory: &Path, result: &mut BTreeMap<PathBuf, (u32, String)>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, result);
+            } else {
+                result.insert(
+                    path.strip_prefix(root).unwrap().into(),
+                    (
+                        std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                        digest(&std::fs::read(&path).unwrap()),
+                    ),
+                );
+            }
+        }
+    }
+    let mut result = BTreeMap::new();
+    visit(root, root, &mut result);
+    result
+}
+
+#[test]
+fn operator_candidate_inspection_authenticates_completed_private_output_without_binding_or_writes()
+{
+    let fixture = Fixture::new();
+    let candidate = &fixture.successor;
+    let scope = candidate.attempt_id();
+    // Reproduce the completed-producer/pre-binding boundary. Removing these
+    // synthetic fixture outputs does not relax production admission.
+    std::fs::remove_file(
+        fixture
+            .root
+            .path()
+            .join("evidence")
+            .join(scope.record("binding")),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(candidate.secret_dir(fixture.root.path()).unwrap()).unwrap();
+    let before = retained_files(fixture.root.path());
+    let operation = &candidate.successor.as_ref().unwrap().native_operation;
+    let (observed, plan) =
+        inspect_successor_candidate_at(fixture.root.path(), &fixture.initial, 0, operation, None)
+            .unwrap();
+    assert_eq!(observed.outputs_sha256.len(), 43);
+    assert_eq!(
+        observed.outputs_sha256,
+        crate::installer_generation::hashes(&fixture.material.next)
+    );
+    assert_eq!(observed.receipt_sha256, candidate.generation_receipt_sha256);
+    assert!(plan.managed().is_some());
+    // Historical verification accepts the authentic expired predecessor. The
+    // operator handoff never changes times or claims current serving validity.
+    assert!(
+        fixture
+            .initial
+            .ingress_metadata(fixture.root.path())
+            .unwrap()
+            .unwrap()
+            .certificate_expires_at
+            < fixture.material.next_metadata.token_observed_at
+    );
+    assert_eq!(retained_files(fixture.root.path()), before);
+    assert!(!fixture
+        .root
+        .path()
+        .join("evidence")
+        .join(scope.record("binding"))
+        .exists());
+    assert!(!fixture
+        .root
+        .path()
+        .join("evidence")
+        .join(scope.record("binding-pending"))
+        .exists());
+    assert!(!candidate.secret_dir(fixture.root.path()).unwrap().exists());
+}
+
+#[test]
+fn operator_candidate_inspection_rejects_changed_helper_output_or_parent_identity() {
+    for change in 0..4 {
+        let fixture = Fixture::new();
+        let candidate = &fixture.successor;
+        let scope = candidate.attempt_id();
+        let operation = &candidate.successor.as_ref().unwrap().native_operation;
+        let mut parent = fixture.initial.clone();
+        match change {
+            0 => {
+                let path = fixture
+                    .root
+                    .path()
+                    .join("evidence")
+                    .join(scope.record("helper"));
+                let mut value: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                value["status"][0]["State"] = json!("running");
+                write(&path, &encoded(&value), 0o600);
+            }
+            1 => {
+                let key = fixture
+                    .material
+                    .next
+                    .keys()
+                    .find(|name| name.ends_with("_token"))
+                    .unwrap();
+                let path = scope
+                    .work(fixture.root.path())
+                    .join("transfer/delivered")
+                    .join(key);
+                write(&path, b"unadmitted replacement", 0o444);
+            }
+            2 => parent.engine_id = "another-engine".into(),
+            _ => parent.generation_receipt_sha256 = "f".repeat(64),
+        }
+        assert!(
+            inspect_successor_candidate_at(fixture.root.path(), &parent, 0, operation, None,)
+                .is_err(),
+            "case {change}"
+        );
+    }
+}
+
 use super::*;
 use crate::{
     installer_compose::{ComposeReceipt, ContainerIdentity, ProjectResources, SetupExecution},

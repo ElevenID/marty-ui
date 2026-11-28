@@ -226,11 +226,14 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
     let file = open(dir, name, libc::O_RDONLY, 0)?;
     let m = file.metadata().map_err(|_| REFUSED)?;
     let mode = m.mode() & 0o7777;
+    // Match maintenance's private-evidence bound: complete native Compose
+    // receipts can exceed 256 KiB when many selected roles repeat labels.
+    let limit = if record { 4 * 1024 * 1024 } else { 65536 };
     require(
         m.is_file()
             && m.nlink() == 1
             && [unsafe { libc::geteuid() }, 0].contains(&m.uid())
-            && m.len() <= if record { 262144 } else { 65536 },
+            && m.len() <= limit,
     )?;
     require(if record {
         mode == 0o600
@@ -238,7 +241,7 @@ fn read(dir: &File, name: &str, record: bool) -> Result<(Vec<u8>, u32)> {
         mode == 0o444 || (name == "openbao_tls_ca_cert" && mode == 0o644)
     })?;
     let mut bytes = Vec::new();
-    file.take(262145)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| REFUSED)?;
     require(
@@ -626,6 +629,71 @@ struct Receipt {
     installation_ready: bool,
 }
 type CandidateProvenance = (Vec<u8>, CandidateFiles, Option<GenerationPlan>);
+
+/// A read-only proof for an operator-owner handoff. No credentials or binding
+/// records are published; ordinary maintenance retains all activation authority.
+pub(crate) struct CandidateInspection {
+    pub(crate) receipt_sha256: String,
+    pub(crate) outputs_sha256: BTreeMap<String, String>,
+}
+
+pub(crate) fn inspect_successor_candidate(
+    installation: &Path,
+    view: &crate::installer_state::LockedInspection,
+    parent: &GenerationBinding,
+    attempt: u64,
+    native_operation: &str,
+    oidc_secret_rotation_sha256: Option<String>,
+) -> Result<CandidateInspection> {
+    view.require_path_binding(installation)?;
+    parent.validate()?;
+    require(
+        parent.installation_id == view.journal().installation_id().to_string()
+            && parent.engine_id == view.journal().runtime().ok_or(REFUSED)?.engine_id,
+    )?;
+    let (inspection, plan) = inspect_successor_candidate_at(
+        installation,
+        parent,
+        attempt,
+        native_operation,
+        oidc_secret_rotation_sha256,
+    )?;
+    plan.require_saved(view)?;
+    view.require_unchanged()?;
+    Ok(inspection)
+}
+
+fn inspect_successor_candidate_at(
+    installation: &Path,
+    parent: &GenerationBinding,
+    attempt: u64,
+    native_operation: &str,
+    oidc_secret_rotation_sha256: Option<String>,
+) -> Result<(CandidateInspection, GenerationPlan)> {
+    parent.validate()?;
+    let next = SuccessorBinding {
+        sequence: parent.sequence().checked_add(1).ok_or(REFUSED)?,
+        attempt,
+        parent_attempt: parent.attempt(),
+        parent_binding_sha256: parent.sha256()?,
+        native_operation: native_operation.into(),
+        oidc_secret_rotation_sha256,
+    };
+    let (receipt, outputs, plan) = candidate_at(
+        installation,
+        &parent.installation_id,
+        &parent.engine_id,
+        Some(&next),
+    )?;
+    Ok((
+        CandidateInspection {
+            receipt_sha256: digest(&receipt),
+            outputs_sha256: crate::installer_generation::hashes(&outputs),
+        },
+        plan.ok_or(REFUSED)?,
+    ))
+}
+
 fn candidate(installation: &Path, id: &str, engine: &str) -> Result<CandidateProvenance> {
     candidate_at(installation, id, engine, None)
 }
