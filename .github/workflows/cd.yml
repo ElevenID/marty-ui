@@ -468,7 +468,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - if: needs.resolve-transaction.outputs.ui_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -617,7 +617,7 @@ jobs:
           subject-name: ${{ env.MIGRATIONS_IMAGE }}
           subject-digest: ${{ steps.digests.outputs.migrations_digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - name: Sign images by digest
         if: needs.resolve-transaction.outputs.services_digest == ''
         env:
@@ -694,7 +694,7 @@ jobs:
           subject-name: ${{ env.OPENBAO_DIDCOMM_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -760,7 +760,7 @@ jobs:
           subject-name: ${{ env.KEYCLOAK_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - if: needs.resolve-transaction.outputs.keycloak_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -1339,7 +1339,7 @@ jobs:
             --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -1829,7 +1829,7 @@ jobs:
           subject-name: ${{ env.SELFHOST_UI_IMAGE }}
           subject-digest: ${{ steps.digests.outputs.ui_digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - name: Sign only the exact produced digests
         env:
           UI_DIGEST: ${{ steps.digests.outputs.ui_digest }}
@@ -2632,27 +2632,27 @@ jobs:
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-openbao-didcomm-sbom.cdx.json
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
           format: cyclonedx-json
@@ -2671,7 +2671,7 @@ jobs:
           test "$actual" = "$EXPECTED_MANIFEST_SHA256"
           cp official-candidate/stack-manifest.json stack-manifest.json
           cp transaction/release-transaction.json release-transaction.json
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
       - name: Sign and checksum manifest evidence
         shell: bash
         run: |
@@ -3031,8 +3031,8 @@ jobs:
           subject-name: ${{ steps.addon.outputs.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab
+      - uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56
         with:
           image: ${{ steps.addon.outputs.image }}@${{ steps.image.outputs.digest }}
           format: cyclonedx-json
