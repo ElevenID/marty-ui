@@ -52,10 +52,11 @@ fn native_receipt(
     completed: bool,
     image: &str,
     engine: &str,
+    full_inventory: bool,
 ) -> ComposeReceipt {
     let project = format!("marty-install-{}", public_fixture::OWNER.replace('-', ""));
     let helper = helper(sequence, completed, image);
-    ComposeReceipt {
+    let mut receipt = ComposeReceipt {
         schema: "elevenid.installer-compose-operation/v1".into(),
         project: project.clone(),
         engine_id: engine.into(),
@@ -74,7 +75,45 @@ fn native_receipt(
         status: vec![json!({"Service":"installer-generation","ID":helper.id,
             "State":if completed {"exited"} else {"created"},"ExitCode":0,"Health":""})],
         installation_ready: false,
+    };
+    if full_inventory {
+        // Docker repeats the layered Compose file list in every status row.
+        // A full installation therefore produces valid receipts above 256 KiB.
+        let config_files = (0..48)
+            .map(|index| {
+                format!(
+                    "/home/operator/elevenid-installations/marty-production-00000000000000000000/source/deploy/compose/selected-feature-layer-{index:02}.yml"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let labels = format!(
+            "com.docker.compose.project={project},com.docker.compose.project.config_files={config_files}"
+        );
+        for index in 0..44 {
+            let service = format!("selected-role-{index:02}");
+            let mut container = helper.clone();
+            container.id = format!("{:064x}", index + 1000);
+            container.service = service.clone();
+            container.setup = false;
+            container.setup_execution = None;
+            container.health_required = true;
+            receipt.status.push(json!({
+                "Service":service,"ID":container.id,"State":"running",
+                "ExitCode":0,"Health":"healthy"
+            }));
+            receipt
+                .resources
+                .as_mut()
+                .unwrap()
+                .containers
+                .insert(service, container);
+        }
+        for row in &mut receipt.status {
+            row["Labels"] = json!(labels);
+        }
     }
+    receipt
 }
 fn native_intent(receipt: &ComposeReceipt, command: Value, prior: &ProjectResources) -> Value {
     json!({"schema":"elevenid.installer-compose-intent/v1",
@@ -96,6 +135,9 @@ impl Fixture {
         Self::with_external_rotation(last, engine, false)
     }
     fn with_external_rotation(last: u64, engine: &str, external: bool) -> Self {
+        Self::with_inventory(last, engine, external, false)
+    }
+    fn with_inventory(last: u64, engine: &str, external: bool, full_inventory: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         for name in [
@@ -269,7 +311,7 @@ impl Fixture {
             } else {
                 format!("g{sequence:020}-wait-000000")
             };
-            let native = native_receipt(sequence, &operation, true, &image, engine);
+            let native = native_receipt(sequence, &operation, true, &image, engine, full_inventory);
             let native_bytes = record(
                 root.path(),
                 &if sequence == 0 {
@@ -282,8 +324,16 @@ impl Fixture {
             if sequence > 0 {
                 let parent = generations.last().unwrap();
                 let create = format!("g{sequence:020}-create-000000");
-                let created = native_receipt(sequence, &create, false, &image, engine);
-                let previous = native_receipt(sequence - 1, "previous", true, &image, engine);
+                let created =
+                    native_receipt(sequence, &create, false, &image, engine, full_inventory);
+                let previous = native_receipt(
+                    sequence - 1,
+                    "previous",
+                    true,
+                    &image,
+                    engine,
+                    full_inventory,
+                );
                 let created_bytes = record(
                     root.path(),
                     &format!("generation-compose-{create}-result.json"),
@@ -532,6 +582,90 @@ fn external_secret_rotation_preserves_full_custody_proof_and_subsequent_generati
         0o600,
     );
     assert!(load_sequence(fixture.root.path(), 2).is_err());
+}
+
+#[test]
+fn private_evidence_bound_is_four_mib_and_secret_bound_remains_64_kib() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = directory(root.path()).unwrap();
+    for (name, record, limit, mode) in [
+        ("large-private-evidence.json", true, 4 * 1024 * 1024, 0o600),
+        ("smtp_password", false, 65536, 0o444),
+    ] {
+        let path = root.path().join(name);
+        let mut bytes = vec![b'a'; limit];
+        write(&path, &bytes, mode);
+        let (loaded, actual_mode) = read(&dir, name, record).unwrap();
+        assert_eq!(loaded, bytes);
+        assert_eq!(actual_mode, mode);
+        bytes.push(b'a');
+        write(&path, &bytes, mode);
+        assert!(read(&dir, name, record).is_err());
+    }
+}
+
+#[test]
+fn large_private_evidence_preserves_custody_and_content_guards() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let dir = directory(root.path()).unwrap();
+    let name = "large-private-evidence.json";
+    let path = root.path().join(name);
+    let bytes = vec![b'a'; 286226];
+    write(&path, &bytes, 0o600);
+    assert!(read(&dir, name, true).is_ok());
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(read(&dir, name, true).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let linked = root.path().join("linked.json");
+    std::fs::hard_link(&path, &linked).unwrap();
+    assert!(read(&dir, name, true).is_err());
+    std::fs::remove_file(&linked).unwrap();
+    std::os::unix::fs::symlink(&path, &linked).unwrap();
+    assert!(read(&dir, "linked.json", true).is_err());
+    std::fs::remove_file(&linked).unwrap();
+
+    for forbidden in [
+        b"\0".as_slice(),
+        b"\xff".as_slice(),
+        b"PRIVATE KEY".as_slice(),
+    ] {
+        let mut changed = bytes.clone();
+        changed[..forbidden.len()].copy_from_slice(forbidden);
+        write(&path, &changed, 0o600);
+        assert!(read(&dir, name, true).is_err());
+    }
+    write(&path, &bytes, 0o600);
+    assert_eq!(read(&dir, name, true).unwrap().0, bytes);
+}
+
+#[test]
+fn large_native_receipts_validate_complete_lineage_and_preserve_helper_equality() {
+    let fixture = Fixture::with_inventory(2, "engine", false, true);
+    let helper = fixture
+        .root
+        .path()
+        .join("evidence/generation-00000000000000000002-helper.json");
+    let bytes = std::fs::read(&helper).unwrap();
+    assert!(bytes.len() > 262144 && bytes.len() < 4 * 1024 * 1024);
+    let receipt: ComposeReceipt = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(receipt.resources.as_ref().unwrap().containers.len(), 45);
+    assert_eq!(receipt.status.len(), 45);
+    assert_eq!(
+        load_sequence(fixture.root.path(), 2).unwrap(),
+        fixture.generations[2]
+    );
+
+    // Extra status metadata remains authenticated: a valid JSON helper must
+    // still exactly match the native wait receipt recorded for this attempt.
+    let mut changed = receipt;
+    changed.status[0]["Labels"] = json!("changed-labels");
+    write(&helper, &encode(&changed), 0o600);
+    assert!(load_sequence(fixture.root.path(), 2).is_err());
+    write(&helper, &bytes, 0o600);
+    load_sequence(fixture.root.path(), 2).unwrap();
 }
 
 #[test]
