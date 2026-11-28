@@ -736,6 +736,67 @@ fn native_compose_full_profile_keeps_restricted_issuance_credentials() {
         assert_credential_denials(workflows, &fixed);
         assert_source_schema_prerequisites(&fixed);
         if maintenance {
+            // Carrier recovery renders the complete saved model. Its two-role
+            // command selection must not filter config or disable setup profiles.
+            let carrier_inputs = inputs.for_feature_postgres_carrier();
+            assert_eq!(
+                carrier_inputs.services,
+                vec!["postgres".to_owned(), "installer-ingress".to_owned()]
+            );
+            let original_inputs = serde_json::to_value(&inputs).unwrap();
+            let mut carrier_record = serde_json::to_value(&carrier_inputs).unwrap();
+            carrier_record["services"] = original_inputs["services"].clone();
+            assert_eq!(
+                carrier_record, original_inputs,
+                "carrier selection must preserve every other authenticated input"
+            );
+            let carrier_profiles: Vec<_> =
+                carrier_inputs.profiles.iter().map(String::as_str).collect();
+            let carrier_model =
+                render_config(&executable, &bundle, &files, &env, &carrier_profiles, &[]);
+            assert_eq!(
+                carrier_model, fixed,
+                "carrier recovery must preserve the complete saved maintenance model"
+            );
+            let configuration_sha256 = crate::installer_compose::model_sha256(&fixed).unwrap();
+            assert_eq!(
+                crate::installer_compose::model_sha256(&carrier_model).unwrap(),
+                configuration_sha256
+            );
+
+            // Reproduce the old carrier preparation with the same native layers.
+            let mut old_carrier_inputs = carrier_inputs.clone();
+            old_carrier_inputs.profiles.clear();
+            let old_carrier_profiles: Vec<_> = old_carrier_inputs
+                .profiles
+                .iter()
+                .map(String::as_str)
+                .collect();
+            let old_carrier_model = render_config(
+                &executable,
+                &bundle,
+                &files,
+                &env,
+                &old_carrier_profiles,
+                &[],
+            );
+            assert_ne!(old_carrier_model, fixed);
+            assert_ne!(
+                crate::installer_compose::model_sha256(&old_carrier_model).unwrap(),
+                configuration_sha256
+            );
+            assert!(
+                fixed["services"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .any(|(role, service)| {
+                        service["labels"]["com.elevenid.installer.phase"] == "setup"
+                            && old_carrier_model["services"].get(role).is_none()
+                    }),
+                "clearing profiles must reproduce the lost setup-role census"
+            );
+
             // The retained owner selects ordinary service names and disables
             // setup profiles. The new schema job must never join that restart.
             let runtime: BTreeSet<_> = fixed["services"]

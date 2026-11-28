@@ -976,9 +976,7 @@ fn maintain_feature_postgres(
     require_recorded_running_intent(state.inspection(), installation)?;
     crate::installer_feature_postgres_tls::verify_for_renewal(state.inspection(), installation)?;
     let saved = installer_doctor::load_session(state.inspection(), installation)?;
-    let mut inputs = saved.inputs.clone();
-    inputs.services = vec!["postgres".into(), "installer-ingress".into()];
-    inputs.profiles.clear();
+    let inputs = saved.inputs.for_feature_postgres_carrier();
     let session = crate::installer_compose::ComposeSession::new_generation(
         docker,
         state.journal().runtime().ok_or(REFUSED)?,
