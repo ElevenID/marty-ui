@@ -156,6 +156,7 @@ class NativeAuthCallbackBrowserTest(unittest.TestCase):
         self.context = self.browser.new_context(ignore_https_errors=True, bypass_csp=False, service_workers="block")
         self.addCleanup(self.context.close)
         self.posts, self.arrivals, self.navigations, self.unexpected, self.errors = [], [], [], [], []
+        self.redirects = []
         self.server.fixture = self
         self.page = self.context.new_page()
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
@@ -224,7 +225,9 @@ document.body.dataset.callbackReady = 'true';
             self.posts.append({"method": request.command, "fields": fields,
                                "origin": request.headers.get("Origin"), "referer": request.headers.get("Referer"),
                                "content_type": request.headers.get("Content-Type"), "query": url.query})
-            request.respond(303, headers={"Location": self.destination + "/console",
+            redirect = {"status": 303, "location": self.destination + "/console"}
+            self.redirects.append(redirect)
+            request.respond(redirect["status"], headers={"Location": redirect["location"],
                             "Set-Cookie": "fixture_session=complete; Path=/; HttpOnly; Secure; SameSite=Lax"})
         elif request.command == "GET" and origin in [CONSOLE, UNLISTED] and url.path == "/console":
             self.arrivals.append({"origin": origin, "method": request.command, "query": url.query})
@@ -253,8 +256,11 @@ document.body.dataset.callbackReady = 'true';
     def assert_form_redirect_blocked(self, destination):
         violations = self.page.locator('#violations output[data-directive="form-action"]')
         violations.first.wait_for(state="attached", timeout=5000)
-        self.assertTrue(any(violations.nth(index).get_attribute("data-blocked").startswith(destination)
-                            for index in range(violations.count())))
+        self.assertEqual(self.redirects, [{"status": 303, "location": destination + "/console"}])
+        # Chromium reports the original form action for a blocked redirect.
+        # The server's exact 303 Location binds that violation to its target.
+        self.assertEqual([violations.nth(index).get_attribute("data-blocked")
+                          for index in range(violations.count())], [API + "/v1/auth/callback"])
         self.assertEqual(self.arrivals, [])
         self.assertEqual(self.page.url, SOURCE + "/oauth/consent")
 
